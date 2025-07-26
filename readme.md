@@ -1,4 +1,4 @@
-# DirectML based 2D desktop to 3D stereo SBS with Depth model
+# 2D desktop to 3D stereo SBS with Depth Anything models (Support AMD/NVIDIA GPUs with DirectML)
 ## Hardware
 AMD/NVIDIA GPUs and other DirectML compatible devices
 ## OS
