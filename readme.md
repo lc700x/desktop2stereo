@@ -38,13 +38,13 @@ DML = torch_directml.device()
 MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 ```
 - Default model id: `depth-anything/Depth-Anything-V2-Small-hf`
-- All supported models:
-`LiheYoung/depth-anything-large-hf`
-`LiheYoung/depth-anything-base-hf`
-`LiheYoung/depth-anything-small-hf`
-`depth-anything/Depth-Anything-V2-Large-hf`
-`depth-anything/Depth-Anything-V2-Base-hf`
-`depth-anything/Depth-Anything-V2-Small-hf`
+- All supported models:  
+`LiheYoung/depth-anything-large-hf`  
+`LiheYoung/depth-anything-base-hf`  
+`LiheYoung/depth-anything-small-hf`  
+`depth-anything/Depth-Anything-V2-Large-hf`  
+`depth-anything/Depth-Anything-V2-Base-hf`  
+`depth-anything/Depth-Anything-V2-Small-hf`  
 
 2. Change Captured Monitor
 Modify the monitor index in the `main.py` (same as the monitor number in **Windows Settings - Display**).
