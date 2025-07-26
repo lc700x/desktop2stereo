@@ -25,7 +25,7 @@ Doulbe click `run.bat`
 ![Half-SBS](./assets/HalfSBS_desktop.jpg)
 ## Optional
 1. Change Model
-Modify the depth model id in the `depth.py` from [HuggingFace](https://huggingface.co/)], the model id **must ends with** `hf`. 
+Modify the depth model id in the `depth.py` from [HuggingFace](https://huggingface.co/), the model id **must ends with** `hf`. 
 ```python
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 import torch
