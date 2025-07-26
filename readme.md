@@ -69,4 +69,4 @@ def capture_loop():
 }
 ```
 ## TO DO
-To opitmize the inference performance and video generation, currently the output may not be very smooth. 
+To opitmize the inference performance and video generation, currently the output may not be very smooth (low FPS). 
