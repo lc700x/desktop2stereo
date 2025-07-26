@@ -7,13 +7,13 @@ Windows 10/11 64-bit OS
 1. AMD GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). For Other Compatible DirectML devices: (i.e. Nvidia GPU, .etc) please install latest hardware driver. 
 2. Install **Python 3.10** from [Python.org](https://www.python.org/ftp/python/3.10.0/python-3.10.0-amd64.exe)
 ## Install and Run
-1. Download Repository to Local Disk
+1. Download repository to local disk
 ```powershell
 git clone https://github.com/lc700x/desktop2stereo
 ```
-2. Install Python Environment
+2. Install python environment  
 Doulbe click `install.bat`
-3. Run the application
+3. Run Stereo Desktop application  
 Doulbe click `run.bat`
 4. Move the **Stereo SBS Viewer** window to the second monitor press `Space` to toggle fullscreen. Recommand to set automatically hide the taskbar on the captured screen. 
 ![Hide Taskbar](./assets/taskbar-settings.png)
