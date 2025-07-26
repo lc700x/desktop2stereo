@@ -52,5 +52,21 @@ Modify the monitor index in the `main.py` (same as the monitor number in **Windo
 def capture_loop():
     cap = DesktopGrabber(monitor_index=1, downscale=0.5)
 ```
+## References
+```BIBTEX
+@article{depth_anything_v2,
+  title={Depth Anything V2},
+  author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Zhao, Zhen and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
+  journal={arXiv:2406.09414},
+  year={2024}
+}
+
+@inproceedings{depth_anything_v1,
+  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data}, 
+  author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
+  booktitle={CVPR},
+  year={2024}
+}
+```
 ## TO DO
 To opitmize the inference performance and video generation, currently the output may not be very smooth. 
