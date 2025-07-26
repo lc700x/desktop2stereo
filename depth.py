@@ -3,9 +3,12 @@ import torch
 import torch_directml
 import numpy as np
 from threading import Lock
+import os
 
 DML = torch_directml.device()
-MODEL_ID = "depth-anything/Depth-Anything-V2-Base-hf"
+print(f"Using DirectML device: {torch_directml.device_name(0)}")
+# change depth model ID if needed
+MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 DTYPE = torch.float16  # Use float16 for DirectML
 
 processor = AutoImageProcessor.from_pretrained(MODEL_ID, use_fast=True)

@@ -6,12 +6,17 @@ from depth import predict_depth
 from viewer import StereoWindow
 import time
 
+# add arg for setting hg mirror if cannot access Hugging Face directly
+import os, sys
+if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
+    os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+
 # Queue setup
 rgb_q = queue.Queue(maxsize=1)
 depth_q = queue.Queue(maxsize=1)
 
 def capture_loop():
-    cap = DesktopGrabber(monitor_index=1, downscale=0.5)
+    cap = DesktopGrabber(monitor_index=1, downscale=0.5) # Default Monitor: 1 for primary, Adjust downscale as needed
     while True:
         frame = cap.grab()
         # Drop any old frame
