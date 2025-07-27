@@ -17,7 +17,8 @@ rgb_q = queue.Queue(maxsize=3)
 depth_q = queue.Queue(maxsize=3)
 
 def capture_loop():
-    cap = DesktopGrabber(monitor_index=1, downscale=1.0) # Default Monitor: 1 for primary, Adjust downscale as needed
+    # Default Monitor: 1 for primary, Adjust downscale as needed
+    cap = DesktopGrabber(monitor_index=1, downscale=0.5) 
     while True:
         frame = cap.grab()
         try:

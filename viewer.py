@@ -35,8 +35,10 @@ FRAGMENT_SHADER = """
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
         float depth = texture(tex_depth, flipped_uv).r;
 
-        // Shift: positive offset to right for right eye, left for left eye
-        vec2 offset_uv = flipped_uv - vec2(u_eye_offset * depth * u_depth_strength, 0.0);
+        // Invert depth so near=1 shifts more, far=0 shifts less
+        float depth_inv = 1.0 - depth;
+
+        vec2 offset_uv = flipped_uv - vec2(u_eye_offset * depth_inv * u_depth_strength, 0.0);
         offset_uv = clamp(offset_uv, 0.0, 1.0);
 
         frag_color = texture(tex_color, offset_uv);
@@ -48,8 +50,8 @@ class StereoWindow:
     def __init__(self):
         self.window_size = (1280, 720)
         self.title = "Stereo SBS Viewer"
-        self.ipd_uv = 0.064
-        self.depth_strength = 0.1
+        self.ipd_uv = 0.064  # Inter-pupillary distance in UV coordinates (0.064 per eye)
+        self.depth_strength = 0.1  # Strength of depth effect
         self._last_window_position = None
         self._last_window_size = None
         self._fullscreen = False

@@ -20,21 +20,17 @@ Doulbe click `run.bat`
 6. Click the **Stereo SBS Viewer** on the another (virtual) monitor display to make sure the **Stereo SBS Viewer** is the 1st active application. Press `space` to toggle full screen mode. 
 6. Now you can use AR/VR to view the Full/Half SBS output. 
 - AR need to switch to 3D mode to connect as a 3840*1080 display
-![Full-SBS](./assets/FullSBS_desktop.jpg)
+![Full-SBS](./assets/FullSBS.png)
 - VR need to use 2nd Display/Virtual Display (VDD) with Desktop+[PC VR] or Virtual Desktop[PC/Standalone VR] or OBS+Wolvic [Standalone VR] to comopose the SBS display to 3D.
-![Half-SBS](./assets/HalfSBS_desktop.jpg)
+![Half-SBS](./assets/HalfSBS.png)
 ## Optional
 1. Change Model
 Modify the depth model id in the `depth.py` from [HuggingFace](https://huggingface.co/), the model id **must ends with** `-hf`. 
 ```python
-from transformers import AutoImageProcessor, AutoModelForDepthEstimation
-import torch
-import torch_directml
-import numpy as np
-from threading import Lock
-
+# Initialize DirectML Device
 DML = torch_directml.device()
-# change depth model ID if needed
+print(f"Using DirectML device: {torch_directml.device_name(0)}")
+DTYPE = torch.float16
 MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 ```
 - Default model id: `depth-anything/Depth-Anything-V2-Small-hf`
@@ -48,10 +44,11 @@ MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 
 2. Change Captured Monitor
 Modify the monitor index in the `main.py` (1 - Primary Monitor).
-Recomand to downscale to 1080P for smoother experience
+Recomand to set `downscale` value to 0.5 (2160p to 1080P) or set system resolution to 1080p for smoother experience
 ```python
 def capture_loop():
-    cap = DesktopGrabber(monitor_index=1, downscale=0.5)
+    # Default Monitor: 1 for primary, Adjust downscale as needed
+    cap = DesktopGrabber(monitor_index=1, downscale=0.5) 
 ```
 ## References
 ```BIBTEX
@@ -69,5 +66,3 @@ def capture_loop():
   year={2024}
 }
 ```
-## TO DO
-To opitmize the inference performance and video generation, currently the output may not be very smooth (low FPS). 
