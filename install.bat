@@ -1,17 +1,57 @@
 @echo off
 echo --- Desktop2Stereo Installer for Windows (With DirectML for AMD GPUs and etc.)---
-echo - Setting up the virtual enviroment
+echo - Setting up the virtual environment
+
+:: Set paths
 Set "VIRTUAL_ENV=.env"
-If Not Exist "%VIRTUAL_ENV%\Scripts\activate.bat" (
-    python.exe -m venv %VIRTUAL_ENV%
+Set "PYTHON_EXE=python.exe"
+
+:: Check if Python is available
+where %PYTHON_EXE% >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Python is not found in PATH. Please install Python 3.10 first.
+    pause
+    exit /b 1
 )
-If Not Exist "%VIRTUAL_ENV%\Scripts\activate.bat" Exit /B 1
-echo - Virtual enviroment activation
-Call "%VIRTUAL_ENV%\Scripts\activate.bat"
+
+:: Create virtual environment if it doesn't exist
+if not exist "%VIRTUAL_ENV%\Scripts\activate.bat" (
+    echo Creating virtual environment...
+    %PYTHON_EXE% -m venv "%VIRTUAL_ENV%"
+    if %errorlevel% neq 0 (
+        echo Failed to create virtual environment
+        pause
+        exit /b 1
+    )
+)
+
+:: Activate virtual environment
+echo - Virtual environment activation
+call "%VIRTUAL_ENV%\Scripts\activate.bat"
+if %errorlevel% neq 0 (
+    echo Failed to activate virtual environment
+    pause
+    exit /b 1
+)
+
+:: Update pip
 echo - Updating the pip package
-python.exe -m pip install --upgrade pip --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python -m pip install --upgrade pip --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+if %errorlevel% neq 0 (
+    echo Failed to update pip
+    pause
+    exit /b 1
+)
+
+:: Install requirements
 echo.
 echo - Installing the requirements
-python.exe -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-echo Python enviroment deployed. 
-@REM --Aliyun-mirror is used here for the user cannot access Official pip site directly.
+python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+if %errorlevel% neq 0 (
+    echo Failed to install requirements
+    pause
+    exit /b 1
+)
+
+echo Python environment deployed successfully.
+pause
