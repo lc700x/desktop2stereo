@@ -15,9 +15,9 @@ git clone https://github.com/lc700x/desktop2stereo
 Doulbe click `install.bat`
 3. Run Stereo Desktop application  
 Doulbe click `run.bat`
-4. Move the **Stereo SBS Viewer** window to the second monitor press `Space` to toggle fullscreen. Recommand to set automatically hide the taskbar on the captured screen. 
-![Hide Taskbar](./assets/taskbar-settings.png)
-5. Click the **Stereo SBS Viewer** tab or use `ALT + TAB` to make sure the **Stereo SBS Viewer** is the 1st active application. 
+4. Move the **Stereo SBS Viewer** window to another (virtual) monitor display.
+5. Set your video/game on the main screen (full screen mode if you needed)
+6. Click the **Stereo SBS Viewer** on the another (virtual) monitor display to make sure the **Stereo SBS Viewer** is the 1st active application. Press `space` to toggle full screen mode. 
 6. Now you can use AR/VR to view the Full/Half SBS output. 
 - AR need to switch to 3D mode to connect as a 3840*1080 display
 ![Full-SBS](./assets/FullSBS_desktop.jpg)
@@ -25,7 +25,7 @@ Doulbe click `run.bat`
 ![Half-SBS](./assets/HalfSBS_desktop.jpg)
 ## Optional
 1. Change Model
-Modify the depth model id in the `depth.py` from [HuggingFace](https://huggingface.co/), the model id **must ends with** `hf`. 
+Modify the depth model id in the `depth.py` from [HuggingFace](https://huggingface.co/), the model id **must ends with** `-hf`. 
 ```python
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 import torch
@@ -47,7 +47,8 @@ MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 `depth-anything/Depth-Anything-V2-Small-hf`  
 
 2. Change Captured Monitor
-Modify the monitor index in the `main.py` (same as the monitor number in **Windows Settings - Display**).
+Modify the monitor index in the `main.py` (1 - Primary Monitor).
+Recomand to downscale to 1080P for smoother experience
 ```python
 def capture_loop():
     cap = DesktopGrabber(monitor_index=1, downscale=0.5)

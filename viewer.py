@@ -74,7 +74,7 @@ class StereoWindow:
         self.position_on_monitor(0)  # 0=primary, 1=secondary
         
         glfw.make_context_current(self.window)
-        glfw.swap_interval(1) # Enable vsync
+        glfw.swap_interval(0) # disable vsync
         self.ctx = moderngl.create_context()
         
         # Setup shaders and buffers
@@ -177,21 +177,19 @@ class StereoWindow:
         )
 
     def update_frame(self, rgb, depth):
-        h, w = depth.shape
+        # Normalize depth with adaptive range
+        depth_min = np.percentile(depth, 2)
+        depth_max = np.percentile(depth, 98)
+        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
+        depth = np.clip(depth, 0, 1)
 
-        # Normalize depth to [0, 1]
-        depth_min = depth.min()
-        depth_max = depth.max()
-        # print(f"Depth min: {depth_min:.4f}, max: {depth_max:.4f}")
-        depth = (depth - depth_min) / (depth_max - depth_min + 1e-8)
-
-        if self.color_tex is None or self.color_tex.size != (w, h):
+        if self.color_tex is None or self.color_tex.size != (rgb.shape[1], rgb.shape[0]):
             if self.color_tex:
                 self.color_tex.release()
             if self.depth_tex:
                 self.depth_tex.release()
-            self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
-            self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
+            self.color_tex = self.ctx.texture((rgb.shape[1], rgb.shape[0]), 3, dtype='f1')
+            self.depth_tex = self.ctx.texture((depth.shape[1], depth.shape[0]), 1, dtype='f4')
             self.prog['tex_color'].value = 0
             self.prog['tex_depth'].value = 1
 

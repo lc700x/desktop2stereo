@@ -1,45 +1,42 @@
-from transformers import AutoImageProcessor, AutoModelForDepthEstimation
-import torch
-import torch_directml
+import torch, torch_directml, torch.nn.functional as F
+from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
-import os
 
 DML = torch_directml.device()
 print(f"Using DirectML device: {torch_directml.device_name(0)}")
-# change depth model ID if needed
+DTYPE = torch.float16
 MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
-DTYPE = torch.float16  # Use float16 for DirectML
 
-processor = AutoImageProcessor.from_pretrained(MODEL_ID, use_fast=True)
-model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE)
-model = model.to(DML).half().eval()  # Convert entire model to float16
+model = (AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE).to(DML).half().eval())
+INPUT_H, INPUT_W = 384, 384 # model’s native resolution
+MEAN = torch.tensor([0.485, 0.456, 0.406], device=DML).view(1,3,1,1)
+STD  = torch.tensor([0.229, 0.224, 0.225], device=DML).view(1,3,1,1)
 
-
-# Warm-up
-with torch.no_grad():
-    dummy = torch.zeros(1, 3, 384, 384, device=DML, dtype=DTYPE)
+with torch.no_grad(): # warm-up
+    dummy = torch.zeros(1,3,INPUT_H,INPUT_W, device=DML, dtype=DTYPE)
     model(pixel_values=dummy)
 
-model_lock = Lock()
+lock = Lock()
 
+@torch.no_grad()
 def predict_depth(rgb_np: np.ndarray) -> np.ndarray:
-    # Convert input to float32 numpy array if it's not already
-    # rgb_np = rgb_np.astype(np.float32) if rgb_np.dtype != np.float32 else rgb_np
-    rgb_np = np.ascontiguousarray(rgb_np.astype(np.float32))  # Ensure float32 & contiguous
-    inputs = processor(images=rgb_np, return_tensors="pt")
-    inputs_on_dml = {k: v.to(DML).to(DTYPE) for k, v in inputs.items()}  # Explicitly convert to float16
+    # upload only once
+    tensor = torch.from_numpy(rgb_np)              # CPU → CPU tensor (uint8)
+    tensor = tensor.permute(2,0,1).float() / 255.  # HWC → CHW, 0-1 range
+    tensor = tensor.unsqueeze(0).to(DML, dtype=DTYPE, non_blocking=True)
 
-    with model_lock, torch.no_grad():
-        outputs = model(**inputs_on_dml)
+    # GPU resize & normalise
+    tensor = F.interpolate(tensor, (INPUT_H, INPUT_W), mode='bilinear', align_corners=False)
+    tensor = (tensor - MEAN) / STD
 
-    depth = outputs.predicted_depth
-    depth_upscaled = torch.nn.functional.interpolate(
-        depth.unsqueeze(1),
-        size=rgb_np.shape[:2],
-        mode="bilinear",
-        align_corners=False,
-    )
-    max_val = depth_upscaled.max()
-    depth_normalized = (depth_upscaled / max_val) if max_val > 0 else depth_upscaled
-    return depth_normalized[0, 0].cpu().numpy().astype("float32")
+    with lock, torch.no_grad():
+        depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
+
+    # upscale back to original and normalise once
+    h, w = rgb_np.shape[:2]
+    depth = F.interpolate(depth.unsqueeze(1), size=(h,w), mode='bilinear', align_corners=False)[0,0]
+
+    depth /= depth.max().clamp(min=1e-6)           # keep on GPU for a sec
+    depth_gpu = depth.detach()
+    return depth.cpu().numpy().astype('float32')   # GPU → CPU

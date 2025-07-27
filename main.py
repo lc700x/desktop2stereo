@@ -1,3 +1,4 @@
+# main.py
 import threading
 import queue
 import glfw
@@ -12,30 +13,29 @@ if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
     os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
 # Queue setup
-rgb_q = queue.Queue(maxsize=1)
-depth_q = queue.Queue(maxsize=1)
+rgb_q = queue.Queue(maxsize=3)
+depth_q = queue.Queue(maxsize=3)
 
 def capture_loop():
-    cap = DesktopGrabber(monitor_index=1, downscale=0.5) # Default Monitor: 1 for primary, Adjust downscale as needed
+    cap = DesktopGrabber(monitor_index=1, downscale=1.0) # Default Monitor: 1 for primary, Adjust downscale as needed
     while True:
         frame = cap.grab()
-        # Drop any old frame
-        while not rgb_q.empty():
-            try:
-                rgb_q.get_nowait()
-            except queue.Empty:
-                break
-        rgb_q.put(frame)
+        try:
+            rgb_q.put(frame, block=False)
+        except queue.Full:
+            rgb_q.get_nowait()  # Remove and discard oldest frame
+            rgb_q.put(frame)  # Retrying with newer frame
 
 def depth_loop():
     while True:
         try:
-            frame = rgb_q.get(block=True, timeout=0.1)
+            frame = rgb_q.get(block=False)
             depth = predict_depth(frame)
             try:
-                depth_q.put((frame, depth), block=False)
+                depth_q.put((frame, depth), block=False)  
             except queue.Full:
-                pass
+                depth_q.get_nowait()  # Discard oldest depth data
+                depth_q.put((frame, depth))
         except queue.Empty:
             time.sleep(0.001)
 
