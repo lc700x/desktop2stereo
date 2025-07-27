@@ -1,4 +1,5 @@
-# 2D desktop to 3D stereo SBS with Depth Anything models (Support AMD/NVIDIA GPUs with DirectML)
+# Desktop2Stereo: 2D desktop to 3D stereo SBS (Support AMD/NVIDIA GPUs with DirectML, powered by Depth Anything AI Models)
+[中文版本](./readmeCN.md)
 ## Hardware
 AMD/NVIDIA GPUs and other DirectML compatible devices
 ## OS
