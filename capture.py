@@ -24,16 +24,22 @@ class DesktopGrabber:
         self._mon = self._mss.monitors[monitor_index]
         print(f"Using monitor {monitor_index}: {self._mon['width']}x{self._mon['height']}")
 
+        # Calculate downscale reduced resolution
+        self.scaled_width = int(self._mon['width'] * self.downscale)
+        self.scaled_height = int(self._mon['height'] * self.downscale)
+
     def grab(self) -> np.ndarray:
         """Return RGB NumPy array, downscaled if needed"""
-        shot = self._mss.grab(self._mon)
-        img = np.array(shot)[:, :, :3]
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
+        # Grab the screen using mss
+        shot = self._mss.grab(self._mon)
+
+        # Convert to NumPy array and RGB format
+        img = np.array(shot)[:, :, :3]  # Use only RGB not BGR
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+
+        # Downscale if set
         if self.downscale < 1.0:
-            h, w = img_rgb.shape[:2]
-            new_w = int(w * self.downscale)
-            new_h = int(h * self.downscale)
-            img_rgb = cv2.resize(img_rgb, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            img_rgb = cv2.resize(img_rgb, (self.scaled_width, self.scaled_height), interpolation=cv2.INTER_AREA)
 
         return img_rgb
