@@ -3,8 +3,6 @@ import mss
 import numpy as np
 import cv2
 
-import mss
-
 class DesktopGrabber:
     """Captures a specific monitor, optionally downscaled."""
 
