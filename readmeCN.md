@@ -61,12 +61,12 @@ MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 
 * 支持的所有模型：
 
-`LiheYoung/depth-anything-large-hf`
-`LiheYoung/depth-anything-base-hf`
-`LiheYoung/depth-anything-small-hf`
-`depth-anything/Depth-Anything-V2-Large-hf`
-`depth-anything/Depth-Anything-V2-Base-hf`
-`depth-anything/Depth-Anything-V2-Small-hf`
+`LiheYoung/depth-anything-large-hf`  
+`LiheYoung/depth-anything-base-hf`  
+`LiheYoung/depth-anything-small-hf`  
+`depth-anything/Depth-Anything-V2-Large-hf`  
+`depth-anything/Depth-Anything-V2-Base-hf`  
+`depth-anything/Depth-Anything-V2-Small-hf`  
 
 2. 更换捕获显示器
    在 `main.py` 中修改 `MONITOR_INDEX`（1 表示主显示器）。
