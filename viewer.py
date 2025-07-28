@@ -69,6 +69,7 @@ class StereoWindow:
         
         # Create window (start in windowed mode)
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
+        self.add_logo(self.window)  # Add logo to window
         if not self.window:
             glfw.terminate()
             raise RuntimeError("Could not create window")
@@ -91,6 +92,26 @@ class StereoWindow:
         
         # Set callbacks
         glfw.set_key_callback(self.window, self.on_key_event)
+
+    def add_logo(self, window):
+        import cv2
+        logo = 'assets/logo.png'  # Path to your icon file
+        img = cv2.imread(logo, cv2.IMREAD_UNCHANGED)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # <--- convert from BGR to RGB
+
+        if img is None:
+            return False
+
+        h, w = img.shape[:2]
+
+        if img.shape[2] == 3:
+            alpha = np.ones((h, w, 1), dtype = np.uint8) * 255
+            img = np.concatenate((img, alpha), axis = 2)
+
+        img = img.astype(np.uint8)
+        glfw_img = (w, h, img)
+
+        glfw.set_window_icon(window, 1, [glfw_img])
 
     def position_on_monitor(self, monitor_index=0):
         """Position window on specified monitor (0-based index)"""
