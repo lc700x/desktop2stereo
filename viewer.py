@@ -127,36 +127,50 @@ class StereoWindow:
         current_monitor = self.get_current_monitor()
         if not current_monitor:
             return
-            
+
         if not self._fullscreen:
-            # Store current window state
+            # ---------- entering “fullscreen” ----------
+            # Remember current window state
             self._last_window_position = glfw.get_window_pos(self.window)
-            self._last_window_size = glfw.get_window_size(self.window)
-            
-            # Get monitor video mode
-            vidmode = glfw.get_video_mode(current_monitor)
-            
-            # Set fullscreen on current monitor
-            glfw.set_window_monitor(
-                self.window,
-                current_monitor,
-                0, 0,
-                vidmode.size.width,
-                vidmode.size.height,
-                vidmode.refresh_rate
-            )
+            self._last_window_size     = glfw.get_window_size(self.window)
+
+            # Monitor geometry
+            mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
+            vidmode      = glfw.get_video_mode(current_monitor)
+            full_w, full_h = vidmode.size.width, vidmode.size.height
+
+            # Make the window border-less + floating
+            glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+            glfw.set_window_attrib(self.window, glfw.FLOATING,  glfw.TRUE)
+
+            # Resize & move so it exactly covers the monitor
+            glfw.set_window_size(self.window, full_w, full_h)
+            glfw.set_window_pos(self.window,  mon_x,  mon_y)
+
             self._fullscreen = True
         else:
-            # Exit fullscreen and restore window
-            glfw.set_window_monitor(
-                self.window,
-                None,  # Windowed mode
-                self._last_window_position[0],
-                self._last_window_position[1],
-                self._last_window_size[0],
-                self._last_window_size[1],
-                0
-            )
+            # ---------- leaving “fullscreen” ----------
+            # Restore decorations / floating attribute
+            glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.TRUE)
+            glfw.set_window_attrib(self.window, glfw.FLOATING,  glfw.FALSE)
+
+            # Restore position & size (default: 1280×720 centred on same monitor)
+            restore_w, restore_h = self.window_size
+            if self._last_window_size:
+                restore_w, restore_h = self._last_window_size
+
+            if self._last_window_position:
+                restore_x, restore_y = self._last_window_position
+            else:
+                # Centre it on the current monitor if we have no previous position
+                vidmode   = glfw.get_video_mode(current_monitor)
+                mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
+                restore_x = mon_x + (vidmode.size.width  - restore_w) // 2
+                restore_y = mon_y + (vidmode.size.height - restore_h) // 2
+
+            glfw.set_window_size(self.window, restore_w, restore_h)
+            glfw.set_window_pos(self.window,  restore_x, restore_y)
+
             self._fullscreen = False
     
     def on_key_event(self, window, key, scancode, action, mods):
