@@ -9,7 +9,7 @@ import time, os, sys
 
 # Set the monitor index and downscale factor
 MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
-DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling
+DOWNSCALE_FACTOR = 1.0 # Set to 1.0 for no downscaling
 
 # add arg for setting hg mirror if cannot access Hugging Face directly
 if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':

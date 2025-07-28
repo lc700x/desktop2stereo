@@ -1,3 +1,4 @@
+# viewer.py
 import glfw
 import moderngl
 import numpy as np
@@ -129,8 +130,7 @@ class StereoWindow:
             return
 
         if not self._fullscreen:
-            # ---------- entering “fullscreen” ----------
-            # Remember current window state
+            # Enter fullscreen mode, Remember current window state
             self._last_window_position = glfw.get_window_pos(self.window)
             self._last_window_size     = glfw.get_window_size(self.window)
 
@@ -149,8 +149,7 @@ class StereoWindow:
 
             self._fullscreen = True
         else:
-            # ---------- leaving “fullscreen” ----------
-            # Restore decorations / floating attribute
+            # Exit fullscreeen mode, Restore decorations / floating attribute
             glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.TRUE)
             glfw.set_window_attrib(self.window, glfw.FLOATING,  glfw.FALSE)
 
