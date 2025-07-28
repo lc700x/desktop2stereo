@@ -15,9 +15,9 @@ DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling, 0.5 is recommended for p
 if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
     os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
-rgb_raw_q = queue.Queue(maxsize=4)
-rgb_proc_q = queue.Queue(maxsize=4)
-depth_q = queue.Queue(maxsize=4)
+rgb_raw_q = queue.Queue(maxsize=3)
+rgb_proc_q = queue.Queue(maxsize=3)
+depth_q = queue.Queue(maxsize=3)
 
 def capture_loop():
     cap = DesktopGrabber(monitor_index=MONITOR_INDEX, downscale=DOWNSCALE_FACTOR)
