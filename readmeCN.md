@@ -69,13 +69,12 @@ MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 `depth-anything/Depth-Anything-V2-Small-hf`
 
 2. 更换捕获显示器
-   在 `main.py` 中修改 `monitor index`（1 表示主显示器）。
-   建议将 `downscale` 设置为 0.5（2160p 降为 1080p），或将系统分辨率设置为 1080p 以获得更流畅的体验。
+   在 `main.py` 中修改 `MONITOR_INDEX`（1 表示主显示器）。
+   建议将 `DOWNSCALE_FACTOR` 设置为 0.5（2160p 降为 1080p），或将系统分辨率设置为 1080p 以获得更流畅的体验。
 
 ```python
-def capture_loop():
-    # 默认显示器：1 为主显示器，可根据需要调整 downscale
-    cap = DesktopGrabber(monitor_index=1, downscale=0.5)
+MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
+DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling
 ```
 
 ## 参考文献

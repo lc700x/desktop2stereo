@@ -44,12 +44,11 @@ MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 `depth-anything/Depth-Anything-V2-Small-hf`  
 
 2. Change Captured Monitor
-Modify the monitor index in the `main.py` (1 - Primary Monitor).
-Recomand to set `downscale` value to 0.5 (2160p to 1080P) or set system resolution to 1080p for smoother experience
+Modify the `MONITOR_INDEX` in the `main.py` (1 - Primary Monitor).
+Recomand to set `DOWNSCALE_FACTOR` value to 0.5 (2160p to 1080P) or set system resolution to 1080p for smoother experience
 ```python
-def capture_loop():
-    # Default Monitor: 1 for primary, Adjust downscale as needed
-    cap = DesktopGrabber(monitor_index=1, downscale=0.5) 
+MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
+DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling
 ```
 ## References
 ```BIBTEX
