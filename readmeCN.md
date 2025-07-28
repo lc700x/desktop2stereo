@@ -73,8 +73,9 @@ MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
    建议将 `DOWNSCALE_FACTOR` 设置为 0.5（2160p 降为 1080p），或将系统分辨率设置为 1080p 以获得更流畅的体验。
 
 ```python
+# Set the monitor index and downscale factor
 MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
-DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling
+DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling, 0.5 is recommended for performance
 ```
 
 ## 参考文献
