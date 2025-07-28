@@ -23,7 +23,7 @@ class DesktopGrabber:
 
         if monitor_index >= len(self._mss.monitors):
             if show_monitor_info:
-                logging.warning(f"Monitor {monitor_index} not found, using primary monitor")
+                print(f"Monitor {monitor_index} not found, using primary monitor")
             monitor_index = 1
 
         self._mon = self._mss.monitors[monitor_index]
