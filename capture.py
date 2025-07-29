@@ -15,7 +15,7 @@ class DesktopGrabber:
             downscale (float): Downscale factor (1.0 for no downscaling).
             show_monitor_info (bool): Whether to print monitor info on initialization.
         """
-        self._mss = mss.mss()
+        self._mss = mss.mss(with_cursor=True) # not working on Windows
         self.downscale = downscale
 
         if show_monitor_info:

@@ -4,12 +4,18 @@ import moderngl
 import numpy as np
 import screeninfo
 import os
+import platform
 
 # Set the HF_ENDPOINT environment variable
 os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
 # Verify the variable is set (optional)
 print(f"HF_ENDPOINT is set to: {os.environ.get('HF_ENDPOINT')}")
+
+# Get OS name
+os_name = platform.system()
+if os_name == "Darwin":
+    print("please turn off hi-dpi on the screen where you put the viewer window")
 
 VERTEX_SHADER = """
     #version 330
@@ -69,7 +75,8 @@ class StereoWindow:
         
         # Create window (start in windowed mode)
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
-        self.add_logo(self.window)  # Add logo to window
+        if os_name == "Windows":
+            self.add_logo(self.window)  # Add logo to window
         if not self.window:
             glfw.terminate()
             raise RuntimeError("Could not create window")
