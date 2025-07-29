@@ -1,5 +1,5 @@
 @echo off
-echo --- Desktop2Stereo Installer for Windows (With DirectML for AMD GPUs and etc.)---
+echo --- Desktop2Stereo Installer (With CUDA for NVIDIA GPUs.) ---
 echo - Setting up the virtual environment
 
 :: Set paths
@@ -46,6 +46,7 @@ if %errorlevel% neq 0 (
 :: Install requirements
 echo.
 echo - Installing the requirements
+python -m pip install -r requirements-cuda.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (
     echo Failed to install requirements
