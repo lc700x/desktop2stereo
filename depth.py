@@ -19,21 +19,22 @@ def get_device():
         import torch_directml
         if torch_directml.is_available():
             DEVICE = torch_directml.device()
-            print(f"Using DirectML device: {torch_directml.device_name(0)}")
+            DEVICE_INFO = f"Using DirectML device: {torch_directml.device_name(0)}"
     except:
         if torch.cuda.is_available():
             DEVICE = torch.device("cuda")
-            print(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
+            DEVICE_INFO = f"Using CUDA device: {torch.cuda.get_device_name(0)}"
         elif torch.backends.mps.is_available():
             DEVICE = torch.device("mps")
-            print(f"Using Apple Silicon (MPS) device")
+            DEVICE_INFO = f"Using Apple Silicon (MPS) device"
         else:
             DEVICE = torch.device("cpu")
-            print("Using CPU device")
-    return DEVICE
+            DEVICE_INFO = "Using CPU device"
+    return DEVICE, DEVICE_INFO
 
+# Get the device and print information
+DEVICE, DEVICE_INFO = get_device()
 
-DEVICE = get_device()
 # Load model with same configuration as example
 model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE).to(DEVICE).half().eval()
 INPUT_H, INPUT_W = 384, 384  # model's native resolution
@@ -78,3 +79,30 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
     return depth.cpu().numpy().astype('float32')
+
+def predict_depth_tensor(image_rgb):
+    """
+    Predict depth map from RGB image (similar to pipeline example but optimized for DirectML)
+    Args:
+        image_rgb: Input RGB image as tensor (3, H, W) in uint8 format
+    Returns:
+        Depth map as tensor (384, 384) normalized to [0, 1]
+    """
+    tensor = image_rgb.to(DEVICE, dtype=torch.uint8, non_blocking=True)
+    tensor = tensor.float()/255  # Convert to float32 in range [0, 1]
+    # Resize and normalize (same as pipeline)
+    tensor = F.interpolate(tensor.unsqueeze(0), (INPUT_H, INPUT_W), mode='bilinear', align_corners=False)
+    tensor = tensor.squeeze(0)  # Remove batch dimension
+    tensor = (tensor - MEAN) / STD
+
+    # Inference with thread safety
+    with lock:
+        depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
+
+    # Post-processing (same as pipeline)
+    h, w = image_rgb.shape[1:3]
+    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0, 0]
+
+    # Normalize to [0, 1] (same as pipeline output)
+    depth = depth / depth.max().clamp(min=1e-6)
+    return depth.float()
