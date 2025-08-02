@@ -1,6 +1,6 @@
 #!/bin/bash
-
-echo "--- Desktop2Stereo Installer for Mac (for M1, M2, M3, M4 Apple Silicon Chips) ---"
+cd "$(dirname "$0")"
+echo "--- Desktop2Stereo Installer (With ROCm for AMD GPUs.) ---"
 echo "- Setting up the virtual environment"
 
 # Set paths
@@ -47,7 +47,7 @@ fi
 # Install requirements
 echo
 echo "- Installing the requirements"
-python -m pip install -r requirements-mps.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python -m pip install -r requirements-rocm.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if [ $? -ne 0 ]; then
     echo "Failed to install requirements"
@@ -57,3 +57,4 @@ fi
 
 echo "Python environment deployed successfully."
 read -p "Press enter to exit..."
+exit 0
