@@ -1,5 +1,5 @@
 #!/bin/bash
-
+cd "$(dirname "$0")"
 echo "--- Desktop2Stereo Installer (With ROCm for AMD GPUs.) ---"
 echo "- Setting up the virtual environment"
 
@@ -57,3 +57,4 @@ fi
 
 echo "Python environment deployed successfully."
 read -p "Press enter to exit..."
+exit 0

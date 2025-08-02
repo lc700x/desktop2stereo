@@ -13,7 +13,6 @@ PyYAML==6.0.2
 regex==2024.11.6
 requests==2.32.4
 safetensors==0.5.3
-screeninfo==0.8.1
 tokenizers==0.21.2
 tqdm==4.67.1
 transformers==4.54.0
