@@ -2,14 +2,7 @@
 import glfw
 import moderngl
 import numpy as np
-import os
 import platform
-
-# Set the HF_ENDPOINT environment variable
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-
-# Verify the variable is set (optional)
-print(f"HF_ENDPOINT is set to: {os.environ.get('HF_ENDPOINT')}")
 
 # Get OS name
 os_name = platform.system()
