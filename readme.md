@@ -78,12 +78,14 @@ Modify the depth model id in the `depth.py` from [HuggingFace](https://huggingfa
     ```
     Default model id: `depth-anything/Depth-Anything-V2-Small-hf`  
     **All supported models**:  
-    `LiheYoung/depth-anything-large-hf`  
-    `LiheYoung/depth-anything-base-hf`  
-    `LiheYoung/depth-anything-small-hf`  
-    `depth-anything/Depth-Anything-V2-Large-hf`  
-    `depth-anything/Depth-Anything-V2-Base-hf`  
-    `depth-anything/Depth-Anything-V2-Small-hf`  
+    ```Bash
+   LiheYoung/depth-anything-large-hf
+   LiheYoung/depth-anything-base-hf
+   LiheYoung/depth-anything-small-hf
+   depth-anything/Depth-Anything-V2-Large-hf
+   depth-anything/Depth-Anything-V2-Base-hf
+   depth-anything/Depth-Anything-V2-Small-hf
+   ```
 ## References
 ```BIBTEX
 @article{depth_anything_v2,
