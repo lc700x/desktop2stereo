@@ -11,7 +11,7 @@ from streaming import MJPEGStreamer
 
 # Configuration
 MONITOR_INDEX = 1         # which monitor to grab
-DOWNSCALE_FACTOR = 1    # resolution scaling for performance
+DOWNSCALE_FACTOR = 0.5    # resolution scaling for performance
 
 STREAM_HOST = "0.0.0.0"
 STREAM_PORT = 1303
