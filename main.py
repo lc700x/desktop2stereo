@@ -6,6 +6,7 @@ from capture import DesktopGrabber
 from depth import predict_depth
 from viewer import StereoWindow
 import time, os, sys
+from depth import DEVICE_INFO
 
 # Set the monitor index and downscale factor
 MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
@@ -57,6 +58,7 @@ def depth_loop():
             time.sleep(0.001)
 
 def main():
+    print(DEVICE_INFO)
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=processing_loop, daemon=True).start()
     threading.Thread(target=depth_loop, daemon=True).start()
