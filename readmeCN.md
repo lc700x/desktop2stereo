@@ -85,7 +85,7 @@
    MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
    DTYPE = torch.float16
    ```
-   默认模型 ID：`depth-anything/Depth-Anything-V2-Small-hf`
+   默认模型 ID：`depth-anything/Depth-Anything-V2-Small-hf`  
    **支持的全部模型**：  
    ```Bash
    LiheYoung/depth-anything-large-hf
