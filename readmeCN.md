@@ -16,7 +16,7 @@ Windows 10/11 64 位系统
 
 ## 安装与运行
 
-1. 下载Desktop2Stereo
+1. 下载Desktop2Stereo  
    下载并解压[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/tag/v1.0)到本地
 
 2. 安装 Python 环境
