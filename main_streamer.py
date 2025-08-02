@@ -2,81 +2,99 @@
 import threading
 import queue
 import time
+from typing import Tuple
 
+import numpy as np
 from capture import DesktopGrabber
 from depth import predict_depth, DEVICE_INFO
 from streaming import MJPEGStreamer
 
 # Configuration
-MONITOR_INDEX   = 1      # which monitor to grab
-DOWNSCALE_FACTOR = 0.5   # resolution scaling for performance
+MONITOR_INDEX = 1         # which monitor to grab
+DOWNSCALE_FACTOR = 1    # resolution scaling for performance
 
-STREAM_HOST      = "0.0.0.0"
-STREAM_PORT      = 1303
-STREAM_FPS       = 60
-STREAM_QUALITY   = 80
+STREAM_HOST = "0.0.0.0"
+STREAM_PORT = 1303
+STREAM_FPS = 60
+STREAM_QUALITY = 80
 
 # stereo-warp parameters (match whatever you used in your GLSL)
-IPD_UV          = 0.064
-DEPTH_STRENGTH  = 0.1
-interval = 1.0 / STREAM_FPS
-# Queues for pipelining
-rgb_raw_q  = queue.Queue(maxsize=3)
-rgb_proc_q = queue.Queue(maxsize=3)
-depth_q = queue.Queue(maxsize=3)
+IPD_UV = 0.064
+DEPTH_STRENGTH = 0.1
+FRAME_INTERVAL = 1.0 / STREAM_FPS
+
+# Queues for pipelining (reduced maxsize for lower latency)
+rgb_raw_q = queue.Queue(maxsize=2)
+rgb_proc_q = queue.Queue(maxsize=2)
+depth_q = queue.Queue(maxsize=2)
 
 
 def capture_loop():
+    """Continuously capture desktop frames and put them in the raw queue."""
     grabber = DesktopGrabber(
         monitor_index=MONITOR_INDEX,
         downscale=DOWNSCALE_FACTOR
     )
+    
     while True:
         frame = grabber.grab()
-        try:
-            rgb_raw_q.put_nowait(frame)
-        except queue.Full:
+        # Non-blocking queue management
+        if rgb_raw_q.full():
             rgb_raw_q.get_nowait()
-            rgb_raw_q.put_nowait(frame)
-        time.sleep(interval)
+        rgb_raw_q.put_nowait(frame)
+        time.sleep(FRAME_INTERVAL)
 
 
 def processing_loop():
-    cap = DesktopGrabber(monitor_index=MONITOR_INDEX, downscale=DOWNSCALE_FACTOR, show_monitor_info=False)
+    """Process raw frames and prepare them for depth prediction."""
+    cap = DesktopGrabber(
+        monitor_index=MONITOR_INDEX, 
+        downscale=DOWNSCALE_FACTOR, 
+        show_monitor_info=False
+    )
+    
     while True:
         try:
-            frame_raw = rgb_raw_q.get(block=True)
-            frame = cap.process(frame_raw)  # Convert and downscale RGB frame
-            try:
-                rgb_proc_q.put(frame, block=False)
-            except queue.Full:
+            frame_raw = rgb_raw_q.get(block=True, timeout=FRAME_INTERVAL)
+            frame = cap.process(frame_raw)
+            
+            if rgb_proc_q.full():
                 rgb_proc_q.get_nowait()
-                rgb_proc_q.put(frame)
+            rgb_proc_q.put_nowait(frame)
+                
         except queue.Empty:
-            time.sleep(interval)
+            continue
+
 
 def depth_loop():
+    """Predict depth for processed frames and enqueue results."""
     while True:
         try:
-            frame_rgb = rgb_proc_q.get(block=True)
+            frame_rgb = rgb_proc_q.get(block=True, timeout=FRAME_INTERVAL)
             depth = predict_depth(frame_rgb)
-            try:
-                depth_q.put((frame_rgb, depth), block=False)
-            except queue.Full:
+            
+            if depth_q.full():
                 depth_q.get_nowait()
-                depth_q.put((frame_rgb, depth))
+            depth_q.put_nowait((frame_rgb, depth))
+                
         except queue.Empty:
-            time.sleep(interval)
+            continue
 
 
 def main():
     print(DEVICE_INFO)
-    # start the capture / process / depth threads
-    threading.Thread(target=capture_loop, daemon=True).start()
-    threading.Thread(target=processing_loop,daemon=True).start()
-    threading.Thread(target=depth_loop, daemon=True).start()
+    
+    # Start worker threads
+    threads = [
+        threading.Thread(target=capture_loop, daemon=True),
+        threading.Thread(target=processing_loop, daemon=True),
+        threading.Thread(target=depth_loop, daemon=True)
+    ]
+    
+    for t in threads:
+        t.start()
 
-    # start MJPEG streamer
+    # Initialize streamer
     streamer = MJPEGStreamer(
         host=STREAM_HOST,
         port=STREAM_PORT,
@@ -89,30 +107,24 @@ def main():
 
     try:
         while True:
-            # block until new frame is ready
             try:
-                rgb, depth = depth_q.get()
-
-                # build a CPU SBS uint8 frame and encode to JPEG
+                rgb, depth = depth_q.get(block=True, timeout=FRAME_INTERVAL)
+                
+                # Build and encode frame
                 sbs = MJPEGStreamer.make_sbs(
                     rgb,
                     depth,
                     ipd_uv=IPD_UV,
                     depth_strength=DEPTH_STRENGTH
                 )
-                jpg = streamer.encode_jpeg(sbs)
+                streamer.set_frame(streamer.encode_jpeg(sbs))
+                
             except queue.Empty:
-                # no new frame available, wait a bit
-                time.sleep(interval)
+                # No new frame, skip this iteration
                 continue
-            # push into the HTTP MJPEG server
-            streamer.set_frame(jpg)
-
-            # throttle to STREAM_FPS
-            time.sleep(interval)
 
     except KeyboardInterrupt:
-        print("\n[Main] Shutting down…")
+        print("\n[Main] Shutting down...")
     finally:
         streamer.stop()
 
