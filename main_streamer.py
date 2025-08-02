@@ -17,6 +17,7 @@ STREAM_HOST = "0.0.0.0"
 STREAM_PORT = 1303
 STREAM_FPS = 60
 STREAM_QUALITY = 80
+HALF_SBS = True  # Use Half-SBS mode for stereo streaming
 
 # stereo-warp parameters (match whatever you used in your GLSL)
 IPD_UV = 0.064
@@ -98,8 +99,8 @@ def main():
     streamer = MJPEGStreamer(
         host=STREAM_HOST,
         port=STREAM_PORT,
-        fps=STREAM_FPS,
-        quality=STREAM_QUALITY
+        quality=STREAM_QUALITY,
+        half_sbs=HALF_SBS,  # Use HalfSBS mode
     )
     streamer.start()
 
@@ -111,7 +112,7 @@ def main():
                 rgb, depth = depth_q.get(block=True, timeout=FRAME_INTERVAL)
                 
                 # Build and encode frame
-                sbs = MJPEGStreamer.make_sbs(
+                sbs = streamer.make_sbs(
                     rgb,
                     depth,
                     ipd_uv=IPD_UV,

@@ -1,5 +1,4 @@
 import threading
-import time
 import io
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
@@ -20,15 +19,14 @@ class MJPEGStreamer:
     def __init__(self,
                  host: str = "0.0.0.0",
                  port: int = 1303,
-                 fps: int = 60,
+                 half_sbs: bool = True,
                  quality: int = 100):
         self.boundary   = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-        self.delay      = 1.0 / fps
         self.quality    = quality
         self.frame      = None
         self.lock       = threading.Lock()
         self.shutdown   = threading.Event()
-
+        self.half_sbs   = half_sbs  # If True, use half-SBS mode (width=W), else full SBS (width=2W)    
         # We'll initialize these after the first frame is set
         self.sbs_width = None
         self.sbs_height = None
@@ -192,16 +190,13 @@ class MJPEGStreamer:
 
             if f:
                 yield self.boundary + f + b"\r\n"
-            time.sleep(self.delay)
         yield b""  # close out
 
-    @staticmethod
-    def make_sbs(rgb: np.ndarray,
-                 depth: np.ndarray,
-                 ipd_uv: float,
-                 depth_strength: float,
-                 *,
-                 half: bool = True
+    def make_sbs(self,
+                rgb: np.ndarray,
+                depth: np.ndarray,
+                ipd_uv: float,
+                depth_strength: float
                 ) -> np.ndarray:
         """
         Build a side-by-side stereo frame.
@@ -243,7 +238,7 @@ class MJPEGStreamer:
         # Full-resolution SBS: concatenate horizontally
         sbs_full = np.concatenate((left, right), axis=1)  # H × (2W) × 3
 
-        if not half:
+        if not self.half_sbs:
             return sbs_full.astype(np.uint8)
 
         # Half-SBS: simple 2:1 sub-sampling in X direction
@@ -254,7 +249,7 @@ class MJPEGStreamer:
         # exit()
         return sbs_half.astype(np.uint8)
     
-    def make_sbs_tensor(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, depth_strength: float = 0.1, half: bool = True) -> np.array:
+    def make_sbs_tensor(self, rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, depth_strength: float = 0.1) -> np.array:
         """
         Build a side-by-side stereo frame using PyTorch tensors with DirectML support.
 
@@ -303,7 +298,7 @@ class MJPEGStreamer:
         # Concatenate for full SBS
         sbs_full = torch.cat([left, right], dim=1)  # (H, 2W, 3)
         
-        if not half:
+        if not self.half_sbs:
             return (sbs_full * 255).clamp(0, 255).byte().cpu().numpy()
         
         # For half-SBS, use strided sampling
@@ -319,7 +314,7 @@ class MJPEGStreamer:
         if self.sbs_width is None or self.sbs_height is None:
             self.sbs_height, self.sbs_width = arr.shape[:2]
             self.index_bytes = self.template.format(
-                fps=self.delay and int(1/self.delay) or 60,
+                fps=60,
                 width=self.sbs_width,
                 height=self.sbs_height
             ).encode("utf-8")
