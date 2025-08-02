@@ -1,28 +1,20 @@
 # Desktop2Stereo: 2D desktop to 3D stereo SBS (Support AMD/NVIDIA GPU/Apple Silicon, powered by Depth Anything AI Models)
 [中文版本](./readmeCN.md)
-## Supported Hardware  
-1. AMD GPU
-2. NVIDIA GPU 
-3. Apple Silicon Chip (M1, M2, M3, M4, ...)
-4. DirectML compatible devices (for **Windows** only)
-## Supported OS
-1. Windows 10/11 64-bit OS  
-2. MacOS 10.9 or later
-3. Linux (beta)
-# Install and Run  
-## Windows 
-1. Install latest GPU driver  
-**AMD GPU**: Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). 
-**NVIDIA GPU**: Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.nvidia.com/en-us/geforce/drivers/).
-**Other DirectML devices**: Please install latest hardware driver accordingly.
-2. Install **Python 3.10**  
-    Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) and install.
-3. Download Desktop2Stereo app  
-   Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/tag/v1.1) and unzip it to local disk. 
-4. Install python environment  
-**AMD GPU and other DirectML compatible devies**: Doulbe click `install-dml.bat`  
-**NVIDIA GPU**: Doulbe click `install-cuda.bat`  
-1. Run Stereo Desktop application  
+## Hardware
+AMD/NVIDIA GPUs and other DirectML compatible devices
+## OS
+Windows 10/11 64-bit OS
+# Software
+1. AMD GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). For Other Compatible DirectML devices: (i.e. Nvidia GPU, .etc) please install latest hardware driver. 
+2. Install **Python 3.10** from [Python.org](https://www.python.org/ftp/python/3.10.0/python-3.10.0-amd64.exe)
+## Install and Run
+1. Download repository to local disk
+```powershell
+git clone https://github.com/lc700x/desktop2stereo
+```
+2. Install python environment  
+Doulbe click `install.bat`
+3. Run Stereo Desktop application  
 Doulbe click `run.bat`
 ## MacOS 
 1. Install **Python 3.10**  
