@@ -87,12 +87,14 @@
    ```
    默认模型 ID：`depth-anything/Depth-Anything-V2-Small-hf`
    **支持的全部模型**：  
-   `LiheYoung/depth-anything-large-hf`  
-   `LiheYoung/depth-anything-base-hf`  
-   `LiheYoung/depth-anything-small-hf`  
-   `depth-anything/Depth-Anything-V2-Large-hf`  
-   `depth-anything/Depth-Anything-V2-Base-hf`  
-   `depth-anything/Depth-Anything-V2-Small-hf`
+   ```Bash
+   LiheYoung/depth-anything-large-hf
+   LiheYoung/depth-anything-base-hf
+   LiheYoung/depth-anything-small-hf
+   depth-anything/Depth-Anything-V2-Large-hf
+   depth-anything/Depth-Anything-V2-Base-hf
+   depth-anything/Depth-Anything-V2-Small-hf
+   ```
 
 ## 参考文献
 
