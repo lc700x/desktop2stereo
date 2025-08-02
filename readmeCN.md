@@ -2,31 +2,30 @@
 
 [English Version](./README.md)
 
-## 硬件要求
+## 支持的硬件
+1. AMD GPU
+2. NVIDIA GPU
+3. Apple Silicon芯片（M1、M2、M3、M4 等）
+4.其他支持 DirectML 的设备（仅支持**Windows**）
+## 支持的操作系统
+1. Windows 10/11 64 位
+2. MacOS 10.9 或更高版本
+3. Linux（测试版）
 
-支持 DirectML 的 AMD/NVIDIA 显卡及其他兼容设备
-
-## 操作系统
-
-Windows 10/11 64 位系统
-
-# 软件要求
-
-1. 对于 AMD 显卡，请从 [AMD 驱动程序与支持](https://www.amd.com/en/support/download/drivers.html) 下载并安装 GPU 驱动程序。对于其他 DirectML 兼容设备（如 Nvidia GPU），请安装最新的硬件驱动。
-2. 从 [Python.org](https://www.python.org/ftp/python/3.10.0/python-3.10.0-amd64.exe) 安装 Python 3.10。
-
-## 安装与运行
-
-1. 将代码库下载到本地磁盘：
-
-```powershell
-git clone https://github.com/lc700x/desktop2stereo
-```
-
-2. 安装 Python 环境
-   双击 `install.bat`
-
-3. 运行 Stereo Desktop 应用程序
+# 安装与运行
+## Windows
+1. 安装最新的 GPU 驱动  
+   **AMD GPU**：从 [AMD 驱动和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新的 GPU 驱动。对于其他兼容 DirectML 的设备，请安装最新的硬件驱动。  
+   **NVIDIA GPU**：从 [NVIDIA 驱动和支持](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新的 GPU 驱动。
+   **其他DirectML设备**：下载安装最新的设备驱动
+2.  安装 **Python 3.10**  
+从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe)下载安装
+3. 下载Desktop2Stereo  
+   下载并解压[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/tag/v1.1)到本地
+4. 安装 Python 环境  
+   **AMD GPU**：双击 `install-dml.bat`  
+   **NVIDIA GPU**：双击 `install-cuda.bat`
+5. 运行 Stereo Desktop 应用  
    双击 `run.bat`
 
 ## MacOS
