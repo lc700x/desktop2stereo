@@ -20,12 +20,8 @@
    **其他DirectML设备**：下载安装最新的设备驱动
 2.  安装 **Python 3.10**  
 从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe)下载安装
-3. 将项目库下载到本地磁盘
-
-```powershell
-git clone https://github.com/lc700x/desktop2stereo
-```
-
+3. 下载Desktop2Stereo  
+   下载并解压[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/tag/v1.1)到本地
 4. 安装 Python 环境  
    **AMD GPU**：双击 `install-dml.bat`  
    **NVIDIA GPU**：双击 `install-cuda.bat`
@@ -36,10 +32,8 @@ git clone https://github.com/lc700x/desktop2stereo
 
 1. 安装 **Python 3.10**
    从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-macos11.pkg) 
-2. 将项目库下载到本地磁盘
-   ```bash
-   git clone https://github.com/lc700x/desktop2stereo
-   ```
+2. 下载Desktop2Stereo  
+   下载并解压[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/tag/v1.1)到本地
 3. 安装 Python 环境  
    双击 `install-mps` 可执行文件
 4. 运行 Stereo Desktop 应用  
@@ -56,11 +50,8 @@ git clone https://github.com/lc700x/desktop2stereo
     sudo apt update
     sudo apt-get install python3.10
     ```
-3. 将项目库下载到本地磁盘
-   ```bash
-   git clone https://github.com/lc700x/desktop2stereo
-   ```
-
+3. 下载Desktop2Stereo  
+   下载并解压[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/tag/v1.1)到本地
 4. 安装 Python 环境  
    **AMD GPU**：双击 `install-rocm.bat`  
    **NVIDIA GPU**：双击 `install-cuda.bat`

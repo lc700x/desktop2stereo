@@ -17,10 +17,8 @@
 **Other DirectML devices**: Please install latest hardware driver accordingly.
 2. Install **Python 3.10**  
     Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) and install.
-3. Download repository to local disk  
-    ```powershell
-    git clone https://github.com/lc700x/desktop2stereo
-    ```
+3. Download Desktop2Stereo app  
+   Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/tag/v1.1) and unzip it to local disk. 
 4. Install python environment  
 **AMD GPU and other DirectML compatible devies**: Doulbe click `install-dml.bat`  
 **NVIDIA GPU**: Doulbe click `install-cuda.bat`  
@@ -29,10 +27,8 @@ Doulbe click `run.bat`
 ## MacOS 
 1. Install **Python 3.10**  
     Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-macos11.pkg) and install.
-2. Download repository to local disk
-    ```bash
-    git clone https://github.com/lc700x/desktop2stereo
-    ```
+2. Download Desktop2Stereo app  
+   Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/tag/v1.1) and unzip it to local disk.
 3. Install python environment  
 Doulbe click `install-mps` executable
 1. Run Stereo Desktop application  
@@ -48,10 +44,8 @@ Doulbe click `run_mac` executable
     sudo apt update
     sudo apt-get install python3.10
     ```
-2. Download repository to local disk
-    ```bash
-    git clone https://github.com/lc700x/desktop2stereo
-    ```
+2. Download Desktop2Stereo app  
+   Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/tag/v1.1) and unzip it to local disk.
 3. Install python environment  
 **AMD GPU**: Doulbe click `install-rocm.bat`  
 **NVIDIA GPU**: Doulbe click `install-cuda.bat`  
