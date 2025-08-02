@@ -2,7 +2,6 @@
 import glfw
 import moderngl
 import numpy as np
-import screeninfo
 import os
 import platform
 
@@ -122,12 +121,15 @@ class StereoWindow:
 
     def position_on_monitor(self, monitor_index=0):
         """Position window on specified monitor (0-based index)"""
-        monitors = screeninfo.get_monitors()
+        monitors = glfw.get_monitors()
         if monitor_index < len(monitors):
             monitor = monitors[monitor_index]
-            # Center window on monitor
-            x = monitor.x + (monitor.width - self.window_size[0]) // 2
-            y = monitor.y + (monitor.height - self.window_size[1]) // 2
+            mon_x, mon_y = glfw.get_monitor_pos(monitor)
+            vidmode = glfw.get_video_mode(monitor)
+            mon_w, mon_h = vidmode.size.width, vidmode.size.height
+
+            x = mon_x + (mon_w - self.window_size[0]) // 2
+            y = mon_y + (mon_h - self.window_size[1]) // 2
             glfw.set_window_pos(self.window, x, y)
 
     def get_current_monitor(self):
@@ -138,7 +140,7 @@ class StereoWindow:
             
         # Get window center
         win_x, win_y = glfw.get_window_pos(self.window)
-        win_w, win_h = glfw.get_window_size(self.window)
+        win_w, win_h = glfw.get_framebuffer_size(self.window)
         window_center_x = win_x + win_w // 2
         window_center_y = win_y + win_h // 2
         
@@ -160,7 +162,7 @@ class StereoWindow:
         if not self._fullscreen:
             # Enter fullscreen mode, Remember current window state
             self._last_window_position = glfw.get_window_pos(self.window)
-            self._last_window_size     = glfw.get_window_size(self.window)
+            self._last_window_size     = glfw.get_framebuffer_size(self.window)
 
             # Monitor geometry
             mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
@@ -243,8 +245,7 @@ class StereoWindow:
         self.ctx.clear(0.1, 0.1, 0.1)
         if not self.color_tex or not self.depth_tex:
             return
-
-        width, height = glfw.get_window_size(self.window)
+        width, height = glfw.get_framebuffer_size(self.window)
         self.color_tex.use(location=0)
         self.depth_tex.use(location=1)
 

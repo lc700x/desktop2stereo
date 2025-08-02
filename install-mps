@@ -56,5 +56,5 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "Python environment deployed successfully."
-read -p "Press enter or close this terminal window to exit..."
+read -p "You can close this terminal window to exit..."
 exit

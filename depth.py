@@ -1,8 +1,13 @@
 # depth.py
 import platform
 if platform.system() == "Darwin":
-    import os
+    import os, warnings
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+    warnings.filterwarnings(
+        "ignore",
+        message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
+        category=UserWarning
+)
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
