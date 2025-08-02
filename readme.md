@@ -64,26 +64,26 @@ Doulbe click `run_linux` executable
 1. Change Captured Monitor and Scale
 Modify the `MONITOR_INDEX` in the `main.py` (1 - Primary Monitor).
 Recomand to set `DOWNSCALE_FACTOR` value to 0.5 (2160p to 1080P) or set system resolution to 1080p for smoother experience
-```python
-# Set the monitor index and downscale factor
-MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
-DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling, 0.5 is recommended for performance
-```
-1. Change Depth Model
+    ```python
+    # Set the monitor index and downscale factor
+    MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
+    DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling, 0.5 is recommended for performance
+    ```
+2. Change Depth Model
 Modify the depth model id in the `depth.py` from [HuggingFace](https://huggingface.co/), the model id **must ends with** `-hf`. 
-```python
-# Model configuration
-MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
-DTYPE = torch.float16
-```
-- Default model id: `depth-anything/Depth-Anything-V2-Small-hf`
-- All supported models:  
-`LiheYoung/depth-anything-large-hf`  
-`LiheYoung/depth-anything-base-hf`  
-`LiheYoung/depth-anything-small-hf`  
-`depth-anything/Depth-Anything-V2-Large-hf`  
-`depth-anything/Depth-Anything-V2-Base-hf`  
-`depth-anything/Depth-Anything-V2-Small-hf`  
+    ```python
+    # Model configuration
+    MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+    DTYPE = torch.float16
+    ```
+    Default model id: `depth-anything/Depth-Anything-V2-Small-hf`  
+    **All supported models**:  
+    `LiheYoung/depth-anything-large-hf`  
+    `LiheYoung/depth-anything-base-hf`  
+    `LiheYoung/depth-anything-small-hf`  
+    `depth-anything/Depth-Anything-V2-Large-hf`  
+    `depth-anything/Depth-Anything-V2-Base-hf`  
+    `depth-anything/Depth-Anything-V2-Small-hf`  
 ## References
 ```BIBTEX
 @article{depth_anything_v2,

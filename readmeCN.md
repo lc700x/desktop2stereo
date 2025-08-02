@@ -29,7 +29,6 @@
    双击 `run.bat`
 
 ## MacOS
-
 1. 安装 **Python 3.10**
    从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-macos11.pkg) 
 2. 下载Desktop2Stereo  
@@ -59,7 +58,6 @@
    双击 `run_linux` 可执行文件
 
 # 设置 Desktop2Stereo 显示
-
 1. 将 **Stereo SBS Viewer** 窗口拖动到第二块（虚拟）显示器上
 2. 在主屏幕上播放你的视频/游戏（如需可切换为全屏模式）
 3. 在第二块（虚拟）显示器上点击 **Stereo SBS Viewer** 窗口，确保该窗口处于活动状态。按 `space` 键切换全屏模式
@@ -71,34 +69,30 @@
 
 
 ## 可选项
-
 1. 更改捕获的显示器和缩放比例  
    在 `main.py` 中修改 `MONITOR_INDEX`（1 - 主显示器）  
    建议将 `DOWNSCALE_FACTOR` 设置为 0.5（2160p 降至 1080p），或将系统分辨率设置为 1080p，以获得更流畅的体验
-
-```python
-# 设置显示器索引和缩放系数
-MONITOR_INDEX = 1  # 设置为 0 代表所有显示器，1 代表主显示器，依此类推
-DOWNSCALE_FACTOR = 0.5 # 设置为 1.0 表示不缩放，推荐设置为 0.5 提升性能
-```
+   ```python
+   # 设置显示器索引和缩放系数
+   MONITOR_INDEX = 1  # 设置为 0 代表所有显示器，1 代表主显示器，依此类推
+   DOWNSCALE_FACTOR = 0.5 # 设置为 1.0 表示不缩放，推荐设置为 0.5 提升性能
+   ```
 
 2. 更换深度模型  
    在 `depth.py` 中修改 [HuggingFace](https://huggingface.co/) 上的深度模型 ID，模型 ID **必须以** `-hf` 结尾
-
-```python
-# 模型配置
-MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
-DTYPE = torch.float16
-```
-
-- 默认模型 ID：`depth-anything/Depth-Anything-V2-Small-hf`
-- 支持的全部模型：  
-  `LiheYoung/depth-anything-large-hf`  
-  `LiheYoung/depth-anything-base-hf`  
-  `LiheYoung/depth-anything-small-hf`  
-  `depth-anything/Depth-Anything-V2-Large-hf`  
-  `depth-anything/Depth-Anything-V2-Base-hf`  
-  `depth-anything/Depth-Anything-V2-Small-hf`
+   ```python
+   # 模型配置
+   MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+   DTYPE = torch.float16
+   ```
+   默认模型 ID：`depth-anything/Depth-Anything-V2-Small-hf`
+   **支持的全部模型**：  
+   `LiheYoung/depth-anything-large-hf`  
+   `LiheYoung/depth-anything-base-hf`  
+   `LiheYoung/depth-anything-small-hf`  
+   `depth-anything/Depth-Anything-V2-Large-hf`  
+   `depth-anything/Depth-Anything-V2-Base-hf`  
+   `depth-anything/Depth-Anything-V2-Small-hf`
 
 ## 参考文献
 
