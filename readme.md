@@ -8,8 +8,8 @@ Windows 10/11 64-bit OS
 1. AMD GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). For Other Compatible DirectML devices: (i.e. Nvidia GPU, .etc) please install latest hardware driver. 
 2. Install **Python 3.10** from [Python.org](https://www.python.org/ftp/python/3.10.0/python-3.10.0-amd64.exe)
 ## Install and Run
-1. Download Desktop2Stereo
-   Download the latest release and unzip it to local disk. 
+1. Download Desktop2Stereo app
+   Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/tag/v1.0) and unzip it to local disk. 
 2. Install python environment  
 Doulbe click `install.bat`
 3. Run Stereo Desktop application  
