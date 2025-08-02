@@ -37,7 +37,7 @@ class MJPEGStreamer:
         tpl = """<!DOCTYPE html>
 <html>
 <head>
-  <title>iw3 desktop streaming</title>
+  <title>Desktop2Stereo streaming</title>
   <script>
     const FPS = {fps};
     const WIDTH = {width};
@@ -196,7 +196,65 @@ class MJPEGStreamer:
         yield b""  # close out
 
     @staticmethod
-    def make_sbs(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, depth_strength: float = 0.1, half: bool = True) -> torch.Tensor:
+    def make_sbs(rgb: np.ndarray,
+                 depth: np.ndarray,
+                 ipd_uv: float,
+                 depth_strength: float,
+                 *,
+                 half: bool = True
+                ) -> np.ndarray:
+        """
+        Build a side-by-side stereo frame.
+
+        Parameters
+        ----------
+        rgb : H×W×3 float32 array in range [0..1]
+        depth : H×W float32 array in range [0..1]
+        ipd_uv : float
+            interpupillary distance in UV space (0–1, relative to image width)
+        depth_strength : float
+            multiplier applied to the per-pixel horizontal parallax
+        half : bool, optional
+            If True, returns “half-SBS”: the output width equals W.
+            Otherwise returns full-width SBS (2W).
+
+        Returns
+        -------
+        np.ndarray
+            uint8 image of shape (H, 2W, 3) if half == False,
+            or (H, W, 3) when half == True.
+        """
+        H, W = depth.shape
+        inv = 1.0 - depth
+        max_px = int(ipd_uv * W)
+        shifts = (inv * max_px * depth_strength).astype(np.int32)
+
+        left  = np.zeros_like(rgb)
+        right = np.zeros_like(rgb)
+        xs    = np.arange(W)[None, :]
+
+        for y in range(H):
+            s = shifts[y]
+            xx_left  = np.clip(xs + (s // 2),  0, W-1)
+            xx_right = np.clip(xs - (s // 2),  0, W-1)
+            left[y]  = rgb[y, xx_left]
+            right[y] = rgb[y, xx_right]
+
+        # Full-resolution SBS: concatenate horizontally
+        sbs_full = np.concatenate((left, right), axis=1)  # H × (2W) × 3
+
+        if not half:
+            return sbs_full.astype(np.uint8)
+
+        # Half-SBS: simple 2:1 sub-sampling in X direction
+        # (i.e., take every second column)
+        sbs_half = sbs_full[:, ::2, :]  # H × W × 3
+        # import cv2  # For debugging purposes, can be removed later
+        # cv2.imwrite("sbs_half.jpg", sbs_half)  # Debugging line, can be removed
+        # exit()
+        return sbs_half.astype(np.uint8)
+    
+    def make_sbs_tensor(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, depth_strength: float = 0.1, half: bool = True) -> np.array:
         """
         Build a side-by-side stereo frame using PyTorch tensors with DirectML support.
 

@@ -1,25 +1,43 @@
 # Desktop2Stereo: 2D desktop to 3D stereo SBS (Support AMD/NVIDIA GPUs with DirectML, powered by Depth Anything AI Models)
 [中文版本](./readmeCN.md)
-## Hardware
-AMD/NVIDIA GPUs and other DirectML compatible devices
-## OS
-Windows 10/11 64-bit OS
-# Software
-1. AMD GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). For Other Compatible DirectML devices: (i.e. Nvidia GPU, .etc) please install latest hardware driver. 
+## Supported Hardware  
+1. AMD GPUs and other DirectML compatible devices
+2. NVIDIA GPUs 
+3. Apple Silicon Chips (M1, M2, M3, M4, ...)
+## Supported OS
+1. Windows 10/11 64-bit OS  
+2. MacOS  
+3. Linux 
+# Install
+## Install for Windows 
+1. Install latest GPU driver  
+**AMD GPUs**: Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). For Other Compatible DirectML devices: please install latest hardware driver. Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.nvidia.com/en-us/geforce/drivers/). 
+**NVIDIA GPUs**: 
 2. Install **Python 3.10** from [Python.org](https://www.python.org/ftp/python/3.10.0/python-3.10.0-amd64.exe)
-## Install and Run
-1. Download repository to local disk
+## 
+3. Download repository to local disk  
 ```powershell
 git clone https://github.com/lc700x/desktop2stereo
 ```
-2. Install python environment  
-Doulbe click `install.bat`
-3. Run Stereo Desktop application  
+4. Install python environment  
+**AMD GPUs**: Doulbe click `install-dml.bat`  
+**NVIDIA GPUs**: Doulbe click `install-cuda.bat`  
+5. Run Stereo Desktop application  
 Doulbe click `run.bat`
-4. Move the **Stereo SBS Viewer** window to another (virtual) monitor display.
-5. Set your video/game on the main screen (full screen mode if you needed)
-6. Click the **Stereo SBS Viewer** on the another (virtual) monitor display to make sure the **Stereo SBS Viewer** is the 1st active application. Press `space` to toggle full screen mode. 
-6. Now you can use AR/VR to view the Full/Half SBS output. 
+## Install for MacOS 
+1. Download repository to local disk
+```bash
+git clone https://github.com/lc700x/desktop2stereo
+```
+4. Install python environment  
+Doulbe click `install.bat`
+5. Run Stereo Desktop application  
+Doulbe click `run.bat`
+# 
+1. Move the **Stereo SBS Viewer** window to another (virtual) monitor display.
+2. Set your video/game on the main screen (full screen mode if you needed)
+3. Click the **Stereo SBS Viewer** on the another (virtual) monitor display to make sure the **Stereo SBS Viewer** is the 1st active application. Press `space` to toggle full screen mode. 
+4. Now you can use AR/VR to view the Full/Half SBS output. 
 - AR need to switch to 3D mode to connect as a 3840*1080 display
 ![Full-SBS](./assets/FullSBS.png)
 - VR need to use 2nd Display/Virtual Display (VDD) with Desktop+[PC VR] or Virtual Desktop[PC/Standalone VR] or OBS+Wolvic [Standalone VR] to comopose the SBS display to 3D.

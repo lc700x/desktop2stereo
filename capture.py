@@ -54,7 +54,7 @@ class DesktopGrabber:
         # But we stripped alpha, so img is BGR now (shape H,W,3)
         return img
 
-    def process_numpy(self, img: np.ndarray) -> np.ndarray:
+    def process(self, img: np.ndarray) -> np.ndarray:
         """
         Process raw BGR image: convert to RGB and apply downscale if set.
         This can be called in a separate thread.
@@ -68,7 +68,7 @@ class DesktopGrabber:
                                  interpolation=cv2.INTER_AREA)
         return img_rgb
     
-    def process(self, img: np.ndarray) -> torch.Tensor:
+    def process_tensor(self, img: np.ndarray) -> torch.Tensor:
         img_bgr = torch.from_numpy(img).to(DEVICE, dtype=torch.uint8, non_blocking=True)  # H,W,C
         img_rgb = img_bgr[..., [2,1,0]]  # BGR to RGB
         chw = img_rgb.permute(2, 0, 1).float() / 255.0  # (3,H,W)
