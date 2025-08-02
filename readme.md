@@ -62,8 +62,8 @@ Doulbe click `run_linux` executable
 ![Half-SBS](./assets/HalfSBS.png)
 ## Optional
 1. Change Captured Monitor and Scale
-Modify the `MONITOR_INDEX` in the `main.py` (1 - Primary Monitor).
-Recomand to set `DOWNSCALE_FACTOR` value to 0.5 (2160p to 1080P) or set system resolution to 1080p for smoother experience
+Modify the `MONITOR_INDEX` in the `main.py` (1 - Primary Monitor).  
+Recommend to set `DOWNSCALE_FACTOR` value to 0.5 (2160p to 1080P) or set system resolution to 1080p for a smoother experience. 
     ```python
     # Set the monitor index and downscale factor
     MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
@@ -78,12 +78,14 @@ Modify the depth model id in the `depth.py` from [HuggingFace](https://huggingfa
     ```
     Default model id: `depth-anything/Depth-Anything-V2-Small-hf`  
     **All supported models**:  
-    `LiheYoung/depth-anything-large-hf`  
-    `LiheYoung/depth-anything-base-hf`  
-    `LiheYoung/depth-anything-small-hf`  
-    `depth-anything/Depth-Anything-V2-Large-hf`  
-    `depth-anything/Depth-Anything-V2-Base-hf`  
-    `depth-anything/Depth-Anything-V2-Small-hf`  
+    ```Bash
+   LiheYoung/depth-anything-large-hf
+   LiheYoung/depth-anything-base-hf
+   LiheYoung/depth-anything-small-hf
+   depth-anything/Depth-Anything-V2-Large-hf
+   depth-anything/Depth-Anything-V2-Base-hf
+   depth-anything/Depth-Anything-V2-Small-hf
+   ```
 ## References
 ```BIBTEX
 @article{depth_anything_v2,
