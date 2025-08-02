@@ -16,7 +16,7 @@
 ## Windows
 1. 安装最新的 GPU 驱动  
    **AMD GPU**：从 [AMD 驱动和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新的 GPU 驱动。对于其他兼容 DirectML 的设备，请安装最新的硬件驱动。  
-   **NVIDIA GPU**：从 [NVIDIA 驱动和支持](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新的 GPU 驱动。
+   **NVIDIA GPU**：从 [NVIDIA 驱动和支持](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新的 GPU 驱动。  
    **其他DirectML设备**：下载安装最新的设备驱动
 2.  安装 **Python 3.10**  
 从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe)下载安装
