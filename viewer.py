@@ -101,7 +101,7 @@ class StereoWindow:
 
     def add_logo(self, window):
         import cv2
-        logo = 'assets/logo.png'  # Path to your icon file
+        logo = './logo.png'  # Path to your icon file
         img = cv2.imread(logo, cv2.IMREAD_UNCHANGED)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # <--- convert from BGR to RGB
 

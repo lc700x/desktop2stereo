@@ -1,5 +1,8 @@
 /develop.ipynb
 /deploy.md
 /__pycache__
-/.env
-/views
+/.env*
+*debug*
+*dev*
+/streamer
+views
