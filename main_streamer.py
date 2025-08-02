@@ -24,9 +24,9 @@ DEPTH_STRENGTH = 0.1
 FRAME_INTERVAL = 1.0 / STREAM_FPS
 
 # Queues for pipelining (reduced maxsize for lower latency)
-rgb_raw_q = queue.Queue(maxsize=2)
-rgb_proc_q = queue.Queue(maxsize=2)
-depth_q = queue.Queue(maxsize=2)
+rgb_raw_q = queue.Queue(maxsize=3)
+rgb_proc_q = queue.Queue(maxsize=3)
+depth_q = queue.Queue(maxsize=3)
 
 
 def capture_loop():
