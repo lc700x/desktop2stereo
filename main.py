@@ -7,9 +7,9 @@ from capture import DesktopGrabber
 from depth import predict_depth, process, DEVICE_INFO
 from viewer import StereoWindow
 
-# Config
-MONITOR_INDEX = 1
-DOWNSCALE_FACTOR = 0.5  # 0.5 for better performance
+# Set the monitor index and downscale factor
+MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
+DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling, 0.5 is recommended for performance
 
 # Optional HuggingFace mirror
 if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
