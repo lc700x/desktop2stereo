@@ -53,29 +53,3 @@ class DesktopGrabber:
         # img is already in BGRA byte order - mss returns from screen in BGRA order
         # But we stripped alpha, so img is BGR now (shape H,W,3)
         return img
-
-    def process(self, img: np.ndarray) -> np.ndarray:
-        """
-        Process raw BGR image: convert to RGB and apply downscale if set.
-        This can be called in a separate thread.
-        """
-        # Convert BGR to RGB
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        # Downscale if requested
-        if self.downscale < 1.0:
-            img_rgb = cv2.resize(img_rgb, (self.scaled_width, self.scaled_height),
-                                 interpolation=cv2.INTER_AREA)
-        return img_rgb
-    
-    def process_tensor(self, img: np.ndarray) -> torch.Tensor:
-        img_bgr = torch.from_numpy(img).to(DEVICE, dtype=torch.uint8, non_blocking=True)  # H,W,C
-        img_rgb = img_bgr[..., [2,1,0]]  # BGR to RGB
-        chw = img_rgb.permute(2, 0, 1).float() / 255.0  # (3,H,W)
-        if self.downscale < 1.0:
-            _, H, W = chw.shape
-            new_h, new_w = int(H * self.downscale), int(W * self.downscale)
-            chw = F.interpolate(chw.unsqueeze(0), size=(new_h, new_w), mode='bilinear', align_corners=False).squeeze(0)
-        # Add batch dim
-        chw = chw.squeeze(0)  # (3,H,W)
-        return chw
