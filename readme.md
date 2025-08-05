@@ -30,7 +30,7 @@
 2. Download Desktop2Stereo app  
    Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.  
 3. Install Python environment  
-    Doulbe click `install-mps` executable.  
+    Doulbe click `install-mps.command` executable.  
 4. Run Stereo2Desktop application  
     Doulbe click `run_mac` executable.  
 ## Linux (Beta)
