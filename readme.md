@@ -29,7 +29,7 @@ Doulbe click `run.bat`.
     Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-macos11.pkg) and install.  
 2. Download Desktop2Stereo app  
    Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.  
-3. Install python environment  
+3. Install Python environment  
 Doulbe click `install-mps` executable.  
 4. Run Stereo2Desktop application  
 Doulbe click `run_mac` executable.  
@@ -46,9 +46,9 @@ Doulbe click `run_mac` executable.
     ```
 2. Download Desktop2Stereo app  
    Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.
-3. Install python environment  
-**AMD GPU**: Doulbe click `install-rocm.bat`.  
-**NVIDIA GPU**: Doulbe click `install-cuda.bat`.  
+3. Install Python environment  
+**AMD GPU**: Doulbe click `install-rocm`.  
+**NVIDIA GPU**: Doulbe click `install-cuda`.  
 1. Run Stereo2Desktop application  
 Doulbe click `run_linux` executable.  
 # Setup the Desktop2Stereo display  
