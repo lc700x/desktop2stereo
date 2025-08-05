@@ -1,6 +1,8 @@
 # depth.py
 import platform
-if platform.system() == "Darwin":
+# get system type
+os_name = platform.system()
+if  os_name == "Darwin":
     import os, warnings
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
     warnings.filterwarnings(
