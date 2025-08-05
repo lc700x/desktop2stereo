@@ -87,13 +87,11 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     depth = depth / depth.max().clamp(min=1e-6)
     return depth.cpu().numpy().astype('float32')
 
-def process(img: np.ndarray, downscale: float = 0.5) -> np.ndarray:
+def process(img_rgb: np.ndarray, downscale: float = 0.5) -> np.ndarray:
         """
         Process raw BGR image: convert to RGB and apply downscale if set.
         This can be called in a separate thread.
         """
-        # Convert BGR to RGB
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         scaled_width = int(img_rgb.shape[1] * downscale)
         scaled_height = int(img_rgb.shape[0] * downscale)
         # Downscale if requested
@@ -103,8 +101,7 @@ def process(img: np.ndarray, downscale: float = 0.5) -> np.ndarray:
         return img_rgb
 
 def process_tensor(img: np.ndarray, downscale: float = 0.5) -> torch.Tensor:
-        img_bgr = torch.from_numpy(img).to(DEVICE, dtype=torch.uint8, non_blocking=True)  # H,W,C
-        img_rgb = img_bgr[..., [2,1,0]]  # BGR to RGB
+        img_rgb = torch.from_numpy(img).to(DEVICE, dtype=torch.uint8, non_blocking=True)  # H,W,C
         chw = img_rgb.permute(2, 0, 1).float()  # (3,H,W)
         if downscale < 1.0:
             H, W, _ = img_rgb.shape

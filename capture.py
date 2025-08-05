@@ -3,7 +3,6 @@ import numpy as np
 import win32gui, win32ui
 import mss
 from PIL import Image
-import cv2
 from depth import DEVICE
 import torch
 import torch.nn.functional as F
@@ -104,7 +103,4 @@ class DesktopGrabber:
         img_array = np.frombuffer(img_with_mouse, dtype=np.uint8)
         img_array = img_array.reshape((self._mon['height'], self._mon['width'], 3))
         
-        # Convert from RGB to BGR (to match original behavior)
-        img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-        
-        return img_bgr
+        return img_array
