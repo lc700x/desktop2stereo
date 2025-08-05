@@ -7,7 +7,7 @@
 4. DirectML compatible devices (for **Windows** only)
 ## Supported OS  
 1. Windows 10/11 64-bit OS  
-2. MacOS 10.9 or later  
+2. MacOS 10.16 or later  
 3. Linux (beta)  
 # Install and Run  
 ## Windows  
@@ -20,19 +20,19 @@
 3. Download Desktop2Stereo app  
    Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.  
 4. Install python environment  
-**AMD GPU and other DirectML compatible devies**: Doulbe click `install-dml.bat`.  
-**NVIDIA GPU**: Doulbe click `install-cuda.bat`.  
+    **AMD GPU and other DirectML compatible devies**: Doulbe click `install-dml.bat`.  
+    **NVIDIA GPU**: Doulbe click `install-cuda.bat`.  
 5. Run Stereo2Desktop application  
-Doulbe click `run.bat`.  
+    Doulbe click `run.bat`.  
 ## MacOS 
 1. Install **Python 3.10**  
     Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-macos11.pkg) and install.  
 2. Download Desktop2Stereo app  
    Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.  
 3. Install Python environment  
-Doulbe click `install-mps` executable.  
+    Doulbe click `install-mps.command` executable.  
 4. Run Stereo2Desktop application  
-Doulbe click `run_mac` executable.  
+    Doulbe click `run_mac` executable.  
 ## Linux (Beta)
 1. Install latest GPU driver  
 **AMD GPU**: Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). 
@@ -47,10 +47,19 @@ Doulbe click `run_mac` executable.
 2. Download Desktop2Stereo app  
    Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.
 3. Install Python environment  
-**AMD GPU**: Doulbe click `install-rocm`.  
-**NVIDIA GPU**: Doulbe click `install-cuda`.  
-1. Run Stereo2Desktop application  
-Doulbe click `run_linux` executable.  
+    **AMD GPU**: Run `install-rocm.bash`: 
+    ```bash
+    bash install-rocm.bash
+    ```
+    **NVIDIA GPU**: Run `install-cuda.bash`:  
+    ```bash
+    bash install-cuda.bash
+    ```
+4. Run Stereo2Desktop application  
+    Run `run_linux.bash`:  
+    ```bash
+    bash run_linux.bash
+    ```
 # Setup the Desktop2Stereo display  
 1. Move the **Stereo SBS Viewer** window to second (virtual) monitor display.  
 2. Set your video/game on the main screen (full screen mode if you needed).  

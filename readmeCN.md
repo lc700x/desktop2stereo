@@ -8,8 +8,8 @@
 4. 其他支持 DirectML 的设备（仅支持**Windows**）  
 ## 支持的操作系统  
 1. Windows 10/11 64 位  
-2. MacOS 10.9 或更高版本  
-3. Linux（测试版） 
+2. MacOS 10.19 或更高版本  
+3. Linux（测试） 
 
 # 安装与运行  
 ## Windows  
@@ -33,7 +33,7 @@
 2. 下载Desktop2Stereo  
    下载并解压[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest)到本地。  
 3. 安装 Python 环境  
-   双击 `install-mps` 可执行文件。  
+   双击 `install-mps.command` 可执行文件。  
 4. 运行 Stereo Desktop 应用  
    双击 `run_mac` 可执行文件。  
 
@@ -43,7 +43,7 @@
    **NVIDIA GPU**：从 [NVIDIA 驱动和支持](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新的 GPU 驱动。  
 2. 安装 **Python 3.10**  
    ```bash
-    # 以Ubuntu为例
+   
     sudo add-apt-repository ppa:savoury1/python
     sudo apt update
     sudo apt-get install python3.10
@@ -51,10 +51,19 @@
 3. 下载Desktop2Stereo  
    下载并解压[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest)到本地。  
 4. 安装 Python 环境   
-   **AMD GPU**：双击 `install-rocm.bat`。  
-   **NVIDIA GPU**：双击 `install-cuda.bat`。  
-5. 运行 Stereo Desktop 应用  
-   双击 `run_linux` 可执行文件。  
+   **AMD GPU**：运行 `install-rocm.bash`脚本：  
+   ```bash
+   bash install-rocm.bash
+   ```
+   **NVIDIA GPU**：运行 `install-cuda.bash`脚本：  
+   ```bash
+   bash install-cuda.bash
+   ```
+6. 运行 Stereo Desktop 应用  
+   运行`run_linux.bash` 脚本：  
+   ```bash
+   bash run_linux.bash
+   ```
 
 # 设置 Desktop2Stereo 显示
 1. 将 **Stereo SBS Viewer** 窗口拖动到第二块（虚拟）显示器上。  
@@ -63,9 +72,9 @@
 4. 现在，你可以使用 AR/VR 设备观看全/半双屏并排输出。  
 
 - AR 需要切换到 3D 模式并连接为 3840\*1080 显示器。  
-
+![Full-SBS](./assets/FullSBS.png)
 - VR 需使用第二块显示器/虚拟显示器（VDD），通过 Desktop+[PC VR] 或 Virtual Desktop [PC/一体机 VR] 或 OBS+Wolvic [一体机 VR] 来将 SBS 输出组合成 3D。  
-
+![Half-SBS](./assets/HalfSBS.png)
 
 ## 可选项
 1. 更改捕获的显示器和缩放比例  
