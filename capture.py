@@ -1,7 +1,9 @@
 # capture.py
 import mss
 import numpy as np
-import cv2
+import win32gui, win32ui
+import mss
+from PIL import Image
 from depth import DEVICE
 import torch
 import torch.nn.functional as F
@@ -49,7 +51,13 @@ class DesktopGrabber:
     def grab(self) -> np.ndarray:
         """Capture the screen and return a raw BGR image (no scaling)."""
         shot = self._mss.grab(self._mon)
-        img = np.array(shot)[:, :, :3]  # raw BGRA, drop alpha channel
-        # img is already in BGRA byte order - mss returns from screen in BGRA order
-        # But we stripped alpha, so img is BGR now (shape H,W,3)
-        return img
+        img = bytearray(shot.rgb)
+        
+        # Add mouse cursor to the image
+        img_with_mouse = add_mouse(img, self._mon['width'])
+        
+        # Convert to numpy array and reshape
+        img_array = np.frombuffer(img_with_mouse, dtype=np.uint8)
+        img_array = img_array.reshape((self._mon['height'], self._mon['width'], 3))
+        
+        return img_array
