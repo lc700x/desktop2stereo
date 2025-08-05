@@ -65,10 +65,10 @@
 2. Set your video/game on the main screen (full screen mode if you needed).  
 3. Click the **Stereo SBS Viewer** on second (virtual) monitor display to make sure the **Stereo SBS Viewer** is the 1st active application. Press `space` to toggle full screen mode.   
 4. Now you can use AR/VR to view the Full/Half SBS output.   
-    - AR need to switch to 3D mode to connect as a 3840*1080 display.  
-    ![Full-SBS](./assets/FullSBS.png)
-    - VR need to use 2nd Display/Virtual Display (VDD) with Desktop+[PC VR] or Virtual Desktop[PC/Standalone VR] or OBS+Wolvic [Standalone VR] to comopose the SBS display to 3D.  
-    ![Half-SBS](./assets/HalfSBS.png)
+- AR need to switch to 3D mode to connect as a 3840*1080 display.  
+![Full-SBS](./assets/FullSBS.png)
+- VR need to use 2nd Display/Virtual Display (VDD) with Desktop+[PC VR] or Virtual Desktop[PC/Standalone VR] or OBS+Wolvic [Standalone VR] to comopose the SBS display to 3D.  
+![Half-SBS](./assets/HalfSBS.png)
 ## Optional
 1. Change Captured Monitor and Scale  
     Modify the `MONITOR_INDEX` in the `main.py` (1 - Primary Monitor).  
