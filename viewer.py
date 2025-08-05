@@ -5,7 +5,7 @@ import numpy as np
 import platform
 
 # Get OS name
-os_name = platform.system()
+from depth import os_name
 
 VERTEX_SHADER = """
     #version 330
