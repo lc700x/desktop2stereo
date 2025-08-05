@@ -7,7 +7,7 @@
 4. DirectML compatible devices (for **Windows** only)
 ## Supported OS  
 1. Windows 10/11 64-bit OS  
-2. MacOS 10.9 or later  
+2. MacOS 10.16 or later  
 3. Linux (beta)  
 # Install and Run  
 ## Windows  
