@@ -46,10 +46,10 @@ if os_name == "Windows":
             for x, y in zip(where[0], where[1]):
                 rgb = [x for x in cursor[x,y]]
                 img = set_pixel(img, w, x+cy, y+cx, rgb=rgb)
-        finally:
+        finally: # if no cursor, draw nothing
             return img
 elif os_name == "Darwin":
-    # TODO capture cursur in MacOS
+    # TODO capture cursor in MacOS
     def add_mouse(img):
         return img
 
