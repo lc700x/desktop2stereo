@@ -8,8 +8,8 @@
 4. 其他支持 DirectML 的设备（仅支持**Windows**）  
 ## 支持的操作系统  
 1. Windows 10/11 64 位  
-2. MacOS 10.9 或更高版本  
-3. Linux（测试版） 
+2. MacOS 10.19 或更高版本  
+3. Linux（测试） 
 
 # 安装与运行  
 ## Windows  
