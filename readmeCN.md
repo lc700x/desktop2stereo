@@ -72,9 +72,9 @@
 4. 现在，你可以使用 AR/VR 设备观看全/半双屏并排输出。  
 
 - AR 需要切换到 3D 模式并连接为 3840\*1080 显示器。  
-
+![Full-SBS](./assets/FullSBS.png)
 - VR 需使用第二块显示器/虚拟显示器（VDD），通过 Desktop+[PC VR] 或 Virtual Desktop [PC/一体机 VR] 或 OBS+Wolvic [一体机 VR] 来将 SBS 输出组合成 3D。  
-
+![Half-SBS](./assets/HalfSBS.png)
 
 ## 可选项
 1. 更改捕获的显示器和缩放比例  
