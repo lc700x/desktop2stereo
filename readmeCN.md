@@ -1,11 +1,11 @@
-# Desktop2Stereo：将2D桌面转为3D立体SBS（支持 AMD/NVIDIA GPU/Apple Silicon，基于 Depth Anything AI 模型）  
+# Desktop2Stereo：将2D桌面转为3D立体SBS（支持 AMD/NVIDIA/Intel GPU/Apple Silicon，基于深度估算AI模型）  
 [English Version](./README.md)  
 
 ## 支持的硬件  
 1. AMD GPU  
 2. NVIDIA GPU  
 3. Apple Silicon芯片（M1、M2、M3、M4 等） 
-4. 其他支持 DirectML 的设备（仅支持**Windows**）  
+4. 其他支持 DirectML 的设备（Intel Arc/Iris GPU等，仅支持**Windows**）  
 ## 支持的操作系统  
 1. Windows 10/11 64 位  
 2. MacOS 10.19 或更高版本  
@@ -16,7 +16,7 @@
 1. 安装最新的 GPU 驱动  
    **AMD GPU**：从 [AMD 驱动和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新的 GPU 驱动。  
    **NVIDIA GPU**：从 [NVIDIA 驱动和支持](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新的 GPU 驱动。  
-   **其他DirectML设备**：下载安装最新的设备驱动。  
+   **其他DirectML设备**：如Intel GPU，请下载安装最新的设备驱动。  
 2.  安装 **Python 3.10**  
 从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe)下载安装包并安装。  
 3. 下载Desktop2Stereo  
@@ -77,32 +77,47 @@
 ![Half-SBS](./assets/HalfSBS.png)
 
 ## 可选项
+**配置文件**： `settings.yml`  
 1. 更改捕获的显示器和缩放比例  
-   在 `main.py` 中修改 `MONITOR_INDEX`（1 - 主显示器）  
-   建议将 `DOWNSCALE_FACTOR` 设置为 0.5（2160p 降至 1080p），或将系统分辨率设置为 1080p，以获得更流畅的体验
-   ```python
-   # Set the monitor index and downscale factor
-   MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
-   DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling, 0.5 is recommended for performance
+   修改 `MONITOR_INDEX`（1 - 主显示器）。  
+   建议将 `DOWNSCALE_FACTOR` 设置为 0.5（2160p 降至 1080p），或将系统分辨率设置为 1080p，以获得更流畅的体验。  
+   ```yaml
+   monitor_index : 1
+   downscale_factor : 0.5
    ```
 
 2. 更换深度模型  
-   在 `depth.py` 中修改 [HuggingFace](https://huggingface.co/) 上的深度模型 ID，模型 ID **必须以** `-hf` 结尾。  
-   ```python
-   # Model configuration
-    MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
-    DTYPE = torch.float16
+   修改深度模型 ID为其他[HuggingFace](https://huggingface.co/) 上的深度估算模型，`depth_model` 的值**必须以** `-hf` 结尾。  
+   ```yaml
+   depth_model :  depth-anything/Depth-Anything-V2-Small-hf
    ```
    默认模型 ID：`depth-anything/Depth-Anything-V2-Small-hf`  
    **支持的全部模型**：  
    ```Bash
-   LiheYoung/depth-anything-large-hf
-   LiheYoung/depth-anything-base-hf
-   LiheYoung/depth-anything-small-hf
    depth-anything/Depth-Anything-V2-Large-hf
-   depth-anything/Depth-Anything-V2-Base-hf
-   depth-anything/Depth-Anything-V2-Small-hf
+    depth-anything/Depth-Anything-V2-Base-hf
+    depth-anything/Depth-Anything-V2-Small-hf
+    depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
+    depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
+    depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
+    depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
+    depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
+    depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
+    LiheYoung/depth-anything-large-hf
+    LiheYoung/depth-anything-base-hf
+    LiheYoung/depth-anything-small-hf
+    xingyang1/Distill-Any-Depth-Large-hf
+    xingyang1/Distill-Any-Depth-Small-hf
+    apple/DepthPro-hf # 1536
+    Intel/dpt-large
    ```
+3. 更改模型下载路径
+   默认为主目录下的`models`文件夹，按需更改`download_path`即可:  
+   ```yaml
+   # model download path
+   download_path : ./models
+   ```
+   
 
 ## 参考文献
 ```BIBTEX
@@ -114,9 +129,25 @@
 }
 
 @inproceedings{depth_anything_v1,
-  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data},
+  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data}, 
   author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
   booktitle={CVPR},
   year={2024}
+}
+
+@inproceedings{Bochkovskii2024:arxiv,
+  author     = {Aleksei Bochkovskii and Ama\"{e}l Delaunoy and Hugo Germain and Marcel Santos and
+               Yichao Zhou and Stephan R. Richter and Vladlen Koltun},
+  title      = {Depth Pro: Sharp Monocular Metric Depth in Less Than a Second},
+  booktitle  = {International Conference on Learning Representations},
+  year       = {2025},
+  url        = {https://arxiv.org/abs/2410.02073},
+}
+
+@article{he2025distill,
+  title   = {Distill Any Depth: Distillation Creates a Stronger Monocular Depth Estimator},
+  author  = {Xiankang He and Dongyan Guo and Hongji Li and Ruibo Li and Ying Cui and Chi Zhang},
+  year    = {2025},
+  journal = {arXiv preprint arXiv: 2502.19204}
 }
 ```

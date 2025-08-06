@@ -3,17 +3,21 @@ import threading
 import queue
 import glfw
 import os, sys
+# diable hf warning
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"]="1"
 from capture import DesktopGrabber
-from depth import predict_depth, process, DEVICE_INFO
+from depth import settings, predict_depth, process, DEVICE_INFO
 from viewer import StereoWindow
 
 # Set the monitor index and downscale factor
-MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
-DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling, 0.5 is recommended for performance
+MONITOR_INDEX, DOWNSCALE_FACTOR = settings["monitor_index"], settings["downscale_factor"]
+
+# set download path
+DOWNLOAD_CACHE = settings["download_path"]
 
 # Optional HuggingFace mirror
 if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
-    os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+    os.environ['HF_ENDPOINT'] = settings["hf_endpoint"]
 
 # Queues
 raw_q = queue.Queue(maxsize=3)
@@ -23,24 +27,24 @@ depth_q = queue.Queue(maxsize=3)
 def capture_loop():
     cap = DesktopGrabber(monitor_index=MONITOR_INDEX, downscale=DOWNSCALE_FACTOR)
     while True:
-        frame_raw = cap.grab()
+        frame_raw, size = cap.grab()
         try:
-            raw_q.put(frame_raw, block=False)
+            raw_q.put((frame_raw, size), block=False)
         except queue.Full:
             try:
-                raw_q.get_nowait()
+                raw_q.get()
             except queue.Empty:
                 pass
-            raw_q.put(frame_raw, block=False)
+            raw_q.put((frame_raw, size), block=False)
 
 def process_loop():
     while True:
         try:
-            frame_raw = raw_q.get(timeout=0.1)
+            frame_raw, size = raw_q.get(timeout=0.1)
         except queue.Empty:
             continue
 
-        frame_rgb = process(frame_raw, downscale=DOWNSCALE_FACTOR)
+        frame_rgb = process(frame_raw, size, downscale=DOWNSCALE_FACTOR)
 
         try:
             proc_q.put(frame_rgb, block=False)
@@ -71,7 +75,6 @@ def depth_loop():
 
 def main():
     print(DEVICE_INFO)
-
     # Start threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
@@ -81,7 +84,7 @@ def main():
 
     while not glfw.window_should_close(window.window):
         try:
-            frame_rgb, depth = depth_q.get(timeout=0.1)
+            frame_rgb, depth = depth_q.get_nowait()
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
             pass

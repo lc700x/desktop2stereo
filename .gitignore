@@ -1,8 +1,13 @@
 /develop.ipynb
 /deploy.md
-/__pycache__
+__pycache__
+cache
 /.env*
 *debug*
 *dev*
 /streamer
 views
+.DS*
+*.zip
+models
+*.pdf
