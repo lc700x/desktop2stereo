@@ -3,17 +3,21 @@ import threading
 import queue
 import glfw
 import os, sys
+# diable hf warning
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"]="1"
 from capture import DesktopGrabber
-from depth import predict_depth, process, DEVICE_INFO
+from depth import settings, predict_depth, process, DEVICE_INFO
 from viewer import StereoWindow
 
 # Set the monitor index and downscale factor
-MONITOR_INDEX = 1  # Change to 0 for all monitors, 1 for primary monitor, ...
-DOWNSCALE_FACTOR = 0.5 # Set to 1.0 for no downscaling, 0.5 is recommended for performance
+MONITOR_INDEX, DOWNSCALE_FACTOR = settings["monitor_index"], settings["downscale_factor"]
+
+# set download path
+DOWNLOAD_CACHE = settings["download_path"]
 
 # Optional HuggingFace mirror
 if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
-    os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+    os.environ['HF_ENDPOINT'] = settings["hf_endpoint"]
 
 # Queues
 raw_q = queue.Queue(maxsize=3)
@@ -71,7 +75,6 @@ def depth_loop():
 
 def main():
     print(DEVICE_INFO)
-
     # Start threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
