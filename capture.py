@@ -50,7 +50,7 @@ if os_name == "Windows":
             return img
 elif os_name == "Darwin":
     # TODO capture cursor in MacOS
-    def add_mouse(img):
+    def add_mouse(img, w):
         return img
 
 
@@ -100,7 +100,7 @@ class DesktopGrabber:
         """Capture the screen with mouse cursor and return a raw BGR image."""
         # Capture screen using the new method
         shot = self._mss.grab(self._mon)
-        img = bytearray(shot.rgb)
+        img = shot.rgb
         # Add mouse cursor to the image for Windows and Mac
         if os_name != "Linux":
             img_with_mouse = add_mouse(img, self._mon['width'])
