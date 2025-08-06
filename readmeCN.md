@@ -86,12 +86,21 @@
    **支持的全部模型**：  
    ```Bash
    depth-anything/Depth-Anything-V2-Large-hf
-   depth-anything/Depth-Anything-V2-Base-hf
-   depth-anything/Depth-Anything-V2-Small-hf
-   LiheYoung/depth-anything-large-hf
-   LiheYoung/depth-anything-base-hf
-   LiheYoung/depth-anything-small-hf
-   apple/DepthPro-hf # depth_resolution 1536
+    depth-anything/Depth-Anything-V2-Base-hf
+    depth-anything/Depth-Anything-V2-Small-hf
+    depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
+    depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
+    depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
+    depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
+    depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
+    depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
+    LiheYoung/depth-anything-large-hf
+    LiheYoung/depth-anything-base-hf
+    LiheYoung/depth-anything-small-hf
+    xingyang1/Distill-Any-Depth-Large-hf
+    xingyang1/Distill-Any-Depth-Small-hf
+    apple/DepthPro-hf # 1536
+    Intel/dpt-large
    ```
 3. 更改模型下载路径
    默认为主目录下的`models`文件夹，按需更改`download_path`即可:  

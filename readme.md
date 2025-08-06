@@ -89,10 +89,19 @@
     depth-anything/Depth-Anything-V2-Large-hf
     depth-anything/Depth-Anything-V2-Base-hf
     depth-anything/Depth-Anything-V2-Small-hf
+    depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
+    depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
+    depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
+    depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
+    depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
+    depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
     LiheYoung/depth-anything-large-hf
     LiheYoung/depth-anything-base-hf
     LiheYoung/depth-anything-small-hf
+    xingyang1/Distill-Any-Depth-Large-hf
+    xingyang1/Distill-Any-Depth-Small-hf
     apple/DepthPro-hf
+    Intel/dpt-large
     ```
 3. Modify Model Download Path
    The download path is the `models` folder, you can edit the `download_path`:  
@@ -123,4 +132,12 @@
   year       = {2025},
   url        = {https://arxiv.org/abs/2410.02073},
 }
+
+@article{he2025distill,
+  title   = {Distill Any Depth: Distillation Creates a Stronger Monocular Depth Estimator},
+  author  = {Xiankang He and Dongyan Guo and Hongji Li and Ruibo Li and Ying Cui and Chi Zhang},
+  year    = {2025},
+  journal = {arXiv preprint arXiv: 2502.19204}
+}
+
 ```
