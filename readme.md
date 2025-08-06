@@ -139,5 +139,4 @@
   year    = {2025},
   journal = {arXiv preprint arXiv: 2502.19204}
 }
-
 ```
