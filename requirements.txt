@@ -16,4 +16,5 @@ safetensors==0.5.3
 tokenizers==0.21.2
 tqdm==4.67.1
 transformers==4.54.0
+hf_xet==1.1.7
 urllib3==2.5.0
