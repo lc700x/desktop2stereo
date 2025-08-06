@@ -1,7 +1,7 @@
 monitor_index : 1
 downscale_factor : 0.5
 depth_model :  depth-anything/Depth-Anything-V2-Small-hf
-depth_resolution : 518
+depth_resolution : 384
 ipd : 0.064
 fp_16: true
 # model download path

@@ -27,24 +27,24 @@ depth_q = queue.Queue(maxsize=3)
 def capture_loop():
     cap = DesktopGrabber(monitor_index=MONITOR_INDEX, downscale=DOWNSCALE_FACTOR)
     while True:
-        frame_raw = cap.grab()
+        frame_raw, size = cap.grab()
         try:
-            raw_q.put(frame_raw, block=False)
+            raw_q.put((frame_raw, size), block=False)
         except queue.Full:
             try:
-                raw_q.get_nowait()
+                raw_q.get()
             except queue.Empty:
                 pass
-            raw_q.put(frame_raw, block=False)
+            raw_q.put((frame_raw, size), block=False)
 
 def process_loop():
     while True:
         try:
-            frame_raw = raw_q.get(timeout=0.1)
+            frame_raw, size = raw_q.get(timeout=0.1)
         except queue.Empty:
             continue
 
-        frame_rgb = process(frame_raw, downscale=DOWNSCALE_FACTOR)
+        frame_rgb = process(frame_raw, size, downscale=DOWNSCALE_FACTOR)
 
         try:
             proc_q.put(frame_rgb, block=False)
@@ -84,7 +84,7 @@ def main():
 
     while not glfw.window_should_close(window.window):
         try:
-            frame_rgb, depth = depth_q.get(timeout=0.1)
+            frame_rgb, depth = depth_q.get_nowait()
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
             pass
