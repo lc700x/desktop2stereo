@@ -129,7 +129,7 @@
 }
 
 @inproceedings{depth_anything_v1,
-  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data},
+  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data}, 
   author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
   booktitle={CVPR},
   year={2024}
@@ -142,5 +142,12 @@
   booktitle  = {International Conference on Learning Representations},
   year       = {2025},
   url        = {https://arxiv.org/abs/2410.02073},
+}
+
+@article{he2025distill,
+  title   = {Distill Any Depth: Distillation Creates a Stronger Monocular Depth Estimator},
+  author  = {Xiankang He and Dongyan Guo and Hongji Li and Ruibo Li and Ying Cui and Chi Zhang},
+  year    = {2025},
+  journal = {arXiv preprint arXiv: 2502.19204}
 }
 ```
