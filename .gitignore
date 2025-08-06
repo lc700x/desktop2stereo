@@ -6,3 +6,6 @@
 *dev*
 /streamer
 views
+.DS*
+*.zip
+models

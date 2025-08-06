@@ -17,9 +17,17 @@ import numpy as np
 from threading import Lock
 import cv2
 
+# load customized settings
+import yaml
+with open("settings.yaml") as settings_yaml:
+    try:
+        settings = yaml.safe_load(settings_yaml)
+    except yaml.YAMLError as exc:
+        print(exc)
 
 # Model configuration
-MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+MODEL_ID = settings["depth_model"]
+CACHE_PATH = settings["download_path"]
 DTYPE = torch.float16
 
 # Initialize DirectML Device
@@ -41,12 +49,13 @@ def get_device():
             DEVICE_INFO = "Using CPU device"
     return DEVICE, DEVICE_INFO
 
+
 # Get the device and print information
 DEVICE, DEVICE_INFO = get_device()
 
 # Load model with same configuration as example
-model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE).to(DEVICE).half().eval()
-INPUT_H, INPUT_W = 384, 384  # model's native resolution
+model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).to(DEVICE).half().eval()
+INPUT_W= settings["depth_resolution"]   # model's native resolution
 
 # Normalization parameters (same as example)
 MEAN = torch.tensor([0.485, 0.456, 0.406], device=DEVICE).view(1, 3, 1, 1)
@@ -54,7 +63,7 @@ STD = torch.tensor([0.229, 0.224, 0.225], device=DEVICE).view(1, 3, 1, 1)
 
 # Warm-up with dummy input
 with torch.no_grad():
-    dummy = torch.zeros(1, 3, INPUT_H, INPUT_W, device=DEVICE, dtype=DTYPE)
+    dummy = torch.zeros(1, 3, INPUT_W, INPUT_W, device=DEVICE, dtype=DTYPE)
     model(pixel_values=dummy)    
 
 lock = Lock()
@@ -74,7 +83,7 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     tensor = tensor.unsqueeze(0).to(DEVICE, dtype=DTYPE, non_blocking=True)
 
     # Resize and normalize (same as pipeline)
-    tensor = F.interpolate(tensor, (INPUT_H, INPUT_W), mode='bilinear', align_corners=False)
+    tensor = F.interpolate(tensor, (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
     tensor = (tensor - MEAN) / STD
 
     # Inference with thread safety
@@ -126,7 +135,7 @@ def predict_depth_tensor(image_rgb):
     """
     tensor = image_rgb.float() / 255.0  # Convert to float32 in range [0, 1]
     # Resize and normalize (same as pipeline)
-    tensor = F.interpolate(tensor.unsqueeze(0), (INPUT_H, INPUT_W), mode='bilinear', align_corners=False)
+    tensor = F.interpolate(tensor.unsqueeze(0), (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
     tensor = tensor.squeeze(0)  # Remove batch dimension
     tensor = (tensor - MEAN) / STD
 

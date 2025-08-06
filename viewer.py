@@ -2,10 +2,11 @@
 import glfw
 import moderngl
 import numpy as np
-import platform
 
-# Get OS name
-from depth import os_name
+# Get OS name and settings
+from depth import os_name, settings
+
+IPD = settings["ipd"]
 
 VERTEX_SHADER = """
     #version 330
