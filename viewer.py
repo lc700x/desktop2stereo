@@ -4,7 +4,7 @@ import moderngl
 import numpy as np
 
 # Get OS name and settings
-from depth import os_name, settings
+from depth import OS_NAME, settings
 
 IPD = settings["ipd"]
 
@@ -66,7 +66,7 @@ class StereoWindow:
         
         # Create window (start in windowed mode)
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
-        if os_name != "Darwin":
+        if OS_NAME != "Darwin":
             self.add_logo(self.window)  # Add logo to window
         if not self.window:
             glfw.terminate()

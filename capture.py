@@ -1,11 +1,11 @@
 # capture.py
 import mss
 import numpy as np
-from depth import os_name
+from depth import OS_NAME
 import mss
 from PIL import Image
 
-if os_name == "Windows":
+if OS_NAME == "Windows":
     # capture cursor in Windows
     import win32gui, win32ui
     def set_pixel(img, w, x, y, rgb=(0,0,0)):
@@ -48,7 +48,7 @@ if os_name == "Windows":
                 img = set_pixel(img, w, x+cy, y+cx, rgb=rgb)
         finally: # if no cursor, draw nothing
             return img
-elif os_name == "Darwin":
+elif OS_NAME == "Darwin":
     # TODO capture cursor in MacOS
     def add_mouse(img, w):
         return img
@@ -76,35 +76,38 @@ class DesktopGrabber:
             if show_monitor_info:
                 print(f"Monitor {monitor_index} not found, using primary monitor")
             monitor_index = 1
-
+        # get monitor resolution
         self._mon = self._mss.monitors[monitor_index]
-
-        self.scaled_width = round(self._mon['width'] * self.downscale)
-        self.scaled_height = round(self._mon['height'] * self.downscale)
-
+        self.system_width, self.system_height = self.get_screen_resolution(monitor_index)
+        self.scaled_width = round(self.system_width * self.downscale)
+        self.scaled_height = round(self.system_height * self.downscale)
         if show_monitor_info:
-            print(f"Using monitor {monitor_index}: {self._mon['width']}x{self._mon['height']}")
+            print(f"Using monitor {monitor_index}: {self.system_width}x{self.system_height}")
             print(f"Downscale factor: {self.downscale}")
             print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
 
     def _log_monitors(self):
         print("Available monitors:")
         for i, mon in enumerate(self._mss.monitors):
+            width, height = self.get_screen_resolution(i)
             if i == 0:
-                print(f"  {i}: All monitors - {mon['width']}x{mon['height']}")
+                print(f"  {i}: All monitors - {width}x{height}")
             else:
-                print(f"  {i}: Monitor {i} - {mon['width']}x{mon['height']} "
-                             f"at ({mon['left']}, {mon['top']})")
+                system_scale = int(width/mon["width"])
+                print(f"  {i}: Monitor {i} - {width}x{height}"
+                             f"at ({mon['left']*system_scale}, {mon['top']*system_scale})")
+    def get_screen_resolution(self, index):
+        monitor = self._mss.monitors[index]
+        screen = self._mss.grab(monitor)
+        return screen.size.width, screen.size.height
     def grab(self) -> np.ndarray:
         """Capture the screen with mouse cursor and return a raw BGR image."""
         # Capture screen using the new method
         shot = self._mss.grab(self._mon)
         img = bytearray(shot.rgb)
         # Add mouse cursor to the image for Windows and Mac
-        if os_name != "Linux":
-            img_with_mouse = add_mouse(img, self._mon['width'])
+        if OS_NAME != "Linux":
+            img = add_mouse(img, self.system_width)
         # Convert to numpy array and reshape
-        img_array = np.frombuffer(img_with_mouse, dtype=np.uint8)
-        img_array = img_array.reshape((self._mon['height'], self._mon['width'], 3))
-        
-        return img_array
+        img_array = np.frombuffer(img, dtype=np.uint8)
+        return img_array, (self.system_height, self.system_width)

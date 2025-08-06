@@ -1,8 +1,8 @@
 # depth.py
 import platform
 # get system type
-os_name = platform.system()
-if  os_name == "Darwin":
+OS_NAME = platform.system()
+if  OS_NAME == "Darwin":
     import os, warnings
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
     warnings.filterwarnings(
@@ -99,15 +99,14 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     depth = depth / depth.max().clamp(min=1e-6)
     return depth.cpu().numpy().astype('float32')
 
-def process(img: np.ndarray, downscale: float = 0.5) -> np.ndarray:
+def process(img_rgb: np.ndarray, size,  downscale: float = 0.5) -> np.ndarray:
         """
         Process raw BGR image: convert to RGB and apply downscale if set.
         This can be called in a separate thread.
         """
-        # Convert BGR to RGB
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        scaled_width = int(img_rgb.shape[1] * downscale)
-        scaled_height = int(img_rgb.shape[0] * downscale)
+        img_rgb = img_rgb.reshape((size[0], size[1], 3))
+        scaled_width = int(size[1] * downscale)
+        scaled_height = int(size[0] * downscale)
         # Downscale if requested
         if downscale < 1.0:
             img_rgb = cv2.resize(img_rgb, (scaled_width, scaled_height),
