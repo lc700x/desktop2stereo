@@ -125,4 +125,13 @@
   booktitle={CVPR},
   year={2024}
 }
+
+@inproceedings{Bochkovskii2024:arxiv,
+  author     = {Aleksei Bochkovskii and Ama\"{e}l Delaunoy and Hugo Germain and Marcel Santos and
+               Yichao Zhou and Stephan R. Richter and Vladlen Koltun},
+  title      = {Depth Pro: Sharp Monocular Metric Depth in Less Than a Second},
+  booktitle  = {International Conference on Learning Representations},
+  year       = {2025},
+  url        = {https://arxiv.org/abs/2410.02073},
+}
 ```
