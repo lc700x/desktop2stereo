@@ -33,7 +33,7 @@
 2. 下载Desktop2Stereo  
    下载并解压[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest)到本地。  
 3. 安装 Python 环境  
-   双击 `install-mps.command` 可执行文件。  
+   双击 `install-mps` 可执行文件。  
 4. 运行 Stereo Desktop 应用  
    双击 `run_mac` 可执行文件。  
 
