@@ -96,11 +96,10 @@ class DesktopGrabber:
                 print(f"  {i}: Monitor {i} - {mon['width']}x{mon['height']} "
                              f"at ({mon['left']}, {mon['top']})")
     def grab(self) -> np.ndarray:
-        global os_name
         """Capture the screen with mouse cursor and return a raw BGR image."""
         # Capture screen using the new method
         shot = self._mss.grab(self._mon)
-        img = shot.rgb
+        img = bytearray(shot.rgb)
         # Add mouse cursor to the image for Windows and Mac
         if os_name != "Linux":
             img_with_mouse = add_mouse(img, self._mon['width'])
