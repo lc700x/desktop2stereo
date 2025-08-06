@@ -10,3 +10,4 @@ views
 .DS*
 *.zip
 models
+*.pdf
