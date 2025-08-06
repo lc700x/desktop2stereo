@@ -1,10 +1,58 @@
 # capture.py
-import mss
 import numpy as np
-import cv2
-from depth import DEVICE
-import torch
-import torch.nn.functional as F
+from depth import os_name
+import mss
+from PIL import Image
+
+if os_name == "Windows":
+    # capture cursor in Windows
+    import win32gui, win32ui
+    def set_pixel(img, w, x, y, rgb=(0,0,0)):
+        """
+        Set a pixel in a, RGB byte array
+        """
+        pos = (x*w + y)*3
+        if pos>=len(img):return img # avoid setting pixel outside of frame
+        img[pos:pos+3] = rgb
+        return img
+
+    def get_cursor(hcursor):
+        hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
+        hbmp = win32ui.CreateBitmap()
+        hbmp.CreateCompatibleBitmap(hdc, 36, 36)
+        hdc = hdc.CreateCompatibleDC()
+        hdc.SelectObject(hbmp)
+        hdc.DrawIcon((0,0), hcursor)
+        bmpinfo = hbmp.GetInfo()
+        bmpstr = hbmp.GetBitmapBits(True)
+        im = np.array(Image.frombuffer(
+            'RGB',
+            (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
+            bmpstr, 'raw', 'BGRX', 0, 1))
+        
+        win32gui.DestroyIcon(hcursor)    
+        win32gui.DeleteObject(hbmp.GetHandle())
+        hdc.DeleteDC()
+        return im
+
+    def add_mouse(img, w):
+        _, hcursor, (cx,cy) = win32gui.GetCursorInfo()
+        # handle no cursor failure
+        try: 
+            cursor = get_cursor(hcursor)
+            cursor_mean = cursor.mean(-1)
+            where = np.where(cursor_mean>0)
+            for x, y in zip(where[0], where[1]):
+                rgb = [x for x in cursor[x,y]]
+                img = set_pixel(img, w, x+cy, y+cx, rgb=rgb)
+        finally: # if no cursor, draw nothing
+            return img
+elif os_name == "Darwin":
+    # TODO capture cursor in MacOS
+    def add_mouse(img):
+        return img
+
+
 class DesktopGrabber:
     """Captures a specific monitor, optionally downscaled."""
 
@@ -17,7 +65,7 @@ class DesktopGrabber:
             downscale (float): Downscale factor (1.0 for no downscaling).
             show_monitor_info (bool): Whether to print monitor info on initialization.
         """
-        self._mss = mss.mss(with_cursor=True) # not working on Windows
+        self._mss = mss.mss(with_cursor=True)  # Only Support Linux
         self.downscale = downscale
 
         if show_monitor_info:
@@ -46,36 +94,18 @@ class DesktopGrabber:
             else:
                 print(f"  {i}: Monitor {i} - {mon['width']}x{mon['height']} "
                              f"at ({mon['left']}, {mon['top']})")
+
     def grab(self) -> np.ndarray:
-        """Capture the screen and return a raw BGR image (no scaling)."""
+        global os_name
+        """Capture the screen with mouse cursor and return a raw BGR image."""
+        # Capture screen using the new method
         shot = self._mss.grab(self._mon)
-        img = np.array(shot)[:, :, :3]  # raw BGRA, drop alpha channel
-        # img is already in BGRA byte order - mss returns from screen in BGRA order
-        # But we stripped alpha, so img is BGR now (shape H,W,3)
-        return img
-
-    def process(self, img: np.ndarray) -> np.ndarray:
-        """
-        Process raw BGR image: convert to RGB and apply downscale if set.
-        This can be called in a separate thread.
-        """
-        # Convert BGR to RGB
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        # Downscale if requested
-        if self.downscale < 1.0:
-            img_rgb = cv2.resize(img_rgb, (self.scaled_width, self.scaled_height),
-                                 interpolation=cv2.INTER_AREA)
-        return img_rgb
-    
-    def process_tensor(self, img: np.ndarray) -> torch.Tensor:
-        img_bgr = torch.from_numpy(img).to(DEVICE, dtype=torch.uint8, non_blocking=True)  # H,W,C
-        img_rgb = img_bgr[..., [2,1,0]]  # BGR to RGB
-        chw = img_rgb.permute(2, 0, 1).float() / 255.0  # (3,H,W)
-        if self.downscale < 1.0:
-            _, H, W = chw.shape
-            new_h, new_w = int(H * self.downscale), int(W * self.downscale)
-            chw = F.interpolate(chw.unsqueeze(0), size=(new_h, new_w), mode='bilinear', align_corners=False).squeeze(0)
-        # Add batch dim
-        chw = chw.squeeze(0)  # (3,H,W)
-        return chw
+        img = bytearray(shot.rgb)
+        # Add mouse cursor to the image for Windows and Mac
+        if os_name != "Linux":
+            img_with_mouse = add_mouse(img, self._mon['width'])
+        # Convert to numpy array and reshape
+        img_array = np.frombuffer(img_with_mouse, dtype=np.uint8)
+        img_array = img_array.reshape((self._mon['height'], self._mon['width'], 3))
+        
+        return img_array

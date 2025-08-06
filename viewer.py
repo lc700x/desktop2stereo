@@ -2,19 +2,11 @@
 import glfw
 import moderngl
 import numpy as np
-import os
-import platform
 
-# Set the HF_ENDPOINT environment variable
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+# Get OS name and settings
+from depth import os_name, settings
 
-# Verify the variable is set (optional)
-print(f"HF_ENDPOINT is set to: {os.environ.get('HF_ENDPOINT')}")
-
-# Get OS name
-os_name = platform.system()
-if os_name == "Darwin":
-    print("please turn off hi-dpi on the screen where you put the viewer window")
+IPD = settings["ipd"]
 
 VERTEX_SHADER = """
     #version 330
@@ -74,7 +66,7 @@ class StereoWindow:
         
         # Create window (start in windowed mode)
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
-        if os_name == "Windows":
+        if os_name != "Darwin":
             self.add_logo(self.window)  # Add logo to window
         if not self.window:
             glfw.terminate()
@@ -101,7 +93,7 @@ class StereoWindow:
 
     def add_logo(self, window):
         import cv2
-        logo = 'assets/logo.png'  # Path to your icon file
+        logo = './logo.png'  # Path to your icon file
         img = cv2.imread(logo, cv2.IMREAD_UNCHANGED)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # <--- convert from BGR to RGB
 

@@ -1,10 +1,9 @@
 @echo off
 echo Running Desktop2Stereo...
-
-:: Set paths
+@REM Set the virtual environment path
 Set "VIRTUAL_ENV=.env"
 
-:: Check if environment exists
+@REM Check if environment exists
 If Not Exist "%VIRTUAL_ENV%\Scripts\activate.bat" Exit /B 1
 
 echo - Virtual environment activation

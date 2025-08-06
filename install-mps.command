@@ -1,6 +1,6 @@
 #!/bin/bash
 cd "$(dirname "$0")"
-echo "--- Desktop2Stereo Installer (With CUDA for NVIDIA GPUs.) ---"
+echo "--- Desktop2Stereo Installer for Mac (for M1, M2, M3, M4 Apple Silicon Chips) ---"
 echo "- Setting up the virtual environment"
 
 # Set paths
@@ -16,9 +16,9 @@ then
 fi
 
 # Create virtual environment if it doesn't exist
-if [ ! -f "$VIRTUAL_ENV/bin/activate" ]; then
+if [ ! -f "./$VIRTUAL_ENV/bin/activate" ]; then
     echo "Creating virtual environment..."
-    $PYTHON_EXE -m venv "$VIRTUAL_ENV"
+    $PYTHON_EXE -m venv "./$VIRTUAL_ENV"
     if [ $? -ne 0 ]; then
         echo "Failed to create virtual environment"
         read -p "Press enter to exit..."
@@ -28,7 +28,7 @@ fi
 
 # Activate virtual environment
 echo "- Virtual environment activation"
-source "$VIRTUAL_ENV/bin/activate"
+source "./$VIRTUAL_ENV/bin/activate"
 if [ $? -ne 0 ]; then
     echo "Failed to activate virtual environment"
     read -p "Press enter to exit..."
@@ -47,8 +47,8 @@ fi
 # Install requirements
 echo
 echo "- Installing the requirements"
-python -m pip install -r requirements-cuda.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python -m pip install -r ./requirements-mps.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python -m pip install -r ./requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if [ $? -ne 0 ]; then
     echo "Failed to install requirements"
     read -p "Press enter to exit..."
@@ -56,5 +56,5 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "Python environment deployed successfully."
-read -p "Press enter to exit..."
-exit 0
+read -p "You can close this terminal window to exit..."
+exit
