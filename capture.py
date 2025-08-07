@@ -61,7 +61,7 @@ if OS_NAME == "Windows":
 else:
     import mss
     class DesktopGrabber:
-        def __init__(self, monitor_index=1, downscale=1.0, show_monitor_info=True):
+        def __init__(self, monitor_index=1, downscale=1.0, show_monitor_info=True, fps=None):
             self.downscale = downscale
             self.monitor_index = monitor_index
             self._mss = mss.mss(with_cursor=True)

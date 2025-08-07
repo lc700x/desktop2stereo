@@ -26,11 +26,11 @@ def put_latest(q, item):
         try:
             q.get_nowait()
         except queue.Empty:
-            pass
+            time.sleep(TIME_SLEEP)
     try:
         q.put_nowait(item)
     except queue.Full:
-        pass  # Drop frame if race condition occurs
+        time.sleep(TIME_SLEEP)  # Drop frame if race condition occurs
 
 def capture_loop():
     cap = DesktopGrabber(monitor_index=MONITOR_INDEX, downscale=DOWNSCALE_FACTOR, fps=FPS)
@@ -75,7 +75,7 @@ def main():
             depth = depth.cpu().numpy().astype('float32')
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
-            pass  # Reuse previous frame if none available
+            time.sleep(TIME_SLEEP)  # Reuse previous frame if none available
 
         window.render()
         glfw.swap_buffers(window.window)
