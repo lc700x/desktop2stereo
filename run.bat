@@ -12,3 +12,9 @@ Call "%VIRTUAL_ENV%\Scripts\activate.bat"
 python main.py --hf-mirror
 
 @REM --hf-mirror is used to set the Hugging Face mirror for users who cannot access HuggingFace directly.
+
+if %errorlevel% neq 0 (
+    echo Failed to run Desktop2Stereo
+    pause
+    exit /b 1
+)
