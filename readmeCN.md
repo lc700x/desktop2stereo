@@ -8,21 +8,22 @@
 4. 其他支持 DirectML 的设备（Intel Arc/Iris GPU等，仅支持**Windows**）  
 ## 支持的操作系统  
 1. Windows 10/11 64 位  
-2. MacOS 10.19 或更高版本  
+2. MacOS 10.16 或更高版本  
 3. Linux（测试） 
 
 # 安装与运行  
 ## Windows  
 1. 安装最新的 GPU 驱动  
    **AMD GPU**：从 [AMD 驱动和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新的 GPU 驱动。  
-   **NVIDIA GPU**：从 [NVIDIA 驱动和支持](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新的 GPU 驱动。  
-   **其他DirectML设备**：如Intel GPU，请下载安装最新的设备驱动。  
-2.  安装 **Python 3.10**  
+   **NVIDIA GPU**：从 [NVIDIA GeForce驱动](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新的 GPU 驱动。  
+   **Intel GPU**：从 [Intel驱动和软件](https://www.intel.com/content/www/us/en/download-center/home.html/) 下载最新的 GPU 驱动。  
+   **其他DirectML设备**：请下载安装最新的设备驱动。  
+2. 安装 **Python 3.10**  
 从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe)下载安装包并安装。  
 3. 下载Desktop2Stereo  
    下载并解压[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest)到本地。  
 4. 安装 Python 环境  
-   **AMD GPU**：双击 `install-dml.bat`。  
+   **AMD/Intel GPU/其他DirecML设备**：双击 `install-dml.bat`。  
    **NVIDIA GPU**：双击 `install-cuda.bat`。  
 5. 运行 Stereo Desktop 应用。  
    双击 `run.bat`。  
@@ -33,7 +34,7 @@
 2. 下载Desktop2Stereo  
    下载并解压[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest)到本地。  
 3. 安装 Python 环境  
-   双击 `install-mps.command` 可执行文件。  
+   双击 `install-mps` 可执行文件。  
 4. 运行 Stereo Desktop 应用  
    双击 `run_mac` 可执行文件。  
 
@@ -66,60 +67,79 @@
    ```
 
 # 设置 Desktop2Stereo 显示
-1. 将 **Stereo SBS Viewer** 窗口拖动到第二块（虚拟）显示器上。  
-2. 在主屏幕上播放你的视频/游戏（如需可切换为全屏模式）。  
-3. 在第二块（虚拟）显示器上点击 **Stereo SBS Viewer** 窗口，确保该窗口处于活动状态。按 `space` 键切换全屏模式。  
-4. 现在，你可以使用 AR/VR 设备观看全/半双屏并排输出。  
+1. 点击**Stereo SBS Viewer** 窗口，用键盘上的`<-左`货`右->`方向键将 **Stereo SBS Viewer** 窗口切换到第二块（虚拟）显示器上，按 `space` 空格键切换全屏模式。
+2. 在主屏幕上播放你的视频/游戏（如需可切换为全屏模式）。
+3. 现在，你可以使用 AR/VR 设备观看全宽/半宽双屏并排立体格式的输出。  
 
-- AR 需要切换到 3D 模式并连接为 3840\*1080 显示器。  
-![Full-SBS](./assets/FullSBS.png)
-- VR 需使用第二块显示器/虚拟显示器（VDD），通过 Desktop+[PC VR] 或 Virtual Desktop [PC/一体机 VR] 或 OBS+Wolvic [一体机 VR] 来将 SBS 输出组合成 3D。  
-![Half-SBS](./assets/HalfSBS.png)
+   - **AR** 需要切换到 3D 模式并连接为 3840\*1080 显示器。  
+   ![Full-SBS](./assets/FullSBS.png)
+   - **VR** 需使用第二块显示器/虚拟显示器（VDD），通过 Desktop+[PC VR] 或 Virtual Desktop [PC/一体机 VR] 或 OBS+Wolvic [一体机 VR] 来将 SBS 输出组合成 3D。  
+   ![Half-SBS](./assets/HalfSBS.png)
 
 ## 可选项
-**配置文件**： `settings.yml`  
-1. 更改捕获的显示器和缩放比例  
-   修改 `MONITOR_INDEX`（1 - 主显示器）。  
-   建议将 `DOWNSCALE_FACTOR` 设置为 0.5（2160p 降至 1080p），或将系统分辨率设置为 1080p，以获得更流畅的体验。  
+所有的可选项都可以使用文本编辑器（如记事本等）在工作目录下的 `settings.yml`  中进行修改默认值。  
+1. 显示器选择  
+   `1` - 主显示器，多数情况下和系统-显示设置中的显示器编号一致。  
    ```yaml
    monitor_index : 1
+   ```
+2. 缩放值  
+   `downscale_factor`决定了输出分辨率，建议为4k分辨率的显示器 设置为`0.5`，或将分辨率设置为 1080p，以获得更流畅的体验。  
+   ```yaml
    downscale_factor : 0.5
    ```
+3. 输入帧率(FPS)  
+   FPS可以设置成显示器的刷新率。（更高的FPS并不意味输出更流畅，取决于硬件）  
+   ```yaml
+   fps : 60
+   ```
+4. 深度分辨率  
+   更高的深度分辨率会有更好的深度细节，它也和模型训练时的参数有关联。  
+   ```yaml
+   depth_resolution : 384
+   ```
 
-2. 更换深度模型  
-   修改深度模型 ID为其他[HuggingFace](https://huggingface.co/) 上的深度估算模型，`depth_model` 的值**必须以** `-hf` 结尾。  
+5. AI深度模型  
+   修改深度模型 ID为其他[HuggingFace](https://huggingface.co/) 上的深度估算模型，`depth_model` 的值**应该以** `-hf` **结尾**。  
    ```yaml
    depth_model :  depth-anything/Depth-Anything-V2-Small-hf
    ```
    默认模型 ID：`depth-anything/Depth-Anything-V2-Small-hf`  
-   **支持的全部模型**：  
+   **目前支持的模型**：  
    ```Bash
    depth-anything/Depth-Anything-V2-Large-hf
-    depth-anything/Depth-Anything-V2-Base-hf
-    depth-anything/Depth-Anything-V2-Small-hf
-    depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
-    depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
-    depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
-    depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
-    depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
-    depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
-    LiheYoung/depth-anything-large-hf
-    LiheYoung/depth-anything-base-hf
-    LiheYoung/depth-anything-small-hf
-    xingyang1/Distill-Any-Depth-Large-hf
-    xingyang1/Distill-Any-Depth-Small-hf
-    apple/DepthPro-hf # 1536
-    Intel/dpt-large
+   depth-anything/Depth-Anything-V2-Base-hf
+   depth-anything/Depth-Anything-V2-Small-hf
+   depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
+   depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
+   depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
+   depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
+   depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
+   depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
+   LiheYoung/depth-anything-large-hf
+   LiheYoung/depth-anything-base-hf
+   LiheYoung/depth-anything-small-hf
+   xingyang1/Distill-Any-Depth-Large-hf
+   xingyang1/Distill-Any-Depth-Small-hf
+   apple/DepthPro-hf # 1536
+   Intel/dpt-large # 慢，不推荐
    ```
-3. 更改模型下载路径
-   默认为主目录下的`models`文件夹，按需更改`download_path`即可:  
+   你也可以尝试其他带有以下文件的模型：  
+   `model.safetensors`  
+   `config.json`  
+   `preprocessor_config.json`  
+6. 更改模型下载路径  
+   默认为工作目录下的`models`文件夹，按需更改`download_path`即可:  
    ```yaml
-   # model download path
    download_path : ./models
    ```
-   
+7. Hugging Face镜像地址
+   [HF-Mirror](https://hf-mirror.com) 是原版[Hugging Face](https://huggingface.co/) 的镜像站，上面有各种AI模型。  
+   ```yaml
+   hf_endpoint : https://hf-mirror.com
+   ```
 
-## 参考文献
+## 参考文献  
 ```BIBTEX
 @article{depth_anything_v2,
   title={Depth Anything V2},
