@@ -105,11 +105,10 @@ def process(img_rgb: np.ndarray, size,  downscale: float = 0.5) -> np.ndarray:
         This can be called in a separate thread.
         """
         img_rgb = img_rgb.reshape((size[0], size[1], 3))
-        scaled_width = int(size[1] * downscale)
-        scaled_height = int(size[0] * downscale)
+        scaled_width, scaled_height = int(size[0] * downscale), int(size[1] * downscale)
         # Downscale if requested
         if downscale < 1.0:
-            img_rgb = cv2.resize(img_rgb, (scaled_width, scaled_height),
+            img_rgb = cv2.resize(img_rgb, (scaled_height, scaled_width),
                                  interpolation=cv2.INTER_AREA)
         return img_rgb
 
