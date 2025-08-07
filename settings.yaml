@@ -1,5 +1,6 @@
 monitor_index : 1
-downscale_factor : 1
+downscale_factor : 0.5
+fps: 60
 depth_model :  depth-anything/Depth-Anything-V2-Small-hf
 depth_resolution : 384
 ipd : 0.064

@@ -85,6 +85,7 @@ class StereoWindow:
             fragment_shader=FRAGMENT_SHADER
         )
         self.quad_vao = self.make_quad()
+        self.monitor_index = 0
         self.color_tex = None
         self.depth_tex = None
         
@@ -123,6 +124,7 @@ class StereoWindow:
             x = mon_x + (mon_w - self.window_size[0]) // 2
             y = mon_y + (mon_h - self.window_size[1]) // 2
             glfw.set_window_pos(self.window, x, y)
+            self.monitor_index = monitor_index  # Track current monitor
 
     def get_current_monitor(self):
         """Get the monitor that contains the window center"""
@@ -144,7 +146,18 @@ class StereoWindow:
                 monitor_y <= window_center_y < monitor_y + vidmode.size.height):
                 return monitor
         return monitors[0]  # fallback to primary monitor
+    def move_to_adjacent_monitor(self, direction):
+        """
+        Move window to adjacent monitor.
+        direction: +1 for right, -1 for left.
+        """
+        monitors = glfw.get_monitors()
+        if not monitors or len(monitors) <= 1:
+            return  # Nothing to switch
 
+        new_index = (self.monitor_index + direction) % len(monitors)
+        self.position_on_monitor(new_index)
+        
     def toggle_fullscreen(self):
         """Toggle fullscreen on current monitor"""
         current_monitor = self.get_current_monitor()
@@ -200,6 +213,10 @@ class StereoWindow:
                 self.toggle_fullscreen()
             elif key == glfw.KEY_ESCAPE:
                 glfw.set_window_should_close(window, True)
+            elif key == glfw.KEY_RIGHT:
+                self.move_to_adjacent_monitor(+1)
+            elif key == glfw.KEY_LEFT:
+                self.move_to_adjacent_monitor(-1)
 
     def make_quad(self):
         vertices = np.array([
