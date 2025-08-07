@@ -93,8 +93,7 @@ class DesktopGrabber:
                 print(f"  {i}: All monitors - {width}x{height}")
             else:
                 system_scale = int(width/mon["width"])
-                print(f"  {i}: Monitor {i} - {width}x{height}"
-                             f"at ({mon['left']*system_scale}, {mon['top']*system_scale})")
+                print(f"  {i}: Monitor {i} - {width}x{height} ({mon['left']*system_scale}, {mon['top']*system_scale})")
     def get_screen_resolution(self, index):
         monitor = self._mss.monitors[index]
         screen = self._mss.grab(monitor)
