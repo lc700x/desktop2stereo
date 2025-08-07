@@ -49,6 +49,7 @@ echo
 echo "- Installing the requirements"
 python -m pip install -r requirements-cuda.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python -m pip install mss==10.0.0 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if [ $? -ne 0 ]; then
     echo "Failed to install requirements"
     read -p "Press enter to exit..."

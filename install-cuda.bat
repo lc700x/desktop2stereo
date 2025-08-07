@@ -48,7 +48,7 @@ echo.
 echo - Installing the requirements
 python -m pip install -r requirements-cuda.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python -m pip install pywin32 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python -m pip install wincam==1.0.14 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (
     echo Failed to install requirements
     pause
