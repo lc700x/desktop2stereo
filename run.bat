@@ -1,5 +1,5 @@
 @echo off
-echo Running Desktop2Stereo...
+echo - Running Desktop2Stereo for Windows...
 @REM Set the virtual environment path
 Set "VIRTUAL_ENV=.env"
 
