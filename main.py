@@ -44,7 +44,7 @@ def process_loop():
         except queue.Empty:
             continue
 
-        frame_rgb = process(frame_raw, size, downscale=DOWNSCALE_FACTOR)
+        frame_rgb = process(frame_raw, size)
 
         try:
             proc_q.put(frame_rgb, block=False)

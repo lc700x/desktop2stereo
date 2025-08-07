@@ -79,9 +79,9 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
         Depth map as numpy array (H, W) normalized to [0, 1]
     """
     # Convert to tensor and normalize (similar to pipeline's preprocessing)
-    tensor = torch.from_numpy(image_rgb)              # CPU → CPU tensor (uint8)
+    tensor = torch.from_numpy(image_rgb.copy())              # CPU → CPU tensor (uint8)
     tensor = tensor.permute(2, 0, 1).float() / 255.  # HWC → CHW, 0-1 range
-    tensor = tensor.unsqueeze(0).to(DEVICE, dtype=DTYPE, non_blocking=True)
+    tensor = tensor.unsqueeze(0).to(DEVICE, dtype=DTYPE)
 
     # Resize and normalize (same as pipeline)
     tensor = F.interpolate(tensor, (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
@@ -99,17 +99,14 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     depth = depth / depth.max().clamp(min=1e-6)
     return depth.cpu().numpy().astype('float32')
 
-def process(img_rgb: np.ndarray, size,  downscale: float = 0.5) -> np.ndarray:
+def process(img_rgb: np.ndarray, size) -> np.ndarray:
         """
         Process raw BGR image: convert to RGB and apply downscale if set.
         This can be called in a separate thread.
         """
-        img_rgb = img_rgb.reshape((size[0], size[1], 3))
-        scaled_width, scaled_height = int(size[0] * downscale), int(size[1] * downscale)
-        # Downscale if requested
-        if downscale < 1.0:
-            img_rgb = cv2.resize(img_rgb, (scaled_height, scaled_width),
-                                 interpolation=cv2.INTER_AREA)
+        # Downscale the image if needed
+        if size[0] < img_rgb.shape[0]:
+            img_rgb = cv2.resize(img_rgb, (size[0], size[1]), interpolation=cv2.INTER_AREA)
         return img_rgb
 
 def process_tensor(img: np.ndarray, downscale: float = 0.5) -> torch.Tensor:
