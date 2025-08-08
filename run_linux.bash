@@ -1,6 +1,6 @@
 #!/bin/bash
 cd "$(dirname "$0")"
-echo "Running Desktop2Stereo..."
+echo "- Running Desktop2Stereo for Linux..."
 
 # Set paths
 VIRTUAL_ENV=".env"
@@ -17,3 +17,9 @@ source "$VIRTUAL_ENV/bin/activate"
 python main.py --hf-mirror
 
 # --hf-mirror is used to set the Hugging Face mirror for users who cannot access HuggingFace directly.
+
+if [ $? -ne 0 ]; then
+    echo "Failed to run Desktop2Stereo"
+    read -p "Press enter to exit..."
+    exit 1
+fi
