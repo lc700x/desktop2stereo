@@ -1,5 +1,14 @@
 # depth.py
-import platform
+import yaml
+import os, sys, platform
+
+# load customized settings
+with open("settings.yaml") as settings_yaml:
+    try:
+        settings = yaml.safe_load(settings_yaml)
+    except yaml.YAMLError as exc:
+        print(exc)
+
 # get system type
 OS_NAME = platform.system()
 if  OS_NAME == "Darwin":
@@ -10,20 +19,18 @@ if  OS_NAME == "Darwin":
         message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
         category=UserWarning
 )
+
+# Set Hugging Face environment variable
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
+    os.environ['HF_ENDPOINT'] = settings["hf_endpoint"]
+
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
-
-# load customized settings
-import yaml
-with open("settings.yaml") as settings_yaml:
-    try:
-        settings = yaml.safe_load(settings_yaml)
-    except yaml.YAMLError as exc:
-        print(exc)
 
 # Model configuration
 MODEL_ID = settings["depth_model"]
