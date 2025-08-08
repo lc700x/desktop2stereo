@@ -1,8 +1,7 @@
 import threading
 import queue
 import glfw
-import os, sys, time
-os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+import time
 
 from capture import DesktopGrabber
 from depth import settings, predict_depth, process, DEVICE_INFO
@@ -11,9 +10,6 @@ from viewer import StereoWindow
 MONITOR_INDEX, DOWNSCALE_FACTOR, FPS = settings["monitor_index"], settings["downscale_factor"], settings["fps"]
 DOWNLOAD_CACHE = settings["download_path"]
 TIME_SLEEP = 1.0 / FPS
-
-if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
-    os.environ['HF_ENDPOINT'] = settings["hf_endpoint"]
 
 # Queues with size=1 (latest-frame-only logic)
 raw_q = queue.Queue(maxsize=1)
