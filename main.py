@@ -7,7 +7,8 @@ from capture import DesktopGrabber
 from depth import settings, predict_depth, process, DEVICE_INFO
 from viewer import StereoWindow
 
-MONITOR_INDEX, DOWNSCALE_FACTOR, FPS = settings["monitor_index"], settings["downscale_factor"], settings["fps"]
+MONITOR_INDEX, DOWNSCALE_FACTOR = settings["monitor_index"], settings["downscale_factor"]
+SHOW_FPS, FPS = settings["show_fps"], settings["fps"]
 DOWNLOAD_CACHE = settings["download_path"]
 TIME_SLEEP = 1.0 / FPS
 
@@ -61,10 +62,24 @@ def main():
     threading.Thread(target=depth_loop, daemon=True).start()
 
     window = StereoWindow()
-
     frame_rgb, depth = None, None
 
+    # FPS calculation variables
+    frame_count = 0
+    last_time = time.time()
+    fps = 0
+    
     while not glfw.window_should_close(window.window):
+        
+        if SHOW_FPS:
+            frame_count += 1
+            current_time = time.time()
+            if current_time - last_time >= 1.0:  # Update every second
+                fps = frame_count / (current_time - last_time)
+                frame_count = 0
+                last_time = current_time
+                # Update window title with FPS
+                glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {fps:.1f}")
         try:
             # Get latest frame, or skip update
             frame_rgb, depth = depth_q.get_nowait()
