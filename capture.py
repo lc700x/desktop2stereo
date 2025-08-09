@@ -1,4 +1,5 @@
 import numpy as np
+import mss
 from depth import OS_NAME
 
 if OS_NAME == "Windows":
@@ -7,9 +8,8 @@ if OS_NAME == "Windows":
         ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI awareness (Windows 8.1+)
     except:
         ctypes.windll.user32.SetProcessDPIAware()  # Windows 7 fallback
-    import numpy as np
     from wincam import DXCamera
-    import mss
+    
     
     # import win32gui, win32ui
     # from PIL import Image
@@ -110,8 +110,6 @@ if OS_NAME == "Windows":
 else:
     def add_mouse(img):
         return img
-
-    import mss
     class DesktopGrabber:
         def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
             self.scaled_height = output_resolution
