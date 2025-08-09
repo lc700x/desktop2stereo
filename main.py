@@ -9,7 +9,7 @@ from viewer import StereoWindow
 
 MONITOR_INDEX, DOWNSCALE_FACTOR = settings["monitor_index"], settings["downscale_factor"]
 SHOW_FPS, FPS = settings["show_fps"], settings["fps"]
-DOWNLOAD_CACHE = settings["download_path"]
+
 TIME_SLEEP = 1.0 / FPS
 
 # Queues with size=1 (latest-frame-only logic)
@@ -96,3 +96,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
