@@ -53,8 +53,7 @@ if OS_NAME == "Windows":
             self.camera.__exit__(exc_type, exc_val, exc_tb)
 
         def grab(self):
-            frame, _ = self.camera.get_rgb_frame()
-            img_array = np.array(frame)
+            img_array, _ = self.camera.get_rgb_frame()
             return img_array, (self.scaled_height, self.scaled_width)
 
 # --- Non-Windows Grabber ---
@@ -97,3 +96,4 @@ else:
             shot = self._mss.grab(self._mon)
             img = np.frombuffer(shot.rgb, dtype=np.uint8).reshape((self.system_height, self.system_width, 3))
             return img, (self.scaled_height, self.scaled_width)
+
