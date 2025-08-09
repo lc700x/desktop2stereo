@@ -17,4 +17,4 @@ tqdm==4.67.1
 transformers==4.54.0
 hf_xet==1.1.7
 urllib3==2.5.0
-mss=10.0.0
+mss==10.0.0
