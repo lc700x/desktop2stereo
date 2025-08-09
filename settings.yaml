@@ -2,8 +2,7 @@ Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Resolution: 384
 Download Path: ./models
 FP16: true
-FPS: 90
-Grabber: mss
+FPS: 60
 HF Endpoint: https://hf-mirror.com
 DEVICE ID: 0
 IPD: 0.064

@@ -14,7 +14,7 @@ python main.py --hf-mirror
 @REM --hf-mirror is used to set the Hugging Face mirror for users who cannot access HuggingFace directly.
 
 if %errorlevel% neq 0 (
-    echo Failed to run Desktop2Stereo
+    echo Desktop2Stereo stopped. 
     pause
     exit /b 1
 )
