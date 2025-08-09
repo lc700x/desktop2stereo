@@ -7,9 +7,8 @@ from capture import DesktopGrabber
 from depth import settings, predict_depth, process, DEVICE_INFO
 from viewer import StereoWindow
 
-MONITOR_INDEX, DOWNSCALE_FACTOR = settings["monitor_index"], settings["downscale_factor"]
-SHOW_FPS, FPS = settings["show_fps"], settings["fps"]
-DOWNLOAD_CACHE = settings["download_path"]
+MONITOR_INDEX, OUTPUT_RESOLUTION = settings["Monitor Index"], settings["Output Resolution"]
+SHOW_FPS, FPS, GRABBER = settings["Show FPS"], settings["FPS"], settings["Grabber"]
 TIME_SLEEP = 1.0 / FPS
 
 # Queues with size=1 (latest-frame-only logic)
@@ -23,14 +22,14 @@ def put_latest(q, item):
         try:
             q.get_nowait()
         except queue.Empty:
-            time.sleep(TIME_SLEEP)
+            pass
     try:
         q.put_nowait(item)
     except queue.Full:
-        time.sleep(TIME_SLEEP)  # Drop frame if race condition occurs
+        pass  # Drop frame if race condition occurs
 
 def capture_loop():
-    cap = DesktopGrabber(monitor_index=MONITOR_INDEX, downscale=DOWNSCALE_FACTOR, fps=FPS)
+    cap = DesktopGrabber(monitor_index=MONITOR_INDEX, output_resolution=OUTPUT_RESOLUTION, fps=FPS, backend=GRABBER)
     while True:
         frame_raw, size = cap.grab()
         put_latest(raw_q, (frame_raw, size))
@@ -95,4 +94,6 @@ def main():
     glfw.terminate()
 
 if __name__ == "__main__":
-    main()
+    # main()
+    import cProfile
+    cProfile.run("main()")
