@@ -23,7 +23,7 @@ if  OS_NAME == "Darwin":
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
-    os.environ['HF_ENDPOINT'] = settings["hf_endpoint"]
+    os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 import torch
 import torch.nn.functional as F
@@ -33,9 +33,9 @@ from threading import Lock
 import cv2
 
 # Model configuration
-MODEL_ID = settings["depth_model"]
-CACHE_PATH = settings["download_path"]
-DTYPE = torch.float16 if settings["fp_16"] else torch.float32 # Use float32 for DirectML compatibility
+MODEL_ID = settings["Depth Model"]
+CACHE_PATH = settings["Download Path"]
+DTYPE = torch.float16 if settings["FP16"] else torch.float32 # Use float32 for DirectML compatibility
 
 # Initialize DirectML Device
 def get_device():
@@ -63,7 +63,7 @@ DEVICE, DEVICE_INFO = get_device()
 
 # Load model with same configuration as example
 model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).half().to(DEVICE).eval()
-INPUT_W= settings["depth_resolution"]   # model's native resolution
+INPUT_W= settings["Depth Resolution"]  # model's native resolution
 
 # Normalization parameters (same as example)
 MEAN = torch.tensor([0.485, 0.456, 0.406], device=DEVICE).view(1, 3, 1, 1)
@@ -232,7 +232,6 @@ def make_sbs(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, dept
 def make_sbs_tensor(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, depth_strength: float = 0.1, half: bool = True) -> np.array:
     """
     Build a side-by-side stereo frame using PyTorch tensors with DirectML support.
-
     Parameters
     ----------
     rgb : Tensor (3, H, W) float32 in range [0..1]

@@ -6,7 +6,7 @@ import numpy as np
 # Get OS name and settings
 from depth import OS_NAME, settings
 
-IPD = settings["ipd"]
+IPD = settings["IPD"]
 
 VERTEX_SHADER = """
     #version 330
