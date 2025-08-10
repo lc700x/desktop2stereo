@@ -45,7 +45,7 @@ FRAGMENT_SHADER = """
 
 class StereoWindow:
     """A window for displaying stereo images side-by-side with depth effect."""
-    def __init__(self):
+    def __init__(self, depth_ratio):
         self.window_size = (1280, 720)
         self.title = "Stereo SBS Viewer"
         self.ipd_uv = 0.064  # Inter-pupillary distance in UV coordinates (0.064 per eye)
@@ -53,6 +53,11 @@ class StereoWindow:
         self._last_window_position = None
         self._last_window_size = None
         self._fullscreen = False
+        self.depth_ratio = depth_ratio
+        self.depth_ratio_original = depth_ratio
+
+        # Flag to track if textures need update
+        self._texture_size = None
         
         # Initialize GLFW
         if not glfw.init():
@@ -76,7 +81,7 @@ class StereoWindow:
         self.position_on_monitor(0)  # 0=primary, 1=secondary
         
         glfw.make_context_current(self.window)
-        glfw.swap_interval(0) # disable vsync
+        glfw.swap_interval(1)  # Enable VSync to limit FPS and reduce CPU load
         self.ctx = moderngl.create_context()
         
         # Setup shaders and buffers
@@ -217,6 +222,17 @@ class StereoWindow:
                 self.move_to_adjacent_monitor(+1)
             elif key == glfw.KEY_LEFT:
                 self.move_to_adjacent_monitor(-1)
+            elif key == glfw.KEY_DOWN:
+                # Decrease depth strength by 0.2
+                self.depth_ratio = max(0, self.depth_ratio - 0.2)
+            elif key == glfw.KEY_UP:
+                # Increase depth strength by 0.2
+                self.depth_ratio = min(10, self.depth_ratio + 0.2)
+            elif key == glfw.KEY_0:
+                # Increase depth strength by 0.2
+                self.depth_ratio = self.depth_ratio_original
+
+
 
     def make_quad(self):
         vertices = np.array([
@@ -231,40 +247,47 @@ class StereoWindow:
         )
 
     def update_frame(self, rgb, depth):
-        # Normalize depth with adaptive range
-        depth_min = np.percentile(depth, 2)
-        depth_max = np.percentile(depth, 98)
-        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
-        depth = np.clip(depth, 0, 1)
-
-        if self.color_tex is None or self.color_tex.size != (rgb.shape[1], rgb.shape[0]):
+        # Only recreate textures if size changed
+        new_size = (rgb.shape[1], rgb.shape[0])
+        if self._texture_size != new_size:
             if self.color_tex:
                 self.color_tex.release()
             if self.depth_tex:
                 self.depth_tex.release()
-            self.color_tex = self.ctx.texture((rgb.shape[1], rgb.shape[0]), 3, dtype='f1')
-            self.depth_tex = self.ctx.texture((depth.shape[1], depth.shape[0]), 1, dtype='f4')
+
+            self.color_tex = self.ctx.texture(new_size, 3, dtype='f1')
+            self.depth_tex = self.ctx.texture(new_size, 1, dtype='f4')
+
+            # Set texture units once after recreating textures
             self.prog['tex_color'].value = 0
             self.prog['tex_depth'].value = 1
 
+            self._texture_size = new_size
+
+        # Upload texture data
         self.color_tex.write(rgb.tobytes())
-        self.depth_tex.write(depth.tobytes())
+        self.depth_tex.write((self.depth_ratio*depth).tobytes())
 
     def render(self):
-        self.ctx.clear(0.1, 0.1, 0.1)
         if not self.color_tex or not self.depth_tex:
-            return
+            return  # Skip render if textures not ready
+
+        self.ctx.clear(0.1, 0.1, 0.1)
         width, height = glfw.get_framebuffer_size(self.window)
+
         self.color_tex.use(location=0)
         self.depth_tex.use(location=1)
 
         # Left eye
         self.ctx.viewport = (0, 0, width // 2, height)
-        self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+        eye_offset = -self.ipd_uv / 2.0
+        self.prog['u_eye_offset'].value = eye_offset
         self.prog['u_depth_strength'].value = self.depth_strength
         self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
         # Right eye
         self.ctx.viewport = (width // 2, 0, width // 2, height)
-        self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+        eye_offset = self.ipd_uv / 2.0
+        self.prog['u_eye_offset'].value = eye_offset
+        # depth_strength stays the same
         self.quad_vao.render(moderngl.TRIANGLE_STRIP)
