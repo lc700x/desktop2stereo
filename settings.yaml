@@ -1,16 +1,9 @@
-Depth Model: depth-anything/Depth-Anything-V2-Small-hf
-Depth Resolution: 384
-Download Path: ./models
-FP16: true
-FPS: 60
-HF Endpoint: https://hf-mirror.com
-DEVICE ID: 0
-IPD: 0.064
-Language: CN
 Monitor Index: 1
-Output Resolution: 1080
+FPS: 60
 Show FPS: true
-Model List: 
+Output Resolution: 1080
+IPD: 0.064
+Model List:
 - depth-anything/Depth-Anything-V2-Large-hf
 - depth-anything/Depth-Anything-V2-Base-hf
 - depth-anything/Depth-Anything-V2-Small-hf
@@ -27,3 +20,10 @@ Model List:
 - xingyang1/Distill-Any-Depth-Small-hf
 - apple/DepthPro-hf
 - Intel/dpt-large
+Depth Model: depth-anything/Depth-Anything-V2-Small-hf
+Depth Strength: '1.0'
+Depth Resolution: 384
+FP16: true
+Download Path: ./models
+HF Endpoint: https://hf-mirror.com
+Language: CN
