@@ -1,6 +1,7 @@
 # depth.py
 import yaml
 import os, sys, platform
+from gui import DEVICES
 
 # load customized settings
 with open("settings.yaml") as settings_yaml:
@@ -22,8 +23,8 @@ if  OS_NAME == "Darwin":
 
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
-    os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
+# if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
+os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 import torch
 import torch.nn.functional as F
@@ -59,7 +60,8 @@ def get_device():
 
 
 # Get the device and print information
-DEVICE, DEVICE_INFO = get_device()
+# DEVICE, DEVICE_INFO = get_device()
+DEVICE, DEVICE_INFO = DEVICES[settings["Device"]]["device"], DEVICES[settings["Device"]]["name"]
 
 # Load model with same configuration as example
 model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).half().to(DEVICE).eval()

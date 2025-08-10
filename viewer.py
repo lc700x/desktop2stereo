@@ -45,7 +45,7 @@ FRAGMENT_SHADER = """
 
 class StereoWindow:
     """A window for displaying stereo images side-by-side with depth effect."""
-    def __init__(self, depth_ratio):
+    def __init__(self, depth_ratio=1.0, display_mode="SBS"):
         self.window_size = (1280, 720)
         self.title = "Stereo SBS Viewer"
         self.ipd_uv = 0.064  # Inter-pupillary distance in UV coordinates (0.064 per eye)
@@ -55,6 +55,7 @@ class StereoWindow:
         self._fullscreen = False
         self.depth_ratio = depth_ratio
         self.depth_ratio_original = depth_ratio
+        self.display_mode = display_mode  # Default: Side-By-Side
 
         # Flag to track if textures need update
         self._texture_size = None
@@ -223,14 +224,20 @@ class StereoWindow:
             elif key == glfw.KEY_LEFT:
                 self.move_to_adjacent_monitor(-1)
             elif key == glfw.KEY_DOWN:
-                # Decrease depth strength by 0.2
-                self.depth_ratio = max(0, self.depth_ratio - 0.2)
+                # Decrease depth strength by 0.1
+                self.depth_ratio = max(0, self.depth_ratio - 0.1)
             elif key == glfw.KEY_UP:
-                # Increase depth strength by 0.2
-                self.depth_ratio = min(10, self.depth_ratio + 0.2)
+                # Increase depth strength by 0.1
+                self.depth_ratio = min(10, self.depth_ratio + 0.1)
             elif key == glfw.KEY_0:
-                # Increase depth strength by 0.2
+                # Reset depth strength to settings
                 self.depth_ratio = self.depth_ratio_original
+            elif key == glfw.KEY_TAB:
+                # Toggle between SBS and TAB modes
+                if self.display_mode == "SBS":
+                    self.display_mode = "TAB"
+                else:
+                    self.display_mode = "SBS"
 
 
 
@@ -270,7 +277,7 @@ class StereoWindow:
 
     def render(self):
         if not self.color_tex or not self.depth_tex:
-            return  # Skip render if textures not ready
+            return
 
         self.ctx.clear(0.1, 0.1, 0.1)
         width, height = glfw.get_framebuffer_size(self.window)
@@ -278,16 +285,32 @@ class StereoWindow:
         self.color_tex.use(location=0)
         self.depth_tex.use(location=1)
 
-        # Left eye
-        self.ctx.viewport = (0, 0, width // 2, height)
-        eye_offset = -self.ipd_uv / 2.0
-        self.prog['u_eye_offset'].value = eye_offset
-        self.prog['u_depth_strength'].value = self.depth_strength
-        self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+        if self.display_mode == "SBS":
+            # Side-by-side layout (existing code)
+            # Left eye
+            self.ctx.viewport = (0, 0, width // 2, height)
+            eye_offset = -self.ipd_uv / 2.0
+            self.prog['u_eye_offset'].value = eye_offset
+            self.prog['u_depth_strength'].value = self.depth_strength
+            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-        # Right eye
-        self.ctx.viewport = (width // 2, 0, width // 2, height)
-        eye_offset = self.ipd_uv / 2.0
-        self.prog['u_eye_offset'].value = eye_offset
-        # depth_strength stays the same
-        self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+            # Right eye
+            self.ctx.viewport = (width // 2, 0, width // 2, height)
+            eye_offset = self.ipd_uv / 2.0
+            self.prog['u_eye_offset'].value = eye_offset
+            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+        else:
+            # Top-and-bottom layout
+            # Left eye on top half
+            self.ctx.viewport = (0, height // 2, width, height // 2)
+            eye_offset = -self.ipd_uv / 2.0
+            self.prog['u_eye_offset'].value = eye_offset
+            self.prog['u_depth_strength'].value = self.depth_strength
+            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+            # Right eye on bottom half
+            self.ctx.viewport = (0, 0, width, height // 2)
+            eye_offset = self.ipd_uv / 2.0
+            self.prog['u_eye_offset'].value = eye_offset
+            self.quad_vao.render(moderngl.TRIANGLE_STRIP)

@@ -1,8 +1,9 @@
 Monitor Index: 1
 FPS: 60
 Show FPS: true
-Output Resolution: 1080
+Output Resolution: 2160
 IPD: 0.064
+Display Mode: TAB
 Model List:
 - depth-anything/Depth-Anything-V2-Large-hf
 - depth-anything/Depth-Anything-V2-Base-hf
@@ -21,9 +22,10 @@ Model List:
 - apple/DepthPro-hf
 - Intel/dpt-large
 Depth Model: depth-anything/Depth-Anything-V2-Small-hf
-Depth Strength: '1.0'
+Depth Strength: 1.0
 Depth Resolution: 384
 FP16: true
 Download Path: ./models
 HF Endpoint: https://hf-mirror.com
+Device: 0
 Language: CN
