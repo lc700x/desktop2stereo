@@ -7,47 +7,41 @@ from capture import DesktopGrabber
 from depth import settings, predict_depth, process, DEVICE_INFO, MODEL_ID
 from viewer import StereoWindow
 
-MONITOR_INDEX, OUTPUT_RESOLUTION = settings["Monitor Index"], settings["Output Resolution"]
+MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
 SHOW_FPS, FPS, DEPTH_STRENTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 TIME_SLEEP = 1.0 / FPS
 
 # Queues with size=1 (latest-frame-only logic)
-raw_q = queue.Queue(maxsize=1)
+raw_q = queue.Queue(maxsize=2)
 proc_q = queue.Queue(maxsize=1)
 
 def put_latest(q, item):
-    """Put item into queue, dropping oldest if queue is full (non-blocking)."""
-    while True:
+    """Put item into queue, dropping old one if needed (non-blocking)."""
+    if q.full():
         try:
-            q.put_nowait(item)
-            break  # Success, exit loop
-        except queue.Full:
-            try:
-                q.get_nowait()  # Drop oldest item
-            except queue.Empty:
-                # Queue empty unexpectedly, retry putting
-                continue
+            q.get_nowait()
+        except queue.Empty:
+            time.sleep(TIME_SLEEP)
+    try:
+        q.put_nowait(item)
+    except queue.Full:
+        time.sleep(TIME_SLEEP)  # Drop frame if race condition occurs
 
 def capture_loop():
     cap = DesktopGrabber(monitor_index=MONITOR_INDEX, output_resolution=OUTPUT_RESOLUTION, fps=FPS)
     while True:
-        try:
-            frame_raw, size = cap.grab()
-        except queue.Empty:
-            time.sleep(TIME_SLEEP)
-            continue     
+        frame_raw, size = cap.grab()
         put_latest(raw_q, (frame_raw, size))
 
 def process_loop():
     while True:
         try:
-            frame_raw, size = raw_q.get(timeout=1)  # blocks until available
+            frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
+            frame_rgb = process(frame_raw, size)
         except queue.Empty:
             continue
-        frame_rgb = process(frame_raw, size)
         depth = predict_depth(frame_rgb)
         put_latest(proc_q, (frame_rgb, depth))
-
 
 def main():
     print(DEVICE_INFO)
@@ -57,7 +51,8 @@ def main():
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
 
-    window = StereoWindow(depth_ratio=DEPTH_STRENTH)
+    window = StereoWindow(depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+    # window = StereoWindow()
     frame_rgb, depth = None, None
 
     # FPS calculation variables
@@ -75,16 +70,17 @@ def main():
                 frame_count = 0
                 last_time = current_time
                 # Update window title with FPS
-                glfw.set_window_title(window.window, f"Stereo Viewer | Strength: {window.depth_ratio:.1f} | FPS: {fps:.1f}")
+                glfw.set_window_title(window.window, f"Stereo Viewer | depth:{window.depth_ratio:.1f}  | FPS: {fps:.1f}")
         try:
-            frame_rgb, depth = proc_q.get(timeout=TIME_SLEEP)
+            # Get latest frame, or skip update
+            frame_rgb, depth = proc_q.get_nowait()
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
             pass
 
         window.render()
         glfw.swap_buffers(window.window)
-        glfw.wait_events_timeout(TIME_SLEEP)  # sleeps until input or timeout
+        glfw.wait_events_timeout(TIME_SLEEP)
 
     glfw.terminate()
 
