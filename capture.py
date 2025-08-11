@@ -98,8 +98,6 @@ else:
                 print(f"Using monitor {monitor_index}: {self.system_width}x{self.system_height}")
                 print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
 
-            self._last_frame_time = 0
-
         def _log_monitors(self):
             print("Available monitors:")
             for i, mon in enumerate(self._mss.monitors):
@@ -123,16 +121,9 @@ else:
             pass
 
         def grab(self):
-            now = time.time()
-            elapsed = now - self._last_frame_time
-            if elapsed < self.frame_interval:
-                time.sleep(self.frame_interval - elapsed)
-            self._last_frame_time = time.time()
-
             shot = self._mss.grab(self._mon)
-            img = np.frombuffer(shot.rgb, dtype=np.uint8).reshape((self.system_height, self.system_width, 3))
-
             # Optional: avoid copy here, just pass img
+            img = cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2RGB)
             img = add_mouse(img)
 
             return img, (self.scaled_height, self.scaled_width)
