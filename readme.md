@@ -81,7 +81,7 @@ Just use the default settnigs and click `Run`, and then click `OK` to run the St
 ![Half-SBS](./assets/HalfSBS.png)    
 ![TAB](./assets/TAB.png)
 5. Real-time modification of **depth strength**.  
-   Use `↑ Up ` or `↓ Right` arrow keys to increase/decrease the depth strength by a step of 0.1.   
+   Use `↑ Up ` or `↓ Right` arrow keys to increase/decrease the depth strength by a step of 0.1. To reset press `0` key. 
    The defination of **depth strength** is in the [detailed settings](###detailed-settings) session.    
 6. Press `Esc` to exit the **Stereo Viewer**. 
 ### Detailed Settings
@@ -143,7 +143,7 @@ All optional settings can be modified on the GUI window and saved to the `settin
 12. **Download Path**  
    Default download path is the `models` folder under the working directory.    
 13. **HF Endpoint** (Hugging Face)  
-   [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run. 
+   [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run.  
 ## References
 ```BIBTEX
 @article{depth_anything_v2,

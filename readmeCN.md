@@ -81,7 +81,7 @@
 ![Half-SBS](./assets/HalfSBS.png)  
 ![TAB](./assets/TAB.png)  
 5. 实时调整**深度强度**。  
-   使用`↑ Up`或`↓ Down`方向键以0.1的步长增加/减少深度强度。  
+   使用`↑ Up`或`↓ Down`方向键以0.1的步长增加/减少深度强度，按`0`键重置。   
    **深度强度**的定义见[详细设置](###detailed-settings)部分。  
 6. 按`Esc`退出**Stereo Viewer**。  
 ### 详细设置  
