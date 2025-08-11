@@ -1,5 +1,5 @@
 #!/bin/bash
 cd "$(dirname "$0")"
 source ".env/bin/activate"
-python gui.py
+python3 gui.py
 exit 0
