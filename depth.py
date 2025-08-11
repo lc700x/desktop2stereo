@@ -15,7 +15,7 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 import torch
-torch.set_num_threads(1) # Set threads to avoid high CPU usage
+torch.set_num_threads(2) # Set 2 threads to avoid high CPU usage caused by default full threads
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -88,7 +88,7 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
         Depth map as numpy array (H, W) normalized to [0, 1]
     """
     # Convert to tensor and normalize (similar to pipeline's preprocessing)
-    tensor = torch.from_numpy(image_rgb.copy()).to(DEVICE, dtype=DTYPE)              # CPU → CPU tensor (uint8)
+    tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)              # CPU → CPU tensor (uint8)
     tensor = tensor.permute(2, 0, 1).float() / 255.  # HWC → CHW, 0-1 range
     tensor = tensor.unsqueeze(0)
 
