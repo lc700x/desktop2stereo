@@ -83,7 +83,6 @@ def main():
         try:
             # Get latest frame, or skip update
             frame_rgb, depth = depth_q.get_nowait()
-            depth = depth.cpu().numpy().astype('float32')
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
             pass  # Reuse previous frame if none available

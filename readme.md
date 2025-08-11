@@ -31,9 +31,9 @@
 2. Download Desktop2Stereo app  
    Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.  
 3. Install Python environment  
-    Doulbe click `install-mps` executable.  
+    Doulbe click `install-mps` executable. (Please allow open in **privacy and security settings**)
 4. Run Stereo2Desktop application  
-    Doulbe click `run_mac` executable.  
+    Doulbe click `run_mac` executable.  (Please allow open in **privacy and security settings**, "Screen Recording" permission is required)
 ### Linux (Beta)
 1. Install latest GPU driver  
 **AMD GPU**: Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). 
@@ -61,6 +61,8 @@
     ```bash
     bash run_linux.bash
     ```
+## Desktop2Stereo GUI
+
 ## Setup the Desktop2Stereo display  
 1. Use arrow keys `<- Left ` or `-> Right` to switch the **Stereo SBS Viewer** window to second (virtual) monitor display. 
 2. Set your video/game on the main screen (full screen mode if you needed).  
