@@ -6,7 +6,7 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 1. AMD GPU  
 2. NVIDIA GPU  
 3. Apple Silicon Chip (M1, M2, M3, M4, ...)  
-4. DirectML compatible devices (Intel Arc/Iris GPU, etc. **Windows** only)
+4. DirectML compatible devices (Intel Arc/Iris GPU, Qualcomm® Adreno GPU, etc. **Windows** only)
 ## Supported OS  
 1. Windows 10/11 (x64/Arm64)
 2. MacOS 10.16 or later  
