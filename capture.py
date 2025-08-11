@@ -4,12 +4,12 @@ from gui import OS_NAME
 
 if OS_NAME == "Windows":
     import ctypes
+    from wincam import DXCamera
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except:
         ctypes.windll.user32.SetProcessDPIAware()
-    from wincam import DXCamera
-    import cv2  # For resizing (add to requirements)
+    
 
     class DesktopGrabber:
         def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
@@ -107,18 +107,9 @@ else:
             screen = self._mss.grab(monitor)
             return screen.size.width, screen.size.height
 
-        def __enter__(self):
-            # No camera context on non-Windows
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            pass
-
         def grab(self):
             shot = self._mss.grab(self._mon)
-            # Optional: avoid copy here, just pass img
             img = cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2RGB)
             img = add_mouse(img)
-            
-
             return img, (self.scaled_height, self.scaled_width)
+
