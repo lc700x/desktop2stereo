@@ -11,11 +11,6 @@ MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], sett
 SHOW_FPS, FPS, DEPTH_STRENTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 TIME_SLEEP = 1.0 / FPS
 
-MONITOR_INDEX, DOWNSCALE_FACTOR = settings["monitor_index"], settings["downscale_factor"]
-SHOW_FPS, FPS = settings["show_fps"], settings["fps"]
-
-TIME_SLEEP = 1.0 / FPS
-
 # Queues with size=1 (latest-frame-only logic)
 raw_q = queue.Queue(maxsize=1)
 proc_q = queue.Queue(maxsize=1)
