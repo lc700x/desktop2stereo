@@ -27,29 +27,8 @@ MODEL_ID = settings["Depth Model"]
 CACHE_PATH = settings["Download Path"]
 DTYPE = torch.float16 if settings["FP16"] else torch.float32 # Use float32 for DirectML compatibility
 
-# Initialize DirectML Device
-def get_device():
-    """
-    Returns a torch.device and a human‐readable device info string.
-    """
-    try:
-        import torch_directml
-        if torch_directml.is_available():
-            dev = torch_directml.device()
-            info = f"Using DirectML device: {torch_directml.device_name(0)}"
-            return dev, info
-    except ImportError:
-        pass
-
-    if torch.cuda.is_available():
-        return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(0)}"
-    if torch.backends.mps.is_available():
-        return torch.device("mps"), "Using Apple Silicon (MPS) device"
-    return torch.device("cpu"), "Using CPU device"
-
 
 # Get the device and print information
-# DEVICE, DEVICE_INFO = get_device()
 DEVICE, DEVICE_INFO = DEVICES[settings["Device"]]["device"], DEVICES[settings["Device"]]["name"]
 
 # Load model with same configuration as example
@@ -282,4 +261,5 @@ def make_sbs_tensor(rgb, depth, ipd_uv=0.03, depth_strength=1.0, half=False):
         return sbs_half.clamp(0, 255).byte().cpu().numpy()  # (H, W, 3)
 
     return sbs_full.clamp(0, 255).byte().cpu().numpy()  # (H, 2W, 3)
+
 
