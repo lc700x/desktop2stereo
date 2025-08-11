@@ -4,12 +4,11 @@ import glfw
 import time
 
 from capture import DesktopGrabber
-from depth import settings, predict_depth, process, DEVICE_INFO
+from depth import settings, predict_depth, process, DEVICE_INFO, MODEL_ID
 from viewer import StereoWindow
 
-MONITOR_INDEX, DOWNSCALE_FACTOR = settings["monitor_index"], settings["downscale_factor"]
-SHOW_FPS, FPS = settings["show_fps"], settings["fps"]
-
+MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
+SHOW_FPS, FPS, DEPTH_STRENTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 TIME_SLEEP = 1.0 / FPS
 
 # Queues with size=1 (latest-frame-only logic)
@@ -30,7 +29,7 @@ def put_latest(q, item):
         time.sleep(TIME_SLEEP)  # Drop frame if race condition occurs
 
 def capture_loop():
-    cap = DesktopGrabber(monitor_index=MONITOR_INDEX, downscale=DOWNSCALE_FACTOR, fps=FPS)
+    cap = DesktopGrabber(monitor_index=MONITOR_INDEX, output_resolution=OUTPUT_RESOLUTION, fps=FPS)
     while True:
         frame_raw, size = cap.grab()
         put_latest(raw_q, (frame_raw, size))
@@ -54,14 +53,15 @@ def depth_loop():
         put_latest(depth_q, (frame_rgb, depth))
 
 def main():
-    print(DEVICE_INFO)
+    print(f"Using {DEVICE_INFO}")
+    print(f"Model: {MODEL_ID}")
 
     # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
     threading.Thread(target=depth_loop, daemon=True).start()
 
-    window = StereoWindow()
+    window = StereoWindow(depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
     frame_rgb, depth = None, None
 
     # FPS calculation variables
@@ -86,11 +86,11 @@ def main():
             depth = depth.cpu().numpy().astype('float32')
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
-            time.sleep(TIME_SLEEP)  # Reuse previous frame if none available
+            pass  # Reuse previous frame if none available
 
         window.render()
         glfw.swap_buffers(window.window)
-        glfw.poll_events()
+        glfw.wait_events_timeout(TIME_SLEEP)
 
     glfw.terminate()
 

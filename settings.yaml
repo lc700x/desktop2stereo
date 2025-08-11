@@ -1,10 +1,31 @@
-monitor_index: 1
-downscale_factor: 0.5
-fps: 60
-show_fps: true
-depth_model: depth-anything/Depth-Anything-V2-Small-hf
-depth_resolution: 384
-ipd: 0.064
-fp_16: true
-download_path: ./models
-hf_endpoint: https://hf-mirror.com
+Monitor Index: 1
+FPS: 60
+Show FPS: true
+Output Resolution: 1080
+IPD: 0.064
+Display Mode: SBS
+Model List:
+- depth-anything/Depth-Anything-V2-Large-hf
+- depth-anything/Depth-Anything-V2-Base-hf
+- depth-anything/Depth-Anything-V2-Small-hf
+- depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
+- depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
+- depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
+- depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
+- depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
+- depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
+- LiheYoung/depth-anything-large-hf
+- LiheYoung/depth-anything-base-hf
+- LiheYoung/depth-anything-small-hf
+- xingyang1/Distill-Any-Depth-Large-hf
+- xingyang1/Distill-Any-Depth-Small-hf
+- apple/DepthPro-hf
+- Intel/dpt-large
+Depth Model: depth-anything/Depth-Anything-V2-Small-hf
+Depth Strength: 1.0
+Depth Resolution: 384
+FP16: true
+Download Path: models
+HF Endpoint: https://hf-mirror.com
+Device: 0
+Language: EN

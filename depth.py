@@ -1,7 +1,7 @@
 # depth.py
 import yaml
-import os, sys, platform
-
+import os
+from gui import DEVICES
 # load customized settings
 with open("settings.yaml") as settings_yaml:
     try:
@@ -9,23 +9,13 @@ with open("settings.yaml") as settings_yaml:
     except yaml.YAMLError as exc:
         print(exc)
 
-# get system type
-OS_NAME = platform.system()
-if  OS_NAME == "Darwin":
-    import os, warnings
-    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-    warnings.filterwarnings(
-        "ignore",
-        message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
-        category=UserWarning
-)
-
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
-    os.environ['HF_ENDPOINT'] = settings["hf_endpoint"]
+# if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
+os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 import torch
+torch.set_num_threads(1) # Set threads to avoid high CPU usage
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -33,9 +23,9 @@ from threading import Lock
 import cv2
 
 # Model configuration
-MODEL_ID = settings["depth_model"]
-CACHE_PATH = settings["download_path"]
-DTYPE = torch.float16 if settings["fp_16"] else torch.float32 # Use float32 for DirectML compatibility
+MODEL_ID = settings["Depth Model"]
+CACHE_PATH = settings["Download Path"]
+DTYPE = torch.float16 if settings["FP16"] else torch.float32 # Use float32 for DirectML compatibility
 
 # Initialize DirectML Device
 def get_device():
@@ -59,11 +49,12 @@ def get_device():
 
 
 # Get the device and print information
-DEVICE, DEVICE_INFO = get_device()
+# DEVICE, DEVICE_INFO = get_device()
+DEVICE, DEVICE_INFO = DEVICES[settings["Device"]]["device"], DEVICES[settings["Device"]]["name"]
 
 # Load model with same configuration as example
 model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).half().to(DEVICE).eval()
-INPUT_W= settings["depth_resolution"]   # model's native resolution
+INPUT_W= settings["Depth Resolution"]  # model's native resolution
 
 # Normalization parameters (same as example)
 MEAN = torch.tensor([0.485, 0.456, 0.406], device=DEVICE).view(1, 3, 1, 1)
@@ -115,8 +106,8 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
 
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
-    # return depth.detach().cpu().numpy().astype('float32')
-    return depth
+    return depth.detach().cpu().numpy().astype('float32')
+    # return depth
 
 def predict_depth2 (image_rgb: np.ndarray, size) -> np.ndarray:
         """
@@ -157,26 +148,30 @@ def predict_depth_tensor(image_rgb):
     """
     Predict depth map from RGB image (similar to pipeline example but optimized for DirectML)
     Args:
-        image_rgb: Input RGB image as tensor (3, H, W) in uint8 format
+        image_rgb: Input RGB image as numpy array (H, W, 3) in uint8 format
     Returns:
-        Depth map as tensor (384, 384) normalized to [0, 1]
+        Depth map as numpy array (H, W) normalized to [0, 1]
     """
-    tensor = image_rgb.float() / 255.0  # Convert to float32 in range [0, 1]
+    # Convert to tensor and normalize (similar to pipeline's preprocessing)
+    img_tensor = torch.from_numpy(image_rgb.copy()).to(DEVICE, dtype=DTYPE)              # CPU → CPU tensor (uint8)
+    tensor = img_tensor.permute(2, 0, 1).float() / 255.  # HWC → CHW, 0-1 range
+    tensor = tensor.unsqueeze(0)
+
     # Resize and normalize (same as pipeline)
-    tensor = F.interpolate(tensor.unsqueeze(0), (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
-    tensor = tensor.squeeze(0)  # Remove batch dimension
-    tensor = (tensor - MEAN) / STD
+    tensor = F.interpolate(tensor, (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
+    tensor = (tensor - MEAN.to(DTYPE)) / STD.to(DTYPE)
 
     # Inference with thread safety
     with lock:
         depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
+
     # Post-processing (same as pipeline)
-    h, w = image_rgb.shape[1:3]
+    h, w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0, 0]
 
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
-    return depth.float()
+    return img_tensor, depth
 
 def make_sbs(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, depth_strength: float = 0.1, half: bool = True) -> np.ndarray:
         """
@@ -228,14 +223,14 @@ def make_sbs(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, dept
         # cv2.imwrite("sbs_half.jpg", sbs_half)  # Debugging line, can be removed
         # exit()
         return sbs_half.astype(np.uint8)
-    
-def make_sbs_tensor(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, depth_strength: float = 0.1, half: bool = True) -> np.array:
+
+def make_sbs_tensor(rgb, depth, ipd_uv=0.03, depth_strength=1.0, half=False):
     """
     Build a side-by-side stereo frame using PyTorch tensors with DirectML support.
 
     Parameters
     ----------
-    rgb : Tensor (3, H, W) float32 in range [0..1]
+    rgb : Tensor (H, W, 3) float32 in range [0..1]
     depth : Tensor (H, W) float32 in range [0..1]
     ipd_uv : float
         interpupillary distance in UV space (0-1, relative to image width)
@@ -248,38 +243,42 @@ def make_sbs_tensor(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.06
     Returns
     -------
     torch.Tensor
-        uint8 image of shape (3, H, 2W) if half == False,
-        or (3, H, W) when half == True.
+        uint8 image of shape (H, 2W, 3) if half == False,
+        or (H, W, 3) when half == True.
     """
-    # Ensure tensors are on the same device
-    _, H, W = rgb.shape
+    assert rgb.ndim == 3 and rgb.shape[2] == 3, "rgb must be (H, W, 3)"
+    assert depth.shape == rgb.shape[:2], "depth must be (H, W)"
+    
+    H, W, _ = rgb.shape
     device = rgb.device
-    # reshape depth[384, 384] to match rgb dimensions [H, W]
+
+    # inverse depth to get parallax (closer = bigger shift)
     inv = 1.0 - depth
     max_px = int(ipd_uv * W)
-    shifts = (inv * max_px * depth_strength).round().long()
-    
-    # Create coordinate grid
-    xs = torch.arange(W, device=device).expand(H, -1)  # (H, W)
-    
-    # Calculate left and right coordinates
-    shifts_half = (shifts // 2).clamp(min=0, max=W//2)
-    left_coords = torch.clamp(xs + shifts_half, 0, W-1)
-    right_coords = torch.clamp(xs - shifts_half, 0, W-1)
-    
-    # Gather pixels using advanced indexing
-    rgb = rgb.permute(1, 2, 0)  # (H, W, 3) for easier indexing
-    # Vectorized implementation using gather
-    y_indices = torch.arange(H, device=device)[:, None].expand(-1, W)
-    left = rgb[y_indices, left_coords]
-    right = rgb[y_indices, right_coords]
-    
-    # Concatenate for full SBS
+    shifts = (inv * max_px * depth_strength).round().long()  # (H, W)
+
+    # coordinate grid
+    xs = torch.arange(W, device=device).unsqueeze(0).expand(H, -1)  # (H, W)
+
+    # half shifts
+    shifts_half = (shifts // 2).clamp(min=0, max=W//2)  # (H, W)
+
+    # left/right coordinates
+    left_coords  = torch.clamp(xs + shifts_half,  0, W-1)
+    right_coords = torch.clamp(xs - shifts_half,  0, W-1)
+
+    # prepare y indices
+    y_indices = torch.arange(H, device=device).unsqueeze(1).expand(-1, W)
+
+    # gather pixels
+    left  = rgb[y_indices, left_coords]   # (H, W, 3)
+    right = rgb[y_indices, right_coords]  # (H, W, 3)
+
+    # concatenate SBS
     sbs_full = torch.cat([left, right], dim=1)  # (H, 2W, 3)
-    
-    if not half:
-        return (sbs_full).clamp(0, 255).byte().cpu().numpy()
-    
-    # For half-SBS, use strided sampling
-    sbs_half = sbs_full[:, ::2, :]  # (H, 2W, 3) to (H, W, 3)
-    return (sbs_half).clamp(0, 255).byte().cpu().numpy()
+
+    if half:
+        sbs_half = sbs_full[:, ::2, :]
+        return sbs_half.clamp(0, 255).byte().cpu().numpy()  # (H, W, 3)
+
+    return sbs_full.clamp(0, 255).byte().cpu().numpy()  # (H, 2W, 3)
