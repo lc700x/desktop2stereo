@@ -67,18 +67,8 @@ if OS_NAME == "Windows":
             self.camera.__exit__(exc_type, exc_val, exc_tb)
 
         def grab(self):
-            # Enforce FPS limit
-            now = time.time()
-            elapsed = now - self._last_frame_time
-            if elapsed < self.frame_interval:
-                time.sleep(self.frame_interval - elapsed)
             self._last_frame_time = time.time()
-
             img_array, _ = self.camera.get_rgb_frame()
-
-            # Resize here (using OpenCV, which is very efficient)
-            if img_array.shape[0] != self.scaled_height or img_array.shape[1] != self.scaled_width:
-                img_array = cv2.resize(img_array, (self.scaled_width, self.scaled_height), interpolation=cv2.INTER_LINEAR)
 
             return img_array, (self.scaled_height, self.scaled_width)
 
@@ -144,8 +134,5 @@ else:
 
             # Optional: avoid copy here, just pass img
             img = add_mouse(img)
-
-            if img.shape[0] != self.scaled_height or img.shape[1] != self.scaled_width:
-                img = cv2.resize(img, (self.scaled_width, self.scaled_height), interpolation=cv2.INTER_LINEAR)
 
             return img, (self.scaled_height, self.scaled_width)
