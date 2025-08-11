@@ -17,7 +17,6 @@ if OS_NAME == "Windows":
             self.scaled_height = output_resolution
             self.monitor_index = monitor_index
             self.fps = fps
-            self.frame_interval = 1.0 / fps
             self._mss = mss.mss(with_cursor=True)
 
             if show_monitor_info:
@@ -42,8 +41,6 @@ if OS_NAME == "Windows":
                 print(f"Using monitor {monitor_index}: {self.system_width}x{self.system_height}")
                 print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
 
-            self._last_frame_time = 0
-
         def _log_monitors(self):
             print("Available monitors:")
             for i, mon in enumerate(self._mss.monitors):
@@ -67,9 +64,7 @@ if OS_NAME == "Windows":
             self.camera.__exit__(exc_type, exc_val, exc_tb)
 
         def grab(self):
-            self._last_frame_time = time.time()
             img_array, _ = self.camera.get_rgb_frame()
-
             return img_array, (self.scaled_height, self.scaled_width)
 
 else:
@@ -83,7 +78,6 @@ else:
             self.scaled_height = output_resolution
             self.monitor_index = monitor_index
             self.fps = fps
-            self.frame_interval = 1.0 / fps
             self._mss = mss.mss(with_cursor=True)
             if show_monitor_info:
                 self._log_monitors()
@@ -125,5 +119,6 @@ else:
             # Optional: avoid copy here, just pass img
             img = cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2RGB)
             img = add_mouse(img)
+            
 
             return img, (self.scaled_height, self.scaled_width)
