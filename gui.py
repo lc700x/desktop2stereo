@@ -96,7 +96,7 @@ DEFAULTS = {
     "IPD": 0.064,
     "Display Mode": "SBS",
     "FP16": True,
-    "Download Path": "./models",
+    "Download Path": "models",
     "HF Endpoint": "https://hf-mirror.com",
     "Device": 0,
     "Language": "EN",
@@ -123,9 +123,9 @@ UI_TEXTS = {
         "Set Language:": "Set Language:",
         "Error": "Error",
         "Warning": "Warning",
-        "Saved": "Saved",
+        "Saved": "Run Desktop2Stereo",
         "PyYAML not installed, cannot save YAML file.": "PyYAML not installed, cannot save YAML file.",
-        "Settings saved to settings.yaml": "Settings saved to settings.yaml",
+        "Settings saved to settings.yaml": "Settings saved to settings.yaml, click OK to run.",
         "Failed to save settings.yaml:": "Failed to save settings.yaml:",
         "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "Could not retrieve monitor list.\nFalling back to indexes 1 and 2."
     },
@@ -149,9 +149,9 @@ UI_TEXTS = {
         "Set Language:": "设置语言:",
         "Error": "错误",
         "Warning": "警告",
-        "Saved": "保存成功",
+        "Saved": "运行Desktop2Stereo",
         "PyYAML not installed, cannot save YAML file.": "未安装PyYAML，无法保存YAML文件。",
-        "Settings saved to settings.yaml": "设置已保存到 settings.yaml",
+        "Settings saved to settings.yaml": "设置已保存到 settings.yaml，按确定运行。",
         "Failed to save settings.yaml:": "保存 settings.yaml 失败：",
         "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "无法获取显示器列表。\n回退到索引1和2。"
     }
@@ -476,13 +476,15 @@ class ConfigGUI(tk.Tk):
         }
         success = self.save_yaml("settings.yaml", cfg)
         if success:
-            messagebox.showinfo(UI_TEXTS[self.language]["Saved"],
+            confirm = messagebox.askokcancel(UI_TEXTS[self.language]["Saved"],
                                 UI_TEXTS[self.language]["Settings saved to settings.yaml"])
-            # Run main.py as a separate process
-            try:
-                subprocess.Popen([sys.executable, "main.py"])
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to run main.py: {e}")
+            
+            if confirm:
+                # Run main.py as a separate process
+                try:
+                    subprocess.Popen([sys.executable, "main.py"])
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to run main.py: {e}")
 
 if __name__ == "__main__":
     app = ConfigGUI()

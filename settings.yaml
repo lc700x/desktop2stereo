@@ -25,7 +25,7 @@ Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 1.0
 Depth Resolution: 384
 FP16: true
-Download Path: ./models
+Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
-Language: CN
+Language: EN
