@@ -1,7 +1,7 @@
 # depth.py
 import yaml
-import os, sys, platform
-from gui import DEVICES
+import os
+from gui import DEVICES, OS_NAME
 
 # load customized settings
 with open("settings.yaml") as settings_yaml:
@@ -9,17 +9,6 @@ with open("settings.yaml") as settings_yaml:
         settings = yaml.safe_load(settings_yaml)
     except yaml.YAMLError as exc:
         print(exc)
-
-# get system type
-OS_NAME = platform.system()
-if  OS_NAME == "Darwin":
-    import os, warnings
-    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-    warnings.filterwarnings(
-        "ignore",
-        message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
-        category=UserWarning
-)
 
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"

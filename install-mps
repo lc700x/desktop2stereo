@@ -1,6 +1,6 @@
 #!/bin/bash
 cd "$(dirname "$0")"
-echo "--- Desktop2Stereo Installer for Mac (for M1, M2, M3, M4 Apple Silicon Chips) ---"
+echo "--- Desktop2Stereo Installer for Mac (for Apple Silicon Chips: M1, M2, M3, M4...) ---"
 echo "- Setting up the virtual environment"
 
 # Set paths

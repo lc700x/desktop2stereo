@@ -44,7 +44,7 @@ def process_loop():
         put_latest(proc_q, (frame_rgb, depth))
 
 def main():
-    print(DEVICE_INFO)
+    print(f"Using {DEVICE_INFO}")
     print(f"Model: {MODEL_ID}")
 
     # Start capture and processing threads
