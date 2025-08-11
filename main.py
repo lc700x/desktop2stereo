@@ -70,7 +70,7 @@ def main():
                 frame_count = 0
                 last_time = current_time
                 # Update window title with FPS
-                glfw.set_window_title(window.window, f"Stereo Viewer | depth:{window.depth_ratio:.1f}  | FPS: {fps:.1f}")
+                glfw.set_window_title(window.window, f"Stereo Viewer | depth: {window.depth_ratio:.1f} | FPS: {fps:.1f}")
         try:
             # Get latest frame, or skip update
             frame_rgb, depth = proc_q.get_nowait()

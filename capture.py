@@ -1,7 +1,6 @@
-import time
 import numpy as np
 import mss
-from depth import OS_NAME
+from gui import OS_NAME
 
 if OS_NAME == "Windows":
     import ctypes
@@ -37,6 +36,7 @@ if OS_NAME == "Windows":
                 self.system_height,
                 fps=self.fps,
             )
+            
             if show_monitor_info:
                 print(f"Using monitor {monitor_index}: {self.system_width}x{self.system_height}")
                 print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
