@@ -12,8 +12,9 @@ SHOW_FPS, FPS, DEPTH_STRENTH = settings["Show FPS"], settings["FPS"], settings["
 TIME_SLEEP = 1.0 / FPS
 
 # Queues with size=1 (latest-frame-only logic)
-raw_q = queue.Queue(maxsize=2)
+raw_q = queue.Queue(maxsize=1)
 proc_q = queue.Queue(maxsize=1)
+depth_q = queue.Queue(maxsize=1)
 
 def put_latest(q, item):
     """Put item into queue, dropping old one if needed (non-blocking)."""
@@ -37,11 +38,19 @@ def process_loop():
     while True:
         try:
             frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
-            frame_rgb = process(frame_raw, size)
+        except queue.Empty:
+            continue
+        frame_rgb = process(frame_raw, size)
+        put_latest(proc_q, frame_rgb)
+
+def depth_loop():
+    while True:
+        try:
+            frame_rgb = proc_q.get(timeout=TIME_SLEEP)
         except queue.Empty:
             continue
         depth = predict_depth(frame_rgb)
-        put_latest(proc_q, (frame_rgb, depth))
+        put_latest(depth_q, (frame_rgb, depth))
 
 def main():
     print(f"Using {DEVICE_INFO}")
@@ -50,9 +59,9 @@ def main():
     # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
+    threading.Thread(target=depth_loop, daemon=True).start()
 
     window = StereoWindow(depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
-    # window = StereoWindow()
     frame_rgb, depth = None, None
 
     # FPS calculation variables
@@ -70,13 +79,13 @@ def main():
                 frame_count = 0
                 last_time = current_time
                 # Update window title with FPS
-                glfw.set_window_title(window.window, f"Stereo Viewer | depth: {window.depth_ratio:.1f} | FPS: {fps:.1f}")
+                glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {fps:.1f}")
         try:
             # Get latest frame, or skip update
-            frame_rgb, depth = proc_q.get_nowait()
+            frame_rgb, depth = depth_q.get_nowait()
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
-            pass
+            pass  # Reuse previous frame if none available
 
         window.render()
         glfw.swap_buffers(window.window)
@@ -86,5 +95,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # import cProfile
-    # cProfile.run("main()", sort='cumtime')
+
