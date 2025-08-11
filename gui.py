@@ -1,12 +1,19 @@
 import os
-import sys
+import sys, platform
 import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-import ctypes
-
-
+OS_NAME = platform.system()
+# Ignore wanning for MPS
+if  OS_NAME == "Darwin":
+    import os, warnings
+    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+    warnings.filterwarnings(
+        "ignore",
+        message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
+        category=UserWarning
+)
 def get_devices():
     """
     Returns a list of dictionaries [{dev: torch.device, info: str}] for all available devices.
@@ -37,12 +44,16 @@ def get_devices():
 
     return devices
 
+DEVICES = get_devices()
 
-# get windows Hi-DPI scale
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)
-except:
-    ctypes.windll.user32.SetProcessDPIAware()
+if OS_NAME == "Windows":
+    import ctypes
+    # get windows Hi-DPI scale
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except:
+        ctypes.windll.user32.SetProcessDPIAware()
+
 try:
     import mss
 except Exception:
@@ -53,8 +64,6 @@ try:
     HAVE_YAML = True
 except Exception:
     HAVE_YAML = False
-    
-DEVICES = get_devices()
 
 DEFAULT_MODEL_LIST = [
     "depth-anything/Depth-Anything-V2-Large-hf",
