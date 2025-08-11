@@ -1,6 +1,6 @@
 # Desktop2Stereo: 一个2D桌面转换3D立体画面的应用
 [English Version](./readme.md)  
-![Desktop2Stereo](./assets/Banner.png)
+![Desktop2Stereo](./assets/Banner.png)  
 一个通用的实时2D转3D应用，支持AMD/NVIDIA/Intel/Qualcomm GPU/Apple Silicon设备，运行于Windows/Mac/Linux操作系统，由深度估计算法模型驱动
 ## 支持的硬件  
 1. AMD GPU  
