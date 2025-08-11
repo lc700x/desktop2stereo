@@ -6,7 +6,7 @@
 1. AMD GPU  
 2. NVIDIA GPU  
 3. Apple Silicon芯片(M1, M2, M3, M4, ...)  
-4. 兼容DirectML的设备(如Intel Arc/Iris GPU等，仅支持**Windows**)
+4. 兼容DirectML的设备(如Intel Arc/Iris GPU，Qualcomm® Adreno GPU等，仅支持**Windows**)
 ## 支持的操作系统  
 1. Windows 10/11 (x64/Arm64)  
 2. MacOS 10.16或更高版本  
