@@ -463,7 +463,7 @@ class ConfigGUI(tk.Tk):
             "FP16": self.fp16_var.get(),
             "Download Path": self.download_var.get(),
             "HF Endpoint": self.hf_endpoint_var.get(),
-            # "Device": self.device_label_to_index.get(self.device_var.get(), DEFAULTS["Device"]),
+            "Device": self.device_label_to_index.get(self.device_var.get(), DEFAULTS["Device"]),
             "Language": self.language,
         }
         success = self.save_yaml("settings.yaml", cfg)

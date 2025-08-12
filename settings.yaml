@@ -27,5 +27,4 @@ Depth Resolution: 384
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
-Device: 0
 Language: EN
