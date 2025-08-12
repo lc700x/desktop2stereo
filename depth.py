@@ -45,14 +45,14 @@ def get_device(index=0):
     try:
         import torch_directml
         if torch_directml.is_available():
-            dev = torch_directml.device(1)
-            info = f"Using DirectML device: {torch_directml.device_name(1)}"
+            dev = torch_directml.device(index)
+            info = f"Using DirectML device: {torch_directml.device_name(index)}"
             return dev, info
     except ImportError:
         pass
 
     if torch.cuda.is_available():
-        return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(0)}"
+        return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
     if torch.backends.mps.is_available():
         return torch.device("mps"), "Using Apple Silicon (MPS) device"
     return torch.device("cpu"), "Using CPU device"
