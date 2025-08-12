@@ -53,15 +53,14 @@ def depth_loop():
         put_latest(depth_q, (frame_rgb, depth))
 
 def main():
-    print(f"Using {DEVICE_INFO}")
-    print(f"Model: {MODEL_ID}")
+    print(DEVICE_INFO)
 
     # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
     threading.Thread(target=depth_loop, daemon=True).start()
 
-    window = StereoWindow(depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+    window = StereoWindow()
     frame_rgb, depth = None, None
 
     # FPS calculation variables
@@ -83,7 +82,6 @@ def main():
         try:
             # Get latest frame, or skip update
             frame_rgb, depth = depth_q.get_nowait()
-            depth = depth.cpu().numpy().astype('float32')
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
             time.sleep(TIME_SLEEP)  # Reuse previous frame if none available
@@ -96,5 +94,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
