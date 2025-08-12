@@ -89,7 +89,7 @@ def main():
 
         window.render()
         glfw.swap_buffers(window.window)
-        glfw.wait_events_timeout(TIME_SLEEP)
+        glfw.poll_evnets()
 
     glfw.terminate()
 
