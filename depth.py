@@ -47,6 +47,8 @@ def get_device(index=0):
         if torch_directml.is_available():
             dev = torch_directml.device(index)
             info = f"Using DirectML device: {torch_directml.device_name(index)}"
+            dev = torch_directml.device(index)
+            info = f"Using DirectML device: {torch_directml.device_name(index)}"
             return dev, info
         if torch.cuda.is_available():
             return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
