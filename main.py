@@ -83,16 +83,16 @@ def main():
         try:
             # Get latest frame, or skip update
             frame_rgb, depth = depth_q.get_nowait()
+            depth = depth.detach().cpu().numpy().astype('float32')
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
-            pass  # Reuse previous frame if none available
+            time.sleep(TIME_SLEEP)  # Reuse previous frame if none available
 
         window.render()
         glfw.swap_buffers(window.window)
-        glfw.wait_events_timeout(TIME_SLEEP)
+        glfw.poll_events()
 
     glfw.terminate()
 
 if __name__ == "__main__":
     main()
-

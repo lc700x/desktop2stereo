@@ -25,7 +25,7 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 import torch
-torch.set_num_threads(1)
+torch.set_num_threads(1) # reduce cpu usage
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -45,16 +45,15 @@ def get_device(index=0):
     try:
         import torch_directml
         if torch_directml.is_available():
-            dev = torch_directml.device(1)
-            info = f"Using DirectML device: {torch_directml.device_name(1)}"
+            dev = torch_directml.device(index)
+            info = f"Using DirectML device: {torch_directml.device_name(index)}"
             return dev, info
-    except ImportError:
+        if torch.cuda.is_available():
+            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+        if torch.backends.mps.is_available():
+            return torch.device("mps"), "Using Apple Silicon (MPS) device"
+    except:
         pass
-
-    if torch.cuda.is_available():
-        return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(0)}"
-    if torch.backends.mps.is_available():
-        return torch.device("mps"), "Using Apple Silicon (MPS) device"
     return torch.device("cpu"), "Using CPU device"
 
 
@@ -96,7 +95,7 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
         Depth map as numpy array (H, W) normalized to [0, 1]
     """
     # Convert to tensor and normalize (similar to pipeline's preprocessing)
-    tensor = torch.from_numpy(image_rgb.copy()).to(DEVICE, dtype=DTYPE)              # CPU → CPU tensor (uint8)
+    tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)  # cpu usage related step
     tensor = tensor.permute(2, 0, 1).float() / 255.  # HWC → CHW, 0-1 range
     tensor = tensor.unsqueeze(0)
 
@@ -114,8 +113,8 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
 
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
-    return depth.detach().cpu().numpy().astype('float32')
-    # return depth
+    # return depth.detach().cpu().numpy().astype('float32')
+    return depth
 
 def predict_depth2 (image_rgb: np.ndarray, size) -> np.ndarray:
         """
