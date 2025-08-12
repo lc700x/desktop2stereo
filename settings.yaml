@@ -21,11 +21,11 @@ Model List:
 - xingyang1/Distill-Any-Depth-Small-hf
 - apple/DepthPro-hf
 - Intel/dpt-large
-Depth Model: depth-anything/Depth-Anything-V2-Base-hf
+Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 1.0
-Depth Resolution: 384
+Depth Resolution: 192
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
-Device: 1
+Device: 0
 Language: EN
