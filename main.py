@@ -78,21 +78,23 @@ def main():
                 fps = frame_count / (current_time - last_time)
                 frame_count = 0
                 last_time = current_time
-                # Update window title with Depth Strength and FPS
-                glfw.set_window_title(window.window, f"Stereo Viewer | depth: {window.depth_ratio:.1f} | FPS: {fps:.1f}")
+                # Update window title with FPS
+                glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {fps:.1f}")
         try:
             # Get latest frame, or skip update
             frame_rgb, depth = depth_q.get_nowait()
+            depth = depth.cpu().numpy().astype('float32')
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
-            pass  # Reuse previous frame if none available
+            time.sleep(TIME_SLEEP)  # Reuse previous frame if none available
 
         window.render()
         glfw.swap_buffers(window.window)
-        glfw.poll_evnets()
+        glfw.poll_events()
 
     glfw.terminate()
 
 if __name__ == "__main__":
     main()
+
 
