@@ -1,17 +1,6 @@
 # depth.py
 import yaml
 import os
-from gui import OS_NAME
-# Ignore wanning for MPS
-if  OS_NAME == "Darwin":
-    import os, warnings
-    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-    warnings.filterwarnings(
-        "ignore",
-        message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
-        category=UserWarning
-)
-
 # load customized settings
 with open("settings.yaml") as settings_yaml:
     try:
@@ -45,8 +34,6 @@ def get_device(index=0):
     try:
         import torch_directml
         if torch_directml.is_available():
-            dev = torch_directml.device(index)
-            info = f"Using DirectML device: {torch_directml.device_name(index)}"
             dev = torch_directml.device(index)
             info = f"Using DirectML device: {torch_directml.device_name(index)}"
             return dev, info
