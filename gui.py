@@ -169,11 +169,11 @@ class ConfigGUI(tk.Tk):
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
 
         try:
-            icon_img = Image.open("logo.png")
+            icon_img = Image.open("icon.png")
             icon_photo = ImageTk.PhotoImage(icon_img)
             self.iconphoto(True, icon_photo)
         except Exception as e:
-            print(f"Warning: Could not load logo.png - {e}")
+            print(f"Warning: Could not load icon.png - {e}")
 
         self.create_widgets()
         self.monitor_label_to_index = self.populate_monitors()

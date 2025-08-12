@@ -23,7 +23,7 @@ Model List:
 - Intel/dpt-large
 Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 1.0
-Depth Resolution: 384
+Depth Resolution: 192
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
