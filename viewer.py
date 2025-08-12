@@ -4,6 +4,7 @@ import moderngl
 import numpy as np
 
 # Get OS name and settings
+from gui import OS_NAME
 from depth import settings
 
 IPD = settings["IPD"]

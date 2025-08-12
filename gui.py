@@ -5,15 +5,6 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 OS_NAME = platform.system()
-
-# get windows Hi-DPI scale
-if OS_NAME == "Windows":
-    import ctypes
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except:
-        ctypes.windll.user32.SetProcessDPIAware()
-
 # Ignore wanning for MPS
 if  OS_NAME == "Darwin":
     import os, warnings
@@ -54,6 +45,14 @@ def get_devices():
     return devices
 
 DEVICES = get_devices()
+
+if OS_NAME == "Windows":
+    import ctypes
+    # get windows Hi-DPI scale
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except:
+        ctypes.windll.user32.SetProcessDPIAware()
 
 try:
     import mss
@@ -162,7 +161,7 @@ UI_TEXTS = {
 class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Desktop2Stereo v2.1 GUI")
+        self.title("Desktop2Stereo v2.0 GUI")
         self.minsize(780, 440)
         self.config(padx=40, pady=40)
 
