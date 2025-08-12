@@ -1,17 +1,6 @@
 # depth.py
 import yaml
 import os
-from gui import OS_NAME
-# Ignore wanning for MPS
-if  OS_NAME == "Darwin":
-    import os, warnings
-    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-    warnings.filterwarnings(
-        "ignore",
-        message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
-        category=UserWarning
-)
-
 # load customized settings
 with open("settings.yaml") as settings_yaml:
     try:

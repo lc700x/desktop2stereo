@@ -3,14 +3,7 @@ import mss
 from gui import OS_NAME
 
 if OS_NAME == "Windows":
-    import ctypes
     from wincam import DXCamera
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except:
-        ctypes.windll.user32.SetProcessDPIAware()
-    
-
     class DesktopGrabber:
         def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
             self.scaled_height = output_resolution
