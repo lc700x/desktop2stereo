@@ -113,8 +113,8 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
 
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
-    return depth.detach().cpu().numpy().astype('float32')
-    # return depth
+    # return depth.detach().cpu().numpy().astype('float32')
+    return depth
 
 def predict_depth2 (image_rgb: np.ndarray, size) -> np.ndarray:
         """
