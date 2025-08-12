@@ -161,7 +161,7 @@ UI_TEXTS = {
 class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Desktop2Stereo v2.0 GUI")
+        self.title("Desktop2Stereo v2.1 GUI")
         self.minsize(780, 440)
         self.config(padx=40, pady=40)
 
