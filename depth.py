@@ -1,7 +1,7 @@
 # depth.py
 import yaml
 import os
-from gui import DEVICES
+from gui import DEVICES, OS_NAME
 # load customized settings
 with open("settings.yaml") as settings_yaml:
     try:
@@ -48,7 +48,12 @@ def get_device(index=0):
 
 
 # Get the device and print information
-DEVICE, DEVICE_INFO = get_device(settings["Device"])
+if OS_NAME == "Windows":
+    # Smoother for Windows
+    DEVICE, DEVICE_INFO = get_device(settings["Device"])
+else: 
+    # Faster for Mac
+    DEVICE, DEVICE_INFO = DEVICES[settings["Device"]]["device"], DEVICES[settings["Device"]]["name"]
 
 # Load model with same configuration as example
 model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).half().to(DEVICE).eval()
