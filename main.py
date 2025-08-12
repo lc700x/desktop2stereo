@@ -82,14 +82,14 @@ def main():
                 glfw.set_window_title(window.window, f"Stereo Viewer | depth: {window.depth_ratio:.1f} | FPS: {fps:.1f}")
         try:
             # Get latest frame, or skip update
-            frame_rgb, depth = depth_q.get_nowait()
+            frame_rgb, depth = depth_q.get(timeout=TIME_SLEEP)
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
-            time.sleep(TIME_SLEEP)  # Reuse previous frame if none available
+            pass  # Reuse previous frame if none available
 
         window.render()
         glfw.swap_buffers(window.window)
-        glfw.poll_events()
+        glfw.wait_events_timeout(TIME_SLEEP)
 
     glfw.terminate()
 
