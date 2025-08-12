@@ -54,13 +54,14 @@ def depth_loop():
 
 def main():
     print(DEVICE_INFO)
+    print(f"Model: {MODEL_ID}")
 
     # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
     threading.Thread(target=depth_loop, daemon=True).start()
 
-    window = StereoWindow()
+    window = StereoWindow(depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
     frame_rgb, depth = None, None
 
     # FPS calculation variables
@@ -77,8 +78,8 @@ def main():
                 fps = frame_count / (current_time - last_time)
                 frame_count = 0
                 last_time = current_time
-                # Update window title with FPS
-                glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {fps:.1f}")
+                # Update window title with Depth Strength and FPS
+                glfw.set_window_title(window.window, f"Stereo Viewer | depth: {window.depth_ratio:.1f} | FPS: {fps:.1f}")
         try:
             # Get latest frame, or skip update
             frame_rgb, depth = depth_q.get_nowait()
@@ -94,4 +95,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
