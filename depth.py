@@ -15,7 +15,7 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 import torch
-torch.set_num_threads(2) # Set 2 threads to avoid high CPU usage caused by default full threads
+torch.set_num_threads(1) # Set to avoid high CPU usage caused by default full threads
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -261,5 +261,6 @@ def make_sbs_tensor(rgb, depth, ipd_uv=0.03, depth_strength=1.0, half=False):
         return sbs_half.clamp(0, 255).byte().cpu().numpy()  # (H, W, 3)
 
     return sbs_full.clamp(0, 255).byte().cpu().numpy()  # (H, 2W, 3)
+
 
 
