@@ -1,7 +1,7 @@
 # depth.py
 import yaml
 import os
-from gui import DEVICES
+
 # load customized settings
 with open("settings.yaml") as settings_yaml:
     try:
@@ -15,7 +15,7 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 import torch
-torch.set_num_threads(1) # Set to avoid high CPU usage caused by default full threads
+torch.set_num_threads(1)
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -27,10 +27,29 @@ MODEL_ID = settings["Depth Model"]
 CACHE_PATH = settings["Download Path"]
 DTYPE = torch.float16 if settings["FP16"] else torch.float32 # Use float32 for DirectML compatibility
 
+# Initialize DirectML Device
+def get_device(index=0):
+    """
+    Returns a torch.device and a human‐readable device info string.
+    """
+    try:
+        import torch_directml
+        if torch_directml.is_available():
+            dev = torch_directml.device(1)
+            info = f"Using DirectML device: {torch_directml.device_name(1)}"
+            return dev, info
+    except ImportError:
+        pass
+
+    if torch.cuda.is_available():
+        return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(0)}"
+    if torch.backends.mps.is_available():
+        return torch.device("mps"), "Using Apple Silicon (MPS) device"
+    return torch.device("cpu"), "Using CPU device"
+
 
 # Get the device and print information
-DEVICE, DEVICE_INFO = DEVICES[settings["Device"]]["device"], DEVICES[settings["Device"]]["name"]
-
+DEVICE, DEVICE_INFO = get_device(settings["Device"])
 # Load model with same configuration as example
 model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).half().to(DEVICE).eval()
 INPUT_W= settings["Depth Resolution"]  # model's native resolution
@@ -67,7 +86,7 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
         Depth map as numpy array (H, W) normalized to [0, 1]
     """
     # Convert to tensor and normalize (similar to pipeline's preprocessing)
-    tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)              # CPU → CPU tensor (uint8)
+    tensor = torch.from_numpy(image_rgb.copy()).to(DEVICE, dtype=DTYPE)              # CPU → CPU tensor (uint8)
     tensor = tensor.permute(2, 0, 1).float() / 255.  # HWC → CHW, 0-1 range
     tensor = tensor.unsqueeze(0)
 
