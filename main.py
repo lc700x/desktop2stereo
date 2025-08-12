@@ -82,7 +82,7 @@ def main():
                 glfw.set_window_title(window.window, f"Stereo Viewer | depth: {window.depth_ratio:.1f} | FPS: {fps:.1f}")
         try:
             # Get latest frame, or skip update
-            frame_rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+            frame_rgb, depth = depth_q.get()
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
             pass  # Reuse previous frame if none available
