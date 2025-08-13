@@ -73,7 +73,7 @@ else:
         class DesktopGrabber:
             def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
                 self.scaled_height = output_resolution
-                self.monitor_index = monitor_index
+                self.monitor_index = monitor_index-1
                 self.fps = fps
                 self.show_monitor_info = show_monitor_info
                 self.done = False
