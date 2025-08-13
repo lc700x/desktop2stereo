@@ -68,30 +68,54 @@ else:
         from ScreenCaptureKit import SCShareableContent, SCContentFilter, SCStreamConfiguration, SCScreenshotManager
         import Quartz.CoreGraphics as CG
         from PIL import Image
-        from Foundation import NSObject, NSRunLoop, NSDate
+        from Foundation import NSRunLoop, NSDate
     
         class DesktopGrabber:
             def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
                 self.scaled_height = output_resolution
-                self.monitor_index = monitor_index-1
+                self.monitor_index = monitor_index
                 self.fps = fps
                 self.show_monitor_info = show_monitor_info
                 self.done = False
                 self.latest_frame = None
 
-                # Get display info from SCShareableContent
-                self.shareable_content = None
-                self.displays = None
-                self._get_displays()
+                # Get monitor info from mss (for scaling + coords)
+                self._mss = mss.mss()
+                self._log_monitors()
 
-                if monitor_index >= len(self.displays):
+                if monitor_index >= len(self._mss.monitors):
                     print(f"Monitor {monitor_index} not found, using primary monitor")
-                    self.monitor_index = 0
+                    self.monitor_index = 1
 
-                self._select_monitor(self.monitor_index)
+                self._mon = self._mss.monitors[self.monitor_index]
+                self.system_width, self.system_height = self.get_screen_resolution(self.monitor_index)
+                self.scaled_width = round(self.system_width * self.scaled_height / self.system_height)
+
+                # Get displays from ScreenCaptureKit and match to mss monitor coords
+                self._get_displays()
+                self._match_display()
+
+                if self.show_monitor_info:
+                    print(f"Using monitor {self.monitor_index}: {self.system_width}x{self.system_height}")
+                    print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
+
+            def _log_monitors(self):
+                if self.show_monitor_info:
+                    print("Available monitors (mss style):")
+                    for i, mon in enumerate(self._mss.monitors):
+                        width, height = self.get_screen_resolution(i)
+                        if i == 0:
+                            print(f"  {i}: All monitors - {width}x{height}")
+                        else:
+                            system_scale = int(width / mon["width"])
+                            print(f"  {i}: Monitor {i} - {width}x{height} at ({mon['left'] * system_scale}, {mon['top'] * system_scale})")
+
+            def get_screen_resolution(self, index):
+                monitor = self._mss.monitors[index]
+                shot = self._mss.grab(monitor)
+                return shot.size.width, shot.size.height
 
             def _get_displays(self):
-                # This runs synchronously with a run loop to get displays
                 self.done = False
                 def completion_handler(shareable_content, error=None):
                     if error:
@@ -103,32 +127,37 @@ else:
                     self.done = True
 
                 SCShareableContent.getShareableContentWithCompletionHandler_(completion_handler)
-
                 while not self.done:
                     NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
 
-                if self.show_monitor_info:
-                    print("Available monitors:")
-                    for i, d in enumerate(self.displays):
-                        size = d.width(), d.height()
-                        print(f"  {i+1}: {size[0]}x{size[1]}")
+            def _match_display(self):
+                """Match mss monitor coordinates to ScreenCaptureKit display"""
+                mss_mon = self._mss.monitors[self.monitor_index]
+                mss_left = mss_mon["left"]
+                mss_top = mss_mon["top"]
 
-            def _select_monitor(self, index):
-                display = self.displays[index]
-                self.system_width = display.width()
-                self.system_height = display.height()
-                self.scaled_width = round(self.system_width * self.scaled_height / self.system_height)
-                if self.show_monitor_info:
-                    print(f"Using monitor {index+1}: {self.system_width}x{self.system_height}")
-                    print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
+                matched = None
+                for d in self.displays:
+                    # Get native pixel position from Quartz
+                    did = d.displayID()
+                    bounds = Quartz.CGDisplayBounds(did)
+                    left = int(bounds.origin.x)
+                    top = int(bounds.origin.y)
+                    if left == mss_left and top == mss_top:
+                        matched = d
+                        break
+
+                if matched is None:
+                    print("Warning: Could not match mss monitor to SC display, defaulting to first display.")
+                    matched = self.displays[0]
+
+                self.sc_display = matched
 
             def grab(self):
-                # Async capture with blocking until result is ready
                 self.done = False
                 self.latest_frame = None
 
-                display = self.displays[self.monitor_index]
-                content_filter = SCContentFilter.alloc().initWithDisplay_excludingWindows_(display, [])
+                content_filter = SCContentFilter.alloc().initWithDisplay_excludingWindows_(self.sc_display, [])
                 configuration = SCStreamConfiguration.alloc().init()
 
                 def handle_cg_image(cg_image, error=None):
@@ -153,7 +182,7 @@ else:
                     NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.001))
 
                 return self.latest_frame, (self.scaled_height, self.scaled_width)
-    except ImportError:
+    except:
         class DesktopGrabber:
             def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
                 self.scaled_height = output_resolution

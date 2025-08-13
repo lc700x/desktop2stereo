@@ -153,7 +153,7 @@ else:
                     NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.001))
 
                 return self.latest_frame, (self.scaled_height, self.scaled_width)
-    except ImportError:
+    except:
         class DesktopGrabber:
             def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
                 self.scaled_height = output_resolution
