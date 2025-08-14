@@ -3,7 +3,7 @@ import queue
 import glfw
 import time
 
-from capture import DesktopGrabber
+from capture0 import DesktopGrabber
 from depth import settings, predict_depth, process, DEVICE_INFO, MODEL_ID
 from viewer import StereoWindow
 
@@ -16,17 +16,16 @@ raw_q = queue.Queue(maxsize=1)
 proc_q = queue.Queue(maxsize=1)
 depth_q = queue.Queue(maxsize=1)
 
+# Remove sleep from put_latest
 def put_latest(q, item):
-    """Put item into queue, dropping old one if needed (non-blocking)."""
     if q.full():
-        try:
-            q.get_nowait()
-        except queue.Empty:
-            time.sleep(TIME_SLEEP)
-    try:
-        q.put_nowait(item)
-    except queue.Full:
-        time.sleep(TIME_SLEEP)  # Drop frame if race condition occurs
+        try: q.get_nowait()
+        except queue.Empty: 
+            pass
+    try: q.put_nowait(item)
+    except queue.Full: 
+        pass  # Drop frame silently
+
 
 def capture_loop():
     cap = DesktopGrabber(monitor_index=MONITOR_INDEX, output_resolution=OUTPUT_RESOLUTION, fps=FPS)
@@ -82,14 +81,14 @@ def main():
                 glfw.set_window_title(window.window, f"Stereo Viewer | depth: {window.depth_ratio:.1f} | FPS: {fps:.1f}")
         try:
             # Get latest frame, or skip update
-            frame_rgb, depth = depth_q.get()
+            frame_rgb, depth = depth_q.get_nowait()
             window.update_frame(frame_rgb, depth)
         except queue.Empty:
-            pass  # Reuse previous frame if none available
+            time.sleep(TIME_SLEEP)  # Reuse previous frame if none available
 
         window.render()
         glfw.swap_buffers(window.window)
-        glfw.wait_events_timeout(TIME_SLEEP)
+        glfw.poll_events()
 
     glfw.terminate()
 

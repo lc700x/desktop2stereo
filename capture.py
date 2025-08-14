@@ -64,115 +64,123 @@ if OS_NAME == "Windows":
 else:
     import cv2
     try: 
-        import objc
-        from ScreenCaptureKit import SCShareableContent, SCContentFilter, SCStreamConfiguration, SCStream, SCStreamOutput
+        import Quartz
+        from ScreenCaptureKit import SCShareableContent, SCContentFilter, SCStreamConfiguration, SCScreenshotManager
         import Quartz.CoreGraphics as CG
-        from Foundation import NSObject, NSRunLoop, NSDate
-
-        class FrameReceiver(NSObject, protocols=[SCStreamOutput]):
-            def initWithParent_(self, parent):
-                self = objc.super(FrameReceiver, self).init()
-                if self:
-                    self.parent = parent
-                return self
-
-            # Called when new frame arrives
-            def stream_didOutputSampleBuffer_ofType_(self, stream, sample_buffer, type_):
-                if sample_buffer is None:
-                    return
-                if type_ != 0:  # 0 = screen content, 1 = audio
-                    return
-
-                # Get pixel buffer
-                image_buffer = sample_buffer.imageBuffer()
-                if not image_buffer:
-                    return
-
-                width = CG.CVPixelBufferGetWidth(image_buffer)
-                height = CG.CVPixelBufferGetHeight(image_buffer)
-
-                # Lock buffer
-                CG.CVPixelBufferLockBaseAddress(image_buffer, 0)
-                base_address = CG.CVPixelBufferGetBaseAddress(image_buffer)
-                bytes_per_row = CG.CVPixelBufferGetBytesPerRow(image_buffer)
-
-                # Create numpy array from raw BGRA data
-                arr = np.frombuffer(base_address, dtype=np.uint8)
-                arr = arr.reshape((height, bytes_per_row // 4, 4))[:, :width, :]
-                frame = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
-
-                CG.CVPixelBufferUnlockBaseAddress(image_buffer, 0)
-                self.parent.latest_frame = frame
-
+        from PIL import Image
+        from Foundation import NSRunLoop, NSDate
+    
         class DesktopGrabber:
             def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
                 self.scaled_height = output_resolution
-                self.monitor_index = monitor_index - 1
+                self.monitor_index = monitor_index
                 self.fps = fps
                 self.show_monitor_info = show_monitor_info
+                self.done = False
                 self.latest_frame = None
 
-                # Get displays
-                self.shareable_content = None
-                self.displays = None
-                self._get_displays()
+                # Get monitor info from mss (for scaling + coords)
+                self._mss = mss.mss()
+                self._log_monitors()
 
-                if self.monitor_index >= len(self.displays):
+                if monitor_index >= len(self._mss.monitors):
                     print(f"Monitor {monitor_index} not found, using primary monitor")
-                    self.monitor_index = 0
+                    self.monitor_index = 1
 
-                self._select_monitor(self.monitor_index)
+                self._mon = self._mss.monitors[self.monitor_index]
+                self.system_width, self.system_height = self.get_screen_resolution(self.monitor_index)
+                self.scaled_width = round(self.system_width * self.scaled_height / self.system_height)
 
-                # Create persistent stream
-                self._setup_stream()
+                # Get displays from ScreenCaptureKit and match to mss monitor coords
+                self._get_displays()
+                self._match_display()
+
+                if self.show_monitor_info:
+                    print(f"Using monitor {self.monitor_index}: {self.system_width}x{self.system_height}")
+                    print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
+
+            def _log_monitors(self):
+                if self.show_monitor_info:
+                    print("Available monitors (mss style):")
+                    for i, mon in enumerate(self._mss.monitors):
+                        width, height = self.get_screen_resolution(i)
+                        if i == 0:
+                            print(f"  {i}: All monitors - {width}x{height}")
+                        else:
+                            system_scale = int(width / mon["width"])
+                            print(f"  {i}: Monitor {i} - {width}x{height} at ({mon['left'] * system_scale}, {mon['top'] * system_scale})")
+
+            def get_screen_resolution(self, index):
+                monitor = self._mss.monitors[index]
+                shot = self._mss.grab(monitor)
+                return shot.size.width, shot.size.height
 
             def _get_displays(self):
-                done = False
+                self.done = False
                 def completion_handler(shareable_content, error=None):
-                    nonlocal done
                     if error:
                         print("Error getting shareable content:", error)
-                        done = True
+                        self.done = True
                         return
                     self.shareable_content = shareable_content
                     self.displays = shareable_content.displays()
-                    done = True
+                    self.done = True
 
                 SCShareableContent.getShareableContentWithCompletionHandler_(completion_handler)
-                while not done:
-                    NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+                while not self.done:
+                    NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(1/self.fps))
 
-                if self.show_monitor_info:
-                    print("Available monitors:")
-                    for i, d in enumerate(self.displays):
-                        size = d.width(), d.height()
-                        print(f"  {i}: {size[0]}x{size[1]}")
+            def _match_display(self):
+                """Match mss monitor coordinates to ScreenCaptureKit display"""
+                mss_mon = self._mss.monitors[self.monitor_index]
+                mss_left = mss_mon["left"]
+                mss_top = mss_mon["top"]
 
-            def _select_monitor(self, index):
-                display = self.displays[index]
-                self.system_width = display.width()
-                self.system_height = display.height()
-                self.scaled_width = round(self.system_width * self.scaled_height / self.system_height)
-                if self.show_monitor_info:
-                    print(f"Using monitor {index}: {self.system_width}x{self.system_height}")
-                    print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
+                matched = None
+                for d in self.displays:
+                    # Get native pixel position from Quartz
+                    did = d.displayID()
+                    bounds = Quartz.CGDisplayBounds(did)
+                    left = int(bounds.origin.x)
+                    top = int(bounds.origin.y)
+                    if left == mss_left and top == mss_top:
+                        matched = d
+                        break
 
-            def _setup_stream(self):
-                display = self.displays[self.monitor_index]
-                content_filter = SCContentFilter.alloc().initWithDisplay_excludingWindows_(display, [])
-                config = SCStreamConfiguration.alloc().init()
-                config.setWidth_(self.system_width)
-                config.setHeight_(self.system_height)
-                config.setMinimumFrameInterval_(1.0 / self.fps)
-                config.setShowsCursor_(True)
+                if matched is None:
+                    print("Warning: Could not match mss monitor to SC display, defaulting to first display.")
+                    matched = self.displays[0]
 
-                self.receiver = FrameReceiver.alloc().initWithParent_(self)
-                self.stream = SCStream.alloc().initWithFilter_configuration_delegate_(content_filter, config, None)
-                self.stream.addStreamOutput_type_sampleHandlerQueue_error_(self.receiver, 0, None, None)
-                self.stream.startCaptureWithCompletionHandler_(lambda e: print("Stream started" if not e else e))
+                self.sc_display = matched
 
             def grab(self):
-                # Simply return the latest frame; it's updated continuously
+                self.done = False
+                self.latest_frame = None
+
+                content_filter = SCContentFilter.alloc().initWithDisplay_excludingWindows_(self.sc_display, [])
+                configuration = SCStreamConfiguration.alloc().init()
+
+                def handle_cg_image(cg_image, error=None):
+                    if error:
+                        print("Error capturing image:", error)
+                        self.done = True
+                        return
+                    width = CG.CGImageGetWidth(cg_image)
+                    height = CG.CGImageGetHeight(cg_image)
+                    data_provider = CG.CGImageGetDataProvider(cg_image)
+                    data = CG.CGDataProviderCopyData(data_provider)
+                    img = Image.frombytes("RGBA", (width, height), data, "raw", "BGRA")
+                    img = img.resize((self.scaled_width, self.scaled_height), Image.BICUBIC)
+                    self.latest_frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGBA2RGB)
+                    self.done = True
+
+                SCScreenshotManager.captureImageWithFilter_configuration_completionHandler_(
+                    content_filter, configuration, handle_cg_image
+                )
+
+                while not self.done:
+                    NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(1/self.fps))
+
                 return self.latest_frame, (self.scaled_height, self.scaled_width)
     except:
         class DesktopGrabber:
