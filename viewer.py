@@ -4,7 +4,7 @@ import moderngl
 import numpy as np
 
 # Get OS name and settings
-from gui import OS_NAME
+from gui import OS_NAME, crop_icon
 from depth import settings
 
 IPD = settings["IPD"]
@@ -44,10 +44,15 @@ FRAGMENT_SHADER = """
     }
     """
 def add_logo(window):
+    # Ignore Mac OS for adding an icon for viewer window
+    if OS_NAME == "Darwin":
+        pass
+    else:
         from PIL  import Image
         glfw_img = Image.open("icon2.png")  # Path to your icon file
-        if OS_NAME != "Darwin":
-            glfw.set_window_icon(window, 1, [glfw_img])
+        glfw_img = crop_icon(glfw_img)
+        glfw.set_window_icon(window, 1, [glfw_img])
+
 class StereoWindow:
     """A window for displaying stereo images side-by-side with depth effect."""
     def __init__(self, depth_ratio=1.0, display_mode="SBS"):

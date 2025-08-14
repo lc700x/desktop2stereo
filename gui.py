@@ -5,10 +5,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 
-VERSION = 2.2
-
-# Ignore wanning for MPS
+VERSION = "v2.1"
 OS_NAME = platform.system()
+# Ignore wanning for MPS
 if  OS_NAME == "Darwin":
     import os, warnings
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
@@ -17,6 +16,15 @@ if  OS_NAME == "Darwin":
         message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
         category=UserWarning
 )
+
+def crop_icon(icon_img):
+    # Make icon larger by cropping for Windows
+    icon_img = icon_img.convert("RGBA")
+    bbox = icon_img.getbbox()
+    icon_img = icon_img.crop(bbox)
+    return icon_img
+
+# Get all computing device list
 def get_devices():
     """
     Returns a list of dictionaries [{dev: torch.device, info: str}] for all available devices.
@@ -164,7 +172,7 @@ UI_TEXTS = {
 class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"Desktop2Stereo v{VERSION} GUI")
+        self.title(f"Desktop2Stereo {VERSION} GUI")
         self.minsize(780, 440)
         self.config(padx=40, pady=40)
 
@@ -173,6 +181,9 @@ class ConfigGUI(tk.Tk):
 
         try:
             icon_img = Image.open("icon.png")
+            if OS_NAME == "Windows":
+                # Make icon larger by cropping for Windows
+                icon_img = crop_icon(icon_img)
             icon_photo = ImageTk.PhotoImage(icon_img)
             self.iconphoto(True, icon_photo)
         except Exception as e:
@@ -233,8 +244,8 @@ class ConfigGUI(tk.Tk):
         
         self.label_res = ttk.Label(self, text="Output Resolution:")
         self.label_res.grid(row=2, column=0, sticky="w", **pad)
-        self.res_values = ["720", "1080", "1440", "2160"]
-        self.res_cb = ttk.Combobox(self, values=self.res_values, state="readonly")
+        self.res_values = ["480", "720", "1080", "1440", "2160"]
+        self.res_cb = ttk.Combobox(self, values=self.res_values, state="normal")
         self.res_cb.grid(row=2, column=1, sticky="ew", **pad)
         
         self.label_fps = ttk.Label(self, text="FPS:")
