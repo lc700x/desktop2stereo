@@ -2,6 +2,8 @@ import numpy as np
 import mss
 from gui import OS_NAME
 
+# DesktopGrabber: wincam (Windows), ScreenCaptureKit (Mac), MSS (Linux) 
+# Windows 10/11
 if OS_NAME == "Windows":
     from wincam import DXCamera
     class DesktopGrabber:
@@ -60,16 +62,15 @@ if OS_NAME == "Windows":
             img_array, _ = self.camera.get_rgb_frame()
             return img_array, (self.scaled_height, self.scaled_width)
 
-# elif OS_NAME == "Darwin":
-else:
+else: # MacOS 12+
     import cv2
-    try: 
+    try:
         import Quartz
         from ScreenCaptureKit import SCShareableContent, SCContentFilter, SCStreamConfiguration, SCScreenshotManager
         import Quartz.CoreGraphics as CG
         from PIL import Image
         from Foundation import NSRunLoop, NSDate
-    
+        
         class DesktopGrabber:
             def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
                 self.scaled_height = output_resolution
@@ -174,15 +175,14 @@ else:
                     self.latest_frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGBA2RGB)
                     self.done = True
 
-                SCScreenshotManager.captureImageWithFilter_configuration_completionHandler_(
-                    content_filter, configuration, handle_cg_image
-                )
+                SCScreenshotManager.captureImageWithFilter_configuration_completionHandler_(content_filter, configuration, handle_cg_image)
 
                 while not self.done:
                     NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(1/self.fps))
 
                 return self.latest_frame, (self.scaled_height, self.scaled_width)
-    except:
+    except: # Old MacOS and Linux
+        print("Use MSS as screen grabber. ")
         class DesktopGrabber:
             def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
                 self.scaled_height = output_resolution
