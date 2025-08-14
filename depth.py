@@ -14,23 +14,7 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 # if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
 os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
-import yaml
-import os
-from gui import DEVICES, OS_NAME
-# load customized settings
-with open("settings.yaml") as settings_yaml:
-    try:
-        settings = yaml.safe_load(settings_yaml)
-    except yaml.YAMLError as exc:
-        print(exc)
-
-# Set Hugging Face environment variable
-os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-# if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
-os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
-
 import torch
-torch.set_num_threads(1) # Set to avoid high CPU usage caused by default full threads
 torch.set_num_threads(1) # Set to avoid high CPU usage caused by default full threads
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
@@ -42,15 +26,8 @@ import cv2
 MODEL_ID = settings["Depth Model"]
 CACHE_PATH = settings["Download Path"]
 DTYPE = torch.float16 if settings["FP16"] else torch.float32 # Use float32 for DirectML compatibility
-MODEL_ID = settings["Depth Model"]
-CACHE_PATH = settings["Download Path"]
-DTYPE = torch.float16 if settings["FP16"] else torch.float32 # Use float32 for DirectML compatibility
 
 # Initialize DirectML Device
-def get_device(index=0):
-    """
-    Returns a torch.device and a human‐readable device info string.
-    """
 def get_device(index=0):
     """
     Returns a torch.device and a human‐readable device info string.
@@ -61,17 +38,7 @@ def get_device(index=0):
             dev = torch_directml.device(index)
             info = f"Using DirectML device: {torch_directml.device_name(index)}"
             return dev, info
-            dev = torch_directml.device(index)
-            info = f"Using DirectML device: {torch_directml.device_name(index)}"
-            return dev, info
         if torch.cuda.is_available():
-            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
-        if torch.backends.mps.is_available():
-            return torch.device("mps"), "Using Apple Silicon (MPS) device"
-    except:
-        pass
-    return torch.device("cpu"), "Using CPU device"
-
             return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
         if torch.backends.mps.is_available():
             return torch.device("mps"), "Using Apple Silicon (MPS) device"
@@ -87,16 +54,8 @@ if OS_NAME == "Windows":
 else: 
     # Faster for Mac
     DEVICE, DEVICE_INFO = DEVICES[settings["Device"]]["device"], DEVICES[settings["Device"]]["name"]
-if OS_NAME == "Windows":
-    # Smoother for Windows
-    DEVICE, DEVICE_INFO = get_device(settings["Device"])
-else: 
-    # Faster for Mac
-    DEVICE, DEVICE_INFO = DEVICES[settings["Device"]]["device"], DEVICES[settings["Device"]]["name"]
 
 # Load model with same configuration as example
-model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).half().to(DEVICE).eval()
-INPUT_W= settings["Depth Resolution"]  # model's native resolution
 model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).half().to(DEVICE).eval()
 INPUT_W= settings["Depth Resolution"]  # model's native resolution
 
@@ -107,21 +66,9 @@ STD = torch.tensor([0.229, 0.224, 0.225], device=DEVICE).view(1, 3, 1, 1)
 # Warm-up with dummy input
 with torch.no_grad():
     dummy = torch.zeros(1, 3, INPUT_W, INPUT_W, device=DEVICE, dtype=DTYPE)
-    dummy = torch.zeros(1, 3, INPUT_W, INPUT_W, device=DEVICE, dtype=DTYPE)
     model(pixel_values=dummy)    
 
 lock = Lock()
-
-
-def process(img_rgb: np.ndarray, size) -> np.ndarray:
-        """
-        Process raw BGR image: convert to RGB and apply downscale if set.
-        This can be called in a separate thread.
-        """
-        # Downscale the image if needed
-        if size[0] < img_rgb.shape[0]:
-            img_rgb = cv2.resize(img_rgb, (size[0], size[1]), interpolation=cv2.INTER_AREA)
-        return img_rgb
 
 
 def process(img_rgb: np.ndarray, size) -> np.ndarray:
@@ -145,14 +92,10 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     """
     # Convert to tensor and normalize (similar to pipeline's preprocessing)
     tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)              # CPU → CPU tensor (uint8)
-    tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)              # CPU → CPU tensor (uint8)
     tensor = tensor.permute(2, 0, 1).float() / 255.  # HWC → CHW, 0-1 range
-    tensor = tensor.unsqueeze(0)
     tensor = tensor.unsqueeze(0)
 
     # Resize and normalize (same as pipeline)
-    tensor = F.interpolate(tensor, (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
-    tensor = (tensor - MEAN.to(DTYPE)) / STD.to(DTYPE)
     tensor = F.interpolate(tensor, (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
     tensor = (tensor - MEAN.to(DTYPE)) / STD.to(DTYPE)
 
@@ -168,10 +111,7 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     depth = depth / depth.max().clamp(min=1e-6)
     return depth.detach().cpu().numpy().astype('float32')
     # return depth
-    return depth.detach().cpu().numpy().astype('float32')
-    # return depth
 
-def predict_depth2 (image_rgb: np.ndarray, size) -> np.ndarray:
 def predict_depth2 (image_rgb: np.ndarray, size) -> np.ndarray:
         """
         Process raw BGR image: convert to RGB and apply downscale if set.
@@ -197,34 +137,10 @@ def predict_depth2 (image_rgb: np.ndarray, size) -> np.ndarray:
         # Normalize to [0, 1] (same as pipeline output)
         depth = depth / depth.max().clamp(min=1e-6)
         return depth.detach().cpu().numpy().astype('float32')
-        # Convert to tensor and normalize (similar to pipeline's preprocessing)
-        tensor = torch.from_numpy(image_rgb.copy())              # CPU → CPU tensor (uint8)
-        tensor = tensor.permute(2, 0, 1).float() / 255.  # HWC → CHW, 0-1 range
-        tensor = tensor.unsqueeze(0).to(DEVICE, dtype=DTYPE)
 
-        # Resize and normalize (same as pipeline)
-        tensor = F.interpolate(tensor, (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
-        tensor = (tensor - MEAN.to(DTYPE)) / STD.to(DTYPE)
-
-        # Inference with thread safety
-        with lock:
-            depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
-
-        # Post-processing (same as pipeline)
-        h, w = image_rgb.shape[:2]
-        depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0, 0]
-
-        # Normalize to [0, 1] (same as pipeline output)
-        depth = depth / depth.max().clamp(min=1e-6)
-        return depth.detach().cpu().numpy().astype('float32')
-
-def process_tensor(img: np.ndarray, size: float = 0.5) -> torch.Tensor:
-        img_rgb = torch.from_numpy(img).to(DEVICE, dtype=torch.uint8, non_blocking=True)  # H,W,C
 def process_tensor(img: np.ndarray, size: float = 0.5) -> torch.Tensor:
         img_rgb = torch.from_numpy(img).to(DEVICE, dtype=torch.uint8, non_blocking=True)  # H,W,C
         chw = img_rgb.permute(2, 0, 1).float()  # (3,H,W)
-        if size[0] < img_rgb.shape[0]:
-            chw = F.interpolate(chw.unsqueeze(0), size=size, mode='bilinear', align_corners=False)
         if size[0] < img_rgb.shape[0]:
             chw = F.interpolate(chw.unsqueeze(0), size=size, mode='bilinear', align_corners=False)
         # Add batch dim
@@ -236,16 +152,9 @@ def predict_depth_tensor(image_rgb):
     Predict depth map from RGB image (similar to pipeline example but optimized for DirectML)
     Args:
         image_rgb: Input RGB image as numpy array (H, W, 3) in uint8 format
-        image_rgb: Input RGB image as numpy array (H, W, 3) in uint8 format
     Returns:
         Depth map as numpy array (H, W) normalized to [0, 1]
-        Depth map as numpy array (H, W) normalized to [0, 1]
     """
-    # Convert to tensor and normalize (similar to pipeline's preprocessing)
-    img_tensor = torch.from_numpy(image_rgb.copy()).to(DEVICE, dtype=DTYPE)              # CPU → CPU tensor (uint8)
-    tensor = img_tensor.permute(2, 0, 1).float() / 255.  # HWC → CHW, 0-1 range
-    tensor = tensor.unsqueeze(0)
-
     # Convert to tensor and normalize (similar to pipeline's preprocessing)
     img_tensor = torch.from_numpy(image_rgb.copy()).to(DEVICE, dtype=DTYPE)              # CPU → CPU tensor (uint8)
     tensor = img_tensor.permute(2, 0, 1).float() / 255.  # HWC → CHW, 0-1 range
@@ -254,22 +163,17 @@ def predict_depth_tensor(image_rgb):
     # Resize and normalize (same as pipeline)
     tensor = F.interpolate(tensor, (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
     tensor = (tensor - MEAN.to(DTYPE)) / STD.to(DTYPE)
-    tensor = F.interpolate(tensor, (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
-    tensor = (tensor - MEAN.to(DTYPE)) / STD.to(DTYPE)
 
     # Inference with thread safety
     with lock:
         depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
 
-
     # Post-processing (same as pipeline)
-    h, w = image_rgb.shape[:2]
     h, w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0, 0]
 
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
-    return img_tensor, depth
     return img_tensor, depth
 
 def make_sbs(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, depth_strength: float = 0.1, half: bool = True) -> np.ndarray:
@@ -324,14 +228,11 @@ def make_sbs(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, dept
         return sbs_half.astype(np.uint8)
 
 def make_sbs_tensor(rgb, depth, ipd_uv=0.03, depth_strength=1.0, half=False):
-
-def make_sbs_tensor(rgb, depth, ipd_uv=0.03, depth_strength=1.0, half=False):
     """
     Build a side-by-side stereo frame using PyTorch tensors with DirectML support.
 
     Parameters
     ----------
-    rgb : Tensor (H, W, 3) float32 in range [0..1]
     rgb : Tensor (H, W, 3) float32 in range [0..1]
     depth : Tensor (H, W) float32 in range [0..1]
     ipd_uv : float
@@ -347,20 +248,12 @@ def make_sbs_tensor(rgb, depth, ipd_uv=0.03, depth_strength=1.0, half=False):
     torch.Tensor
         uint8 image of shape (H, 2W, 3) if half == False,
         or (H, W, 3) when half == True.
-        uint8 image of shape (H, 2W, 3) if half == False,
-        or (H, W, 3) when half == True.
     """
     assert rgb.ndim == 3 and rgb.shape[2] == 3, "rgb must be (H, W, 3)"
     assert depth.shape == rgb.shape[:2], "depth must be (H, W)"
     
     H, W, _ = rgb.shape
-    assert rgb.ndim == 3 and rgb.shape[2] == 3, "rgb must be (H, W, 3)"
-    assert depth.shape == rgb.shape[:2], "depth must be (H, W)"
-    
-    H, W, _ = rgb.shape
     device = rgb.device
-
-    # inverse depth to get parallax (closer = bigger shift)
 
     # inverse depth to get parallax (closer = bigger shift)
     inv = 1.0 - depth
@@ -385,36 +278,7 @@ def make_sbs_tensor(rgb, depth, ipd_uv=0.03, depth_strength=1.0, half=False):
     right = rgb[y_indices, right_coords]  # (H, W, 3)
 
     # concatenate SBS
-    shifts = (inv * max_px * depth_strength).round().long()  # (H, W)
-
-    # coordinate grid
-    xs = torch.arange(W, device=device).unsqueeze(0).expand(H, -1)  # (H, W)
-
-    # half shifts
-    shifts_half = (shifts // 2).clamp(min=0, max=W//2)  # (H, W)
-
-    # left/right coordinates
-    left_coords  = torch.clamp(xs + shifts_half,  0, W-1)
-    right_coords = torch.clamp(xs - shifts_half,  0, W-1)
-
-    # prepare y indices
-    y_indices = torch.arange(H, device=device).unsqueeze(1).expand(-1, W)
-
-    # gather pixels
-    left  = rgb[y_indices, left_coords]   # (H, W, 3)
-    right = rgb[y_indices, right_coords]  # (H, W, 3)
-
-    # concatenate SBS
     sbs_full = torch.cat([left, right], dim=1)  # (H, 2W, 3)
-
-    if half:
-        sbs_half = sbs_full[:, ::2, :]
-        return sbs_half.clamp(0, 255).byte().cpu().numpy()  # (H, W, 3)
-
-    return sbs_full.clamp(0, 255).byte().cpu().numpy()  # (H, 2W, 3)
-
-
-
 
     if half:
         sbs_half = sbs_full[:, ::2, :]
