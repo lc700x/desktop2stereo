@@ -76,7 +76,8 @@ class StereoWindow:
         
         # Create window (start in windowed mode)
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
-        add_logo(self.window)
+        if OS_NAME != "Darwin"
+            add_logo(self.window)
         if not self.window:
             glfw.terminate()
             raise RuntimeError("Could not create window")
