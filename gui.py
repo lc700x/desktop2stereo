@@ -16,6 +16,15 @@ if  OS_NAME == "Darwin":
         message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
         category=UserWarning
 )
+
+def crop_icon(icon_img):
+    # Make icon larger by cropping for Windows
+    icon_img = icon_img.convert("RGBA")
+    bbox = icon_img.getbbox()
+    icon_img = icon_img.crop(bbox)
+    return icon_img
+
+# Get all computing device list
 def get_devices():
     """
     Returns a list of dictionaries [{dev: torch.device, info: str}] for all available devices.
@@ -172,6 +181,9 @@ class ConfigGUI(tk.Tk):
 
         try:
             icon_img = Image.open("icon.png")
+            if OS_NAME == "Windows":
+                # Make icon larger by cropping for Windows
+                icon_img = crop_icon(icon_img)
             icon_photo = ImageTk.PhotoImage(icon_img)
             self.iconphoto(True, icon_photo)
         except Exception as e:
