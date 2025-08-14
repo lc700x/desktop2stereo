@@ -4,6 +4,8 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
+
+VERSION = "2.1"
 OS_NAME = platform.system()
 # Ignore wanning for MPS
 if  OS_NAME == "Darwin":
@@ -161,7 +163,7 @@ UI_TEXTS = {
 class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Desktop2Stereo v2.1 GUI")
+        self.title(f"Desktop2Stereo v{VERSION} GUI")
         self.minsize(780, 440)
         self.config(padx=40, pady=40)
 
