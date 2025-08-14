@@ -15,11 +15,11 @@ set CFG_FILE=%VENV_DIR%\pyvenv.cfg
 set ACTIVATE_FILE=%VENV_DIR%\Scripts\activate.bat
 set ACTIVATE=%VENV_DIR%\Scripts\activate
 
-echo --- Python Paths ---
+echo ---- Python Paths ----
 echo Project: %PROJECT_DIR%
 echo Python:  %PYTHON_EXE%
 echo Venv:    %VENV_DIR%
-echo -----------------------
+echo ----------------------
 
 REM Check Python
 if not exist "%PYTHON_EXE%" (
@@ -93,4 +93,5 @@ endlocal
 echo Starting Desktop2Stereo GUI...
 call .env\Scripts\activate
 start "" python  -m gui
+
 exit /b 0
