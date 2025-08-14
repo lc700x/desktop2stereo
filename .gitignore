@@ -12,3 +12,4 @@ views
 models
 *.pdf
 profile.svg
+test_capture.py
