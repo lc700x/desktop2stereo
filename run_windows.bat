@@ -15,12 +15,10 @@ set CFG_FILE=%VENV_DIR%\pyvenv.cfg
 set ACTIVATE_FILE=%VENV_DIR%\Scripts\activate.bat
 set ACTIVATE=%VENV_DIR%\Scripts\activate
 
-echo ---- Python Paths ----
-echo Project: %PROJECT_DIR%
+echo ---- Python Enviroment Paths ----
 echo Python:  %PYTHON_EXE%
 echo Venv:    %VENV_DIR%
-echo ----------------------
-
+echo ---------------------------------
 REM Check Python
 if not exist "%PYTHON_EXE%" (
     echo ERROR: Python 3.10 not found at %PYTHON_EXE%
