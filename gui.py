@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 
-VERSION = "2.1"
+VERSION = "v2.1"
 OS_NAME = platform.system()
 # Ignore wanning for MPS
 if  OS_NAME == "Darwin":
@@ -163,7 +163,7 @@ UI_TEXTS = {
 class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"Desktop2Stereo v{VERSION} GUI")
+        self.title(f"Desktop2Stereo {VERSION} GUI")
         self.minsize(780, 440)
         self.config(padx=40, pady=40)
 
@@ -232,8 +232,8 @@ class ConfigGUI(tk.Tk):
         
         self.label_res = ttk.Label(self, text="Output Resolution:")
         self.label_res.grid(row=2, column=0, sticky="w", **pad)
-        self.res_values = ["720", "1080", "1440", "2160"]
-        self.res_cb = ttk.Combobox(self, values=self.res_values, state="readonly")
+        self.res_values = ["480", "720", "1080", "1440", "2160"]
+        self.res_cb = ttk.Combobox(self, values=self.res_values, state="normal")
         self.res_cb.grid(row=2, column=1, sticky="ew", **pad)
         
         self.label_fps = ttk.Label(self, text="FPS:")
