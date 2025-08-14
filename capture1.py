@@ -200,8 +200,7 @@ else:
                 self.system_scale = int(self.system_width / self._mon["width"])
                 if show_monitor_info:
                     print(f"Using monitor {monitor_index}: {self.system_width}x{self.system_height}")
-                    print(f"Scaled resol
-                          ution: {self.scaled_width}x{self.scaled_height}")
+                    print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
 
             def _log_monitors(self):
                 print("Available monitors:")
