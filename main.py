@@ -68,18 +68,17 @@ def main():
     last_time = time.time()
     fps = 0
     
-    while not glfw.window_should_close(window.window):
-        
-        if SHOW_FPS:
-            frame_count += 1
-            current_time = time.time()
-            if current_time - last_time >= 1.0:  # Update every second
-                fps = frame_count / (current_time - last_time)
-                frame_count = 0
-                last_time = current_time
-                # Update window title with Depth Strength and FPS
-                glfw.set_window_title(window.window, f"Stereo Viewer | depth: {window.depth_ratio:.1f} | FPS: {fps:.1f}")
+    while not glfw.window_should_close(window.window): 
         try:
+            if SHOW_FPS:
+                frame_count += 1
+                current_time = time.time()
+                if current_time - last_time >= 1.0:  # Update every second
+                    fps = frame_count / (current_time - last_time)
+                    frame_count = 0
+                    last_time = current_time
+                    # Update window title with Depth Strength and FPS
+                    glfw.set_window_title(window.window, f"Stereo Viewer | depth: {window.depth_ratio:.1f} | FPS: {fps:.1f}")
             # Get latest frame, or skip update
             frame_rgb, depth = depth_q.get_nowait()
             window.update_frame(frame_rgb, depth)
