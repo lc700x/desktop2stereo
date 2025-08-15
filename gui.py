@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 
-VERSION = "v2.1"
+VERSION = "v2.2"
 OS_NAME = platform.system()
 # Ignore wanning for MPS
 if  OS_NAME == "Darwin":
@@ -372,7 +372,7 @@ class ConfigGUI(tk.Tk):
         return self.device_label_to_index
 
 
-    
+    # get all monitors
     def populate_monitors(self):
         self.monitor_label_to_index = {}
         monitors = []
