@@ -15,7 +15,6 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 import torch
-torch.set_num_threads(1) # Set to avoid high CPU usage caused by default full threads
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -82,7 +81,7 @@ def process(img_rgb: np.ndarray, size) -> np.ndarray:
         return img_rgb
 
 @torch.no_grad()
-def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
+def predict_depth(image_rgb: np.ndarray, downsample=8, q_min=0.02, q_max=0.98, eps=1e-6) -> np.ndarray:
     """
     Predict depth map from RGB image (similar to pipeline example but optimized for DirectML)
     Args:
@@ -109,6 +108,21 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
 
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
+    # sample subset for quantiles (cheap)
+    sampled = depth[::downsample, ::downsample].float()
+
+    # compute quantiles (works on CPU and GPU)
+    depth_min = torch.quantile(sampled, q_min)
+    depth_max = torch.quantile(sampled, q_max)
+
+    # avoid division by zero
+    denom = (depth_max - depth_min).clamp_min(eps)
+
+    # normalize and clip
+    depth = (depth - depth_min) / denom
+    depth = depth.clamp(0.0, 1.0)
+
+    # return norm  # dtype float32, device same as input
     return depth.detach().cpu().numpy().astype('float32')
     # return depth
 

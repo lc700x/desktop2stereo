@@ -3,7 +3,7 @@ import queue
 import glfw
 import time
 
-from capture0 import DesktopGrabber
+from capture import DesktopGrabber
 from depth import settings, predict_depth, process, DEVICE_INFO, MODEL_ID
 from viewer import StereoWindow
 

@@ -26,6 +26,8 @@ def crop_icon(icon_img):
 
 # Get all computing device list
 def get_devices():
+    import torch
+    torch.set_num_threads(1) # Set to avoid high CPU usage caused by default full threads
     """
     Returns a list of dictionaries [{dev: torch.device, info: str}] for all available devices.
     """
@@ -41,7 +43,6 @@ def get_devices():
         pass
 
     try:
-        import torch
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 devices[count] = {"name": f"CUDA {i}: {torch.cuda.get_device_name(i)}", "device": torch.device(f"cuda:{i}")}

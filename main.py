@@ -3,7 +3,7 @@ import queue
 import glfw
 import time
 
-from capture0 import DesktopGrabber
+from capture import DesktopGrabber
 from depth import settings, predict_depth, process, DEVICE_INFO, MODEL_ID
 from viewer import StereoWindow
 
@@ -67,7 +67,7 @@ def main():
     frame_count = 0
     last_time = time.time()
     fps = 0
-    while not glfw.window_should_close(window.window):
+    while not glfw.window_should_close(window.window): 
         try:
             # Get latest frame, or skip update
             frame_rgb, depth = depth_q.get_nowait()
@@ -92,4 +92,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
