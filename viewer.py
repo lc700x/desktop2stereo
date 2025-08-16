@@ -44,15 +44,11 @@ FRAGMENT_SHADER = """
     }
     """
 def add_logo(window):
-    # Ignore Mac OS for adding an icon for viewer window
-    if OS_NAME == "Darwin":
-        pass
-    else:
         from PIL  import Image
         glfw_img = Image.open("icon2.png")  # Path to your icon file
-        glfw_img = crop_icon(glfw_img)
-        glfw.set_window_icon(window, 1, [glfw_img])
-
+        if OS_NAME != "Darwin":
+            glfw_img = crop_icon(glfw_img)
+            glfw.set_window_icon(window, 1, [glfw_img])
 class StereoWindow:
     """A window for displaying stereo images side-by-side with depth effect."""
     def __init__(self, depth_ratio=1.0, display_mode="SBS"):

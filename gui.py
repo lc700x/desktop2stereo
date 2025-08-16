@@ -5,9 +5,10 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 
-VERSION = "v2.1"
-OS_NAME = platform.system()
+VERSION = 2.2
+
 # Ignore wanning for MPS
+OS_NAME = platform.system()
 if  OS_NAME == "Darwin":
     import os, warnings
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
@@ -23,8 +24,7 @@ def crop_icon(icon_img):
     bbox = icon_img.getbbox()
     icon_img = icon_img.crop(bbox)
     return icon_img
-
-# Get all computing device list
+    
 def get_devices():
     """
     Returns a list of dictionaries [{dev: torch.device, info: str}] for all available devices.
@@ -172,7 +172,7 @@ UI_TEXTS = {
 class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"Desktop2Stereo {VERSION} GUI")
+        self.title(f"Desktop2Stereo v{VERSION} GUI")
         self.minsize(780, 440)
         self.config(padx=40, pady=40)
 
@@ -182,7 +182,6 @@ class ConfigGUI(tk.Tk):
         try:
             icon_img = Image.open("icon.png")
             if OS_NAME == "Windows":
-                # Make icon larger by cropping for Windows
                 icon_img = crop_icon(icon_img)
             icon_photo = ImageTk.PhotoImage(icon_img)
             self.iconphoto(True, icon_photo)
@@ -244,8 +243,8 @@ class ConfigGUI(tk.Tk):
         
         self.label_res = ttk.Label(self, text="Output Resolution:")
         self.label_res.grid(row=2, column=0, sticky="w", **pad)
-        self.res_values = ["480", "720", "1080", "1440", "2160"]
-        self.res_cb = ttk.Combobox(self, values=self.res_values, state="normal")
+        self.res_values = ["720", "1080", "1440", "2160"]
+        self.res_cb = ttk.Combobox(self, values=self.res_values, state="readonly")
         self.res_cb.grid(row=2, column=1, sticky="ew", **pad)
         
         self.label_fps = ttk.Label(self, text="FPS:")
