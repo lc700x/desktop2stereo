@@ -67,7 +67,7 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 ## Desktop2Stereo GUI App
 ### Quick Run Desktop2Stereo
 Just use the default settnigs and click `Run`, and then click `OK` to run the Stereo Viewer window. 
-![Run](./assets/Run.png)
+![Run](./assets/GUI.png)
 ### Stereo Viewer Window
 ![Viewer](./assets/Viewer.png)
 1. Use `← Left ` or `→ Right` arrow keys to switch the **Stereo Viewer** window to second (virtual) monitor display. 
@@ -101,8 +101,19 @@ All optional settings can be modified on the GUI window and saved to the `settin
 6. **Output Resolution**
     Default output resolution is `1080` (**1080p**, `1920x1080`) for a smoother experience. `2160` (**4K**, `3840x2160`) and `1440` (**2K**, `2560x1440`) resolutions are also available if you have powerful devices. 
 7. **FPS** (frames per second)
-    FPS can set as your monitor refresh rate, default input FPS is `60`. It determins the freqency of the screen caputre process (higher FPS does not ensure smoother output, depending on your devices).  
-8. **Depth Model**
+    FPS can set as your monitor refresh rate, default input FPS is `60`. It determins the freqency of the screen caputre process (higher FPS does not ensure smoother output, depending on your devices).
+8. **Depth Resolution**  
+    Higher depth resolution can give better depth details but cause higher GPU usage, which is also related to the model training settings.  
+    Default depth resolution is set to `384` for balanced performance.  
+9. **Depth Strength**  
+    With higher depth strength, 3D depth effect of the object would be stronger. However, higher value can induce visible artifacts.
+    Default is set to `1.0`. The recomanded depth strength range is `(1, 5)`.  
+10. **IPD** (Interpupillary Distance)  
+    IPD is the distance between the centers of your pupils, it affects how your brain interprets stereoscopic 3D. 
+    The default IPD is `0.064` in meter (m), which is the average human IPD value. 
+11. **Download Path**  
+   Default download path is the `models` folder under the working directory.
+12. **Depth Model**
     Modify the depth model id from [HuggingFace](https://huggingface.co/), the model id under `depth_model` **mostly shall ends** with `-hf`.  
     Large model can cause higher GPU usage and latency.   
     Default depth model: `depth-anything/Depth-Anything-V2-Small-hf`  
@@ -129,19 +140,7 @@ All optional settings can be modified on the GUI window and saved to the `settin
    You can also manually add the hugging face models in the `settings.yaml` which including the following:  
    `model.safetensors`  
    `config.json`  
-   `preprocessor_config.json`  
-
-9. **Depth Resolution**  
-    Higher depth resolution can give better depth details but cause higher GPU usage, which is also related to the model training settings.  
-    Default depth resolution is set to `384` for balanced performance.  
-10. **Depth Strength**  
-    With higher depth strength, 3D depth effect of the object would be stronger. However, higher value can induce visible artifacts.
-    Default is set to `1.0`. The recomanded depth strength range is `(1, 5)`.  
-11. **IPD** (Interpupillary Distance)  
-    IPD is the distance between the centers of your pupils, it affects how your brain interprets stereoscopic 3D. 
-    The default IPD is `0.064` in meter (m), which is the average human IPD value. 
-12. **Download Path**  
-   Default download path is the `models` folder under the working directory.    
+   `preprocessor_config.json`    
 13. **HF Endpoint** (Hugging Face)  
    [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run.  
 ## References
