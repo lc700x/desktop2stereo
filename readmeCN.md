@@ -67,7 +67,7 @@
 ## Desktop2Stereo GUI应用  
 ### 快速运行Desktop2Stereo  
 使用默认设置，点击`Run`，然后点击`OK`运行立体查看器窗口。  
-![Run](./assets/Run.png)  
+![Run](./assets/GUI.png)  
 ### 立体查看器窗口  
 ![Viewer](./assets/Viewer.png)  
 1. 使用`← Left`或`→ Right`方向键将**Stereo Viewer**窗口切换到第二个(虚拟)显示器。  
