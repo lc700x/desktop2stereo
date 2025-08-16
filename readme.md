@@ -67,7 +67,7 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 ## Desktop2Stereo GUI App
 ### Quick Run Desktop2Stereo
 Just use the default settnigs and click `Run`, and then click `OK` to run the Stereo Viewer window. 
-![Run](./assets/GUI.png)
+![Run](./assets/GUI.png=200x)
 ### Stereo Viewer Window
 ![Viewer](./assets/Viewer.png)
 1. Use `← Left ` or `→ Right` arrow keys to switch the **Stereo Viewer** window to second (virtual) monitor display. 
@@ -87,7 +87,7 @@ Just use the default settnigs and click `Run`, and then click `OK` to run the St
 ### Detailed Settings
 All optional settings can be modified on the GUI window and saved to the `settings.yaml`. Each time you click `Run`, the settings will be saved automatically, and clicking `Reset` will restore the default settings.  
 
-![Settings](./assets/Settings.png)
+![Settings](./assets/Settings.png=200x)
 1. **Set Language**  
     English (`EN`) and Simplified Chinese (`CN`) are supported. 
 2. **Monitor index**  
