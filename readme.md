@@ -67,7 +67,7 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 ## Desktop2Stereo GUI App
 ### Quick Run Desktop2Stereo
 Just use the default settnigs and click `Run`, and then click `OK` to run the Stereo Viewer window. 
-![Run](./assets/Run.png)
+![Run](./assets/GUI.png)
 ### Stereo Viewer Window
 ![Viewer](./assets/Viewer.png)
 1. Use `← Left ` or `→ Right` arrow keys to switch the **Stereo Viewer** window to second (virtual) monitor display. 
