@@ -98,7 +98,7 @@ DEFAULT_MODEL_LIST = [
 DEFAULTS = {
     "Monitor Index": 1,
     "Output Resolution": 1080,
-    "FPS": 30,
+    "FPS": 60,
     "Show FPS": True,
     "Model List": DEFAULT_MODEL_LIST,
     "Depth Model": DEFAULT_MODEL_LIST[2],
@@ -109,7 +109,7 @@ DEFAULTS = {
     "FP16": True,
     "Download Path": "models",
     "HF Endpoint": "https://hf-mirror.com",
-    # "Device": 0,
+    "Device": 0,
     "Language": "EN",
 }
 
@@ -127,6 +127,7 @@ UI_TEXTS = {
         "FP16": "FP16",
         "Download Path:": "Download Path:",
         "Browse...": "Browse...",
+        "Stop": "Stop",
         "HF Endpoint:": "HF Endpoint:",
         "Device:": "Device:",
         "Reset": "Reset",
@@ -136,9 +137,13 @@ UI_TEXTS = {
         "Warning": "Warning",
         "Saved": "Run Desktop2Stereo",
         "PyYAML not installed, cannot save YAML file.": "PyYAML not installed, cannot save YAML file.",
-        "Settings saved to settings.yaml": "Settings saved to settings.yaml, click OK to run.",
+        "Settings saved to settings.yaml": "Settings saved to settings.yaml",
         "Failed to save settings.yaml:": "Failed to save settings.yaml:",
-        "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "Could not retrieve monitor list.\nFalling back to indexes 1 and 2."
+        "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.",
+        "Loaded settings.yaml at startup": "Loaded settings.yaml at startup",
+        "Running": "Running...",
+        "Stopped": "Stopped.",
+        "Countdown": "Settings saved to settings.yaml, running Stereo Viewer in {seconds} seconds..."
     },
     "CN": {
         "Monitor Index:": "显示器索引:",
@@ -153,6 +158,7 @@ UI_TEXTS = {
         "FP16": "半精度浮点 (F16)",
         "Download Path:": "下载路径:",
         "Browse...": "浏览...",
+        "Stop": "停止",
         "HF Endpoint:": "HF 接口:",
         "Device:": "设备:",
         "Reset": "重置",
@@ -162,20 +168,22 @@ UI_TEXTS = {
         "Warning": "警告",
         "Saved": "运行Desktop2Stereo",
         "PyYAML not installed, cannot save YAML file.": "未安装PyYAML，无法保存YAML文件。",
-        "Settings saved to settings.yaml": "设置已保存到 settings.yaml，按确定运行。",
+        "Settings saved to settings.yaml": "设置已保存到 settings.yaml",
         "Failed to save settings.yaml:": "保存 settings.yaml 失败：",
-        "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "无法获取显示器列表。\n回退到索引1和2。"
+        "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "无法获取显示器列表。\n回退到索引1和2。",
+        "Loaded settings.yaml at startup": "启动时已加载 settings.yaml",
+        "Running": "运行中...",
+        "Stopped": "已停止。",
+        "Countdown": "设置已保存到 settings.yaml，Stereo Viewer 将在 {seconds} 秒后运行..."
     }
 }
-
 
 class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"Desktop2Stereo v{VERSION} GUI")
         self.minsize(780, 440)
-        self.config(padx=40, pady=40)
-
+        self.resizable(False, False)
         self.language = "EN"
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
 
@@ -200,7 +208,7 @@ class ConfigGUI(tk.Tk):
                     self.loaded_model_list = cfg["Model List"]
                 self.apply_config(cfg)
                 self.update_language_texts()
-                print("Loaded settings.yaml at startup")
+                self.update_status(UI_TEXTS[self.language]["Loaded settings.yaml at startup"])
             except Exception as e:
                 print(f"Failed to load settings.yaml: {e}")
                 self.load_defaults()
@@ -210,102 +218,140 @@ class ConfigGUI(tk.Tk):
             self.update_language_texts()
 
         self.language_var.set(self.language)
+        self.process = None  # Keep track of the spawned process
 
     def create_widgets(self):
         pad = {"padx": 8, "pady": 6}
 
-        self.label_monitor = ttk.Label(self, text="Monitor Index:")
+        # -------------------------
+        # Main content frame
+        # -------------------------
+        self.content_frame = ttk.Frame(self)
+        self.content_frame.grid(row=0, column=0, sticky="nsew", padx=40, pady=20)
+        
+        # Configure root row/column weights
+        self.rowconfigure(0, weight=1)   # content frame expands
+        self.rowconfigure(1, weight=0)   # status bar fixed
+        self.columnconfigure(0, weight=1)
+        
+        # Monitor Index
+        self.label_monitor = ttk.Label(self.content_frame, text="Monitor Index:")
         self.label_monitor.grid(row=0, column=0, sticky="w", **pad)
         self.monitor_var = tk.StringVar()
-        self.monitor_menu = ttk.OptionMenu(self, self.monitor_var, "")
+        self.monitor_menu = ttk.OptionMenu(self.content_frame, self.monitor_var, "")
         self.monitor_menu.grid(row=0, column=1, sticky="w", **pad)
         
-        self.label_language = ttk.Label(self, text="Set Language:")
+        # Language
+        self.label_language = ttk.Label(self.content_frame, text="Set Language:")
         self.label_language.grid(row=0, column=2, sticky="we", **pad)
         self.language_var = tk.StringVar()
-        self.language_cb = ttk.Combobox(self, textvariable=self.language_var, state="readonly", values=["English", "简体中文"])
+        self.language_cb = ttk.Combobox(
+            self.content_frame, textvariable=self.language_var, state="readonly",
+            values=["English", "简体中文"]
+        )
         self.language_cb.grid(row=0, column=3, sticky="ew", **pad)
         self.language_cb.bind("<<ComboboxSelected>>", self.on_language_change)
         
-        self.label_device = ttk.Label(self, text="Device:")
+        # Device
+        self.label_device = ttk.Label(self.content_frame, text="Device:")
         self.label_device.grid(row=1, column=0, sticky="w", **pad)
         self.device_var = tk.StringVar()
-        self.device_menu = ttk.OptionMenu(self, self.device_var, "")
+        self.device_menu = ttk.OptionMenu(self.content_frame, self.device_var, "")
         self.device_menu.grid(row=1, column=1, sticky="w", **pad)
         
+        # FP16 and Show FPS
         self.fp16_var = tk.BooleanVar()
-        self.fp16_cb = ttk.Checkbutton(self, text="FP16", variable=self.fp16_var)
+        self.fp16_cb = ttk.Checkbutton(self.content_frame, text="FP16", variable=self.fp16_var)
         self.fp16_cb.grid(row=1, column=2, sticky="w", **pad)
         
         self.showfps_var = tk.BooleanVar()
-        self.showfps_cb = ttk.Checkbutton(self, text="Show FPS", variable=self.showfps_var)
+        self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
         self.showfps_cb.grid(row=1, column=3, sticky="w", **pad)
         
-        self.label_res = ttk.Label(self, text="Output Resolution:")
+        # Output Resolution
+        self.label_res = ttk.Label(self.content_frame, text="Output Resolution:")
         self.label_res.grid(row=2, column=0, sticky="w", **pad)
         self.res_values = ["720", "1080", "1440", "2160"]
-        self.res_cb = ttk.Combobox(self, values=self.res_values, state="readonly")
+        self.res_cb = ttk.Combobox(self.content_frame, values=self.res_values, state="readonly")
         self.res_cb.grid(row=2, column=1, sticky="ew", **pad)
         
-        self.label_fps = ttk.Label(self, text="FPS:")
+        # FPS
+        self.label_fps = ttk.Label(self.content_frame, text="FPS:")
         self.label_fps.grid(row=2, column=2, sticky="w", **pad)
         self.fps_values = ["30", "60", "75", "90", "120"]
-        self.fps_cb = ttk.Combobox(self, values=self.fps_values, state="normal")
+        self.fps_cb = ttk.Combobox(self.content_frame, values=self.fps_values, state="normal")
         self.fps_cb.grid(row=2, column=3, sticky="ew", **pad)
         
-        self.label_depth_model = ttk.Label(self, text="Depth Model:")
-        self.label_depth_model.grid(row=3, column=0, sticky="w", **pad)
-        self.depth_model_var = tk.StringVar()
-        self.depth_model_cb = ttk.Combobox(self, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
-        self.depth_model_cb.grid(row=3, column=1, columnspan=2, sticky="ew", **pad)
-
-        self.label_depth_res = ttk.Label(self, text="Depth Resolution:")
+        # Download path
+        self.label_download = ttk.Label(self.content_frame, text="Download Path:")
+        self.label_download.grid(row=3, column=0, sticky="w", **pad)
+        self.download_var = tk.StringVar()
+        self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
+        self.download_entry.grid(row=3, column=1, columnspan=2, sticky="ew", **pad)
+        self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
+        self.btn_browse.grid(row=3, column=3, sticky="ew", **pad)
+        
+        # Depth Resolution and Depth Strength
+        self.label_depth_res = ttk.Label(self.content_frame, text="Depth Resolution:")
         self.label_depth_res.grid(row=4, column=0, sticky="w", **pad)
-        self.depth_res_values = ["192", "384", "576", "768", "960", "1152", "1344", "1536"]
-        self.depth_res_cb = ttk.Combobox(self, values=self.depth_res_values, state="normal")
+        self.depth_res_values = ["48", "96", "192", "384", "576", "768", "960", "1152", "1344", "1536"]
+        self.depth_res_cb = ttk.Combobox(self.content_frame, values=self.depth_res_values, state="normal")
         self.depth_res_cb.grid(row=4, column=1, sticky="ew", **pad)
         
-        self.label_depth_strength = ttk.Label(self, text="Depth Strength:")
+        self.label_depth_strength = ttk.Label(self.content_frame, text="Depth Strength:")
         self.label_depth_strength.grid(row=4, column=2, sticky="w", **pad)
         self.depth_strength_values = ["1.0", "2.0", "3.0", "4.0", "5.0"]
-        self.depth_strength_cb = ttk.Combobox(self, values=self.depth_strength_values, state="normal")
+        self.depth_strength_cb = ttk.Combobox(self.content_frame, values=self.depth_strength_values, state="normal")
         self.depth_strength_cb.grid(row=4, column=3, sticky="ew", **pad)
         
-        self.label_display_mode = ttk.Label(self, text="Display Mode:")
+        # Display Mode
+        self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
         self.label_display_mode.grid(row=5, column=0, sticky="w", **pad)
         self.display_mode_values = ["SBS", "TAB"]
-        self.display_mode_cb = ttk.Combobox(self, values=self.display_mode_values, state="readonly")
+        self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
         self.display_mode_cb.grid(row=5, column=1, sticky="ew", **pad)
         
-        self.label_ipd = ttk.Label(self, text="IPD (m):")
+        # IPD
+        self.label_ipd = ttk.Label(self.content_frame, text="IPD (m):")
         self.label_ipd.grid(row=5, column=2, sticky="w", **pad)
         self.ipd_var = tk.StringVar()
-        self.ipd_entry = ttk.Entry(self, textvariable=self.ipd_var)
+        self.ipd_entry = ttk.Entry(self.content_frame, textvariable=self.ipd_var)
         self.ipd_entry.grid(row=5, column=3, sticky="ew", **pad)
         
-        self.label_download = ttk.Label(self, text="Download Path:")
-        self.label_download.grid(row=6, column=0, sticky="w", **pad)
-        self.download_var = tk.StringVar()
-        self.download_entry = ttk.Entry(self, textvariable=self.download_var)
-        self.download_entry.grid(row=6, column=1, columnspan=2, sticky="ew", **pad)
-        self.btn_browse = ttk.Button(self, text="Browse...", command=self.browse_download)
-        self.btn_browse.grid(row=6, column=3, sticky="ew", **pad)
+        # Depth Model
+        self.label_depth_model = ttk.Label(self.content_frame, text="Depth Model:")
+        self.label_depth_model.grid(row=6, column=0, sticky="w", **pad)
+        self.depth_model_var = tk.StringVar()
+        self.depth_model_cb = ttk.Combobox(self.content_frame, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
+        self.depth_model_cb.grid(row=6, column=1, columnspan=2, sticky="ew", **pad)
         
-        self.label_hf_endpoint = ttk.Label(self, text="HF Endpoint:")
+        # HF Endpoint
+        self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
         self.label_hf_endpoint.grid(row=8, column=0, sticky="w", **pad)
         self.hf_endpoint_var = tk.StringVar()
-        self.hf_endpoint_entry = ttk.Entry(self, textvariable=self.hf_endpoint_var)
+        self.hf_endpoint_entry = ttk.Entry(self.content_frame, textvariable=self.hf_endpoint_var)
         self.hf_endpoint_entry.grid(row=8, column=1,  sticky="ew", **pad)
         
-        self.btn_reset = ttk.Button(self, text="Reset", command=self.reset_to_defaults)
-        self.btn_reset.grid(row=8, column=2, sticky="ew", **pad)
-
-        self.btn_run = ttk.Button(self, text="Run", command=self.save_settings)
+        # Buttons
+        self.btn_reset = ttk.Button(self.content_frame, text="Reset", command=self.reset_to_defaults)
+        self.btn_reset.grid(row=6, column=3, sticky="ew", **pad)
+        
+        self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
+        self.btn_stop.grid(row=8, column=2, sticky="ew", **pad)
+        
+        self.btn_run = ttk.Button(self.content_frame, text="Run", command=self.save_settings)
         self.btn_run.grid(row=8, column=3, sticky="ew", **pad)
+        
+        # Column weights inside content frame
+        for col in range(4):
+            self.content_frame.columnconfigure(col, weight=1)
+        
+        # -------------------------
+        # Status bar at bottom
+        # -------------------------
+        self.status_label = tk.Label(self, text="", anchor="w", relief="sunken", padx=20, pady=4)
+        self.status_label.grid(row=1, column=0, sticky="we")  # no padding
 
-        self.columnconfigure(1, weight=1)
-        self.columnconfigure(2, weight=1)
-        self.columnconfigure(3, weight=1)
 
     def update_language_texts(self):
         texts = UI_TEXTS[self.language]
@@ -324,9 +370,34 @@ class ConfigGUI(tk.Tk):
         self.label_device.config(text=texts["Device:"])
         self.btn_browse.config(text=texts["Browse..."])
         self.btn_reset.config(text=texts["Reset"])
+        self.btn_stop.config(text=texts["Stop"])
         self.btn_run.config(text=texts["Run"])
         self.label_language.config(text=texts["Set Language:"])
         self.language_cb["values"] = list(UI_TEXTS.keys())
+        
+        # Update status bar translation
+        if hasattr(self, "status_label"):
+            current_text = self.status_label.cget("text")
+            mapping = {
+                # English mappings
+                "Loaded settings.yaml at startup": texts["Loaded settings.yaml at startup"],
+                "Running": texts["Running"],
+                "Stopped": texts["Stopped"],
+                # Chinese mappings
+                "启动时已加载 settings.yaml": texts["Loaded settings.yaml at startup"],
+                "运行中...": texts["Running"],
+                "已停止。": texts["Stopped"],
+            }
+            import re
+            if "Stereo Viewer" in current_text or "运行 Stereo Viewer" in current_text:
+                # Extract seconds from countdown text
+                match = re.search(r"(\d+)", current_text)
+                seconds = int(match.group(1)) if match else 3
+                self.status_label.config(
+                    text=texts["Countdown"].format(seconds=seconds)
+                )
+            elif current_text in mapping:
+                self.status_label.config(text=mapping[current_text])
 
     def on_language_change(self, event):
         selected = self.language_var.get()
@@ -424,20 +495,21 @@ class ConfigGUI(tk.Tk):
                                  f"{UI_TEXTS[self.language]['Failed to save settings.yaml:']} {e}")
             return False
 
-    def apply_config(self, cfg):
+    def apply_config(self, cfg, keep_optional=True):
         monitor_idx = cfg.get("Monitor Index", DEFAULTS["Monitor Index"])
         label_for_idx = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == monitor_idx), None)
         if label_for_idx:
             self.monitor_var.set(label_for_idx)
         elif self.monitor_label_to_index:
             self.monitor_var.set(next(iter(self.monitor_label_to_index)))
-            
-        # device_idx = cfg.get("Device", DEFAULTS["Device"])
-        # lavel_for_device_idx = next((lbl for lbl, i in self.device_label_to_index.items() if i == device_idx), None)
-        # if lavel_for_device_idx:
-        #     self.device_var.set(lavel_for_device_idx)
-        # elif self.device_label_to_index:
-        #     self.device_var.set(next(iter(self.device_label_to_index)))
+
+        if keep_optional:  # no update for device
+            device_idx = cfg.get("Device", DEFAULTS["Device"])
+            label_for_device_idx = next((lbl for lbl, i in self.device_label_to_index.items() if i == device_idx), None)
+            if label_for_device_idx:
+                self.device_var.set(label_for_device_idx)
+            elif self.device_label_to_index:
+                self.device_var.set(next(iter(self.device_label_to_index)))
 
         self.fps_cb.set(str(cfg.get("FPS", DEFAULTS["FPS"])))
         self.showfps_var.set(cfg.get("Show FPS", DEFAULTS["Show FPS"]))
@@ -459,8 +531,8 @@ class ConfigGUI(tk.Tk):
         self.fp16_var.set(cfg.get("FP16", DEFAULTS["FP16"]))
         self.download_var.set(cfg.get("Download Path", DEFAULTS["Download Path"]))
         self.hf_endpoint_var.set(cfg.get("HF Endpoint", DEFAULTS["HF Endpoint"]))
-        self.language = cfg.get("Language", DEFAULTS["Language"])
-
+        if keep_optional:  # no update for language
+            self.language_var.set(cfg.get("Language", DEFAULTS["Language"]))
 
     def load_defaults(self):
         self.apply_config(DEFAULTS)
@@ -468,6 +540,10 @@ class ConfigGUI(tk.Tk):
     def reset_to_defaults(self):
         self.load_defaults()
         # self.update_language_texts()
+    
+    def update_status(self, msg: str):
+        """Update status bar text."""
+        self.status_label.config(text=msg)
 
     def save_settings(self):
         cfg = {
@@ -489,15 +565,38 @@ class ConfigGUI(tk.Tk):
         }
         success = self.save_yaml("settings.yaml", cfg)
         if success:
-            confirm = messagebox.askokcancel(UI_TEXTS[self.language]["Saved"],
-                                UI_TEXTS[self.language]["Settings saved to settings.yaml"])
-            
-            if confirm:
-                # Run main.py as a separate process
-                try:
-                    subprocess.Popen([sys.executable, "main.py"])
-                except Exception as e:
-                    messagebox.showerror("Error", f"Failed to run main.py: {e}")
+            # Show a message with countdown
+            countdown_seconds = 3
+            self._countdown_and_run(countdown_seconds)
+
+    def _countdown_and_run(self, seconds):
+        if seconds > 0:
+            self.update_status(
+                UI_TEXTS[self.language]["Countdown"].format(seconds=seconds)
+            )
+            self.after(1000, lambda: self._countdown_and_run(seconds - 1))
+        else:
+            try:
+                self.process = subprocess.Popen([sys.executable, "main.py"])
+                self.update_status(UI_TEXTS[self.language]["Running"])
+            except Exception as e:
+                messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Failed to run main.py: {e}")
+                self.update_status(UI_TEXTS[self.language]["Stopped"])
+                
+    def stop_process(self):
+        if self.process and self.process.poll() is None:  # still running
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+            except Exception as e:
+                messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Failed to stop process: {e}")
+            finally:
+                self.process = None
+                self.update_status(UI_TEXTS[self.language]["Stopped"])
+        else:
+            self.update_status(UI_TEXTS[self.language]["Stopped"])
 
 if __name__ == "__main__":
     app = ConfigGUI()
