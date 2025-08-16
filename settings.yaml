@@ -1,4 +1,4 @@
-Monitor Index: 2
+Monitor Index: 1
 FPS: 60
 Show FPS: true
 Output Resolution: 1080
@@ -23,7 +23,7 @@ Model List:
 - Intel/dpt-large
 Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 1.0
-Depth Resolution: 192
+Depth Resolution: 384
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com

@@ -44,15 +44,11 @@ FRAGMENT_SHADER = """
     }
     """
 def add_logo(window):
-    # Ignore Mac OS for adding an icon for viewer window
-    if OS_NAME == "Darwin":
-        pass
-    else:
         from PIL  import Image
         glfw_img = Image.open("icon2.png")  # Path to your icon file
-        glfw_img = crop_icon(glfw_img)
-        glfw.set_window_icon(window, 1, [glfw_img])
-
+        if OS_NAME != "Darwin":
+            glfw_img = crop_icon(glfw_img)
+            glfw.set_window_icon(window, 1, [glfw_img])
 class StereoWindow:
     """A window for displaying stereo images side-by-side with depth effect."""
     def __init__(self, depth_ratio=1.0, display_mode="SBS"):
@@ -244,11 +240,11 @@ class StereoWindow:
 
     def update_frame(self, rgb, depth):
         # Normalize depth with adaptive range
-        # depth_sampled = depth[::8, ::8]
-        # depth_min = np.quantile(depth_sampled, 0.2)
-        # depth_max = np.quantile(depth_sampled, 0.98)
-        # depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
-        # depth = np.clip(depth, 0, 1)
+        depth_sampled = depth[::8, ::8]
+        depth_min = np.quantile(depth_sampled, 0.2)
+        depth_max = np.quantile(depth_sampled, 0.98)
+        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
+        depth = np.clip(depth, 0, 1)
         # Only recreate textures if size changed
         new_size = (rgb.shape[1], rgb.shape[0])
         if self._texture_size != new_size:

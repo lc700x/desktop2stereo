@@ -71,10 +71,11 @@ elif OS_NAME == "Darwin":
     # macOS-specific imports assumed present in your environment:
     from AppKit import NSCursor, NSBitmapImageRep, NSPNGFileType
     import Quartz.CoreGraphics as CG
+    from Quartz import CGCursorIsVisible
     import mss
 
     # Cursor loader with caching & precomputation
-    def get_cursor_image_and_hotspot(scale):
+    def get_cursor_image_and_hotspot():
         """
         Retrieve current system cursor image (BGRA uint8 numpy) and hotspot, but also
         return precomputed helpers for fast per-frame overlay:
@@ -137,11 +138,11 @@ elif OS_NAME == "Darwin":
         except Exception:
             return None, None, None, None
 
-    def get_cursor_position(scale):
+    def get_cursor_position():
         """Return current cursor (x, y) in macOS display coordinates (origin bottom-left)."""
         ev = CG.CGEventCreate(None)
         loc = CG.CGEventGetLocation(ev)
-        return int(loc.x * scale), int(loc.y * scale)
+        return loc.x, loc.y
 
     # Fast overlay using cached premultiplied data
     def overlay_cursor_on_frame(frame_bgr, cursor_bgra, hotspot, cursor_pos, alpha_f32=None, premultiplied_bgr_f32=None):
@@ -268,15 +269,19 @@ elif OS_NAME == "Darwin":
 
         def grab(self):
             # Grab: mss gives a raw BGRA buffer (Pillow style). Convert once to numpy view.
+            shot = self._mss.grab(self._mon)
+            arr = np.asarray(shot)  # BGRA uint8 view (no unnecessary copies if mss supports it)
+            # Convert to BGR (drop alpha) using OpenCV (fast C path)
+            frame_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
             # Load cursor and precompute alpha/premultiplied arrays for fast overlay
-            if self.with_cursor :
-                x, y = get_cursor_position(self.system_scale)
+            if self.with_cursor and CGCursorIsVisible():
+                x, y = get_cursor_position()
                 # Convert to local monitor frame coordinates (origin top-left)
                 cursor_x = x - self._mon["left"]
                 cursor_y = y - self._mon["top"]
                 # Only overlay if cursor is within this monitor's frame
                 if 0 <= cursor_x <= int(self.system_width) and 0 <= cursor_y <= int(self.system_height):
-                    cursor_bgra, hotspot, alpha_f32, premultiplied = get_cursor_image_and_hotspot(self.system_scale)
+                    cursor_bgra, hotspot, alpha_f32, premultiplied = get_cursor_image_and_hotspot()
                     if cursor_bgra.shape[0] > 8 and cursor_bgra.shape[1] > 8:
                         h, w = cursor_bgra.shape[:2]
                         new_w, new_h = int(w / 8 * self.system_scale * self.system_scale), int(h / 8 * self.system_scale * self.system_scale)
@@ -296,23 +301,17 @@ elif OS_NAME == "Darwin":
                     self.cursor_hotspot = (0, 0)
                     self.cursor_alpha = None
                     self.cursor_premultiplied = None
-                    
-            shot = self._mss.grab(self._mon)
-            arr = np.asarray(shot)  # BGRA uint8 view (no unnecessary copies if mss supports it)
-            # Convert to BGR (drop alpha) using OpenCV (fast C path)
-            frame_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
 
-            if self.with_cursor and self.cursor_bgra is not None:
-                    # overlay in-place using optimized routine
-                    frame_bgr = overlay_cursor_on_frame(
-                        frame_bgr,
-                        self.cursor_bgra,
-                        self.cursor_hotspot,
-                        (cursor_x, cursor_y),
-                        alpha_f32=self.cursor_alpha,
-                        premultiplied_bgr_f32=self.cursor_premultiplied
-                    )
-
+                if self.with_cursor and self.cursor_bgra is not None:
+                        # overlay in-place using optimized routine
+                        frame_bgr = overlay_cursor_on_frame(
+                            frame_bgr,
+                            self.cursor_bgra,
+                            self.cursor_hotspot,
+                            (cursor_x, cursor_y),
+                            alpha_f32=self.cursor_alpha,
+                            premultiplied_bgr_f32=self.cursor_premultiplied
+                        )
             # Return RGB image & scaled dimensions (match your original return signature)
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             return frame_rgb, (self.scaled_height, self.scaled_width)
