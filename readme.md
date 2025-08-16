@@ -1,7 +1,7 @@
 # Desktop2Stereo: a 2D Desktop to 3D Stereo App
-[中文版本](./readmeCN.md)  
-![Desktop2Stereo](./assets/Banner.png)   
+[中文版本](./readmeCN.md)   
   
+![Desktop2Stereo](./assets/Banner.png)   
 A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/Apple Silicon devices on Windows/Mac/Linux OS, powered by Depth Estimation AI Models
 ## Alternative Download Link
 [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96)  
