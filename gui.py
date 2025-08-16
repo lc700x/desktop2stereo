@@ -579,9 +579,23 @@ class ConfigGUI(tk.Tk):
             try:
                 self.process = subprocess.Popen([sys.executable, "main.py"])
                 self.update_status(UI_TEXTS[self.language]["Running"])
+                self._monitor_process()  # start monitoring after launch
             except Exception as e:
-                messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Failed to run main.py: {e}")
+                messagebox.showerror(
+                    UI_TEXTS[self.language]["Error"],
+                    f"Failed to run main.py: {e}"
+                )
                 self.update_status(UI_TEXTS[self.language]["Stopped"])
+
+    def _monitor_process(self):
+        """Check if process is still running; update label if stopped externally."""
+        if self.process and self.process.poll() is not None:
+            # Process ended or was killed outside
+            self.process = None
+            self.update_status(UI_TEXTS[self.language]["Stopped"])
+        else:
+            # Keep checking every second
+            self.after(1000, self._monitor_process)
                 
     def stop_process(self):
         if self.process and self.process.poll() is None:  # still running
