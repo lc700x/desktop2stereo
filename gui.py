@@ -98,7 +98,7 @@ DEFAULT_MODEL_LIST = [
 DEFAULTS = {
     "Monitor Index": 1,
     "Output Resolution": 1080,
-    "FPS": 60,
+    "FPS": 30,
     "Show FPS": True,
     "Model List": DEFAULT_MODEL_LIST,
     "Depth Model": DEFAULT_MODEL_LIST[2],
@@ -109,7 +109,7 @@ DEFAULTS = {
     "FP16": True,
     "Download Path": "models",
     "HF Endpoint": "https://hf-mirror.com",
-    "Device": 0,
+    # "Device": 0,
     "Language": "EN",
 }
 
@@ -432,12 +432,12 @@ class ConfigGUI(tk.Tk):
         elif self.monitor_label_to_index:
             self.monitor_var.set(next(iter(self.monitor_label_to_index)))
             
-        device_idx = cfg.get("Device", DEFAULTS["Device"])
-        lavel_for_device_idx = next((lbl for lbl, i in self.device_label_to_index.items() if i == device_idx), None)
-        if lavel_for_device_idx:
-            self.device_var.set(lavel_for_device_idx)
-        elif self.device_label_to_index:
-            self.device_var.set(next(iter(self.device_label_to_index)))
+        # device_idx = cfg.get("Device", DEFAULTS["Device"])
+        # lavel_for_device_idx = next((lbl for lbl, i in self.device_label_to_index.items() if i == device_idx), None)
+        # if lavel_for_device_idx:
+        #     self.device_var.set(lavel_for_device_idx)
+        # elif self.device_label_to_index:
+        #     self.device_var.set(next(iter(self.device_label_to_index)))
 
         self.fps_cb.set(str(cfg.get("FPS", DEFAULTS["FPS"])))
         self.showfps_var.set(cfg.get("Show FPS", DEFAULTS["Show FPS"]))
@@ -484,7 +484,7 @@ class ConfigGUI(tk.Tk):
             "FP16": self.fp16_var.get(),
             "Download Path": self.download_var.get(),
             "HF Endpoint": self.hf_endpoint_var.get(),
-            "Device": self.device_label_to_index.get(self.device_var.get(), DEFAULTS["Device"]),
+            "Device": self.device_label_to_index.get(self.device_var.get()),
             "Language": self.language,
         }
         success = self.save_yaml("settings.yaml", cfg)
