@@ -53,7 +53,7 @@ def depth_loop():
         put_latest(depth_q, (frame_rgb, depth))
 
 def main():
-    print(f"Using {DEVICE_INFO}")
+    print(f"{DEVICE_INFO}")
     print(f"Model: {MODEL_ID}")
 
     # Start capture and processing threads
