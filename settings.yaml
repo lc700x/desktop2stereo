@@ -1,7 +1,7 @@
 Monitor Index: 1
 FPS: 60
 Show FPS: true
-Output Resolution: 1080
+Output Resolution: 2160
 IPD: 0.064
 Display Mode: SBS
 Model List:
@@ -27,5 +27,5 @@ Depth Resolution: 384
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
-Device: 0
+Device: 1
 Language: EN

@@ -83,22 +83,6 @@ def process(img_rgb: np.ndarray, size) -> np.ndarray:
         return img_rgb
 
 @torch.no_grad()
-def normalize_with_resize(t, target_down=8, q_min=0.2, q_max=0.98, eps=1e-6):
-    H, W = t.shape
-    Hs, Ws = max(1, H // target_down), max(1, W // target_down)
-
-    # make shape (1, H, W) for TF.resize
-    t_ch = t.unsqueeze(0)  # 1 x H x W
-
-    # resize using bilinear interpolation (good for smooth depth maps)
-    small = TF.resize(t_ch, [Hs, Ws], interpolation=InterpolationMode.BILINEAR)[0].float()
-
-    depth_min = torch.quantile(small, q_min)
-    depth_max = torch.quantile(small, q_max)
-    denom = (depth_max - depth_min).clamp_min(eps)
-    norm = (t - depth_min) / denom
-    return norm.clamp(0.0, 1.0)
-
 def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     """
     Predict depth map from RGB image (similar to pipeline example but optimized for DirectML)
@@ -126,6 +110,5 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
 
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
-    depth = normalize_with_resize(depth)
-    return depth.detach().cpu().numpy().astype('float32')
-    # return depth
+    return depth
+    # return depth.detach().cpu().numpy().astype('float32')

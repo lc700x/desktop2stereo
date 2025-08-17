@@ -22,7 +22,7 @@ def put_latest(q, item):
         try:
             q.get_nowait()
         except queue.Empty:
-            time.sleep(TIME_SLEEP)
+            pass
     try:
         q.put_nowait(item)
     except queue.Full:
@@ -37,7 +37,7 @@ def capture_loop():
 def process_loop():
     while True:
         try:
-            frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
+            frame_raw, size = raw_q.get(timeout = TIME_SLEEP)
         except queue.Empty:
             continue
         frame_rgb = process(frame_raw, size)
@@ -46,7 +46,7 @@ def process_loop():
 def depth_loop():
     while True:
         try:
-            frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+            frame_rgb = proc_q.get(timeout = TIME_SLEEP)
         except queue.Empty:
             continue
         depth = predict_depth(frame_rgb)
@@ -73,7 +73,7 @@ def main():
         
         try:
             # Get latest frame, or skip update
-            frame_rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+            frame_rgb, depth = depth_q.get_nowait()
             window.update_frame(frame_rgb, depth)
             if SHOW_FPS:
                 frame_count += 1
@@ -89,7 +89,7 @@ def main():
 
         window.render()
         glfw.swap_buffers(window.window)
-        glfw.wait_events_timeout(TIME_SLEEP)
+        glfw.poll_events()
 
     glfw.terminate()
 
