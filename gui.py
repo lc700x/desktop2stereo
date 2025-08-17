@@ -381,8 +381,8 @@ class ConfigGUI(tk.Tk):
             mapping = {
                 # English mappings
                 "Loaded settings.yaml at startup": texts["Loaded settings.yaml at startup"],
-                "Running": texts["Running"],
-                "Stopped": texts["Stopped"],
+                "Running...": texts["Running"],
+                "Stopped.": texts["Stopped"],
                 # Chinese mappings
                 "启动时已加载 settings.yaml": texts["Loaded settings.yaml at startup"],
                 "运行中...": texts["Running"],
