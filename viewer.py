@@ -239,7 +239,6 @@ class StereoWindow:
         )
 
     def update_frame(self, rgb, depth):
-        depth = depth.detach().cpu().numpy().astype('float32')
         # Normalize depth with adaptive range
         depth_sampled = depth[::8, ::8]
         depth_min = np.quantile(depth_sampled, 0.2)
