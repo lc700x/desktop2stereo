@@ -17,6 +17,8 @@ os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 import torch
 torch.set_num_threads(1) # Set to avoid high CPU usage caused by default full threads
 import torch.nn.functional as F
+import torchvision.transforms.functional as TF
+from torchvision.transforms import InterpolationMode
 from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
@@ -90,9 +92,9 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
         Depth map as numpy array (H, W) normalized to [0, 1]
     """
     # Convert to tensor and normalize (similar to pipeline's preprocessing)
-    tensor = torch.from_numpy(image_rgb)              # CPU → CPU tensor (uint8)
-    tensor = tensor.permute(2, 0, 1).float() / 255.  # HWC → CHW, 0-1 range
-    tensor = tensor.unsqueeze(0).to(DEVICE, dtype=DTYPE, non_blocking=True) # set to improve performance
+    tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE, non_blocking=True) # CPU → CPU tensor (uint8)
+    tensor = tensor.permute(2, 0, 1).float() / 255  # HWC → CHW, 0-1 range
+    tensor = tensor.unsqueeze(0) # set to improve performance
 
     # Resize and normalize (same as pipeline)
     tensor = F.interpolate(tensor, (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
@@ -108,5 +110,5 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
 
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
-    return depth.detach().cpu().numpy().astype('float32')
-    # return depth
+    return depth
+    # return depth.detach().cpu().numpy().astype('float32')
