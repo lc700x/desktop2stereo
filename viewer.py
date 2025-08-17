@@ -240,11 +240,11 @@ class StereoWindow:
 
     def update_frame(self, rgb, depth):
         # Normalize depth with adaptive range
-        depth_sampled = depth[::8, ::8]
-        depth_min = np.quantile(depth_sampled, 0.2)
-        depth_max = np.quantile(depth_sampled, 0.98)
-        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
-        depth = np.clip(depth, 0, 1)
+        # depth_sampled = depth[::8, ::8]
+        # depth_min = np.quantile(depth_sampled, 0.2)
+        # depth_max = np.quantile(depth_sampled, 0.98)
+        # depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
+        # depth = np.clip(depth, 0, 1)
         # Only recreate textures if size changed
         new_size = (rgb.shape[1], rgb.shape[0])
         if self._texture_size != new_size:
