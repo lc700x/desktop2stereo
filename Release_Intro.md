@@ -1,10 +1,10 @@
-# Desktop2Stereo文件说明. 
-## 下载链接：. 
+# Desktop2Stereo文件说明
+## 下载链接：
 [GitHub](https://github.com/lc700x/desktop2stereo/releases/latest)
 [夸克网盘](https://pan.quark.cn/s/9d2bcf039b96)
 提取码：`1vcn`. 
-## 文件说明：. 
-- 根据需求，四种版本选一个下载即可。  
+## 文件版本
+- 根据需求，四种文件版本选一个下载即可。  
 - 第一次运行会建立Python缓存会久一点才弹出软件窗口。  
 1. `Desktop2Stereo_v2.2_DirectML_AMD_etc.zip`  
     AMD和其他GPU懒人版 (Windows x64)：解压后直接运行run_windows.bat  
