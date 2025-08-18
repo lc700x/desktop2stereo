@@ -1,5 +1,5 @@
 # Desktop2Stereo文件说明
-## 下载链接：
+## 下载链接
 [GitHub](https://github.com/lc700x/desktop2stereo/releases/latest)
 [夸克网盘](https://pan.quark.cn/s/9d2bcf039b96)
 提取码：`1vcn`. 
