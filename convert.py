@@ -24,12 +24,12 @@ def convert_from_pretrained(model_path):
 
 
 if __name__ == '__main__':
-    # Usage:
+    # Usage: model path cannot have "-" use "_" instead!!!
     # 1. Put model (pytorch_model.bin, model.safetensors, tf_model.h5, model.ckpt.index or flax_model.msgpack) into a folder ModelName/
     # 2. Run the following:
     # python convert.py --model_path path_to_ModelName
 
     args = parse_arguments()
 
-    print(f"covert  {args.model_path} into HuggingFace safetensor")
+    print(f"covert {args.model_path} into HuggingFace safetensor")
     convert_from_pretrained(args.model_path)
