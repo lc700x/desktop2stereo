@@ -277,14 +277,15 @@ elif OS_NAME == "Darwin":
             if self.with_cursor and CGCursorIsVisible():
                 x, y = get_cursor_position()
                 # Convert to local monitor frame coordinates (origin top-left)
-                cursor_x = x - self._mon["left"]
-                cursor_y = y - self._mon["top"]
+                cursor_x = (x - self._mon["left"]) * self.system_scale
+                cursor_y = (y - self._mon["top"]) * self.system_scale
                 # Only overlay if cursor is within this monitor's frame
                 if 0 <= cursor_x <= int(self.system_width) and 0 <= cursor_y <= int(self.system_height):
                     cursor_bgra, hotspot, alpha_f32, premultiplied = get_cursor_image_and_hotspot()
-                    if cursor_bgra.shape[0] > 8 and cursor_bgra.shape[1] > 8:
+                    scale_factor = 16 // self.system_scale
+                    if cursor_bgra.shape[0] > scale_factor and cursor_bgra.shape[1] > scale_factor:
                         h, w = cursor_bgra.shape[:2]
-                        new_w, new_h = int(w / 8 * self.system_scale * self.system_scale), int(h / 8 * self.system_scale * self.system_scale)
+                        new_w, new_h = int(w / scale_factor), int(h / scale_factor)
                         # resize BGRA; keep alpha channel scaled properly
                         cursor_bgra = cv2.resize(cursor_bgra, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
@@ -358,4 +359,3 @@ else: # Old MacOS and Linux
             shot = self._mss.grab(self._mon)
             img = cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2RGB)
             return img, (self.scaled_height, self.scaled_width)
-
