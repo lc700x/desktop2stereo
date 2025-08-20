@@ -1,7 +1,7 @@
 Monitor Index: 1
 FPS: 60
 Show FPS: true
-Output Resolution: 2160
+Output Resolution: 1080
 IPD: 0.064
 Display Mode: SBS
 Model List:
@@ -18,14 +18,22 @@ Model List:
 - LiheYoung/depth-anything-base-hf
 - LiheYoung/depth-anything-small-hf
 - xingyang1/Distill-Any-Depth-Large-hf
+- lc700x/Distill-Any-Depth-Base-hf
 - xingyang1/Distill-Any-Depth-Small-hf
+- lc700x/Distill-Any-Depth-Base-hf
+- lc700x/dpt-dinov2-giant-kitti
+- lc700x/dpt-dinov2-large-kitti
+- lc700x/dpt-dinov2-base-kitti
+- facebook/dpt-dinov2-small-kitti
+- lc700x/dpt-hybrid-midas-hf
+- Intel/dpt-beit-base-384
 - apple/DepthPro-hf
-- Intel/dpt-large
+- hf-tiny-model-private/tiny-random-GLPNForDepthEstimation
 Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 1.0
 Depth Resolution: 384
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
-Device: 1
+Device: 0
 Language: EN
