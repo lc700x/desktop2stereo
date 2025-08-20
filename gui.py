@@ -91,7 +91,13 @@ DEFAULT_MODEL_LIST = [
     "LiheYoung/depth-anything-small-hf",
     "xingyang1/Distill-Any-Depth-Large-hf",
     "xingyang1/Distill-Any-Depth-Small-hf",
+    "lc700x/Distill-Any-Depth-Base-hf",
+    "facebook/dpt-dinov2-small-kitti",
+    "lc700x/dpt-dinov2-base-kitti",
+    "lc700x/dpt-hybrid-midas-hf",
     "apple/DepthPro-hf",
+    "apple/DepthPro-mixin",
+    "lc700x/dpt-hybrid-midas-hf",
     "Intel/dpt-large"
 ]
 
