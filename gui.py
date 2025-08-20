@@ -90,9 +90,17 @@ DEFAULT_MODEL_LIST = [
     "LiheYoung/depth-anything-base-hf",
     "LiheYoung/depth-anything-small-hf",
     "xingyang1/Distill-Any-Depth-Large-hf",
+    "lc700x/Distill-Any-Depth-Base-hf",
     "xingyang1/Distill-Any-Depth-Small-hf",
+    "lc700x/Distill-Any-Depth-Base-hf",
+    "lc700x/dpt-dinov2-giant-kitti",
+    "lc700x/dpt-dinov2-large-kitti",
+    "lc700x/dpt-dinov2-base-kitti",
+    "facebook/dpt-dinov2-small-kitti",
+    "lc700x/dpt-hybrid-midas-hf",
+    "Intel/dpt-large",
     "apple/DepthPro-hf",
-    "Intel/dpt-large"
+    "hf-tiny-model-private/tiny-random-GLPNForDepthEstimation"
 ]
 
 DEFAULTS = {
