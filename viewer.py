@@ -87,7 +87,7 @@ class StereoWindow:
         self.position_on_monitor(0)  # 0=primary, 1=secondary
         
         glfw.make_context_current(self.window)
-        glfw.swap_interval(1)  # Enable VSync to limit FPS and reduce CPU load
+        glfw.swap_interval(0)  # Enable VSync to limit FPS and reduce CPU load
         self.ctx = moderngl.create_context()
         
         # Setup shaders and buffers

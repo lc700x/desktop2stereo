@@ -90,9 +90,17 @@ DEFAULT_MODEL_LIST = [
     "LiheYoung/depth-anything-base-hf",
     "LiheYoung/depth-anything-small-hf",
     "xingyang1/Distill-Any-Depth-Large-hf",
+    "lc700x/Distill-Any-Depth-Base-hf",
     "xingyang1/Distill-Any-Depth-Small-hf",
+    "lc700x/Distill-Any-Depth-Base-hf",
+    "lc700x/dpt-dinov2-giant-kitti",
+    "lc700x/dpt-dinov2-large-kitti",
+    "lc700x/dpt-dinov2-base-kitti",
+    "facebook/dpt-dinov2-small-kitti",
+    "lc700x/dpt-hybrid-midas-hf",
+    "Intel/dpt-beit-base-384",
     "apple/DepthPro-hf",
-    "Intel/dpt-large"
+    "hf-tiny-model-private/tiny-random-GLPNForDepthEstimation"
 ]
 
 DEFAULTS = {
@@ -271,8 +279,8 @@ class ConfigGUI(tk.Tk):
         # Output Resolution
         self.label_res = ttk.Label(self.content_frame, text="Output Resolution:")
         self.label_res.grid(row=2, column=0, sticky="w", **pad)
-        self.res_values = ["720", "1080", "1440", "2160"]
-        self.res_cb = ttk.Combobox(self.content_frame, values=self.res_values, state="readonly")
+        self.res_values = ["480", "720", "1080", "1440", "2160"]
+        self.res_cb = ttk.Combobox(self.content_frame, values=self.res_values, state="normal")
         self.res_cb.grid(row=2, column=1, sticky="ew", **pad)
         
         # FPS
@@ -381,8 +389,8 @@ class ConfigGUI(tk.Tk):
             mapping = {
                 # English mappings
                 "Loaded settings.yaml at startup": texts["Loaded settings.yaml at startup"],
-                "Running...": texts["Running"],
-                "Stopped.": texts["Stopped"],
+                "Running": texts["Running"],
+                "Stopped": texts["Stopped"],
                 # Chinese mappings
                 "启动时已加载 settings.yaml": texts["Loaded settings.yaml at startup"],
                 "运行中...": texts["Running"],

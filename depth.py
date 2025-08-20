@@ -12,13 +12,12 @@ with open("settings.yaml") as settings_yaml:
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 # if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
-os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
+if settings["HF Endpoint"]:
+    os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 import torch
 torch.set_num_threads(1) # Set to avoid high CPU usage caused by default full threads
 import torch.nn.functional as F
-import torchvision.transforms.functional as TF
-from torchvision.transforms import InterpolationMode
 from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
@@ -37,15 +36,13 @@ def get_device(index=0):
     try:
         import torch_directml
         if torch_directml.is_available():
-            dev = torch_directml.device(index)
-            info = f"Using DirectML device: {torch_directml.device_name(index)}"
-            return dev, info
-        if torch.cuda.is_available():
-            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
-        if torch.backends.mps.is_available():
-            return torch.device("mps"), "Using Apple Silicon (MPS) device"
+            return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
     except:
         pass
+    if torch.cuda.is_available():
+        return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+    if torch.backends.mps.is_available():
+        return torch.device("mps"), "Using Apple Silicon (MPS) device"
     return torch.device("cpu"), "Using CPU device"
 
 
@@ -60,14 +57,14 @@ else:
 # Load model with same configuration as example
 model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).half().to(DEVICE).eval()
 INPUT_W= settings["Depth Resolution"]  # model's native resolution
-
+MODEL_DTYPE = next(model.parameters()).dtype
 # Normalization parameters (same as example)
 MEAN = torch.tensor([0.485, 0.456, 0.406], device=DEVICE).view(1, 3, 1, 1)
 STD = torch.tensor([0.229, 0.224, 0.225], device=DEVICE).view(1, 3, 1, 1)
 
 # Warm-up with dummy input
 with torch.no_grad():
-    dummy = torch.zeros(1, 3, INPUT_W, INPUT_W, device=DEVICE, dtype=DTYPE)
+    dummy = torch.zeros(1, 3, INPUT_W, INPUT_W, device=DEVICE, dtype=MODEL_DTYPE)
     model(pixel_values=dummy)    
 
 lock = Lock()
@@ -102,6 +99,7 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
 
     # Inference with thread safety
     with lock:
+        tensor = tensor.to(dtype=MODEL_DTYPE)
         depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
 
     # Post-processing (same as pipeline)
