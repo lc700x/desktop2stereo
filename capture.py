@@ -1,6 +1,6 @@
 import numpy as np
 import mss
-from gui import OS_NAME
+from utils import OS_NAME
 
 # DesktopGrabber: wincam (Windows), MSS + AppKit (Mac), MSS (Linux) 
 # Windows 10/11

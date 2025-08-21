@@ -4,10 +4,7 @@ import moderngl
 import numpy as np
 
 # Get OS name and settings
-from gui import OS_NAME, crop_icon
-from depth import settings
-
-IPD = settings["IPD"]
+from utils import OS_NAME, IPD, crop_icon
 
 VERTEX_SHADER = """
     #version 330

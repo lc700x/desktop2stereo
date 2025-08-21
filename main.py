@@ -2,14 +2,12 @@ import threading
 import queue
 import glfw
 import time
-
+from utils import MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, DEPTH_STRENTH
 from capture import DesktopGrabber
-from depth import settings, predict_depth, process, DEVICE_INFO, MODEL_ID
+from depth import predict_depth, process
 from viewer import StereoWindow
 
-MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
-SHOW_FPS, FPS, DEPTH_STRENTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
-TIME_SLEEP = 1.0 / FPS
+TIME_SLEEP = round(1.0 / FPS, 2)
 
 # Queues with size=1 (latest-frame-only logic)
 raw_q = queue.Queue(maxsize=1)
@@ -53,9 +51,6 @@ def depth_loop():
         put_latest(depth_q, (frame_rgb, depth))
 
 def main():
-    print(f"{DEVICE_INFO}")
-    print(f"Model: {MODEL_ID}")
-
     # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()

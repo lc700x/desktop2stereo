@@ -1,30 +1,12 @@
 import os
-import sys, platform
+import sys
 import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
+from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon
 
-VERSION = 2.2
-
-# Ignore wanning for MPS
-OS_NAME = platform.system()
-if  OS_NAME == "Darwin":
-    import os, warnings
-    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-    warnings.filterwarnings(
-        "ignore",
-        message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
-        category=UserWarning
-)
-
-def crop_icon(icon_img):
-    # Make icon larger by cropping for Windows
-    icon_img = icon_img.convert("RGBA")
-    bbox = icon_img.getbbox()
-    icon_img = icon_img.crop(bbox)
-    return icon_img
-    
+# List all avaiable devices
 def get_devices():
     """
     Returns a list of dictionaries [{dev: torch.device, info: str}] for all available devices.
@@ -75,33 +57,6 @@ try:
     HAVE_YAML = True
 except Exception:
     HAVE_YAML = False
-
-DEFAULT_MODEL_LIST = [
-    "depth-anything/Depth-Anything-V2-Large-hf",
-    "depth-anything/Depth-Anything-V2-Base-hf",
-    "depth-anything/Depth-Anything-V2-Small-hf",
-    "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf",
-    "depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf",
-    "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf",
-    "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf",
-    "depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf",
-    "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf",
-    "LiheYoung/depth-anything-large-hf",
-    "LiheYoung/depth-anything-base-hf",
-    "LiheYoung/depth-anything-small-hf",
-    "xingyang1/Distill-Any-Depth-Large-hf",
-    "lc700x/Distill-Any-Depth-Base-hf",
-    "xingyang1/Distill-Any-Depth-Small-hf",
-    "lc700x/Distill-Any-Depth-Base-hf",
-    "lc700x/dpt-dinov2-giant-kitti",
-    "lc700x/dpt-dinov2-large-kitti",
-    "lc700x/dpt-dinov2-base-kitti",
-    "facebook/dpt-dinov2-small-kitti",
-    "lc700x/dpt-hybrid-midas-hf",
-    "Intel/dpt-beit-base-384",
-    "apple/DepthPro-hf",
-    "hf-tiny-model-private/tiny-random-GLPNForDepthEstimation"
-]
 
 DEFAULTS = {
     "Monitor Index": 1,

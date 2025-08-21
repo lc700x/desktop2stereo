@@ -1,20 +1,4 @@
 # depth.py
-import yaml
-import os
-from gui import DEVICES, OS_NAME
-# load customized settings
-with open("settings.yaml") as settings_yaml:
-    try:
-        settings = yaml.safe_load(settings_yaml)
-    except yaml.YAMLError as exc:
-        print(exc)
-
-# Set Hugging Face environment variable
-os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-# if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
-if settings["HF Endpoint"]:
-    os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
-
 import torch
 torch.set_num_threads(1) # Set to avoid high CPU usage caused by default full threads
 import torch.nn.functional as F
@@ -22,11 +6,10 @@ from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION
 
 # Model configuration
-MODEL_ID = settings["Depth Model"]
-CACHE_PATH = settings["Download Path"]
-DTYPE = torch.float16 if settings["FP16"] else torch.float32 # Use float32 for DirectML compatibility
+DTYPE = torch.float16 if FP16 else torch.float32 # Use float32 for DirectML compatibility
 
 # Initialize DirectML Device
 def get_device(index=0):
@@ -47,16 +30,14 @@ def get_device(index=0):
 
 
 # Get the device and print information
-if OS_NAME == "Windows":
-    # Smoother for Windows
-    DEVICE, DEVICE_INFO = get_device(settings["Device"])
-else: 
-    # Faster for Mac
-    DEVICE, DEVICE_INFO = DEVICES[settings["Device"]]["device"], DEVICES[settings["Device"]]["name"]
+DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
+
+# Output Info
+print(f"{DEVICE_INFO}")
+print(f"Model: {MODEL_ID}")
 
 # Load model with same configuration as example
 model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).half().to(DEVICE).eval()
-INPUT_W= settings["Depth Resolution"]  # model's native resolution
 MODEL_DTYPE = next(model.parameters()).dtype
 # Normalization parameters (same as example)
 MEAN = torch.tensor([0.485, 0.456, 0.406], device=DEVICE).view(1, 3, 1, 1)
@@ -64,7 +45,7 @@ STD = torch.tensor([0.229, 0.224, 0.225], device=DEVICE).view(1, 3, 1, 1)
 
 # Warm-up with dummy input
 with torch.no_grad():
-    dummy = torch.zeros(1, 3, INPUT_W, INPUT_W, device=DEVICE, dtype=MODEL_DTYPE)
+    dummy = torch.zeros(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=DEVICE, dtype=MODEL_DTYPE)
     model(pixel_values=dummy)    
 
 lock = Lock()
@@ -94,7 +75,7 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     tensor = tensor.unsqueeze(0) # set to improve performance
 
     # Resize and normalize (same as pipeline)
-    tensor = F.interpolate(tensor, (INPUT_W, INPUT_W), mode='bilinear', align_corners=False)
+    tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
     tensor = (tensor - MEAN) / STD
 
     # Inference with thread safety
