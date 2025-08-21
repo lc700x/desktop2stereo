@@ -106,7 +106,8 @@ UI_TEXTS = {
         "Loaded settings.yaml at startup": "Loaded settings.yaml at startup",
         "Running": "Running...",
         "Stopped": "Stopped.",
-        "Countdown": "Settings saved to settings.yaml, running Stereo Viewer in {seconds} seconds..."
+        "Countdown": "Settings saved to settings.yaml, starting Stereo Viewer..."
+        # "Countdown": "Settings saved to settings.yaml, running Stereo Viewer in {seconds} seconds..."
     },
     "CN": {
         "Monitor Index:": "显示器索引:",
@@ -137,7 +138,8 @@ UI_TEXTS = {
         "Loaded settings.yaml at startup": "启动时已加载 settings.yaml",
         "Running": "运行中...",
         "Stopped": "已停止。",
-        "Countdown": "设置已保存到 settings.yaml，Stereo Viewer 将在 {seconds} 秒后运行..."
+        "Countdown": "设置已保存到 settings.yaml，启动Stereo Viewer..."
+        # "Countdown": "设置已保存到 settings.yaml，Stereo Viewer 将在 {seconds} 秒后运行..."
     }
 }
 
@@ -346,20 +348,24 @@ class ConfigGUI(tk.Tk):
                 "Loaded settings.yaml at startup": texts["Loaded settings.yaml at startup"],
                 "Running": texts["Running"],
                 "Stopped": texts["Stopped"],
+                "Settings saved to settings.yaml, starting Stereo Viewer...": texts["Countdown"],
                 # Chinese mappings
                 "启动时已加载 settings.yaml": texts["Loaded settings.yaml at startup"],
                 "运行中...": texts["Running"],
                 "已停止。": texts["Stopped"],
+                "设置已保存到 settings.yaml，启动Stereo Viewer...": texts["Countdown"]
             }
-            import re
-            if "Stereo Viewer" in current_text or "运行 Stereo Viewer" in current_text:
-                # Extract seconds from countdown text
-                match = re.search(r"(\d+)", current_text)
-                seconds = int(match.group(1)) if match else 3
-                self.status_label.config(
-                    text=texts["Countdown"].format(seconds=seconds)
-                )
-            elif current_text in mapping:
+            # import re
+            # if "Stereo Viewer" in current_text or "运行 Stereo Viewer" in current_text:
+            #     # Extract seconds from countdown text
+            #     match = re.search(r"(\d+)", current_text)
+            #     seconds = int(match.group(1)) if match else 3
+            #     self.status_label.config(
+            #         text=texts["Countdown"].format(seconds=seconds)
+            #     )
+            
+            # elif current_text in mapping:
+            if current_text in mapping:
                 self.status_label.config(text=mapping[current_text])
 
     def on_language_change(self, event):
@@ -529,7 +535,7 @@ class ConfigGUI(tk.Tk):
         success = self.save_yaml("settings.yaml", cfg)
         if success:
             # Show a message with countdown
-            countdown_seconds = 3
+            countdown_seconds = 0.5
             self._countdown_and_run(countdown_seconds)
 
     def _countdown_and_run(self, seconds):

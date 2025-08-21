@@ -51,7 +51,7 @@ class StereoWindow:
     def __init__(self, depth_ratio=1.0, display_mode="SBS"):
         self.window_size = (1280, 720)
         self.title = "Stereo SBS Viewer"
-        self.ipd_uv = 0.064  # Inter-pupillary distance in UV coordinates (0.064 per eye)
+        self.ipd_uv = IPD  # Inter-pupillary distance in UV coordinates (0.064 per eye)
         self.depth_strength = 0.1  # Strength of depth effect
         self._last_window_position = None
         self._last_window_size = None
