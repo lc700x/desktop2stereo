@@ -1,9 +1,9 @@
-Monitor Index: 1
+Monitor Index: 2
 FPS: 60
 Show FPS: true
 Output Resolution: 1080
 IPD: 0.064
-Display Mode: SBS
+Display Mode: Full-SBS
 Model List:
 - depth-anything/Depth-Anything-V2-Large-hf
 - depth-anything/Depth-Anything-V2-Base-hf

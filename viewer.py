@@ -245,15 +245,15 @@ class StereoWindow:
         depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
         depth = np.clip(depth, 0, 1)
         # Only recreate textures if size changed
-        w, h, _ = rgb.shape
+        h, w, _ = rgb.shape
         if self._texture_size != (w, h):
             if self.color_tex:
                 self.color_tex.release()
             if self.depth_tex:
                 self.depth_tex.release()
 
-            self.color_tex = self.ctx.texture((h, w), 3, dtype='f1')
-            self.depth_tex = self.ctx.texture((h, w), 1, dtype='f4')
+            self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
+            self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
 
             self.prog['tex_color'].value = 0
             self.prog['tex_depth'].value = 1
@@ -284,18 +284,18 @@ class StereoWindow:
         else:
             disp_w, disp_h = 2 * tex_w, tex_h  # default full SBS
 
-        target_aspect = disp_w / disp_h
-        window_aspect = win_w / win_h
+        target_aspect = disp_h / disp_w
+        window_aspect = win_h / win_w
 
         # Scale to fit window, preserving aspect ratio
-        if window_aspect > target_aspect:
+        if window_aspect <= target_aspect:
             # Window is wider than content
             view_h = win_h
-            view_w = int(view_h * target_aspect)
+            view_w = int(view_h / target_aspect)
         else:
             # Window is taller than content
             view_w = win_w
-            view_h = int(view_w / target_aspect)
+            view_h = int(view_w * target_aspect)
 
         offset_x = (win_w - view_w) // 2
         offset_y = (win_h - view_h) // 2
