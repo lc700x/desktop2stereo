@@ -48,7 +48,7 @@ def add_logo(window):
             glfw.set_window_icon(window, 1, [glfw_img])
 class StereoWindow:
     """A window for displaying stereo images side-by-side with depth effect."""
-    def __init__(self, depth_ratio=1.0, display_mode="SBS"):
+    def __init__(self, depth_ratio=1.0, display_mode="Half-SBS"):
         self.window_size = (1280, 720)
         self.title = "Stereo SBS Viewer"
         self.ipd_uv = IPD  # Inter-pupillary distance in UV coordinates (0.064 per eye)
@@ -58,6 +58,8 @@ class StereoWindow:
         self._fullscreen = False
         self.depth_ratio = depth_ratio
         self.depth_ratio_original = depth_ratio
+        # all available modes (order used for cycling)
+        self._modes = ["Full-SBS", "Half-SBS", "TAB"]
         self.display_mode = display_mode  # Default: Side-By-Side
 
         # Flag to track if textures need update
@@ -122,7 +124,7 @@ class StereoWindow:
             
         # Get window center
         win_x, win_y = glfw.get_window_pos(self.window)
-        win_w, win_h = glfw.get_framebuffer_size(self.window)
+        win_w, win_h = glfw.get_window_size(self.window)
         window_center_x = win_x + win_w // 2
         window_center_y = win_y + win_h // 2
         
@@ -215,11 +217,10 @@ class StereoWindow:
                 # Reset depth strength to settings
                 self.depth_ratio = self.depth_ratio_original
             elif key == glfw.KEY_TAB:
-                # Toggle between SBS and TAB modes
-                if self.display_mode == "SBS":
-                    self.display_mode = "TAB"
-                else:
-                    self.display_mode = "SBS"
+                # Cycle display mode: Full-SBS -> Half-SBS -> TAB -> Full-SBS
+                idx = self._modes.index(self.display_mode)
+                idx = (idx + 1) % len(self._modes)
+                self.display_mode = self._modes[idx]
 
 
 
@@ -244,62 +245,95 @@ class StereoWindow:
         depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
         depth = np.clip(depth, 0, 1)
         # Only recreate textures if size changed
-        new_size = (rgb.shape[1], rgb.shape[0])
-        if self._texture_size != new_size:
+        w, h, _ = rgb.shape
+        if self._texture_size != (w, h):
             if self.color_tex:
                 self.color_tex.release()
             if self.depth_tex:
                 self.depth_tex.release()
 
-            self.color_tex = self.ctx.texture(new_size, 3, dtype='f1')
-            self.depth_tex = self.ctx.texture(new_size, 1, dtype='f4')
+            self.color_tex = self.ctx.texture((h, w), 3, dtype='f1')
+            self.depth_tex = self.ctx.texture((h, w), 1, dtype='f4')
 
-            # Set texture units once after recreating textures
             self.prog['tex_color'].value = 0
             self.prog['tex_depth'].value = 1
 
-            self._texture_size = new_size
+            self._texture_size = (w, h)
 
         # Upload texture data
-        self.color_tex.write(rgb.tobytes())
-        self.depth_tex.write((self.depth_ratio*depth).tobytes())
+        self.color_tex.write(rgb.astype('uint8').tobytes())
+        self.depth_tex.write((self.depth_ratio * depth).astype('float32').tobytes())
 
     def render(self):
         if not self.color_tex or not self.depth_tex:
             return
 
         self.ctx.clear(0.1, 0.1, 0.1)
-        width, height = glfw.get_framebuffer_size(self.window)
+        win_w, win_h = glfw.get_framebuffer_size(self.window)
+
+        # Input texture resolution
+        tex_w, tex_h = self._texture_size
+
+        # Determine effective stereo frame size by display mode
+        if self.display_mode == "Full-SBS":
+            disp_w, disp_h = 2 * tex_w, tex_h
+        elif self.display_mode == "Half-SBS":
+            disp_w, disp_h = tex_w, tex_h
+        elif self.display_mode == "TAB":
+            disp_w, disp_h = tex_w, tex_h
+        else:
+            disp_w, disp_h = 2 * tex_w, tex_h  # default full SBS
+
+        target_aspect = disp_w / disp_h
+        window_aspect = win_w / win_h
+
+        # Scale to fit window, preserving aspect ratio
+        if window_aspect > target_aspect:
+            # Window is wider than content
+            view_h = win_h
+            view_w = int(view_h * target_aspect)
+        else:
+            # Window is taller than content
+            view_w = win_w
+            view_h = int(view_w / target_aspect)
+
+        offset_x = (win_w - view_w) // 2
+        offset_y = (win_h - view_h) // 2
 
         self.color_tex.use(location=0)
         self.depth_tex.use(location=1)
 
-        if self.display_mode == "SBS":
-            # Side-by-side layout (existing code)
+        if self.display_mode == "Full-SBS":
             # Left eye
-            self.ctx.viewport = (0, 0, width // 2, height)
-            eye_offset = -self.ipd_uv / 2.0
-            self.prog['u_eye_offset'].value = eye_offset
+            self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
+            self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
             self.prog['u_depth_strength'].value = self.depth_strength
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
             # Right eye
-            self.ctx.viewport = (width // 2, 0, width // 2, height)
-            eye_offset = self.ipd_uv / 2.0
-            self.prog['u_eye_offset'].value = eye_offset
+            self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+            self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-        else:
-            # Top-and-bottom layout
-            # Left eye on top half
-            self.ctx.viewport = (0, height // 2, width, height // 2)
-            eye_offset = -self.ipd_uv / 2.0
-            self.prog['u_eye_offset'].value = eye_offset
+        elif self.display_mode == "Half-SBS":
+            # Same as FULL but both squeezed into width
+            self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
+            self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
             self.prog['u_depth_strength'].value = self.depth_strength
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-            # Right eye on bottom half
-            self.ctx.viewport = (0, 0, width, height // 2)
-            eye_offset = self.ipd_uv / 2.0
-            self.prog['u_eye_offset'].value = eye_offset
+            self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+            self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+        elif self.display_mode == "TAB":
+            # Top eye
+            self.ctx.viewport = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
+            self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+            self.prog['u_depth_strength'].value = self.depth_strength
+            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+            # Bottom eye
+            self.ctx.viewport = (offset_x, offset_y, view_w, view_h // 2)
+            self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)

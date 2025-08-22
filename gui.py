@@ -39,14 +39,6 @@ def get_devices():
 
 DEVICES = get_devices()
 
-if OS_NAME == "Windows":
-    import ctypes
-    # get windows Hi-DPI scale
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except:
-        ctypes.windll.user32.SetProcessDPIAware()
-
 try:
     import mss
 except Exception:
@@ -68,7 +60,7 @@ DEFAULTS = {
     "Depth Strength": 1.0,
     "Depth Resolution": 384,
     "IPD": 0.064,
-    "Display Mode": "SBS",
+    "Display Mode": "Half-SBS",
     "FP16": True,
     "Download Path": "models",
     "HF Endpoint": "https://hf-mirror.com",
@@ -272,7 +264,7 @@ class ConfigGUI(tk.Tk):
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
         self.label_display_mode.grid(row=5, column=0, sticky="w", **pad)
-        self.display_mode_values = ["SBS", "TAB"]
+        self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB"]
         self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
         self.display_mode_cb.grid(row=5, column=1, sticky="ew", **pad)
         
