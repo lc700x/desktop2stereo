@@ -44,8 +44,9 @@ if OS_NAME == "Windows":
             self.scaled_width = round(self.system_width * self.scaled_height / self.system_height)
             
             if show_monitor_info:
-                print(f"Capture area: {self.system_width}x{self.system_height} at ({left},{top})")
-                print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
+                print(f"Capture {self.capture_mode}: {self.system_width}x{self.system_height} at ({left},{top})")
+                if self.system_height >= self.scaled_height:
+                    print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
 
             self.camera = DXCamera(
                 left,
@@ -281,8 +282,9 @@ elif OS_NAME == "Darwin":
             self.scaled_width = round(self.system_width * self.scaled_height / self.system_height)
 
             if show_monitor_info:
-                print(f"Capture area: {self.system_width}x{self.system_height} at ({self.left},{self.top})")
-                print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
+                print(f"Capture {self.capture_mode}: {self.system_width}x{self.system_height} at ({self.left},{self.top})")
+                if self.system_height >= self.scaled_height:
+                    print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
 
         def _log_monitors(self):
             print("Available monitors:")
@@ -400,8 +402,9 @@ else: # Linux and other platforms
             self.scaled_width = round(self.system_width * self.scaled_height / self.system_height)
 
             if show_monitor_info:
-                print(f"Capture area: {self.system_width}x{self.system_height} at ({self.left},{self.top})")
-                print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
+                print(f"Capture {self.capture_mode}: {self.system_width}x{self.system_height} at ({self.left},{self.top})")
+                if self.system_height >= self.scaled_height:
+                    print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
 
         def _log_monitors(self):
             print("Available monitors:")

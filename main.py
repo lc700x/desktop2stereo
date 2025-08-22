@@ -29,7 +29,10 @@ def put_latest(q, item):
 def capture_loop():
     cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS)
     while True:
-        frame_raw, size = cap.grab()
+        try:
+            frame_raw, size = cap.grab()
+        except OSError:
+            exit()
         put_latest(raw_q, (frame_raw, size))
 
 def process_loop():

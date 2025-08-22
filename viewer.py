@@ -222,8 +222,6 @@ class StereoWindow:
                 idx = (idx + 1) % len(self._modes)
                 self.display_mode = self._modes[idx]
 
-
-
     def make_quad(self):
         vertices = np.array([
             -1, -1, 0, 0,
