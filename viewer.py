@@ -285,7 +285,7 @@ class StereoWindow:
             disp_w, disp_h = 2 * tex_w, tex_h  # default full SBS
 
         target_aspect = disp_h / disp_w
-        window_aspect = win_h / win_w
+        window_aspect = win_h / (win_w + 1e-6) # avoid division of 0
 
         # Scale to fit window, preserving aspect ratio
         if window_aspect <= target_aspect:
