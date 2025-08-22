@@ -1,11 +1,9 @@
 Monitor Index: 2
-Capture Source: Window
-Window Title: Outlook (Display 1)
 FPS: 60
 Show FPS: true
-Output Resolution: 1080
+Output Resolution: 720
 IPD: 0.064
-Display Mode: Full-SBS
+Display Mode: Half-SBS
 Model List:
 - depth-anything/Depth-Anything-V2-Large-hf
 - depth-anything/Depth-Anything-V2-Base-hf
@@ -53,7 +51,3 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: EN
-region_top: -11
-region_left: -11
-region_height: 2110
-region_width: 3862

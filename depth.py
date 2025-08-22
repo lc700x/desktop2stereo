@@ -57,7 +57,7 @@ def process(img_rgb: np.ndarray, size) -> np.ndarray:
         """
         # Downscale the image if needed
         if size[0] < img_rgb.shape[0]:
-            img_rgb = cv2.resize(img_rgb, (size[0], size[1]), interpolation=cv2.INTER_AREA)
+            img_rgb = cv2.resize(img_rgb, (size[1], size[0]), interpolation=cv2.INTER_AREA)
         return img_rgb
 
 @torch.no_grad()
