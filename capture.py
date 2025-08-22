@@ -14,10 +14,10 @@ if OS_NAME == "Windows":
             
             # Get capture coordinates from settings
             from utils import settings
-            self.capture_mode = settings.get("Capture Mode", "monitor")
+            self.capture_mode = settings.get("Capture Mode", "Monitor")
             self.capture_coords = settings.get("Capture Coordinates")
             
-            if self.capture_mode == "monitor":
+            if self.capture_mode == "Monitor":
                 monitor_index = settings.get("Monitor Index", 1)
                 if show_monitor_info:
                     self._log_monitors()
@@ -83,13 +83,164 @@ if OS_NAME == "Windows":
 
 elif OS_NAME == "Darwin":
     import io
-    import numpy as np
     import cv2
     from PIL import Image
     from AppKit import NSCursor, NSBitmapImageRep, NSPNGFileType
     import Quartz.CoreGraphics as CG
     from Quartz import CGCursorIsVisible
-    import mss
+    
+    # Cursor loader with caching & precomputation
+    def get_cursor_image_and_hotspot():
+        """
+        Retrieve current system cursor image (BGRA uint8 numpy) and hotspot, but also
+        return precomputed helpers for fast per-frame overlay:
+        - cursor_bgra: original BGRA uint8 (H,W,4)
+        - hotspot: (x,y) in pixels
+        - alpha_f32: HxW float32 alpha in [0..1]
+        - premultiplied_bgr_f32: HxW x 3 float32 (BGR * alpha)
+        Returns (cursor_bgra, hotspot, alpha_f32, premultiplied_bgr_f32) or (None, None, None, None)
+        """
+        try:
+            cursor = NSCursor.currentSystemCursor()
+            if cursor is None:
+                return None, None, None, None
+
+            ns_image = cursor.image()
+            if ns_image is None:
+                return None, None, None, None
+
+            # hotspot in points -> pixels
+            hot_pt = cursor.hotSpot()
+            hotspot_x = hot_pt.x
+            hotspot_y = hot_pt.y 
+
+            tiff = ns_image.TIFFRepresentation()
+            if tiff is None:
+                return None, None, None, None
+            bitmap = NSBitmapImageRep.imageRepWithData_(tiff)
+            if bitmap is None:
+                return None, None, None, None
+
+            png_data = bitmap.representationUsingType_properties_(NSPNGFileType, None)
+            if png_data is None:
+                return None, None, None, None
+            # Get current cursor
+            
+            cursor = NSCursor.currentSystemCursor()
+            image = cursor.image()
+            bitmap_rep = NSBitmapImageRep.imageRepWithData_(image.TIFFRepresentation())
+            png_data = bitmap_rep.representationUsingType_properties_(NSPNGFileType, None)
+            buffer = io.BytesIO(png_data)
+            img_array = Image.open(buffer)
+            rgba = np.array(img_array)
+            bgra = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)
+
+            buf = io.BytesIO(png_data)
+            pil_img = Image.open(buf).convert("RGBA")
+            rgba = np.array(pil_img)  # H x W x 4 (RGBA)
+
+            # Convert to BGRA uint8 (same memory layout as OpenCV expects)
+            bgra = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)  # uint8
+
+            # Precompute alpha (float32 [0..1]) and premultiplied BGR (float32)
+            alpha = (bgra[:, :, 3].astype(np.float32) / 255.0)  # H x W float32
+            # convert BGR channels to float32 and premultiply by alpha: (B,G,R) * alpha
+            bgr = bgra[:, :, :3].astype(np.float32)
+            premultiplied = bgr * alpha[:, :, None]  # H x W x 3 float32
+
+            return bgra, (hotspot_x, hotspot_y), alpha, premultiplied
+
+        except Exception:
+            return None, None, None, None
+
+    def get_cursor_position():
+        """Return current cursor (x, y) in macOS display coordinates (origin bottom-left)."""
+        ev = CG.CGEventCreate(None)
+        loc = CG.CGEventGetLocation(ev)
+        return loc.x, loc.y
+
+    # Fast overlay using cached premultiplied data
+    def overlay_cursor_on_frame(frame_bgr, cursor_bgra, hotspot, cursor_pos, alpha_f32=None, premultiplied_bgr_f32=None):
+        """
+        Fast overlay of cursor_bgra onto frame_bgr.
+
+        frame_bgr: HxW x 3 uint8, modified in place and returned
+        cursor_bgra: full cursor BGRA uint8 array (or None)
+        hotspot: (hot_x, hot_y) in pixels
+        cursor_pos: (x, y) in frame coordinates
+        alpha_f32, premultiplied_bgr_f32: optional precomputed arrays returned by get_cursor_image_and_hotspot
+        """
+        h_frame, w_frame = frame_bgr.shape[:2]
+        x_cv, y_cv = cursor_pos
+
+        if cursor_bgra is None:
+            # fallback dot (very cheap)
+            cv2.circle(frame_bgr, (x_cv, y_cv), 8, (0, 0, 255), -1)
+            return frame_bgr
+
+        cur_h, cur_w = cursor_bgra.shape[:2]
+        hot_x, hot_y = hotspot
+
+        top_left_x = int(round(x_cv - hot_x))
+        top_left_y = int(round(y_cv - hot_y))
+
+        # clipped destination rectangle in frame coords
+        x0 = max(top_left_x, 0)
+        y0 = max(top_left_y, 0)
+        x1 = min(top_left_x + cur_w, w_frame)
+        y1 = min(top_left_y + cur_h, h_frame)
+
+        if x0 >= x1 or y0 >= y1:
+            return frame_bgr
+
+        # source rectangle inside the cursor image
+        src_x0 = x0 - top_left_x
+        src_y0 = y0 - top_left_y
+        src_x1 = src_x0 + (x1 - x0)
+        src_y1 = src_y0 + (y1 - y0)
+
+        dst_region = frame_bgr[y0:y1, x0:x1]  # view (H_roi, W_roi, 3), uint8
+
+        # If precomputed premultiplied is available, use it; otherwise make minimal local copies
+        if premultiplied_bgr_f32 is not None and alpha_f32 is not None:
+            src_premult = premultiplied_bgr_f32[src_y0:src_y1, src_x0:src_x1]  # float32
+            alpha_roi = alpha_f32[src_y0:src_y1, src_x0:src_x1]  # float32
+        else:
+            # Minimal local computation if not precomputed (still faster than repeated heavy numpy casts)
+            src_region = cursor_bgra[src_y0:src_y1, src_x0:src_x1]  # uint8 BGRA
+            alpha_roi = src_region[:, :, 3].astype(np.float32) / 255.0
+            src_premult = src_region[:, :, :3].astype(np.float32) * alpha_roi[:, :, None]
+
+        # Fast path: if alpha is binary (only 0 or 1), we can avoid blending cost -> use copy / mask
+        # Check quickly by testing min/max of alpha_roi with small thresholds
+        a_min = float(alpha_roi.min())
+        a_max = float(alpha_roi.max())
+        if a_min >= 0.999:  # fully opaque -> direct copy
+            dst_region[:, :, :] = src_premult.astype(np.uint8)
+            return frame_bgr
+        elif a_max <= 1e-6:  # fully transparent -> nothing to do
+            return frame_bgr
+
+        # General alpha blend using OpenCV native operations (float32)
+        # dst_scaled = dst * (1 - alpha)
+        dst_f32 = dst_region.astype(np.float32)
+
+        # Build one_minus_alpha 3-channel float32 by merging
+        one_minus_alpha = (1.0 - alpha_roi).astype(np.float32)
+        one_minus_alpha_3 = cv2.merge([one_minus_alpha, one_minus_alpha, one_minus_alpha])  # float32
+
+        # Multiply in C (fast)
+        dst_scaled = np.empty_like(dst_f32)
+        cv2.multiply(dst_f32, one_minus_alpha_3, dst_scaled)  # dst * (1-alpha)
+
+        # result = src_premult + dst_scaled
+        res_f32 = dst_scaled
+        cv2.add(src_premult, dst_scaled, res_f32)  # in-place add into res_f32
+
+        # Write result back to frame (convert to uint8)
+        # Use round and clip via convertScaleAbs can be used, but we'll cast safely
+        np.copyto(dst_region, np.clip(res_f32, 0, 255).astype(np.uint8))
+        return frame_bgr
 
     class DesktopGrabber:
         def __init__(self, output_resolution=1080, show_monitor_info=True, fps=60, with_cursor=True):
@@ -100,10 +251,10 @@ elif OS_NAME == "Darwin":
             
             # Get capture coordinates from settings
             from utils import settings
-            self.capture_mode = settings.get("Capture Mode", "monitor")
+            self.capture_mode = settings.get("Capture Mode", "Monitor")
             self.capture_coords = settings.get("Capture Coordinates")
             
-            if self.capture_mode == "monitor":
+            if self.capture_mode == "Monitor":
                 monitor_index = settings.get("Monitor Index", 1)
                 if show_monitor_info:
                     self._log_monitors()
@@ -219,10 +370,10 @@ else: # Linux and other platforms
             
             # Get capture coordinates from settings
             from utils import settings
-            self.capture_mode = settings.get("Capture Mode", "monitor")
+            self.capture_mode = settings.get("Capture Mode", "Monitor")
             self.capture_coords = settings.get("Capture Coordinates")
             
-            if self.capture_mode == "monitor":
+            if self.capture_mode == "Monitor":
                 monitor_index = settings.get("Monitor Index", 1)
                 if show_monitor_info:
                     self._log_monitors()
