@@ -29,7 +29,6 @@ if  OS_NAME == "Darwin":
 )
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-# if len(sys.argv) >= 2 and sys.argv[1] == '--hf-mirror':
 if settings["HF Endpoint"]:
     os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
@@ -54,6 +53,5 @@ FP16 = settings["FP16"]
 MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
 SHOW_FPS, FPS, DEPTH_STRENTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 IPD = settings["IPD"]
-
-
-
+CAPTURE_MODE = settings["Capture Mode"]
+CAPTURE_COORDS = settings["Capture Coordinates"]

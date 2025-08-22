@@ -1,7 +1,10 @@
-Monitor Index: 2
+Capture Mode: Monitor
+Monitor Index: 1
+Window Title: ''
+Capture Coordinates: null
 FPS: 60
 Show FPS: true
-Output Resolution: 720
+Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:

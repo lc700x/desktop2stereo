@@ -1,12 +1,19 @@
 import os
-import sys
+import sys, time
 import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon
 
-# List all avaiable devices
+# Add pywinalt import
+try:
+    import pywinctl as pwc
+    HAVE_PYWINCTL = True
+except ImportError:
+    HAVE_PYWINCTL = False
+
+# List all available devices
 def get_devices():
     """
     Returns a list of dictionaries [{dev: torch.device, info: str}] for all available devices.
@@ -51,7 +58,10 @@ except Exception:
     HAVE_YAML = False
 
 DEFAULTS = {
+    "Capture Mode": "Monitor",  # "Monitor" or "Window"
     "Monitor Index": 1,
+    "Window Title": "",
+    "Capture Coordinates": None,  # (left, top, width, height)
     "Output Resolution": 1080,
     "FPS": 60,
     "Show FPS": True,
@@ -70,7 +80,10 @@ DEFAULTS = {
 
 UI_TEXTS = {
     "EN": {
+        "Capture Mode:": "Capture Mode:",
         "Monitor Index:": "Monitor Index:",
+        "Window Title:": "Window Title:",
+        "Select Window": "Select Window",
         "FPS:": "FPS:",
         "Show FPS": "Show FPS",
         "Output Resolution:": "Output Resolution:",
@@ -98,11 +111,16 @@ UI_TEXTS = {
         "Loaded settings.yaml at startup": "Loaded settings.yaml at startup",
         "Running": "Running...",
         "Stopped": "Stopped.",
-        "Countdown": "Settings saved to settings.yaml, starting Stereo Viewer..."
-        # "Countdown": "Settings saved to settings.yaml, running Stereo Viewer in {seconds} seconds..."
+        "Countdown": "Settings saved to settings.yaml, starting Stereo Viewer...",
+        "Window selection not available": "Window selection not available (pywinctl not installed)",
+        "No windows found": "No windows found",
+        "Selected window:": "Selected window:"
     },
     "CN": {
+        "Capture Mode:": "捕获模式:",
         "Monitor Index:": "显示器索引:",
+        "Window Title:": "窗口标题:",
+        "Select Window": "选择窗口",
         "FPS:": "帧率:",
         "Show FPS": "显示帧率",
         "Output Resolution:": "输出分辨率:",
@@ -130,8 +148,10 @@ UI_TEXTS = {
         "Loaded settings.yaml at startup": "启动时已加载 settings.yaml",
         "Running": "运行中...",
         "Stopped": "已停止。",
-        "Countdown": "设置已保存到 settings.yaml，启动Stereo Viewer..."
-        # "Countdown": "设置已保存到 settings.yaml，Stereo Viewer 将在 {seconds} 秒后运行..."
+        "Countdown": "设置已保存到 settings.yaml，启动Stereo Viewer...",
+        "Window selection not available": "窗口选择不可用 (未安装pywinctl)",
+        "No windows found": "未找到窗口",
+        "Selected window:": "已选择窗口:"
     }
 }
 
@@ -139,10 +159,11 @@ class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"Desktop2Stereo v{VERSION} GUI")
-        self.minsize(780, 440)
+        self.minsize(780, 500)  # Increased height for new controls
         self.resizable(False, False)
         self.language = "EN"
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
+        self.selected_window_coords = None
 
         try:
             icon_img = Image.open("icon.png")
@@ -180,9 +201,7 @@ class ConfigGUI(tk.Tk):
     def create_widgets(self):
         pad = {"padx": 8, "pady": 6}
 
-        # -------------------------
         # Main content frame
-        # -------------------------
         self.content_frame = ttk.Frame(self)
         self.content_frame.grid(row=0, column=0, sticky="nsew", padx=40, pady=20)
         
@@ -191,12 +210,35 @@ class ConfigGUI(tk.Tk):
         self.rowconfigure(1, weight=0)   # status bar fixed
         self.columnconfigure(0, weight=1)
         
-        # Monitor Index
+        # Capture Mode
+        self.label_capture_mode = ttk.Label(self.content_frame, text="Capture Mode:")
+        self.label_capture_mode.grid(row=0, column=0, sticky="w", **pad)
+        self.capture_mode_var = tk.StringVar()
+        self.capture_mode_menu = ttk.OptionMenu(
+            self.content_frame, self.capture_mode_var, "Monitor", 
+            "Monitor", "Window", command=self.on_capture_mode_change
+        )
+        self.capture_mode_menu.grid(row=0, column=1, sticky="w", **pad)
+        
+        # Monitor Index (only shown when capture mode is Monitor)
         self.label_monitor = ttk.Label(self.content_frame, text="Monitor Index:")
-        self.label_monitor.grid(row=0, column=0, sticky="w", **pad)
+        self.label_monitor.grid(row=1, column=0, sticky="w", **pad)
         self.monitor_var = tk.StringVar()
         self.monitor_menu = ttk.OptionMenu(self.content_frame, self.monitor_var, "")
-        self.monitor_menu.grid(row=0, column=1, sticky="w", **pad)
+        self.monitor_menu.grid(row=1, column=1, sticky="w", **pad)
+        
+        # Window Title (only shown when capture mode is window)
+        self.label_window = ttk.Label(self.content_frame, text="Window Title:")
+        self.label_window.grid(row=1, column=0, sticky="w", **pad)
+        self.window_var = tk.StringVar()
+        self.window_entry = ttk.Entry(self.content_frame, textvariable=self.window_var)
+        self.window_entry.grid(row=1, column=1, sticky="ew", **pad)
+        self.btn_select_window = ttk.Button(
+            self.content_frame, 
+            text="Select Window", 
+            command=self.select_window
+        )
+        self.btn_select_window.grid(row=1, column=2, sticky="ew", **pad)
         
         # Language
         self.label_language = ttk.Label(self.content_frame, text="Set Language:")
@@ -211,87 +253,87 @@ class ConfigGUI(tk.Tk):
         
         # Device
         self.label_device = ttk.Label(self.content_frame, text="Device:")
-        self.label_device.grid(row=1, column=0, sticky="w", **pad)
+        self.label_device.grid(row=2, column=0, sticky="w", **pad)
         self.device_var = tk.StringVar()
         self.device_menu = ttk.OptionMenu(self.content_frame, self.device_var, "")
-        self.device_menu.grid(row=1, column=1, sticky="w", **pad)
+        self.device_menu.grid(row=2, column=1, sticky="w", **pad)
         
         # FP16 and Show FPS
         self.fp16_var = tk.BooleanVar()
         self.fp16_cb = ttk.Checkbutton(self.content_frame, text="FP16", variable=self.fp16_var)
-        self.fp16_cb.grid(row=1, column=2, sticky="w", **pad)
+        self.fp16_cb.grid(row=2, column=2, sticky="w", **pad)
         
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
-        self.showfps_cb.grid(row=1, column=3, sticky="w", **pad)
+        self.showfps_cb.grid(row=2, column=3, sticky="w", **pad)
         
         # Output Resolution
         self.label_res = ttk.Label(self.content_frame, text="Output Resolution:")
-        self.label_res.grid(row=2, column=0, sticky="w", **pad)
+        self.label_res.grid(row=3, column=0, sticky="w", **pad)
         self.res_values = ["480", "720", "1080", "1440", "2160"]
         self.res_cb = ttk.Combobox(self.content_frame, values=self.res_values, state="normal")
-        self.res_cb.grid(row=2, column=1, sticky="ew", **pad)
+        self.res_cb.grid(row=3, column=1, sticky="ew", **pad)
         
         # FPS
         self.label_fps = ttk.Label(self.content_frame, text="FPS:")
-        self.label_fps.grid(row=2, column=2, sticky="w", **pad)
+        self.label_fps.grid(row=3, column=2, sticky="w", **pad)
         self.fps_values = ["30", "60", "75", "90", "120"]
         self.fps_cb = ttk.Combobox(self.content_frame, values=self.fps_values, state="normal")
-        self.fps_cb.grid(row=2, column=3, sticky="ew", **pad)
+        self.fps_cb.grid(row=3, column=3, sticky="ew", **pad)
         
         # Download path
         self.label_download = ttk.Label(self.content_frame, text="Download Path:")
-        self.label_download.grid(row=3, column=0, sticky="w", **pad)
+        self.label_download.grid(row=4, column=0, sticky="w", **pad)
         self.download_var = tk.StringVar()
         self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
-        self.download_entry.grid(row=3, column=1, columnspan=2, sticky="ew", **pad)
+        self.download_entry.grid(row=4, column=1, columnspan=2, sticky="ew", **pad)
         self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
-        self.btn_browse.grid(row=3, column=3, sticky="ew", **pad)
+        self.btn_browse.grid(row=4, column=3, sticky="ew", **pad)
         
         # Depth Resolution and Depth Strength
         self.label_depth_res = ttk.Label(self.content_frame, text="Depth Resolution:")
-        self.label_depth_res.grid(row=4, column=0, sticky="w", **pad)
+        self.label_depth_res.grid(row=5, column=0, sticky="w", **pad)
         self.depth_res_values = ["48", "96", "192", "384", "576", "768", "960", "1152", "1344", "1536"]
         self.depth_res_cb = ttk.Combobox(self.content_frame, values=self.depth_res_values, state="normal")
-        self.depth_res_cb.grid(row=4, column=1, sticky="ew", **pad)
+        self.depth_res_cb.grid(row=5, column=1, sticky="ew", **pad)
         
         self.label_depth_strength = ttk.Label(self.content_frame, text="Depth Strength:")
-        self.label_depth_strength.grid(row=4, column=2, sticky="w", **pad)
+        self.label_depth_strength.grid(row=5, column=2, sticky="w", **pad)
         self.depth_strength_values = ["1.0", "2.0", "3.0", "4.0", "5.0"]
         self.depth_strength_cb = ttk.Combobox(self.content_frame, values=self.depth_strength_values, state="normal")
-        self.depth_strength_cb.grid(row=4, column=3, sticky="ew", **pad)
+        self.depth_strength_cb.grid(row=5, column=3, sticky="ew", **pad)
         
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
-        self.label_display_mode.grid(row=5, column=0, sticky="w", **pad)
+        self.label_display_mode.grid(row=6, column=0, sticky="w", **pad)
         self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB"]
         self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
-        self.display_mode_cb.grid(row=5, column=1, sticky="ew", **pad)
+        self.display_mode_cb.grid(row=6, column=1, sticky="ew", **pad)
         
         # IPD
         self.label_ipd = ttk.Label(self.content_frame, text="IPD (m):")
-        self.label_ipd.grid(row=5, column=2, sticky="w", **pad)
+        self.label_ipd.grid(row=6, column=2, sticky="w", **pad)
         self.ipd_var = tk.StringVar()
         self.ipd_entry = ttk.Entry(self.content_frame, textvariable=self.ipd_var)
-        self.ipd_entry.grid(row=5, column=3, sticky="ew", **pad)
+        self.ipd_entry.grid(row=6, column=3, sticky="ew", **pad)
         
         # Depth Model
         self.label_depth_model = ttk.Label(self.content_frame, text="Depth Model:")
-        self.label_depth_model.grid(row=6, column=0, sticky="w", **pad)
+        self.label_depth_model.grid(row=7, column=0, sticky="w", **pad)
         self.depth_model_var = tk.StringVar()
         self.depth_model_cb = ttk.Combobox(self.content_frame, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
-        self.depth_model_cb.grid(row=6, column=1, columnspan=2, sticky="ew", **pad)
+        self.depth_model_cb.grid(row=7, column=1, columnspan=2, sticky="ew", **pad)
         
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
         self.label_hf_endpoint.grid(row=8, column=0, sticky="w", **pad)
         self.hf_endpoint_var = tk.StringVar()
         self.hf_endpoint_entry = ttk.Entry(self.content_frame, textvariable=self.hf_endpoint_var)
-        self.hf_endpoint_entry.grid(row=8, column=1,  sticky="ew", **pad)
+        self.hf_endpoint_entry.grid(row=8, column=1, sticky="ew", **pad)
         
         # Buttons
         self.btn_reset = ttk.Button(self.content_frame, text="Reset", command=self.reset_to_defaults)
-        self.btn_reset.grid(row=6, column=3, sticky="ew", **pad)
+        self.btn_reset.grid(row=7, column=3, sticky="ew", **pad)
         
         self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
         self.btn_stop.grid(row=8, column=2, sticky="ew", **pad)
@@ -303,16 +345,192 @@ class ConfigGUI(tk.Tk):
         for col in range(4):
             self.content_frame.columnconfigure(col, weight=1)
         
-        # -------------------------
         # Status bar at bottom
-        # -------------------------
         self.status_label = tk.Label(self, text="", anchor="w", relief="sunken", padx=20, pady=4)
         self.status_label.grid(row=1, column=0, sticky="we")  # no padding
 
+        # Initialize capture mode UI
+        self.on_capture_mode_change()
 
+    def on_capture_mode_change(self, *args):
+        """Show/hide monitor or window controls based on capture mode"""
+        mode = self.capture_mode_var.get()
+        if mode == "Monitor":
+            self.label_monitor.grid()
+            self.monitor_menu.grid()
+            self.label_window.grid_remove()
+            self.window_entry.grid_remove()
+            self.btn_select_window.grid_remove()
+        else:  # window
+            self.label_monitor.grid_remove()
+            self.monitor_menu.grid_remove()
+            self.label_window.grid()
+            self.window_entry.grid()
+            self.btn_select_window.grid()
+
+    def select_window(self):
+        """Let user select a window interactively with better error handling"""
+        if not HAVE_PYWINCTL:
+            messagebox.showerror(
+                UI_TEXTS[self.language]["Error"],
+                UI_TEXTS[self.language]["Window selection not available"]
+            )
+            return
+
+        try:
+            # Try multiple times to get windows with a small delay
+            windows = []
+            for _ in range(3):  # Try up to 3 times
+                try:
+                    windows = pwc.getWindowsWithTitle("")
+                    if windows:
+                        break
+                    time.sleep(0.5)  # Short delay before retry
+                except Exception as e:
+                    print(f"Window detection error: {e}")
+                    time.sleep(0.5)
+                    continue
+
+            if not windows:
+                # Try alternative method to get windows
+                try:
+                    windows = pwc.getAllWindows()
+                    windows = [w for w in windows if w.title]  # Filter windows with titles
+                except Exception as e:
+                    print(f"Alternative window detection failed: {e}")
+
+            if not windows:
+                error_msg = UI_TEXTS[self.language]["No windows found"]
+                
+                # Add platform-specific troubleshooting tips
+                if OS_NAME == "Darwin":
+                    error_msg += "\n\nmacOS Tip: Please ensure the app has Screen Recording permission in System Settings > Privacy & Security"
+                elif OS_NAME == "Linux":
+                    error_msg += "\n\nLinux Tip: Try running under X11 instead of Wayland if possible"
+                
+                messagebox.showwarning(
+                    UI_TEXTS[self.language]["Warning"],
+                    error_msg
+                )
+                return
+
+            # Create window selection dialog
+            select_dialog = tk.Toplevel(self)
+            select_dialog.title(UI_TEXTS[self.language]["Select Window"])
+            select_dialog.resizable(True, True)
+            
+            # Add filter entry
+            filter_frame = ttk.Frame(select_dialog)
+            filter_frame.pack(fill=tk.X, padx=5, pady=5)
+            
+            filter_label = ttk.Label(filter_frame, text="Filter:")
+            filter_label.pack(side=tk.LEFT)
+            
+            filter_var = tk.StringVar()
+            filter_entry = ttk.Entry(filter_frame, textvariable=filter_var)
+            filter_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            
+            # Listbox with scrollbars
+            list_frame = ttk.Frame(select_dialog)
+            list_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+            
+            scroll_y = ttk.Scrollbar(list_frame)
+            scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            scroll_x = ttk.Scrollbar(list_frame, orient=tk.HORIZONTAL)
+            scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+            
+            listbox = tk.Listbox(
+                list_frame,
+                width=80,
+                height=20,
+                yscrollcommand=scroll_y.set,
+                xscrollcommand=scroll_x.set,
+                selectmode=tk.SINGLE
+            )
+            listbox.pack(fill=tk.BOTH, expand=True)
+            
+            scroll_y.config(command=listbox.yview)
+            scroll_x.config(command=listbox.xview)
+            
+            # Populate listbox
+            window_list = []
+            for win in windows:
+                title = win.title if win.title else "Untitled"
+                try:
+                    size = f"{win.width}x{win.height}" if win.width and win.height else "Unknown size"
+                    listbox.insert(tk.END, f"{title} [{size}]")
+                    window_list.append(win)
+                except Exception as e:
+                    print(f"Error processing window {title}: {e}")
+                    continue
+            
+            # Filter function
+            def update_filter(*args):
+                filter_text = filter_var.get().lower()
+                listbox.delete(0, tk.END)
+                for win in windows:
+                    title = win.title if win.title else "Untitled"
+                    try:
+                        size = f"{win.width}x{win.height}" if win.width and win.height else "Unknown size"
+                        if filter_text in title.lower() or filter_text in size.lower():
+                            listbox.insert(tk.END, f"{title} [{size}]")
+                    except:
+                        continue
+            
+            filter_var.trace("w", update_filter)
+            
+            # Selection handler
+            def on_select():
+                selected_idx = listbox.curselection()
+                if selected_idx:
+                    selected_win = window_list[selected_idx[0]]
+                    self.window_var.set(selected_win.title)
+                    self.selected_window_coords = (
+                        selected_win.left,
+                        selected_win.top,
+                        selected_win.width,
+                        selected_win.height
+                    )
+                    self.update_status(
+                        f"{UI_TEXTS[self.language]['Selected window:']} {selected_win.title} "
+                        f"({selected_win.width}x{selected_win.height})"
+                    )
+                    select_dialog.destroy()
+            
+            # Button frame
+            button_frame = ttk.Frame(select_dialog)
+            button_frame.pack(fill=tk.X, padx=5, pady=5)
+            
+            select_btn = ttk.Button(button_frame, text="Select", command=on_select)
+            select_btn.pack(side=tk.RIGHT)
+            
+            refresh_btn = ttk.Button(button_frame, text="Refresh", command=lambda: self.select_window())
+            refresh_btn.pack(side=tk.RIGHT, padx=5)
+            
+            cancel_btn = ttk.Button(button_frame, text="Cancel", command=select_dialog.destroy)
+            cancel_btn.pack(side=tk.RIGHT)
+            
+            # Center the dialog
+            select_dialog.update_idletasks()
+            x = self.winfo_x() + (self.winfo_width() - select_dialog.winfo_width()) // 2
+            y = self.winfo_y() + (self.winfo_height() - select_dialog.winfo_height()) // 2
+            select_dialog.geometry(f"+{x}+{y}")
+            
+            # Set focus to filter entry
+            filter_entry.focus_set()
+            
+        except Exception as e:
+            messagebox.showerror(
+                UI_TEXTS[self.language]["Error"],
+                f"Error selecting window: {str(e)}"
+            )
     def update_language_texts(self):
         texts = UI_TEXTS[self.language]
+        self.label_capture_mode.config(text=texts["Capture Mode:"])
         self.label_monitor.config(text=texts["Monitor Index:"])
+        self.label_window.config(text=texts["Window Title:"])
+        self.btn_select_window.config(text=texts["Select Window"])
         self.label_fps.config(text=texts["FPS:"])
         self.showfps_cb.config(text=texts["Show FPS"])
         self.label_res.config(text=texts["Output Resolution:"])
@@ -336,27 +554,15 @@ class ConfigGUI(tk.Tk):
         if hasattr(self, "status_label"):
             current_text = self.status_label.cget("text")
             mapping = {
-                # English mappings
                 "Loaded settings.yaml at startup": texts["Loaded settings.yaml at startup"],
                 "Running": texts["Running"],
                 "Stopped": texts["Stopped"],
                 "Settings saved to settings.yaml, starting Stereo Viewer...": texts["Countdown"],
-                # Chinese mappings
                 "启动时已加载 settings.yaml": texts["Loaded settings.yaml at startup"],
                 "运行中...": texts["Running"],
                 "已停止。": texts["Stopped"],
                 "设置已保存到 settings.yaml，启动Stereo Viewer...": texts["Countdown"]
             }
-            # import re
-            # if "Stereo Viewer" in current_text or "运行 Stereo Viewer" in current_text:
-            #     # Extract seconds from countdown text
-            #     match = re.search(r"(\d+)", current_text)
-            #     seconds = int(match.group(1)) if match else 3
-            #     self.status_label.config(
-            #         text=texts["Countdown"].format(seconds=seconds)
-            #     )
-            
-            # elif current_text in mapping:
             if current_text in mapping:
                 self.status_label.config(text=mapping[current_text])
 
@@ -373,7 +579,7 @@ class ConfigGUI(tk.Tk):
     
     def populate_devices(self):
         self.device_label_to_index = {}
-        device_dict = DEVICES  # Expected format: {idx: {"name": str, "device": torch.device}}
+        device_dict = DEVICES
         self.all_devices = device_dict
 
         # Clear existing menu items
@@ -402,8 +608,6 @@ class ConfigGUI(tk.Tk):
 
         return self.device_label_to_index
 
-
-    
     def populate_monitors(self):
         self.monitor_label_to_index = {}
         monitors = []
@@ -445,24 +649,39 @@ class ConfigGUI(tk.Tk):
     def save_yaml(self, path, cfg):
         if not HAVE_YAML:
             messagebox.showerror(UI_TEXTS[self.language]["Error"],
-                                 UI_TEXTS[self.language]["PyYAML not installed, cannot save YAML file."])
+                                UI_TEXTS[self.language]["PyYAML not installed, cannot save YAML file."])
             return False
         try:
+            # Convert any tuples to lists before saving
+            if isinstance(cfg.get("Capture Coordinates"), tuple):
+                cfg["Capture Coordinates"] = list(cfg["Capture Coordinates"])
+                
             with open(path, "w", encoding="utf-8") as f:
                 yaml.dump(cfg, f, allow_unicode=True, sort_keys=False)
             return True
         except Exception as e:
             messagebox.showerror(UI_TEXTS[self.language]["Error"],
-                                 f"{UI_TEXTS[self.language]['Failed to save settings.yaml:']} {e}")
+                                f"{UI_TEXTS[self.language]['Failed to save settings.yaml:']} {e}")
             return False
 
     def apply_config(self, cfg, keep_optional=True):
+        # Convert any lists to tuples for Capture Coordinates
+        if isinstance(cfg.get("Capture Coordinates"), list):
+            cfg["Capture Coordinates"] = tuple(cfg["Capture Coordinates"])
+        # Capture mode
+        self.capture_mode_var.set(cfg.get("Capture Mode", DEFAULTS["Capture Mode"]))
+        
+        # Monitor settings
         monitor_idx = cfg.get("Monitor Index", DEFAULTS["Monitor Index"])
         label_for_idx = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == monitor_idx), None)
         if label_for_idx:
             self.monitor_var.set(label_for_idx)
         elif self.monitor_label_to_index:
             self.monitor_var.set(next(iter(self.monitor_label_to_index)))
+
+        # Window settings
+        self.window_var.set(cfg.get("Window Title", DEFAULTS["Window Title"]))
+        self.selected_window_coords = cfg.get("Capture Coordinates", DEFAULTS["Capture Coordinates"])
 
         if keep_optional:  # no update for device
             device_idx = cfg.get("Device", DEFAULTS["Device"])
@@ -495,12 +714,14 @@ class ConfigGUI(tk.Tk):
         if keep_optional:  # no update for language
             self.language_var.set(cfg.get("Language", DEFAULTS["Language"]))
 
+        # Update UI based on capture mode
+        self.on_capture_mode_change()
+
     def load_defaults(self):
         self.apply_config(DEFAULTS)
 
     def reset_to_defaults(self):
         self.load_defaults()
-        # self.update_language_texts()
     
     def update_status(self, msg: str):
         """Update status bar text."""
@@ -508,7 +729,10 @@ class ConfigGUI(tk.Tk):
 
     def save_settings(self):
         cfg = {
+            "Capture Mode": self.capture_mode_var.get(),
             "Monitor Index": self.monitor_label_to_index.get(self.monitor_var.get(), DEFAULTS["Monitor Index"]),
+            "Window Title": self.window_var.get(),
+            "Capture Coordinates": self.selected_window_coords,
             "FPS": int(self.fps_cb.get()),
             "Show FPS": self.showfps_var.get(),
             "Output Resolution": int(self.res_cb.get()),
