@@ -354,7 +354,7 @@ class ConfigGUI(tk.Tk):
         self.on_capture_mode_change()
 
     def refresh_window_list(self):
-        """Refresh the list of available windows"""
+        """Refresh the list of available windows with optimized performance"""
         if not HAVE_PYWINCTL:
             messagebox.showerror(
                 UI_TEXTS[self.language]["Error"],
@@ -363,25 +363,24 @@ class ConfigGUI(tk.Tk):
             return
 
         try:
-            windows = []
-            for _ in range(3):  # Try up to 3 times
-                try:
-                    windows = pwc.getWindowsWithTitle("")
-                    if windows:
-                        break
-                    time.sleep(0.5)
-                except Exception as e:
-                    print(f"Window detection error: {e}")
-                    time.sleep(0.5)
-                    continue
+            # First attempt - get windows with titles
+            try:
+                windows = pwc.getWindowsWithTitle("")
+                windows = [w for w in windows if w.title]  # Filter windows with empty titles
+            except Exception as e:
+                print(f"Window detection error: {e}")
+                windows = []
 
+            # Second attempt - fallback to all windows if first failed
             if not windows:
                 try:
-                    windows = pwc.getAllWindows()
-                    windows = [w for w in windows if w.title]
+                    all_windows = pwc.getAllWindows()
+                    windows = [w for w in all_windows if w.title]
                 except Exception as e:
                     print(f"Alternative window detection failed: {e}")
+                    windows = []
 
+            # If still no windows, show warning and return
             if not windows:
                 messagebox.showwarning(
                     UI_TEXTS[self.language]["Warning"],
@@ -389,18 +388,35 @@ class ConfigGUI(tk.Tk):
                 )
                 return
 
-            # Store window objects and create display list
-            self._window_objects = []
+            # Optimized window processing
             window_list = []
-            for win in windows:
-                title = win.title if win.title else "Untitled"
-                try:
-                    size = f"{win.width}x{win.height}" if win.width and win.height else "Unknown size"
-                    window_list.append(f"{title} [{size}]")
-                    self._window_objects.append(win)
-                except Exception as e:
-                    print(f"Error processing window {title}: {e}")
-                    continue
+            self._window_objects = []
+            
+            # Process windows in chunks for better performance
+            chunk_size = 50  # Process 50 windows at a time
+            for i in range(0, len(windows), chunk_size):
+                chunk = windows[i:i + chunk_size]
+                for win in chunk:
+                    try:
+                        title = win.title.strip() if win.title else "Untitled"
+                        
+                        # Only get size if we need to display it
+                        size_str = ""
+                        try:
+                            if hasattr(win, 'width') and hasattr(win, 'height'):
+                                if win.width and win.height:
+                                    size_str = f"{win.width}x{win.height}"
+                        except Exception:
+                            pass
+                        
+                        if not size_str:
+                            continue
+                        
+                        window_list.append(f"{title} [{size_str}]")
+                        self._window_objects.append(win)
+                    except Exception as e:
+                        print(f"Error processing window: {e}")
+                        continue
 
             # Update the combobox
             self.window_cb['values'] = window_list
@@ -413,7 +429,6 @@ class ConfigGUI(tk.Tk):
                 UI_TEXTS[self.language]["Error"],
                 f"Error refreshing window list: {str(e)}"
             )
-
     def on_window_selected(self, event=None):
         """Handle window selection from the combobox"""
         if not hasattr(self, '_window_objects') or not self._window_objects:
