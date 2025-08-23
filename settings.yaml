@@ -1,10 +1,10 @@
-Capture Mode: Window
+Capture Mode: Monitor
 Monitor Index: 1
 Capture Coordinates:
-- 520
-- 144
-- 1200
-- 860
+- 0
+- 25
+- 2240
+- 1152
 FPS: 60
 Show FPS: true
 Output Resolution: 1080
