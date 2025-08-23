@@ -268,8 +268,8 @@ elif OS_NAME == "Darwin":
                 
                 self.left = self._mon['left'] * self.system_scale
                 self.top = self._mon['top'] * self.system_scale
-                self.width = self.system_width
-                self.height = self.system_height
+                self.width = self._mon["width"]
+                self.height = self._mon["height"]
             else:
                 # Window capture mode
                 if not self.capture_coords:
@@ -388,8 +388,8 @@ else: # Linux and other platforms
                 
                 self.left = self._mon['left'] * self.system_scale
                 self.top = self._mon['top'] * self.system_scale
-                self.width = self.system_width
-                self.height = self.system_height
+                self.width = self._mon["width"]
+                self.height = self._mon["height"]
             else:
                 # Window capture mode
                 if not self.capture_coords:
