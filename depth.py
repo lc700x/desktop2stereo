@@ -96,3 +96,26 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     depth = depth / depth.max().clamp(min=1e-6)
     return depth
     # return depth.detach().cpu().numpy().astype('float32')
+    
+def predict_depth_tensor(image_rgb):
+    # Convert to tensor and normalize (similar to pipeline's preprocessing)
+    image_rgb_tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE, non_blocking=True) # CPU → CPU tensor (uint8)
+    tensor = image_rgb_tensor.permute(2, 0, 1).float() / 255  # HWC → CHW, 0-1 range
+    tensor = tensor.unsqueeze(0) # set to improve performance
+
+    # Resize and normalize (same as pipeline)
+    tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
+    tensor = (tensor - MEAN) / STD
+
+    # Inference with thread safety
+    with lock:
+        tensor = tensor.to(dtype=MODEL_DTYPE)
+        depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
+
+    # Post-processing (same as pipeline)
+    h, w = image_rgb.shape[:2]
+    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0, 0]
+
+    # Normalize to [0, 1] (same as pipeline output)
+    depth = depth / depth.max().clamp(min=1e-6)
+    return image_rgb_tensor, depth
