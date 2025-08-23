@@ -1,10 +1,6 @@
 Capture Mode: Monitor
-Monitor Index: 3
-Capture Coordinates:
-- 0
-- 25
-- 2240
-- 1152
+Monitor Index: 1
+Capture Coordinates: null
 FPS: 60
 Show FPS: true
 Output Resolution: 1080
@@ -56,4 +52,4 @@ FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
-Language: CN
+Language: EN
