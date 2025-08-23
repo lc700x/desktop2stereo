@@ -66,30 +66,38 @@ def main():
     frame_count = 0
     last_time = time.perf_counter()
     fps = 0
-    
+
+    # Average FPS calculation
+    total_frames = 0
+    start_time = time.perf_counter()
+
     while not glfw.window_should_close(window.window):
-        
         try:
-            # Get latest frame, or skip update
             frame_rgb, depth = depth_q.get_nowait()
             window.update_frame(frame_rgb, depth)
             if SHOW_FPS:
                 frame_count += 1
+                total_frames += 1
                 current_time = time.perf_counter()
                 if current_time - last_time >= 1.0:  # Update every second
                     fps = frame_count / (current_time - last_time)
                     frame_count = 0
                     last_time = current_time
-                    # Update window title with Depth Strength and FPS
-                    glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {fps:.1f} | depth: {window.depth_ratio:.1f}")
+                    glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {fps:.1f} | Depth: {window.depth_ratio:.1f}")
         except queue.Empty:
-            pass  # Reuse previous frame if none available
+            pass
 
         window.render()
         glfw.swap_buffers(window.window)
         glfw.poll_events()
 
+    # Print average FPS on exit
+    total_time = time.perf_counter() - start_time
+    avg_fps = total_frames / total_time if total_time > 0 else 0
+    print(f"Average FPS: {avg_fps:.2f}")
+
     glfw.terminate()
+
 
 if __name__ == "__main__":
     main()
