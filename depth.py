@@ -32,12 +32,17 @@ def get_device(index=0):
 # Get the device and print information
 DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
 
+# Enalbe cudnn  benchmark
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True
+
 # Output Info
 print(f"{DEVICE_INFO}")
 print(f"Model: {MODEL_ID}")
 
 # Load model with same configuration as example
 model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).half().to(DEVICE).eval()
+
 MODEL_DTYPE = next(model.parameters()).dtype
 # Normalization parameters (same as example)
 MEAN = torch.tensor([0.485, 0.456, 0.406], device=DEVICE).view(1, 3, 1, 1)

@@ -64,7 +64,7 @@ def main():
 
     # FPS calculation variables
     frame_count = 0
-    last_time = time.time()
+    last_time = time.perf_counter()
     fps = 0
     
     while not glfw.window_should_close(window.window):
@@ -75,7 +75,7 @@ def main():
             window.update_frame(frame_rgb, depth)
             if SHOW_FPS:
                 frame_count += 1
-                current_time = time.time()
+                current_time = time.perf_counter()
                 if current_time - last_time >= 1.0:  # Update every second
                     fps = frame_count / (current_time - last_time)
                     frame_count = 0

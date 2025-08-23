@@ -263,8 +263,19 @@ class StereoWindow:
         self.depth_tex.write((self.depth_ratio * depth).astype('float32').tobytes())
 
     def render(self):
-        if not self.color_tex or not self.depth_tex:
-            return
+        """Safe rendering with texture checks"""
+        # Cache attributes locally to reduce lookups
+        color_tex = self.color_tex
+        depth_tex = self.depth_tex
+        texture_size = self._texture_size
+        
+        if not color_tex or not depth_tex:
+                return
+            
+        # Proceed with normal rendering
+        self.ctx.clear(0.1, 0.1, 0.1)
+        win_w, win_h = glfw.get_framebuffer_size(self.window)
+        tex_w, tex_h = texture_size  # Use cached tuple
 
         self.ctx.clear(0.1, 0.1, 0.1)
         win_w, win_h = glfw.get_framebuffer_size(self.window)  # width, height
