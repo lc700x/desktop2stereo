@@ -3,7 +3,7 @@ import queue
 import time
 from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, IPD, FPS, DEPTH_STRENTH, SHOW_FPS
 from capture import DesktopGrabber
-from depth import predict_depth_tensor, process
+from depth import predict_depth_tensor, process, make_sbs_tensor
 from streamer import MJPEGStreamer
 
 TIME_SLEEP = round(1.0 / FPS, 2)
@@ -17,6 +17,7 @@ STREAM_HOST      = "0.0.0.0"
 raw_q = queue.Queue(maxsize=1)
 proc_q = queue.Queue(maxsize=1)
 depth_q = queue.Queue(maxsize=1)
+sbs_q = queue.Queue(maxsize=1)
 
 def put_latest(q, item):
     """Put item into queue, dropping old one if needed (non-blocking)."""
@@ -56,12 +57,22 @@ def depth_loop():
             continue
         depth, rgb = predict_depth_tensor(frame_rgb)
         put_latest(depth_q, (rgb, depth))
+        
+def sbs_loop():
+    while True:
+        try:
+            rgb, depth = depth_q.get(timeout = TIME_SLEEP)
+        except queue.Empty:
+            continue
+        sbs = make_sbs_tensor(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH/10, display_mode = DISPLAY_MODE)
+        put_latest(sbs_q, sbs)
 
 def main():
     # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
     threading.Thread(target=depth_loop, daemon=True).start()
+    threading.Thread(target=sbs_loop, daemon=True).start()
 
     # start MJPEG streamer
     streamer = MJPEGStreamer(
@@ -86,9 +97,7 @@ def main():
 
         while True:
             try:
-                rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-                # build a CPU SBS uint8 frame and encode to JPEG
-                sbs = streamer.make_sbs_tensor(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH/10, display_mode = DISPLAY_MODE)
+                sbs = sbs_q.get(timeout=TIME_SLEEP)
                 jpg = streamer.encode_jpeg(sbs)
                 # push into the HTTP MJPEG server
                 streamer.set_frame(jpg)
