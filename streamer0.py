@@ -1,41 +1,40 @@
 import threading
-import io, time
+import time
+import io
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
-import numpy as np
-import torch, cv2
 from PIL import Image
-import torch.nn.functional as F
+import numpy as np
+import torch
+from depth import resize_tensor
+import cv2
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     allow_reuse_address = True
     block_on_close = False
 
-
 class MJPEGStreamer:
     """
-    High-performance MJPEG server for side-by-side stereo streaming.
-    Optimized with TurboJPEG and non-blocking frame delivery.
+    Simple MJPEG server (multipart/x-mixed-replace).  
+    Call `set_frame(jpeg_bytes)` each time you have a new JPEG.
     """
-
     def __init__(self,
                  host: str = "0.0.0.0",
                  port: int = 1303,
                  fps: int = 60,
-                 quality: int = 90):
-        self.boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-        self.quality = quality
-        self.frame = None
-        self.lock = threading.Lock()
-        self.shutdown = threading.Event()
+                 quality: int = 100):
+        self.boundary   = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+        self.delay      = 1.0 / fps
+        self.quality    = quality
+        self.frame      = None
+        self.lock       = threading.Lock()
+        self.shutdown   = threading.Event()
 
+        # We'll initialize these after the first frame is set
         self.sbs_width = None
         self.sbs_height = None
-        self.index_bytes = None
-        
-        self.delay      = round(1.0 / fps, 4)
 
-        # Lightweight HTML page
-        self.template = """<!DOCTYPE html>
+        # Initial template without width/height (will be updated)
+        tpl = """<!DOCTYPE html>
 <html>
     <head>
         <meta charset="UTF-8">
@@ -147,37 +146,35 @@ class MJPEGStreamer:
     </body>
 </html>
 """
+        self.template = tpl
+        self.index_bytes = None  # Will be set after first frame
 
         def app(environ, start_response):
             path = environ.get("PATH_INFO", "/")
             if path == "/":
                 if self.index_bytes is None:
-                    start_response("503 Service Unavailable",
-                                   [("Content-Type", "text/plain")])
+                    start_response("503 Service Unavailable", [("Content-Type","text/plain")])
                     return [b"Stream not ready yet"]
                 start_response("200 OK",
-                               [("Content-Type", "text/html; charset=utf-8")])
+                    [("Content-Type","text/html; charset=utf-8")])
                 return [self.index_bytes]
 
             if path == "/stream.mjpg":
                 start_response("200 OK", [
-                    ("Content-Type",
-                     "multipart/x-mixed-replace; boundary=frame"),
+                    ("Content-Type","multipart/x-mixed-replace; boundary=frame"),
                 ])
                 return self._generate()
-
-            start_response("404 Not Found",
-                           [("Content-Type", "text/plain")])
+            
+            start_response("404 Not Found", [("Content-Type","text/plain")])
             return [b"Not Found"]
 
         self.server = make_server(host, port, app, ThreadingWSGIServer)
-        self.thread = threading.Thread(target=self.server.serve_forever,
-                                       daemon=True)
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, daemon=True
+        )
 
     def start(self):
-        print(
-            f"[MJPEGStreamer] serving on http://{self.server.server_address[0]}:{self.server.server_address[1]}/"
-        )
+        print(f"[MJPEGStreamer] serving on http://{self.server.server_address[0]}:{self.server.server_address[1]}/")
         self.thread.start()
 
     def stop(self):
@@ -185,29 +182,23 @@ class MJPEGStreamer:
         self.server.shutdown()
         self.server.server_close()
 
-    def set_frame(self, jpeg_bytes):
-        """
-        Provide a new RGB frame (H, W, 3) uint8.
-        """
+    def set_frame(self, jpeg_bytes: bytes):
         with self.lock:
             self.frame = jpeg_bytes
 
     def _generate(self):
-        """
-        Stream frames as multipart MJPEG.
-        No artificial sleep; yields frames as soon as available.
-        """
+        # generator for the WSGI response
         while not self.shutdown.is_set():
-            f = None
             with self.lock:
-                if self.frame is not None:
-                    f = self.frame
+                f = self.frame
+
             if f:
                 yield self.boundary + f + b"\r\n"
-                time.sleep(self.delay)
-        yield b""  # End of stream
+            time.sleep(self.delay)
+        yield b""  # close out
+
     @staticmethod
-    def make_sbs(rgb: np.ndarray, depth, ipd_uv: float = 0.064,
+    def make_sbs(rgb: np.ndarray, depth: np.ndarray, ipd_uv: float = 0.064,
                     depth_strength: float = 0.1, display_mode: str = "Half-SBS") -> np.ndarray:
         """
         Build a side-by-side stereo frame using NumPy arrays.
@@ -232,7 +223,12 @@ class MJPEGStreamer:
         """
         # Ensure correct dtype/range
         depth = depth.detach().cpu().numpy().astype('float32')
+        if rgb.max() <= 1.0:
+            rgb *= 255.0
+        rgb = rgb.astype(np.uint8)
+
         h, w, _ = rgb.shape
+        depth = np.asarray(depth, dtype=np.float32)
 
         # inverse depth & pixel shift
         depth_inv = 1.0 - depth
@@ -261,105 +257,61 @@ class MJPEGStreamer:
                 output = cv2.resize(output, (w, h), interpolation=cv2.INTER_AREA)
 
         return output.astype(np.uint8)
-    
     @staticmethod
-    def make_sbs_tensor(
-        rgb: torch.Tensor,
-        depth: torch.Tensor,
-        ipd_uv: float = 0.064,
-        depth_strength: float = 0.1,
-        display_mode: str = "Half-SBS",   # "Full-SBS" | "Half-SBS" | "TAB"
-        assume_rgb_range_0_1: bool = True,
-        return_cpu_uint8: bool = True,
-    ):
+    def make_sbs_tensor(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv: float = 0.064, depth_strength: float = 0.1, display_mode: str = "Half-SBS") -> torch.Tensor:
         """
-        Faster GPU-friendly side-by-side (SBS) generator.
+        Build a side-by-side stereo frame using PyTorch tensors with DirectML support.
 
-        Inputs:
-            rgb: Tensor, either (C, H, W) or (H, W, C). Float32 expected.
-                If values are in [0..1], set assume_rgb_range_0_1=True.
-            depth: Tensor, (H, W) float32 in [0..1]
-            ipd_uv: interpupillary distance in normalized image width
-            depth_strength: multiplier for parallax
-            display_mode: "Full-SBS", "Half-SBS", or "TAB" (TAB stacks vertically)
-            return_cpu_uint8: if True, returns a uint8 numpy array on CPU (H,W,3 or H,2W,3).
-                            if False, returns torch.Tensor on the same device as inputs:
-                            dtype uint8 when conversion requested, or float32 if you prefer.
-        Returns:
-            if return_cpu_uint8: numpy uint8 image (H, W or H, 2W, 3) depending on mode
-            else: torch.uint8 tensor on the input device (C,H,W) or (H,W,C) per `display_mode`
+        Parameters
+        ----------
+        rgb : Tensor (3, H, W) float32 in range [0..1]
+        depth : Tensor (H, W) float32 in range [0..1]
+        ipd_uv : float
+            interpupillary distance in UV space (0-1, relative to image width)
+        depth_strength : float
+            multiplier applied to the per-pixel horizontal parallax
+        half : bool, optional
+            If True, returns "half-SBS": the output width equals W.
+            Otherwise returns full-width SBS (2W).
+
+        Returns
+        -------
+        torch.Tensor
+            uint8 image of shape (3, H, 2W) if half == False,
+            or (3, H, W) when half == True.
         """
-        # quick checks and canonicalize shapes
-        if rgb.ndim == 3 and rgb.shape[0] in (1,3):  # (C,H,W)
-            rgb_c = rgb
-        elif rgb.ndim == 3 and rgb.shape[2] in (1,3):  # (H,W,C)
-            rgb_c = rgb.permute(2,0,1).contiguous()
+        # Ensure tensors are on the same device
+        device = rgb.device
+        H, W, _ = rgb.shape
+        
+        # calculate shifts
+        inv = 1.0 - depth
+        max_px = int(ipd_uv * W)
+        shifts = (inv * max_px * depth_strength).round().long()
+        
+        # Create coordinate grid
+        xs = torch.arange(W, device=device).expand(H, -1)  # (H, W)
+        
+        # Calculate left and right coordinates
+        shifts_half = (shifts // 2).clamp(min=0, max=W//2)
+        left_coords = torch.clamp(xs + shifts_half, 0, W-1)
+        right_coords = torch.clamp(xs - shifts_half, 0, W-1)
+        
+        # Vectorized implementation using gather
+        y_indices = torch.arange(H, device=device)[:, None].expand(-1, W)
+        left = rgb[y_indices, left_coords]
+        right = rgb[y_indices, right_coords]
+        
+        # Concatenate for full SBS
+        if display_mode == "TAB":
+            output = torch.cat([left, right], dim=0) # (2H, W, 3)
+            output = resize_tensor(output, scale=(H, W))
         else:
-            raise ValueError("rgb must be shape (C,H,W) or (H,W,C) with 1 or 3 channels")
-
-        device = rgb_c.device
-        C, H, W = rgb_c.shape
-
-        if depth.device != device:
-            depth = depth.to(device, non_blocking=True)
-
-        # scale rgb to 0..255 on device (float) if it was 0..1
-        if assume_rgb_range_0_1:
-            rgb_c = rgb_c * 255.0
-
-        # compute per-pixel integer shift (H, W)
-        inv = 1.0 - depth       # nearer -> smaller inv -> smaller shift? keep your original logic
-        max_px = float(ipd_uv) * float(W)
-        shifts = (inv * max_px * float(depth_strength)).round().to(torch.long, non_blocking=True)  # (H, W)
-
-        # half-shift each eye (you used shifts//2 previously)
-        shifts_half = (shifts // 2).clamp(min=0, max=W // 2)   # (H, W) long
-
-        # create base x coordinates (H, W) without creating extra big copies in python loop
-        xs = torch.arange(W, device=device, dtype=torch.long).unsqueeze(0).expand(H, W)  # (H, W) long
-
-        left_idx = (xs + shifts_half).clamp(0, W - 1)   # (H, W)
-        right_idx = (xs - shifts_half).clamp(0, W - 1)  # (H, W)
-
-        # gather expects index shape to match src for the gathered dim, so expand across channels
-        # shapes for gather: src = (C, H, W), index = (C, H, W)
-        idx_left = left_idx.unsqueeze(0).expand(C, H, W)
-        idx_right = right_idx.unsqueeze(0).expand(C, H, W)
-
-        # gather along width dimension (dim=2)
-        # no_grad helps avoid autograd overhead if not needed
-        with torch.no_grad():
-            left = torch.gather(rgb_c, 2, idx_left)   # (C, H, W)
-            right = torch.gather(rgb_c, 2, idx_right) # (C, H, W)
-
-            # arrange output according to display_mode
-            if display_mode == "TAB":
-                # stack vertically: (2H, W, C) we'll create (C, 2H, W)
-                out = torch.cat([left, right], dim=1)  # (C, 2H, W)
-            else:
-                # side-by-side: (C, H, 2W)
-                out = torch.cat([left, right], dim=2)  # (C, H, 2W)
-
-            # if user wants "Half-SBS" (output width == W), resize on device:
-            # you used cv2.resize to (W,H) when display_mode != "Full-SBS" previously.
-            # We'll interpret "Half-SBS" as "stacked into W width" and use F.interpolate.
-            if display_mode != "Full-SBS":
-                # we need to resize to (C, H, W) — do interpolate on device (preserves speed)
-                target_w = W
-                target_h = H
-                out = F.interpolate(out.unsqueeze(0), size=(target_h, target_w), mode="area")[0]  # (C,H,W)
-
-            # clamp and convert to uint8
-            out = (out/255).clamp(0, 255).to(torch.uint8)
-
-        # move to CPU+numpy only at last step if requested
-        if return_cpu_uint8:
-            # convert to (H, W, C) uint8 numpy on CPU
-            out_cpu = out.permute(1, 2, 0).contiguous().cpu().numpy()
-            return out_cpu
-        else:
-            # return tensor on device (C,H,W)
-            return out
+            output = torch.cat([left, right], dim=1)  # (H, 2W, 3)
+            if display_mode == "Half-SBS":
+                output = resize_tensor(output, scale=(H, W)) # (H, 2W, 3) to (H, W, 3)
+        return (output).clamp(0, 255).byte().cpu().numpy()
+        
     def encode_jpeg(self, arr: np.ndarray) -> bytes:
         """
         Encode a H×(W or 2W)×3 uint8 numpy array to JPEG bytes.
@@ -378,19 +330,3 @@ class MJPEGStreamer:
         buf = io.BytesIO()
         img.save(buf, format='JPEG', quality=self.quality)
         return buf.getvalue()
-
-
-# Example usage:
-if __name__ == "__main__":
-    import cv2
-
-    cap = cv2.VideoCapture(0)
-    streamer = MJPEGStreamer(port=1303, fps=60, quality=90)
-    streamer.start()
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        streamer.set_frame(frame)

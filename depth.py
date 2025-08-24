@@ -28,7 +28,6 @@ def get_device(index=0):
         return torch.device("mps"), "Using Apple Silicon (MPS) device"
     return torch.device("cpu"), "Using CPU device"
 
-
 # Get the device and print information
 DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
 
@@ -55,15 +54,26 @@ with torch.no_grad():
 
 lock = Lock()
 
+def process_tensor(img_rgb: np.ndarray, size) -> np.ndarray:
+    """
+    Process raw BGR image: convert to RGB and apply downscale if set.
+    This can be called in a separate thread.
+    """
+    # Downscale the image if needed
+    if size[0] < img_rgb.shape[0]:
+        img_rgb = cv2.resize(img_rgb, (size[1], size[0]), interpolation=cv2.INTER_AREA)
+    rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE) # CPU → CPU tensor (uint8)
+    return rgb_tensor
+
 def process(img_rgb: np.ndarray, size) -> np.ndarray:
-        """
-        Process raw BGR image: convert to RGB and apply downscale if set.
-        This can be called in a separate thread.
-        """
-        # Downscale the image if needed
-        if size[0] < img_rgb.shape[0]:
-            img_rgb = cv2.resize(img_rgb, (size[1], size[0]), interpolation=cv2.INTER_AREA)
-        return img_rgb
+    """
+    Process raw BGR image: convert to RGB and apply downscale if set.
+    This can be called in a separate thread.
+    """
+    # Downscale the image if needed
+    if size[0] < img_rgb.shape[0]:
+        img_rgb = cv2.resize(img_rgb, (size[1], size[0]), interpolation=cv2.INTER_AREA)
+    return img_rgb
 
 @torch.no_grad()
 def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
@@ -97,10 +107,17 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     return depth
     # return depth.detach().cpu().numpy().astype('float32')
     
-def predict_depth_tensor(image_rgb):
+def predict_depth_tensor(img_rgb):
+    """
+    Predict depth map from RGB image (similar to pipeline example but optimized for DirectML)
+    Args:
+        image_rgb: Input RGB image as numpy array (H, W, 3) in uint8 format
+    Returns:
+        Depth map as numpy array (H, W) normalized to [0, 1]
+    """
     # Convert to tensor and normalize (similar to pipeline's preprocessing)
-    image_rgb_tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE, non_blocking=True) # CPU → CPU tensor (uint8)
-    tensor = image_rgb_tensor.permute(2, 0, 1).float() / 255  # HWC → CHW, 0-1 range
+    rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE) # CPU → CPU tensor (uint8)
+    tensor = rgb_tensor.permute(2, 0, 1).float() / 255  # HWC → CHW, 0-1 range
     tensor = tensor.unsqueeze(0) # set to improve performance
 
     # Resize and normalize (same as pipeline)
@@ -113,9 +130,22 @@ def predict_depth_tensor(image_rgb):
         depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
 
     # Post-processing (same as pipeline)
-    h, w = image_rgb.shape[:2]
+    h, w = rgb_tensor.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0, 0]
 
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
-    return image_rgb_tensor, depth
+    # # Downsample by striding
+    # depth_sampled = depth[::8, ::8].float()
+
+    # # Compute quantiles
+    # depth_min = torch.quantile(depth_sampled, 0.2)
+    # depth_max = torch.quantile(depth_sampled, 0.98)
+
+    # # Normalize
+    # depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
+
+    # # Clamp to [0,1]
+    # depth = depth.clamp(0, 1)
+    return depth, rgb_tensor
+    # return depth.detach().cpu().numpy().astype('float32')

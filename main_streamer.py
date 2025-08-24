@@ -1,12 +1,17 @@
 import threading
 import queue
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, IPD, FPS, DEPTH_STRENTH
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, IPD, FPS, DEPTH_STRENTH, SHOW_FPS
 from capture import DesktopGrabber
 from depth import predict_depth_tensor, process
 from streamer import MJPEGStreamer
 
 TIME_SLEEP = round(1.0 / FPS, 2)
+
+# Streamer settings: TODO load from settings.yaml
+STREAM_PORT      = 1303
+STREAM_QUALITY   = 100
+STREAM_HOST      = "0.0.0.0"
 
 # Queues with size=1 (latest-frame-only logic)
 raw_q = queue.Queue(maxsize=1)
@@ -49,25 +54,20 @@ def depth_loop():
             frame_rgb = proc_q.get(timeout = TIME_SLEEP)
         except queue.Empty:
             continue
-        image_rgb, depth = predict_depth_tensor(frame_rgb)
-        put_latest(depth_q, (image_rgb, depth))
+        depth, rgb = predict_depth_tensor(frame_rgb)
+        put_latest(depth_q, (rgb, depth))
 
 def main():
     # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
     threading.Thread(target=depth_loop, daemon=True).start()
-    
-    STREAM_HOST      = "0.0.0.0"
-    STREAM_PORT      = 1303
-    STREAM_FPS       = 60
-    STREAM_QUALITY   = 100
 
     # start MJPEG streamer
     streamer = MJPEGStreamer(
         host=STREAM_HOST,
         port=STREAM_PORT,
-        fps=STREAM_FPS,
+        fps=FPS,
         quality=STREAM_QUALITY
     )
     streamer.start()
@@ -75,25 +75,41 @@ def main():
     print(f"[Main] Streaming side-by-side MJPEG at http://{STREAM_HOST}:{STREAM_PORT}/")
 
     try:
+        
+        # FPS calculation variables
+        frame_count = 0
+        last_time = time.perf_counter()
+
+        # Average FPS calculation
+        total_frames = 0
+        start_time = time.perf_counter()
+
         while True:
             try:
                 rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-
                 # build a CPU SBS uint8 frame and encode to JPEG
-                sbs = MJPEGStreamer.make_sbs(
-                    rgb,
-                    depth,
-                    ipd_uv=IPD,
-                    depth_strength=DEPTH_STRENTH/10
-                )
+                sbs = streamer.make_sbs_tensor(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH/10, display_mode = DISPLAY_MODE)
                 jpg = streamer.encode_jpeg(sbs)
-
                 # push into the HTTP MJPEG server
                 streamer.set_frame(jpg)
+                if SHOW_FPS:
+                    frame_count += 1
+                    total_frames += 1
+                    current_time = time.perf_counter()
+                    if current_time - last_time >= 1.0:  # Update every second
+                        current_fps = frame_count / (current_time - last_time)
+                        frame_count = 0
+                        last_time = current_time
+                        print(current_fps)
             except queue.Empty:
                     time.sleep(TIME_SLEEP)
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
+        # Print average FPS on exit
+        total_time = time.perf_counter() - start_time
+        avg_fps = total_frames / total_time if total_time > 0 else 0
+        print(f"Average FPS: {avg_fps:.2f}")
+        exit()
     finally:
         streamer.stop()
 
