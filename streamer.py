@@ -1,19 +1,17 @@
 import threading
-import io, time
+import io
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
 import numpy as np
-import torch, cv2
+import cv2
 from PIL import Image
-import torch.nn.functional as F
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     allow_reuse_address = True
     block_on_close = False
 
-
 class MJPEGStreamer:
     """
-    High-performance MJPEG server for side-by-side stereo streaming.
+    MJPEG server for side-by-side stereo streaming.
     Optimized with TurboJPEG and non-blocking frame delivery.
     """
 
@@ -204,7 +202,7 @@ class MJPEGStreamer:
                     f = self.frame
             if f:
                 yield self.boundary + f + b"\r\n"
-                time.sleep(self.delay)
+                # time.sleep(self.delay)
         yield b""  # End of stream
     def encode_jpeg(self, arr: np.ndarray) -> bytes:
         """

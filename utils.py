@@ -55,3 +55,6 @@ SHOW_FPS, FPS, DEPTH_STRENTH = settings["Show FPS"], settings["FPS"], settings["
 IPD = settings["IPD"]
 CAPTURE_MODE = settings["Capture Mode"]
 CAPTURE_COORDS = settings["Capture Coordinates"]
+
+STREAM_PORT = settings["Streamer Port"]
+STREAM_HOST = settings["Streamer Host"]

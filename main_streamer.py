@@ -1,17 +1,14 @@
 import threading
 import queue
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, IPD, FPS, DEPTH_STRENTH, SHOW_FPS
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, IPD, FPS, DEPTH_STRENTH, SHOW_FPS, STREAM_PORT, STREAM_HOST
 from capture import DesktopGrabber
 from depth import predict_depth_tensor, process, make_sbs_tensor
 from streamer import MJPEGStreamer
 
+# Streamer settings
 TIME_SLEEP = round(1.0 / FPS, 2)
-
-# Streamer settings: TODO load from settings.yaml
-STREAM_PORT      = 1303
 STREAM_QUALITY   = 100
-STREAM_HOST      = "0.0.0.0"
 
 # Queues with size=1 (latest-frame-only logic)
 raw_q = queue.Queue(maxsize=1)
@@ -106,10 +103,10 @@ def main():
                     total_frames += 1
                     current_time = time.perf_counter()
                     if current_time - last_time >= 1.0:  # Update every second
-                        current_fps = frame_count / (current_time - last_time)
+                        # current_fps = frame_count / (current_time - last_time)
                         frame_count = 0
                         last_time = current_time
-                        print(current_fps)
+                        # print(f"FPS: {current_fps}")
             except queue.Empty:
                     time.sleep(TIME_SLEEP)
     except KeyboardInterrupt:

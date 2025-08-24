@@ -194,8 +194,6 @@ def make_sbs_tensor(
     display_mode: str = "Half-SBS",   # "Full-SBS" | "Half-SBS" | "TAB"
 ):
     """
-    Faster GPU-friendly side-by-side (SBS) generator.
-
     Inputs:
         rgb: Tensor, either (C, H, W) or (H, W, C). Float32 expected.
             If values are in [0..1], set assume_rgb_range_0_1=True.
@@ -203,12 +201,7 @@ def make_sbs_tensor(
         ipd_uv: interpupillary distance in normalized image width
         depth_strength: multiplier for parallax
         display_mode: "Full-SBS", "Half-SBS", or "TAB" (TAB stacks vertically)
-        return_cpu_uint8: if True, returns a uint8 numpy array on CPU (H,W,3 or H,2W,3).
-                        if False, returns torch.Tensor on the same device as inputs:
-                        dtype uint8 when conversion requested, or float32 if you prefer.
-    Returns:
-        if return_cpu_uint8: numpy uint8 image (H, W or H, 2W, 3) depending on mode
-        else: torch.uint8 tensor on the input device (C,H,W) or (H,W,C) per `display_mode`
+    Returns: numpy uint8 image (H, W or H, 2W, 3) depending on mode
     """
     # quick checks and canonicalize shapes
     rgb_c = rgb.permute(2,0,1).contiguous()
