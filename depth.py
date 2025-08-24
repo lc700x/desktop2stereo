@@ -108,10 +108,16 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     # return depth.detach().cpu().numpy().astype('float32')
     
 def predict_depth_tensor(img_rgb):
-    # Convert to tensor and normalize (similar to pipeline's preprocessing)
-    img_rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE, non_blocking=True) # CPU → CPU tensor (uint8)
-    tensor = img_rgb_tensor.permute(2, 0, 1).float() / 255  # HWC → CHW, 0-1 range
-    tensor = tensor.unsqueeze(0) # set to improve performance
+    # Ensure input is numpy (H,W,3)
+    if isinstance(img_rgb, torch.Tensor):
+        img_rgb = img_rgb.cpu().numpy()
+
+    assert img_rgb.ndim == 3 and img_rgb.shape[2] == 3, \
+        f"Expected HWC numpy image, got {img_rgb.shape}"
+
+    # Now safe
+    img_rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE) / 255.0  # (H,W,3)
+    tensor = img_rgb_tensor.permute(2, 0, 1).unsqueeze(0)  # (1,3,H,W)
 
     # Resize and normalize (same as pipeline)
     tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
@@ -251,7 +257,7 @@ def make_sbs_tensor(
             out = F.interpolate(out.unsqueeze(0), size=(target_h, target_w), mode="area")[0]  # (C,H,W)
 
         # clamp and convert to uint8
-        out = out.clamp(0, 255).to(torch.uint8)
+        out = out.to(torch.float32).clamp(0, 255).to(torch.uint8)
 
     # convert to (H, W, C) uint8 numpy on CPU
     out_cpu = out.permute(1, 2, 0).contiguous().cpu().numpy()

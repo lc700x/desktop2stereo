@@ -94,7 +94,7 @@ def main():
 
         while True:
             try:
-                sbs = sbs_q.get(timeout=TIME_SLEEP)
+                sbs = sbs_q.get_nowait()
                 jpg = streamer.encode_jpeg(sbs)
                 # push into the HTTP MJPEG server
                 streamer.set_frame(jpg)
@@ -108,7 +108,7 @@ def main():
                         last_time = current_time
                         # print(f"FPS: {current_fps}")
             except queue.Empty:
-                    time.sleep(TIME_SLEEP)
+                    pass
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
         # Print average FPS on exit

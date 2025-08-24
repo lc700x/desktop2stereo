@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 1
+Monitor Index: 2
 Capture Coordinates:
 - 927
 - 750
@@ -20,6 +20,9 @@ Model List:
 - depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
 - depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
 - depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
+- depth-anything/prompt-depth-anything-vitl-hf
+- depth-anything/prompt-depth-anything-vits-hf
+- depth-anything/prompt-depth-anything-vits-transparent-hf
 - lc700x/Amodal-Depth-Anything-V2-large-hf
 - LiheYoung/depth-anything-large-hf
 - LiheYoung/depth-anything-base-hf
@@ -49,7 +52,7 @@ Model List:
 - Intel/zoedepth-nyu
 - Intel/zoedepth-kitti
 - apple/DepthPro-hf
-Depth Model: depth-anything/Depth-Anything-V2-Small-hf
+Depth Model: depth-anything/prompt-depth-anything-vits-hf
 Depth Strength: 1.0
 Depth Resolution: 384
 FP16: true
@@ -57,6 +60,6 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: EN
-Run Mode: Viewer
+Run Mode: Streamer
 Streamer Host: 192.168.1.100
 Streamer Port: 1400
