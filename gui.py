@@ -1,5 +1,5 @@
 import os
-import sys, time
+import sys
 import subprocess
 import socket
 import tkinter as tk
@@ -7,13 +7,68 @@ from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon
 
-# Add pywinctl import
-try:
-    import pywinctl as pwc
-    HAVE_PYWINCTL = True
-except ImportError:
-    HAVE_PYWINCTL = False
+# Get window lists
+if OS_NAME == "Windows":
+    try:
+        import win32gui
+    except ImportError:
+        win32gui = None
+    def list_windows():
+        windows = []
 
+        def callback(hwnd, _):
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd)
+                if title:
+                    rect = win32gui.GetWindowRect(hwnd)
+                    x, y, r, b = rect
+                    w, h = r - x, b - y
+                    if w > 0 and h > 0:
+                        windows.append((title, w, h, x, y, hwnd))
+            return True
+        win32gui.EnumWindows(callback, None)
+        return windows
+elif OS_NAME == "Darwin":
+    try:
+        from Quartz import (
+            CGWindowListCopyWindowInfo,
+            kCGWindowListOptionOnScreenOnly,
+            kCGNullWindowID,
+        )
+    except ImportError:
+        CGWindowListCopyWindowInfo = None
+
+    def list_windows():
+        windows = []
+        if CGWindowListCopyWindowInfo is None:
+            return windows
+        options = kCGWindowListOptionOnScreenOnly
+        window_info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
+        for win in window_info:
+            title = win.get("kCGWindowName", "")
+            if title:
+                bounds = win.get("kCGWindowBounds", {})
+                w, h = bounds.get("Width", 0), bounds.get("Height", 0)
+                x, y = bounds.get("X", 0), bounds.get("Y", 0)
+                if w > 0 and h > 0:
+                    windows.append((title, w, h, x, y, win["kCGWindowNumber"]))
+        return windows
+else:
+    import subprocess
+    def list_windows():
+        windows = []
+        try:
+            result = subprocess.check_output(["wmctrl", "-lG"]).decode("utf-8").splitlines()
+            for line in result:
+                parts = line.split(None, 6)
+                if len(parts) >= 7:
+                    win_id, x, y, w, h, _, title = parts
+                    w, h, x, y = int(w), int(h), int(x), int(y)
+                    if title.strip() and w > 0 and h > 0:
+                        windows.append((title.strip(), w, h, x, y, win_id))
+        except Exception as e:
+            print("Linux window listing error:", e)
+        return windows
 # List all available devices
 def get_devices():
     """
@@ -115,7 +170,6 @@ UI_TEXTS = {
         "Running": "Running...",
         "Stopped": "Stopped.",
         "Countdown": "Settings saved to settings.yaml, starting...",
-        "Window selection not available": "Window selection not available (pywinctl not installed)",
         "A thread already running!": "A thread already running!",
         "No windows found": "No windows found",
         "Selected window:": "Selected window:",
@@ -158,7 +212,6 @@ UI_TEXTS = {
         "Running": "运行中...",
         "Stopped": "已停止。",
         "Countdown": "设置已保存到 settings.yaml，启动中...",
-        "Window selection not available": "窗口选择不可用 (未安装pywinctl)",
         "A thread already running!": "一个进程已经运行！",
         "No windows found": "未找到窗口",
         "Selected window:": "已选择窗口:",
@@ -412,35 +465,12 @@ class ConfigGUI(tk.Tk):
                 return s.getsockname()[0]
         except Exception:
             return "127.0.0.1"
-
+    
     def refresh_window_list(self):
         """Refresh the list of available windows with optimized performance"""
-        if not HAVE_PYWINCTL:
-            messagebox.showerror(
-                UI_TEXTS[self.language]["Error"],
-                UI_TEXTS[self.language]["Window selection not available"]
-            )
-            return
-
         try:
-            # First attempt - get windows with titles
-            try:
-                windows = pwc.getWindowsWithTitle("")
-                windows = [w for w in windows if w.title]  # Filter windows with empty titles
-            except Exception as e:
-                print(f"Window detection error: {e}")
-                windows = []
+            windows = list_windows()
 
-            # Second attempt - fallback to all windows if first failed
-            if not windows:
-                try:
-                    all_windows = pwc.getAllWindows()
-                    windows = [w for w in all_windows if w.title]
-                except Exception as e:
-                    print(f"Alternative window detection failed: {e}")
-                    windows = []
-
-            # If still no windows, show warning and return
             if not windows:
                 messagebox.showwarning(
                     UI_TEXTS[self.language]["Warning"],
@@ -448,38 +478,16 @@ class ConfigGUI(tk.Tk):
                 )
                 return
 
-            # Optimized window processing
             window_list = []
             self._window_objects = []
-            
-            # Process windows in chunks for better performance
-            chunk_size = 50  # Process 50 windows at a time
-            for i in range(0, len(windows), chunk_size):
-                chunk = windows[i:i + chunk_size]
-                for win in chunk:
-                    try:
-                        title = win.title.strip() if win.title else "Untitled"
-                        
-                        # Only get size if we need to display it
-                        size_str = ""
-                        try:
-                            if hasattr(win, 'width') and hasattr(win, 'height'):
-                                if win.width and win.height:
-                                    size_str = f"{win.width}x{win.height}"
-                        except Exception:
-                            pass
-                        
-                        if not size_str:
-                            continue
-                        
-                        window_list.append(f"{title} [{size_str}]")
-                        self._window_objects.append(win)
-                    except Exception as e:
-                        print(f"Error processing window: {e}")
-                        continue
 
-            # Update the combobox
-            self.window_cb['values'] = window_list
+            for title, w, h, x, y, handle in windows:
+                size_str = f"{w}x{h}"
+                window_list.append(f"{title} [{size_str}]")
+                # Store as tuple
+                self._window_objects.append((title, w, h, x, y, handle))
+
+            self.window_cb["values"] = window_list
             if window_list:
                 self.window_cb.current(0)
                 self.on_window_selected()
@@ -489,35 +497,29 @@ class ConfigGUI(tk.Tk):
                 UI_TEXTS[self.language]["Error"],
                 f"Error refreshing window list: {str(e)}"
             )
+
+
     def on_window_selected(self, event=None):
         """Handle window selection from the combobox"""
-        if not hasattr(self, '_window_objects') or not self._window_objects:
+        if not hasattr(self, "_window_objects") or not self._window_objects:
             return
 
         selected_text = self.window_var.get()
         if not selected_text:
             return
 
-        # Find the corresponding window object
         selected_index = None
-        for i, win in enumerate(self._window_objects):
-            title = win.title if win.title else "Untitled"
-            size = f"{win.width}x{win.height}" if win.width and win.height else "Unknown size"
+        for i, (title, w, h, x, y, handle) in enumerate(self._window_objects):
+            size = f"{w}x{h}" if w and h else "Unknown size"
             if selected_text == f"{title} [{size}]":
                 selected_index = i
                 break
 
         if selected_index is not None:
-            selected_win = self._window_objects[selected_index]
-            self.selected_window_coords = (
-                selected_win.left,
-                selected_win.top,
-                selected_win.width,
-                selected_win.height
-            )
+            title, w, h, x, y, handle = self._window_objects[selected_index]
+            self.selected_window_coords = (int(x), int(y), int(w), int(h))
             self.update_status(
-                f"{UI_TEXTS[self.language]['Selected window:']} {selected_win.title} "
-                f"({selected_win.width}x{selected_win.height})"
+                f"{UI_TEXTS[self.language]['Selected window:']} {title} ({w}x{h})"
             )
 
     def on_capture_mode_change(self, *args):
