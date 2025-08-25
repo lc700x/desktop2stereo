@@ -1,13 +1,13 @@
 Capture Mode: Window
-Monitor Index: 1
+Monitor Index: 2
 Capture Coordinates:
-- 2736
-- 481
-- 730
-- 562
-FPS: 30
+- 133
+- 30
+- 2240
+- 1152
+FPS: 120
 Show FPS: true
-Output Resolution: 1080
+Output Resolution: 1152
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
@@ -54,11 +54,11 @@ Model List:
 - apple/DepthPro-hf
 Depth Model: depth-anything/prompt-depth-anything-vits-hf
 Depth Strength: 1.0
-Depth Resolution: 384
+Depth Resolution: 192
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: EN
-Run Mode: Viewer
+Run Mode: Streamer
 Streamer Port: 1400

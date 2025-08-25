@@ -199,7 +199,7 @@ def make_sbs(rgb: np.ndarray, depth, ipd_uv: float = 0.064,
 
     return output.astype(np.uint8)
 
-def make_sbs_tensor(
+def make_sbs_tensor0(
     rgb: torch.Tensor,
     depth: torch.Tensor,
     ipd_uv: float = 0.064,
@@ -222,9 +222,9 @@ def make_sbs_tensor(
     C, H, W = rgb_c.shape
 
     # compute per-pixel integer shift (H, W)
-    inv = 1.0 - depth       # nearer -> smaller inv -> smaller shift? keep your original logic
-    max_px = float(ipd_uv) * float(W)
-    shifts = (inv * max_px * float(depth_strength)).round().to(torch.long, non_blocking=True)  # (H, W)
+    inv = 1.0 - depth       # nearer -> smaller inv -> smaller shift
+    max_px = ipd_uv * W
+    shifts = (inv * max_px * depth_strength//5).round().to(torch.long, non_blocking=True)  # (H, W)
 
     # half-shift each eye (you used shifts//2 previously)
     shifts_half = (shifts // 2).clamp(min=0, max=W // 2)   # (H, W) long
@@ -268,4 +268,92 @@ def make_sbs_tensor(
 
     # convert to (H, W, C) uint8 numpy on CPU
     out_cpu = out.permute(1, 2, 0).contiguous().cpu().numpy()
+    return out_cpu
+
+def make_sbs_tensor(
+    rgb: torch.Tensor,
+    depth: torch.Tensor,
+    ipd_uv: float = 0.064,
+    depth_strength: float = 0.1,
+    display_mode: str = "Half-SBS",   # "Full-SBS" | "Half-SBS" | "TAB"
+):
+    """
+    Inputs:
+        rgb: Tensor, either (C, H, W) or (H, W, C). Float32 expected.
+        depth: Tensor, (H, W) float32 in [0..1]
+        ipd_uv: interpupillary distance in normalized image width
+        depth_strength: multiplier for parallax
+        display_mode: "Full-SBS", "Half-SBS", or "TAB"
+    Returns: numpy uint8 image (H, W, 3)
+    """
+    if rgb.ndim == 3 and rgb.shape[0] != 3:
+        rgb_c = rgb.permute(2, 0, 1).contiguous()
+    else:
+        rgb_c = rgb.contiguous()
+    
+    device = rgb_c.device
+    C, H, W = rgb_c.shape
+
+    # compute per-pixel integer shift (H, W)
+    inv = 1.0 - depth
+    max_px = ipd_uv * W
+    shifts = (inv * max_px * depth_strength // 5).round().to(torch.long, non_blocking=True)
+    shifts_half = (shifts // 2).clamp(min=0, max=W // 2)
+
+    xs = torch.arange(W, device=device, dtype=torch.long).unsqueeze(0).expand(H, W)
+    left_idx = (xs + shifts_half).clamp(0, W - 1)
+    right_idx = (xs - shifts_half).clamp(0, W - 1)
+
+    idx_left = left_idx.unsqueeze(0).expand(C, H, W)
+    idx_right = right_idx.unsqueeze(0).expand(C, H, W)
+
+    with torch.no_grad():
+        left = torch.gather(rgb_c, 2, idx_left)
+        right = torch.gather(rgb_c, 2, idx_right)
+
+    # ------------------ Setup output canvas sizes ------------------
+    if display_mode == "Full-SBS":
+        win_w, win_h =  W, H
+        aspect = 32 / 9
+    elif display_mode == "Half-SBS":
+        win_w, win_h = W, H
+        aspect = 16 / 9
+    elif display_mode == "TAB":
+        win_w, win_h = W, 2 * H
+        aspect = 16 / 9
+    else:
+        raise ValueError("Invalid display_mode")
+
+    # enforce target aspect ratio by padding
+    target_h = win_h
+    target_w = int(round(target_h * aspect))
+    if target_w < win_w:
+        target_w = win_w
+        target_h = int(round(target_w / aspect))
+
+    canvas = torch.zeros((C, target_h, target_w), dtype=torch.uint8, device="cpu")
+
+    # ------------------ Place images ------------------
+    def place_eye(img, cx, cy, box_w, box_h):
+        # scale to fit inside box while keeping aspect
+        ih, iw = img.shape[1:]
+        scale = min(box_w / iw, box_h / ih)
+        new_w, new_h = int(iw * scale), int(ih * scale)
+        resized = F.interpolate(img.unsqueeze(0), size=(new_h, new_w), mode="area")[0]
+        print(resized.shape)
+        # place in canvas
+        x0 = cx - new_w // 2
+        y0 = cy - new_h // 2
+        canvas[:, y0:y0+new_h, x0:x0+new_w] = resized.to(torch.uint8)
+
+    if display_mode in ["Full-SBS", "Half-SBS"]:
+        # left eye
+        place_eye(left, target_w // 4, target_h // 2, target_w // 2, target_h)
+        # right eye
+        place_eye(right, 3 * target_w // 4, target_h // 2, target_w // 2, target_h)
+    else:  # TAB
+        place_eye(left, target_w // 2, target_h // 4, target_w, target_h // 2)
+        place_eye(right, target_w // 2, 3 * target_h // 4, target_w, target_h // 2)
+
+    out_cpu = canvas.permute(1, 2, 0).contiguous().cpu().numpy()
     return out_cpu

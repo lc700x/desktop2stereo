@@ -341,7 +341,7 @@ class ConfigGUI(tk.Tk):
         
         # Capture Mode (Monitor / Window)
         self.capture_mode_var_label = tk.StringVar()
-        self.capture_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.capture_mode_var_label, state="readonly")
+        self.capture_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.capture_mode_var_label, state="readonly", width=8)
         self.capture_mode_cb.grid(row=2, column=0, sticky="ew", **self.pad)
         self.capture_mode_cb.bind("<<ComboboxSelected>>", self.on_capture_mode_change)
         

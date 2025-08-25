@@ -1,5 +1,5 @@
 import threading
-import io
+import io, time
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
 import numpy as np
@@ -202,7 +202,7 @@ class MJPEGStreamer:
                     f = self.frame
             if f:
                 yield self.boundary + f + b"\r\n"
-                # time.sleep(self.delay)
+                time.sleep(self.delay)
         yield b""  # End of stream
     def encode_jpeg(self, arr: np.ndarray) -> bytes:
         """

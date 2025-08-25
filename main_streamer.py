@@ -77,36 +77,31 @@ def main():
         # FPS calculation variables
         frame_count = 0
         last_time = time.perf_counter()
-
-        # Average FPS calculation
-        total_frames = 0
         start_time = time.perf_counter()
 
         while True:
             try:
                 rgb, depth = depth_q.get(timeout = TIME_SLEEP)
-                sbs = make_sbs_tensor(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH/10, display_mode = DISPLAY_MODE)
+                sbs = make_sbs_tensor(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode = DISPLAY_MODE)
                 jpg = streamer.encode_jpeg(sbs)
                 # push into the HTTP MJPEG server
                 streamer.set_frame(jpg)
                 if SHOW_FPS:
                     frame_count += 1
-                    total_frames += 1
                     current_time = time.perf_counter()
                     if current_time - last_time >= 1.0:  # Update every second
                         current_fps = frame_count / (current_time - last_time)
                         frame_count = 0
                         last_time = current_time
-                        print(f"FPS: {current_fps}")
+                        print(f"FPS: {current_fps:.2f}")
             except queue.Empty:
                     pass
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
         # Print average FPS on exit
         total_time = time.perf_counter() - start_time
-        avg_fps = total_frames / total_time if total_time > 0 else 0
+        avg_fps = frame_count / total_time if total_time > 0 else 0
         print(f"Average FPS: {avg_fps:.2f}")
-        exit()
     finally:
         streamer.stop()
 
