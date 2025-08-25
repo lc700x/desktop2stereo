@@ -108,6 +108,13 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     # return depth.detach().cpu().numpy().astype('float32')
     
 def predict_depth_tensor(img_rgb):
+    """
+    Predict depth map from RGB image (similar to pipeline example but optimized for DirectML)
+    Args:
+        image_rgb: Input RGB image as numpy array (H, W, 3) in uint8 format
+    Returns:
+        Depth map as numpy array (H, W) normalized to [0, 1]
+    """
     # Ensure input is numpy (H,W,3)
     if isinstance(img_rgb, torch.Tensor):
         img_rgb = img_rgb.cpu().numpy()
@@ -115,9 +122,9 @@ def predict_depth_tensor(img_rgb):
     assert img_rgb.ndim == 3 and img_rgb.shape[2] == 3, \
         f"Expected HWC numpy image, got {img_rgb.shape}"
 
-    # Now safe
-    img_rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE) / 255.0  # (H,W,3)
-    tensor = img_rgb_tensor.permute(2, 0, 1).unsqueeze(0)  # (1,3,H,W)
+    rgb_tensor = torch.from_numpy(img_rgb.copy()).to(DEVICE, dtype=DTYPE) # CPU → CPU tensor (uint8)
+    tensor = rgb_tensor.permute(2, 0, 1).float() / 255  # HWC → CHW, 0-1 range
+    tensor = tensor.unsqueeze(0) # set to improve performance
 
     # Resize and normalize (same as pipeline)
     tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
@@ -134,7 +141,7 @@ def predict_depth_tensor(img_rgb):
 
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
-    return depth, img_rgb_tensor
+    return depth, rgb_tensor
     # return depth.detach().cpu().numpy().astype('float32')
     
 def make_sbs(rgb: np.ndarray, depth, ipd_uv: float = 0.064,
