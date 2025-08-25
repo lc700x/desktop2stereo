@@ -38,20 +38,42 @@ elif OS_NAME == "Darwin":
     except ImportError:
         CGWindowListCopyWindowInfo = None
 
-    def list_windows():
+    def list_windows(min_width=20, min_height=20):
         windows = []
-        if CGWindowListCopyWindowInfo is None:
-            return windows
         options = kCGWindowListOptionOnScreenOnly
         window_info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
+
+        # System UI processes we want to ignore
+        blacklist = {
+            "Window Server",
+            "ControlCenter",
+            "NotificationCenter",
+            "Spotlight",
+            "Dock",
+            "SystemUIServer",
+            "CoreServicesUIAgent",
+        }
+
         for win in window_info:
-            title = win.get("kCGWindowName", "")
-            if title:
-                bounds = win.get("kCGWindowBounds", {})
-                w, h = bounds.get("Width", 0), bounds.get("Height", 0)
-                x, y = bounds.get("X", 0), bounds.get("Y", 0)
-                if w > 0 and h > 0:
-                    windows.append((title, w, h, x, y, win["kCGWindowNumber"]))
+            title = win.get("kCGWindowName", "") or ""
+            owner = win.get("kCGWindowOwnerName", "")
+            layer = win.get("kCGWindowLayer", 0)
+            bounds = win.get("kCGWindowBounds", {})
+            w, h = int(bounds.get("Width", 0)), int(bounds.get("Height", 0))
+            x, y = int(bounds.get("X", 0)), int(bounds.get("Y", 0))
+
+            # Filtering rules
+            if not title.strip():
+                continue
+            if owner in blacklist:
+                continue
+            if layer != 0:  # skip menu bar, overlays, etc.
+                continue
+            if w < min_width or h < min_height:
+                continue
+
+            windows.append((title.strip(), w, h, x, y, win["kCGWindowNumber"]))
+
         return windows
 else:
     import subprocess
@@ -229,8 +251,8 @@ class ConfigGUI(tk.Tk):
         super().__init__()
         self.pad = {"padx": 8, "pady": 6}
         self.title(f"Desktop2Stereo v{VERSION} GUI")
-        self.minsize(780, 560)  # Increased height for new controls
-        self.resizable(False, False)
+        self.minsize(800, 420)  # Increased height for new controls
+        self.resizable(True, False)
         self.language = "EN"
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
         self.selected_window_coords = None

@@ -2,9 +2,9 @@ Capture Mode: Window
 Monitor Index: 1
 Capture Coordinates:
 - 0
-- 25
-- 2240
-- 1152
+- 1259
+- 1
+- 1
 FPS: 30
 Show FPS: true
 Output Resolution: 1080
@@ -60,6 +60,6 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: EN
-Run Mode: Viewer
+Run Mode: Streamer
 Streamer Host: 192.168.1.76
 Streamer Port: 1400
