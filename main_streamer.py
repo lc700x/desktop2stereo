@@ -14,7 +14,6 @@ STREAM_QUALITY   = 100
 raw_q = queue.Queue(maxsize=1)
 proc_q = queue.Queue(maxsize=1)
 depth_q = queue.Queue(maxsize=1)
-sbs_q = queue.Queue(maxsize=1)
 
 def put_latest(q, item):
     """Put item into queue, dropping old one if needed (non-blocking)."""
@@ -54,22 +53,12 @@ def depth_loop():
             continue
         depth, rgb = predict_depth_tensor(frame_rgb)
         put_latest(depth_q, (rgb, depth))
-        
-def sbs_loop():
-    while True:
-        try:
-            rgb, depth = depth_q.get(timeout = TIME_SLEEP)
-        except queue.Empty:
-            continue
-        sbs = make_sbs_tensor(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH/10, display_mode = DISPLAY_MODE)
-        put_latest(sbs_q, sbs)
 
 def main():
     # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
     threading.Thread(target=depth_loop, daemon=True).start()
-    threading.Thread(target=sbs_loop, daemon=True).start()
 
     # start MJPEG streamer
     streamer = MJPEGStreamer(
@@ -94,7 +83,8 @@ def main():
 
         while True:
             try:
-                sbs = sbs_q.get_nowait()
+                rgb, depth = depth_q.get(timeout = TIME_SLEEP)
+                sbs = make_sbs_tensor(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH/10, display_mode = DISPLAY_MODE)
                 jpg = streamer.encode_jpeg(sbs)
                 # push into the HTTP MJPEG server
                 streamer.set_frame(jpg)
@@ -103,10 +93,10 @@ def main():
                     total_frames += 1
                     current_time = time.perf_counter()
                     if current_time - last_time >= 1.0:  # Update every second
-                        # current_fps = frame_count / (current_time - last_time)
+                        current_fps = frame_count / (current_time - last_time)
                         frame_count = 0
                         last_time = current_time
-                        # print(f"FPS: {current_fps}")
+                        print(f"FPS: {current_fps}")
             except queue.Empty:
                     pass
     except KeyboardInterrupt:
