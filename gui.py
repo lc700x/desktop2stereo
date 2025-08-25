@@ -379,7 +379,7 @@ class ConfigGUI(tk.Tk):
         # Streamer Host and Port (only visible when run mode is streamer)
         self.label_streamer_host = ttk.Label(self.content_frame, text="IP Address:")
         self.streamer_host_var = tk.StringVar()
-        self.streamer_host_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_host_var)
+        self.streamer_host_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_host_var, state="readonly")
 
         self.label_streamer_port = ttk.Label(self.content_frame, text="Port:")
         self.streamer_port_var = tk.StringVar()
@@ -622,8 +622,7 @@ class ConfigGUI(tk.Tk):
         if label == streamer_label:
             self.run_mode_key = "Streamer"
             # populate host with detected local IP if empty
-            if not self.streamer_host_var.get():
-                self.streamer_host_var.set(self.get_local_ip())
+            self.streamer_host_var.set(self.get_local_ip())
             if not self.streamer_port_var.get():
                 self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 8080)))
             # grid the controls
