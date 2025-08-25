@@ -1,7 +1,7 @@
 import threading
 import queue
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, IPD, FPS, DEPTH_STRENTH, SHOW_FPS, STREAM_PORT, STREAM_HOST
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, IPD, FPS, DEPTH_STRENTH, SHOW_FPS, STREAM_PORT
 from capture import DesktopGrabber
 from depth import predict_depth_tensor, process, make_sbs_tensor
 from streamer import MJPEGStreamer
@@ -9,6 +9,7 @@ from streamer import MJPEGStreamer
 # Streamer settings
 TIME_SLEEP = round(1.0 / FPS, 2)
 STREAM_QUALITY   = 100
+STREAM_HOST = "0.0.0.0"
 
 # Queues with size=1 (latest-frame-only logic)
 raw_q = queue.Queue(maxsize=1)

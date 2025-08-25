@@ -57,4 +57,3 @@ CAPTURE_MODE = settings["Capture Mode"]
 CAPTURE_COORDS = settings["Capture Coordinates"]
 
 STREAM_PORT = settings["Streamer Port"]
-STREAM_HOST = settings["Streamer Host"]

@@ -199,8 +199,10 @@ UI_TEXTS = {
         "Viewer": "Viewer",
         "Streamer": "Streamer",
         "Port:": "Port:",
-        "IP Address:": "IP Address:",
+        "Streamer URL:": "Streamer URL",
         "Host:": "Host:",
+        "Invalid port number (1-65535)": "Invalid port number (must be between 1-65535)",
+        "Invalid port number": "Port must be a number",
     },
     "CN": {
         "Monitor": "显示器",
@@ -241,8 +243,10 @@ UI_TEXTS = {
         "Viewer": "本地查看",
         "Streamer": "网络推流",
         "Port:": "端口:",
-        "IP Address:": "IP 地址:",
+        "Streamer URL": "推流网址:",
         "Host": "主机:",
+        "Invalid port number (1-65535)": "端口号无效 (必须介于1-65535之间)",
+        "Invalid port number": "端口必须是数字",
     }
 }
 
@@ -452,13 +456,13 @@ class ConfigGUI(tk.Tk):
         self.hf_endpoint_entry.grid(row=9, column=1, sticky="ew", **self.pad)
         
         # Streamer Host and Port (only visible when run mode is streamer)
-        self.label_streamer_host = ttk.Label(self.content_frame, text="IP Address:")
+        self.label_streamer_host = ttk.Label(self.content_frame, text="Streamer URL:")
         self.streamer_host_var = tk.StringVar()
-        self.streamer_host_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_host_var, state="readonly")
-
+        self.streamer_host_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_host_var, state="readonly", foreground="#3E83F7")
         self.label_streamer_port = ttk.Label(self.content_frame, text="Port:")
         self.streamer_port_var = tk.StringVar()
         self.streamer_port_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_port_var)
+        self.streamer_port_var.trace_add("write", self.update_host_url)
 
         # Buttons (moved down a bit to make room)
         self.btn_reset = ttk.Button(self.content_frame, text="Reset", command=self.reset_to_defaults)
@@ -519,7 +523,29 @@ class ConfigGUI(tk.Tk):
                 UI_TEXTS[self.language]["Error"],
                 f"Error refreshing window list: {str(e)}"
             )
-
+    
+    def update_host_url(self, *args):
+        """Update the host URL when port changes and validate the port number"""
+        port = self.streamer_port_var.get()
+        if port:
+            try:
+                port_num = int(port)
+                if 1 <= port_num <= 65535:
+                    self.streamer_host_var.set(f"http://{self.get_local_ip()}:{port_num}")
+                else:
+                    messagebox.showerror(
+                        UI_TEXTS[self.language]["Error"],
+                        UI_TEXTS[self.language].get("Invalid port number (1-65535)", "Invalid port number (must be between 1-65535)")
+                    )
+                    # Reset to default port if invalid
+                    self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+            except ValueError:
+                messagebox.showerror(
+                    UI_TEXTS[self.language]["Error"],
+                    UI_TEXTS[self.language].get("Invalid port number", "Port must be a number")
+                )
+                # Reset to default port if invalid
+                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
 
     def on_window_selected(self, event=None):
         """Handle window selection from the combobox"""
@@ -610,7 +636,7 @@ class ConfigGUI(tk.Tk):
         self.on_capture_mode_change()
 
         # Streamer host/port labels
-        self.label_streamer_host.config(text=texts.get("IP Address:", "IP Address:"))
+        self.label_streamer_host.config(text=texts.get("Streamer URL", "Streamer URL"))
         self.label_streamer_port.config(text=texts.get("Port:", "Port:"))
 
         # language combobox values
@@ -645,10 +671,10 @@ class ConfigGUI(tk.Tk):
         streamer_label = texts.get("Streamer", "Streamer")
         if label == streamer_label:
             self.run_mode_key = "Streamer"
-            # populate host with detected local IP if empty
-            self.streamer_host_var.set(self.get_local_ip())
             if not self.streamer_port_var.get():
-                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 8080)))
+                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+            # populate host with detected local IP if empty
+            self.streamer_host_var.set(f"http://{self.get_local_ip()}:{self.streamer_port_var.get()}")
             # grid the controls
             self.label_streamer_host.grid(row=1, column=0, sticky="w", padx=8, pady=6)
             self.streamer_host_entry.grid(row=1, column=1, sticky="ew", padx=8, pady=6)
@@ -806,12 +832,12 @@ class ConfigGUI(tk.Tk):
         run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Viewer"))
         self.run_mode_key = run_mode
         host = cfg.get("Streamer Host") or DEFAULTS.get("Streamer Host")
-        port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", 8080))
+        port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", 1400))
         if host:
-            self.streamer_host_var.set(str(host))
+            self.streamer_host_var.set(f"http://{host}:{port}")
         else:
             # default local ip
-            self.streamer_host_var.set(self.get_local_ip())
+            self.streamer_host_var.set(f"http://{self.get_local_ip()}:{port}")
         self.streamer_port_var.set(str(port))
         # Capture mode
         capture_mode = cfg.get("Capture Mode", DEFAULTS.get("Capture Mode", "Monitor"))
@@ -834,14 +860,12 @@ class ConfigGUI(tk.Tk):
     def save_settings(self):
         # Validate port
         try:
-            port_val = int(self.streamer_port_var.get()) if self.streamer_port_var.get() else DEFAULTS.get("Streamer Port", 8080)
+            port_val = int(self.streamer_port_var.get()) if self.streamer_port_var.get() else DEFAULTS.get("Streamer Port", 1400)
             if not (1 <= port_val <= 65535):
                 raise ValueError("Port out of range")
         except Exception:
             messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Invalid port: {self.streamer_port_var.get()}")
             return
-
-        host_val = self.streamer_host_var.get() or self.get_local_ip()
 
         cfg = {
             "Capture Mode": self.capture_mode_key,
@@ -862,7 +886,6 @@ class ConfigGUI(tk.Tk):
             "Device": self.device_label_to_index.get(self.device_var.get()),
             "Language": self.language,
             "Run Mode": self.run_mode_key,
-            "Streamer Host": host_val,
             "Streamer Port": port_val,
         }
         success = self.save_yaml("settings.yaml", cfg)
