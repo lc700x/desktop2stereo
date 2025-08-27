@@ -7,7 +7,6 @@ from utils import OS_NAME, CAPTURE_MODE, WINDOW_TITLE, MONITOR_INDEX
 if OS_NAME == "Windows":
     import win32gui
     from ctypes import windll
-    import mss
     from wincam import DXCamera
 
     # call once on startup so coordinates are in physical pixels
@@ -26,7 +25,7 @@ if OS_NAME == "Windows":
         return left, top, right - left, bottom - top
 
     class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode="Window"):
+        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE):
             self.scaled_height = output_resolution
             self.fps = fps
             self._mss = mss.mss()
@@ -44,8 +43,6 @@ if OS_NAME == "Windows":
                 except AttributeError:
                     pass
             else:
-                if not window_title:
-                    raise ValueError("No window title specified for window capture")
                 self.window_title = window_title
                 self.hwnd = win32gui.FindWindow(None, self.window_title)
                 if not self.hwnd:
@@ -74,8 +71,7 @@ if OS_NAME == "Windows":
                 self._ensure_camera_matches_window()
             # now camera exists and matches current window
             img_array, _ = self.camera.get_rgb_frame()
-            self.scaled_width = round(self.prev_rect[2] * self.scaled_height / self.prev_rect[3])
-            return img_array, (self.scaled_height, self.scaled_width)
+            return img_array, self.scaled_height
 
         def close(self):
             if self.camera:

@@ -54,25 +54,27 @@ with torch.no_grad():
 
 lock = Lock()
 
-def process_tensor(img_rgb: np.ndarray, size) -> np.ndarray:
+def process_tensor(img_rgb: np.ndarray, height) -> np.ndarray:
     """
     Process raw BGR image: convert to RGB and apply downscale if set.
     This can be called in a separate thread.
     """
     # Downscale the image if needed
-    if size[0] < img_rgb.shape[0]:
-        img_rgb = cv2.resize(img_rgb, (size[1], size[0]), interpolation=cv2.INTER_AREA)
+    if height < img_rgb.shape[0]:
+        width = int(img_rgb.shape[1] / img_rgb.shape[0] * height)
+        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
     rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE) # CPU → CPU tensor (uint8)
     return rgb_tensor
 
-def process(img_rgb: np.ndarray, size) -> np.ndarray:
+def process(img_rgb: np.ndarray, height) -> np.ndarray:
     """
     Process raw BGR image: convert to RGB and apply downscale if set.
     This can be called in a separate thread.
     """
     # Downscale the image if needed
-    if size[0] < img_rgb.shape[0]:
-        img_rgb = cv2.resize(img_rgb, (size[1], size[0]), interpolation=cv2.INTER_AREA)
+    if height < img_rgb.shape[0]:
+        width = int(img_rgb.shape[1] / img_rgb.shape[0] * height)
+        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
     return img_rgb
 
 @torch.no_grad()
@@ -209,7 +211,7 @@ def pad_to_aspect_ratio(img: torch.Tensor, aspect_ratio=(16, 9)):
     Returns:
         torch.Tensor: Padded image tensor (C, H_new, W_new).
     """
-    C, H, W = img.shape
+    _, H, W = img.shape
     target_w, target_h = aspect_ratio
 
     # Current aspect ratio
@@ -256,9 +258,15 @@ def make_sbs_tensor(
     with lock:  # <<< Thread safety for all GPU ops
         # quick checks and canonicalize shapes
         rgb_c = rgb.permute(2, 0, 1).contiguous()
-        C, H, W = rgb_c.shape
+        _, H, W = rgb_c.shape
 
         # compute per-pixel integer shift (H, W)
+        depth_sampled = depth[::8, ::8]
+        depth_min = torch.quantile(depth_sampled, 0.2)
+        depth_max = torch.quantile(depth_sampled, 0.98)
+        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
+        depth = torch.clamp(depth, 0.0, 1.0)
+        
         inv = torch.ones((H, W), device=DEVICE, dtype=DTYPE) - depth
         max_px = ipd_uv * W
         shifts = (inv * max_px * depth_strength / 5).round().to(torch.long, non_blocking=True)

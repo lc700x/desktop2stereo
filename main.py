@@ -98,7 +98,7 @@ def main(mode="Viewer"):
         else:
             # Streamer settings
             from depth import predict_depth_tensor, make_sbs_tensor
-            from streamer import MP4Streamer
+            from streamer import MJPEGStreamer
             def depth_loop():
                 while True:
                     try:
@@ -109,7 +109,6 @@ def main(mode="Viewer"):
                     put_latest(depth_q, (rgb, depth))
             threading.Thread(target=depth_loop, daemon=True).start()
             STREAM_QUALITY   = 100
-            STREAM_HOST = "0.0.0.0"
             # start MJPEG streamer
             streamer = MJPEGStreamer(
                 port=STREAM_PORT,
