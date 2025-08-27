@@ -492,13 +492,17 @@ class ConfigGUI(tk.Tk):
             
             # Try to select the saved window by name
             if self.selected_window_name:
+                find_window = False
                 for i, (title, _) in enumerate(self._window_objects):
                     if title == self.selected_window_name:
                         self.window_cb.current(i)
                         self.update_status(
                             f"{UI_TEXTS[self.language]['Selected window:']} {title}"
                         )
+                        find_window = True
                         break
+                if not find_window:
+                    self.window_var.set(DEFAULTS["Window Title"])
             elif window_list:
                 self.window_cb.current(0)
                 self.on_window_selected()
