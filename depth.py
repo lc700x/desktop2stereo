@@ -122,16 +122,15 @@ def predict_depth_tensor(img_rgb):
     assert img_rgb.ndim == 3 and img_rgb.shape[2] == 3, \
         f"Expected HWC numpy image, got {img_rgb.shape}"
 
-    rgb_tensor = torch.from_numpy(img_rgb.copy()).to(DEVICE, dtype=DTYPE) # CPU → CPU tensor (uint8)
-    tensor = rgb_tensor.permute(2, 0, 1).float() / 255  # HWC → CHW, 0-1 range
-    tensor = tensor.unsqueeze(0) # set to improve performance
-
-    # Resize and normalize (same as pipeline)
-    tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
-    tensor = (tensor - MEAN) / STD
-
     # Inference with thread safety
     with lock:
+        rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE) # CPU → CPU tensor (uint8)
+        tensor = rgb_tensor.permute(2, 0, 1).float() / 255  # HWC → CHW, 0-1 range
+        tensor = tensor.unsqueeze(0) # set to improve performance
+
+        # Resize and normalize (same as pipeline)
+        tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
+        tensor = (tensor - MEAN) / STD
         tensor = tensor.to(dtype=MODEL_DTYPE)
         depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
 
@@ -199,76 +198,42 @@ def make_sbs(rgb: np.ndarray, depth, ipd_uv: float = 0.064,
 
     return output.astype(np.uint8)
 
-def make_sbs_tensor0(
-    rgb: torch.Tensor,
-    depth: torch.Tensor,
-    ipd_uv: float = 0.064,
-    depth_strength: float = 0.1,
-    display_mode: str = "Half-SBS",   # "Full-SBS" | "Half-SBS" | "TAB"
-):
+def pad_to_aspect_ratio(img: torch.Tensor, aspect_ratio=(16, 9)):
     """
-    Inputs:
-        rgb: Tensor, either (C, H, W) or (H, W, C). Float32 expected.
-            If values are in [0..1], set assume_rgb_range_0_1=True.
-        depth: Tensor, (H, W) float32 in [0..1]
-        ipd_uv: interpupillary distance in normalized image width
-        depth_strength: multiplier for parallax
-        display_mode: "Full-SBS", "Half-SBS", or "TAB" (TAB stacks vertically)
-    Returns: numpy uint8 image (H, W or H, 2W, 3) depending on mode
+    Pads an image tensor (C, H, W) to the given aspect ratio with black pixels.
+
+    Args:
+        img (torch.Tensor): Input image tensor of shape (C, H, W).
+        aspect_ratio (tuple): Desired aspect ratio (W, H). Default is (16, 9).
+
+    Returns:
+        torch.Tensor: Padded image tensor (C, H_new, W_new).
     """
-    # quick checks and canonicalize shapes
-    rgb_c = rgb.permute(2,0,1).contiguous()
-    device = rgb_c.device
-    C, H, W = rgb_c.shape
+    C, H, W = img.shape
+    target_w, target_h = aspect_ratio
 
-    # compute per-pixel integer shift (H, W)
-    inv = 1.0 - depth       # nearer -> smaller inv -> smaller shift
-    max_px = ipd_uv * W
-    shifts = (inv * max_px * depth_strength//5).round().to(torch.long, non_blocking=True)  # (H, W)
+    # Current aspect ratio
+    img_ratio = W / H
+    target_ratio = target_w / target_h
 
-    # half-shift each eye (you used shifts//2 previously)
-    shifts_half = (shifts // 2).clamp(min=0, max=W // 2)   # (H, W) long
+    if abs(img_ratio-target_ratio) <= 0.001:
+        return img
+    elif img_ratio > target_ratio:
+        # Too wide → pad height
+        new_H = int(round(W / target_ratio))
+        pad_total = new_H - H
+        pad_top = pad_total // 2
+        pad_bottom = pad_total - pad_top
+        padding = (0, 0, pad_top, pad_bottom)  # (left, right, top, bottom)
+    else:
+        # Too tall → pad width
+        new_W = int(round(H * target_ratio))
+        pad_total = new_W - W
+        pad_left = pad_total // 2
+        pad_right = pad_total - pad_left
+        padding = (pad_left, pad_right, 0, 0)  # (left, right, top, bottom)
 
-    # create base x coordinates (H, W) without creating extra big copies in python loop
-    xs = torch.arange(W, device=device, dtype=torch.long).unsqueeze(0).expand(H, W)  # (H, W) long
-
-    left_idx = (xs + shifts_half).clamp(0, W - 1)   # (H, W)
-    right_idx = (xs - shifts_half).clamp(0, W - 1)  # (H, W)
-
-    # gather expects index shape to match src for the gathered dim, so expand across channels
-    # shapes for gather: src = (C, H, W), index = (C, H, W)
-    idx_left = left_idx.unsqueeze(0).expand(C, H, W)
-    idx_right = right_idx.unsqueeze(0).expand(C, H, W)
-
-    # gather along width dimension (dim=2)
-    # no_grad helps avoid autograd overhead if not needed
-    with torch.no_grad():
-        left = torch.gather(rgb_c, 2, idx_left)   # (C, H, W)
-        right = torch.gather(rgb_c, 2, idx_right) # (C, H, W)
-
-        # arrange output according to display_mode
-        if display_mode == "TAB":
-            # stack vertically: (2H, W, C) we'll create (C, 2H, W)
-            out = torch.cat([left, right], dim=1)  # (C, 2H, W)
-        else:
-            # side-by-side: (C, H, 2W)
-            out = torch.cat([left, right], dim=2)  # (C, H, 2W)
-
-        # if user wants "Half-SBS" (output width == W), resize on device:
-        # you used cv2.resize to (W,H) when display_mode != "Full-SBS" previously.
-        # We'll interpret "Half-SBS" as "stacked into W width" and use F.interpolate.
-        if display_mode != "Full-SBS":
-            # we need to resize to (C, H, W) — do interpolate on device (preserves speed)
-            target_w = W
-            target_h = H
-            out = F.interpolate(out.unsqueeze(0), size=(target_h, target_w), mode="area")[0]  # (C,H,W)
-
-        # clamp and convert to uint8
-        out = out.to(torch.float32).clamp(0, 255).to(torch.uint8)
-
-    # convert to (H, W, C) uint8 numpy on CPU
-    out_cpu = out.permute(1, 2, 0).contiguous().cpu().numpy()
-    return out_cpu
+    return F.pad(img, padding, mode="constant", value=0)
 
 def make_sbs_tensor(
     rgb: torch.Tensor,
@@ -283,77 +248,52 @@ def make_sbs_tensor(
         depth: Tensor, (H, W) float32 in [0..1]
         ipd_uv: interpupillary distance in normalized image width
         depth_strength: multiplier for parallax
-        display_mode: "Full-SBS", "Half-SBS", or "TAB"
-    Returns: numpy uint8 image (H, W, 3)
+        display_mode: "Full-SBS", "Half-SBS", or "TAB" (TAB stacks vertically)
+    Returns:
+        numpy uint8 image (H, W or H, 2W, 3) depending on mode
     """
-    if rgb.ndim == 3 and rgb.shape[0] != 3:
+
+    with lock:  # <<< Thread safety for all GPU ops
+        # quick checks and canonicalize shapes
         rgb_c = rgb.permute(2, 0, 1).contiguous()
-    else:
-        rgb_c = rgb.contiguous()
-    
-    device = rgb_c.device
-    C, H, W = rgb_c.shape
+        C, H, W = rgb_c.shape
 
-    # compute per-pixel integer shift (H, W)
-    inv = 1.0 - depth
-    max_px = ipd_uv * W
-    shifts = (inv * max_px * depth_strength // 5).round().to(torch.long, non_blocking=True)
-    shifts_half = (shifts // 2).clamp(min=0, max=W // 2)
+        # compute per-pixel integer shift (H, W)
+        inv = torch.ones((H, W), device=DEVICE, dtype=DTYPE) - depth
+        max_px = ipd_uv * W
+        shifts = (inv * max_px * depth_strength / 5).round().to(torch.long, non_blocking=True)
 
-    xs = torch.arange(W, device=device, dtype=torch.long).unsqueeze(0).expand(H, W)
-    left_idx = (xs + shifts_half).clamp(0, W - 1)
-    right_idx = (xs - shifts_half).clamp(0, W - 1)
+        # half-shift each eye
+        shifts_half = (shifts // 2).clamp(min=0, max=W // 2)
 
-    idx_left = left_idx.unsqueeze(0).expand(C, H, W)
-    idx_right = right_idx.unsqueeze(0).expand(C, H, W)
+        # base x coordinates
+        xs = torch.arange(W, device=DEVICE, dtype=torch.long).unsqueeze(0).expand(H, W)
 
-    with torch.no_grad():
-        left = torch.gather(rgb_c, 2, idx_left)
-        right = torch.gather(rgb_c, 2, idx_right)
+        left_idx = (xs + shifts_half).clamp(0, W - 1)
+        right_idx = (xs - shifts_half).clamp(0, W - 1)
 
-    # ------------------ Setup output canvas sizes ------------------
-    if display_mode == "Full-SBS":
-        win_w, win_h =  W, H
-        aspect = 32 / 9
-    elif display_mode == "Half-SBS":
-        win_w, win_h = W, H
-        aspect = 16 / 9
-    elif display_mode == "TAB":
-        win_w, win_h = W, 2 * H
-        aspect = 16 / 9
-    else:
-        raise ValueError("Invalid display_mode")
+        # expand across channels
+        idx_left = left_idx.unsqueeze(0).expand(C, H, W)
+        idx_right = right_idx.unsqueeze(0).expand(C, H, W)
 
-    # enforce target aspect ratio by padding
-    target_h = win_h
-    target_w = int(round(target_h * aspect))
-    if target_w < win_w:
-        target_w = win_w
-        target_h = int(round(target_w / aspect))
+        with torch.no_grad():
+            gen_left = torch.gather(rgb_c, 2, idx_left)
+            gen_right = torch.gather(rgb_c, 2, idx_right)
+            left = pad_to_aspect_ratio(gen_left)
+            right = pad_to_aspect_ratio(gen_right)
 
-    canvas = torch.zeros((C, target_h, target_w), dtype=torch.uint8, device="cpu")
+            # arrange output according to display_mode
+            if display_mode == "TAB":
+                out = torch.cat([left, right], dim=1)  # (C, 2H, W)
+            else:
+                out = torch.cat([left, right], dim=2)  # (C, H, 2W)
 
-    # ------------------ Place images ------------------
-    def place_eye(img, cx, cy, box_w, box_h):
-        # scale to fit inside box while keeping aspect
-        ih, iw = img.shape[1:]
-        scale = min(box_w / iw, box_h / ih)
-        new_w, new_h = int(iw * scale), int(ih * scale)
-        resized = F.interpolate(img.unsqueeze(0), size=(new_h, new_w), mode="area")[0]
-        print(resized.shape)
-        # place in canvas
-        x0 = cx - new_w // 2
-        y0 = cy - new_h // 2
-        canvas[:, y0:y0+new_h, x0:x0+new_w] = resized.to(torch.uint8)
+            if display_mode != "Full-SBS":
+                out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
 
-    if display_mode in ["Full-SBS", "Half-SBS"]:
-        # left eye
-        place_eye(left, target_w // 4, target_h // 2, target_w // 2, target_h)
-        # right eye
-        place_eye(right, 3 * target_w // 4, target_h // 2, target_w // 2, target_h)
-    else:  # TAB
-        place_eye(left, target_w // 2, target_h // 4, target_w, target_h // 2)
-        place_eye(right, target_w // 2, 3 * target_h // 4, target_w, target_h // 2)
+            out = out.to(torch.float32).clamp(0, 255).to(torch.uint8)
 
-    out_cpu = canvas.permute(1, 2, 0).contiguous().cpu().numpy()
+        # convert to (H, W, C) on CPU
+        out_cpu = out.permute(1, 2, 0).contiguous().cpu().numpy()
+
     return out_cpu

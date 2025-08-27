@@ -1,5 +1,15 @@
 import yaml
-import os, platform
+import os, platform, socket
+
+def get_local_ip():
+    """Return the local IP address by creating a UDP socket to a public IP."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            # doesn't need to be reachable
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
 
 def crop_icon(icon_img):
     """Crop to make icon larger by cropping for Windows"""
@@ -44,6 +54,7 @@ if OS_NAME == "Windows":
 VERSION = 2.3
 
 # Get settings
+RUN_MODE = settings["Run Mode"]
 MODEL_ID = settings["Depth Model"]
 DEFAULT_MODEL_LIST = settings["Model List"]
 CACHE_PATH = settings["Download Path"]
@@ -57,3 +68,4 @@ CAPTURE_MODE = settings["Capture Mode"]
 CAPTURE_COORDS = settings["Capture Coordinates"]
 
 STREAM_PORT = settings["Streamer Port"]
+LOCAL_IP = get_local_ip()

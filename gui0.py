@@ -168,13 +168,13 @@ class ConfigGUI(tk.Tk):
         self._window_objects = []  # Store window objects for reference
 
         try:
-            icon_img = Image.open("icon.png")
+            icon_img = Image.open("icon.ico")
             if OS_NAME == "Windows":
                 icon_img = crop_icon(icon_img)
             icon_photo = ImageTk.PhotoImage(icon_img)
             self.iconphoto(True, icon_photo)
         except Exception as e:
-            print(f"Warning: Could not load icon.png - {e}")
+            print(f"Warning: Could not load icon.ico - {e}")
 
         self.create_widgets()
         self.monitor_label_to_index = self.populate_monitors()

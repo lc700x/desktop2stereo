@@ -1,31 +1,56 @@
 import os
 import sys
 import subprocess
-import socket
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon
+from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon, get_local_ip
 
 # Get window lists
 if OS_NAME == "Windows":
     try:
         import win32gui
+        import win32con
+        import ctypes
+        from ctypes import wintypes
     except ImportError:
         win32gui = None
+
     def list_windows():
         windows = []
+
+        # Setup for DWM call
+        DWMWA_EXTENDED_FRAME_BOUNDS = 9
+        dwmapi = ctypes.WinDLL("dwmapi")
+        rect_type = wintypes.RECT
+
+        def get_window_rect(hwnd):
+            rect = rect_type()
+            try:
+                # Try extended frame bounds (no shadow/borders)
+                res = dwmapi.DwmGetWindowAttribute(
+                    hwnd,
+                    DWMWA_EXTENDED_FRAME_BOUNDS,
+                    ctypes.byref(rect),
+                    ctypes.sizeof(rect),
+                )
+                if res == 0:  # S_OK
+                    return rect.left, rect.top, rect.right, rect.bottom
+            except Exception:
+                pass
+            # fallback
+            return win32gui.GetWindowRect(hwnd)
 
         def callback(hwnd, _):
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd)
                 if title:
-                    rect = win32gui.GetWindowRect(hwnd)
-                    x, y, r, b = rect
+                    x, y, r, b = get_window_rect(hwnd)
                     w, h = r - x, b - y
                     if w > 0 and h > 0:
                         windows.append((title, w, h, x, y, hwnd))
             return True
+
         win32gui.EnumWindows(callback, None)
         return windows
 elif OS_NAME == "Darwin":
@@ -198,7 +223,7 @@ UI_TEXTS = {
         "Run Mode:": "Run Mode:",
         "Viewer": "Viewer",
         "Streamer": "Streamer",
-        "Port:": "Port:",
+        "Streamer Port:": "Streamer Port:",
         "Streamer URL:": "Streamer URL",
         "Host:": "Host:",
         "Invalid port number (1-65535)": "Invalid port number (must be between 1-65535)",
@@ -242,7 +267,7 @@ UI_TEXTS = {
         "Run Mode:": "运行模式:",
         "Viewer": "本地查看",
         "Streamer": "网络推流",
-        "Port:": "端口:",
+        "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
         "Host": "主机:",
         "Invalid port number (1-65535)": "端口号无效 (必须介于1-65535之间)",
@@ -263,13 +288,13 @@ class ConfigGUI(tk.Tk):
         self._window_objects = []  # Store window objects for reference
 
         try:
-            icon_img = Image.open("icon.png")
+            icon_img = Image.open("icon.ico")
             if OS_NAME == "Windows":
                 icon_img = crop_icon(icon_img)
             icon_photo = ImageTk.PhotoImage(icon_img)
             self.iconphoto(True, icon_photo)
         except Exception as e:
-            print(f"Warning: Could not load icon.png - {e}")
+            print(f"Warning: Could not load icon.ico - {e}")
 
         # internal run mode key: 'Viewer' or 'Streamer'
         self.run_mode_key = DEFAULTS.get("Run Mode", "Viewer")
@@ -356,8 +381,8 @@ class ConfigGUI(tk.Tk):
         # self.window_cb.grid(row=0, column=0, sticky="ew", **self.pad)
         self.window_cb.bind("<<ComboboxSelected>>", self.on_window_selected)
         
-        self.btn_refresh = ttk.Button(self.content_frame, text="Refresh", command=self.refresh_window_list)
-        # self.btn_refresh.grid(row=0, column=1,  sticky="we", **self.pad)
+        self.btn_refresh = ttk.Button(self.content_frame, text="Refresh", command=self.refresh_monitor_and_window)
+        self.btn_refresh.grid(row=2, column=3, sticky="we", **self.pad)
         
         # Language
         self.label_language = ttk.Label(self.content_frame, text="Set Language:")
@@ -459,7 +484,7 @@ class ConfigGUI(tk.Tk):
         self.label_streamer_host = ttk.Label(self.content_frame, text="Streamer URL:")
         self.streamer_host_var = tk.StringVar()
         self.streamer_host_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_host_var, state="readonly", foreground="#3E83F7")
-        self.label_streamer_port = ttk.Label(self.content_frame, text="Port:")
+        self.label_streamer_port = ttk.Label(self.content_frame, text="Streamer Port:")
         self.streamer_port_var = tk.StringVar()
         self.streamer_port_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_port_var)
         self.streamer_port_var.trace_add("write", self.update_host_url)
@@ -481,16 +506,6 @@ class ConfigGUI(tk.Tk):
         # Status bar at bottom
         self.status_label = tk.Label(self, text="", anchor="w", relief="sunken", padx=20, pady=4)
         self.status_label.grid(row=1, column=0, sticky="we")  # no padding
-
-    def get_local_ip(self):
-        """Return the local IP address by creating a UDP socket to a public IP."""
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                # doesn't need to be reachable
-                s.connect(("8.8.8.8", 80))
-                return s.getsockname()[0]
-        except Exception:
-            return "127.0.0.1"
     
     def refresh_window_list(self):
         """Refresh the list of available windows with optimized performance"""
@@ -523,6 +538,13 @@ class ConfigGUI(tk.Tk):
                 UI_TEXTS[self.language]["Error"],
                 f"Error refreshing window list: {str(e)}"
             )
+    def refresh_monitor_and_window(self):
+        """Allow user to get latest monitor/window list"""
+        if self.capture_mode_key == "Window":
+            self.refresh_window_list()
+        else:
+            self.populate_monitors()
+        self.update_host_url() # refresh URL
     
     def update_host_url(self, *args):
         """Update the host URL when port changes and validate the port number"""
@@ -531,7 +553,7 @@ class ConfigGUI(tk.Tk):
             try:
                 port_num = int(port)
                 if 1 <= port_num <= 65535:
-                    self.streamer_host_var.set(f"http://{self.get_local_ip()}:{port_num}")
+                    self.streamer_host_var.set(f"http://{get_local_ip()}:{port_num}")
                 else:
                     messagebox.showerror(
                         UI_TEXTS[self.language]["Error"],
@@ -580,12 +602,10 @@ class ConfigGUI(tk.Tk):
         if label == monitor_label:
             self.capture_mode_key = "Monitor"
             self.monitor_menu.grid(row=2, column=1, columnspan=2, sticky="w", **self.pad)
-            self.btn_refresh.grid_remove()
             self.window_cb.grid_remove()
         else:  # Window
             self.capture_mode_key = "Window"
             self.monitor_menu.grid_remove()
-            self.btn_refresh.grid(row=2, column=3, sticky="we", **self.pad)
             self.window_cb.grid(row=2, column=1, columnspan=2, sticky="ew", **self.pad)
             # Refresh window list automatically when switching to Window mode
             self.refresh_window_list()
@@ -637,7 +657,7 @@ class ConfigGUI(tk.Tk):
 
         # Streamer host/port labels
         self.label_streamer_host.config(text=texts.get("Streamer URL", "Streamer URL"))
-        self.label_streamer_port.config(text=texts.get("Port:", "Port:"))
+        self.label_streamer_port.config(text=texts.get("Streamer Port:", "Streamer Port:"))
 
         # language combobox values
         self.language_cb["values"] = list(UI_TEXTS.keys())
@@ -674,7 +694,7 @@ class ConfigGUI(tk.Tk):
             if not self.streamer_port_var.get():
                 self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
             # populate host with detected local IP if empty
-            self.streamer_host_var.set(f"http://{self.get_local_ip()}:{self.streamer_port_var.get()}")
+            self.streamer_host_var.set(f"http://{get_local_ip()}:{self.streamer_port_var.get()}")
             # grid the controls
             self.label_streamer_host.grid(row=1, column=0, sticky="w", padx=8, pady=6)
             self.streamer_host_entry.grid(row=1, column=1, sticky="ew", padx=8, pady=6)
@@ -837,7 +857,7 @@ class ConfigGUI(tk.Tk):
             self.streamer_host_var.set(f"http://{host}:{port}")
         else:
             # default local ip
-            self.streamer_host_var.set(f"http://{self.get_local_ip()}:{port}")
+            self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
         self.streamer_port_var.set(str(port))
         # Capture mode
         capture_mode = cfg.get("Capture Mode", DEFAULTS.get("Capture Mode", "Monitor"))
@@ -910,10 +930,8 @@ class ConfigGUI(tk.Tk):
             self.after(1000, lambda: self._countdown_and_run(seconds - 1))
         else:
             try:
-                if self.run_mode_key == "Viewer":
-                    cmd = [sys.executable, "main.py"]
-                else:
-                    cmd = [sys.executable, "main_streamer.py"]
+                print(f"[Main] Initializing Desktop2Stereo {self.run_mode_key}…")
+                cmd = [sys.executable, "main.py"]
 
                 self.process = subprocess.Popen(cmd)
                 self.update_status(UI_TEXTS[self.language]["Running"])
@@ -950,8 +968,10 @@ class ConfigGUI(tk.Tk):
             finally:
                 self.process = None
                 self.update_status(UI_TEXTS[self.language]["Stopped"])
+                print(f"[Main] {self.run_mode_key} Stopped")
         else:
             self.update_status(UI_TEXTS[self.language]["Stopped"])
+            print(f"[Main] {self.run_mode_key} Stopped")
 
 if __name__ == "__main__":
     app = ConfigGUI()

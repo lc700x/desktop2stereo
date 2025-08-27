@@ -4,7 +4,7 @@ import moderngl
 import numpy as np
 
 # Get OS name and settings
-from utils import OS_NAME, IPD, crop_icon
+from utils import OS_NAME, crop_icon
 
 VERTEX_SHADER = """
     #version 330
@@ -42,16 +42,16 @@ FRAGMENT_SHADER = """
     """
 def add_logo(window):
         from PIL  import Image
-        glfw_img = Image.open("icon2.png")  # Path to your icon file
+        glfw_img = Image.open("icon2.ico")  # Path to your icon file
         if OS_NAME != "Darwin":
             glfw_img = crop_icon(glfw_img)
             glfw.set_window_icon(window, 1, [glfw_img])
 class StereoWindow:
     """A window for displaying stereo images side-by-side with depth effect."""
-    def __init__(self, depth_ratio=1.0, display_mode="Half-SBS"):
+    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS"):
         self.window_size = (1280, 720)
         self.title = "Stereo SBS Viewer"
-        self.ipd_uv = IPD  # Inter-pupillary distance in UV coordinates (0.064 per eye)
+        self.ipd_uv = ipd  # Inter-pupillary distance in UV coordinates (0.064 per eye)
         self.depth_strength = 0.1  # Strength of depth effect
         self._last_window_position = None
         self._last_window_size = None

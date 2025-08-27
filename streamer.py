@@ -1,10 +1,14 @@
 import threading
-import io, time
+import io, time, os
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
 import numpy as np
 import cv2
 from PIL import Image
+from utils import get_local_ip
+
+ICON_PATH = "icon2.ico"
+
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     allow_reuse_address = True
     block_on_close = False
@@ -30,14 +34,15 @@ class MJPEGStreamer:
         self.sbs_height = None
         self.index_bytes = None
         
-        self.delay      = round(1.0 / fps, 4)
+        self.delay = round(1.0 / fps, 4)
 
-        # Lightweight HTML page
+        # Lightweight HTML page (no process_token code)
         self.template = """<!DOCTYPE html>
 <html>
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="icon" type="image/x-icon" href="./favicon.ico">
         <title>Desktop2Stereo Streamer</title>
         <script>
             const FPS = {fps};
@@ -48,8 +53,6 @@ class MJPEGStreamer:
             window.onload = () => {{
                 let canvasStream = null;
                 let canvas = document.createElement("canvas");
-                let process_token = null;
-                let stop_update = false;
 
                 canvas.width = WIDTH;
                 canvas.height = HEIGHT;
@@ -70,44 +73,13 @@ class MJPEGStreamer:
                         }}
                         render();
                     }};
-                    // check server restart
-                    setInterval(() => {{
-                    if (document.hidden) {{
-                        return;
-                    }}
-                    fetch('/process_token',
-                        {{
-                                method: 'GET',
-                        }})
-                        .then((res) => {{
-                                if (!res.ok) {{
-                                stop_update = true;
-                                //console.log("err1", res.status, res.statusText);
-                                }}
-                                return res.json();
-                        }})
-                        .then((res) => {{
-                            //console.log("check token", process_token, res.token);
-                            if (process_token == null) {{
-                                process_token = res.token;
-                            }} else if (process_token != res.token) {{
-                                // reload
-                                process_token = null;
-                                location.reload();
-                            }}
-                        }})
-                        .catch((reason) => {{
-                            stop_update = true;
-                                //console.log("err2", reason);
-                        }});
-                    }}, 4000);
                 }}
                 
                 function setup_video() {{
                     const video = document.getElementById("player-canvas");
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(video, 0, 0, WIDTH*2, HEIGHT);
-                    canvasStream = canvas.captureStream(FPS);  // 0-FPS freq
+                    canvasStream = canvas.captureStream(FPS);
                     video.srcObject = canvasStream;
                 }}
                 setup_interval();
@@ -163,6 +135,17 @@ class MJPEGStreamer:
                      "multipart/x-mixed-replace; boundary=frame"),
                 ])
                 return self._generate()
+            
+            if path == "/favicon.ico":  # serve web icon
+                if os.path.exists(ICON_PATH):
+                    with open(ICON_PATH, "rb") as f:
+                        data = f.read()
+                    start_response("200 OK", [("Content-Type", "image/x-icon")])
+                    return [data]
+                else:
+                    start_response("404 Not Found",
+                                   [("Content-Type", "text/plain")])
+                    return [b"Icon not found"]
 
             start_response("404 Not Found",
                            [("Content-Type", "text/plain")])
@@ -174,7 +157,7 @@ class MJPEGStreamer:
 
     def start(self):
         print(
-            f"[MJPEGStreamer] serving on http://{self.server.server_address[0]}:{self.server.server_address[1]}/"
+            f"[MJPEGStreamer] serving on http://{get_local_ip()}:{self.server.server_address[1]}/"
         )
         self.thread.start()
 
@@ -204,12 +187,12 @@ class MJPEGStreamer:
                 yield self.boundary + f + b"\r\n"
                 time.sleep(self.delay)
         yield b""  # End of stream
+
     def encode_jpeg(self, arr: np.ndarray) -> bytes:
         """
         Encode a H×(W or 2W)×3 uint8 numpy array to JPEG bytes.
         Also updates the HTML template with the correct dimensions if this is the first frame.
         """
-        # Update dimensions if this is the first frame
         if self.sbs_width is None or self.sbs_height is None:
             self.sbs_height, self.sbs_width = arr.shape[:2]
             self.index_bytes = self.template.format(
@@ -226,8 +209,6 @@ class MJPEGStreamer:
 
 # Example usage:
 if __name__ == "__main__":
-    import cv2
-
     cap = cv2.VideoCapture(0)
     streamer = MJPEGStreamer(port=1303, fps=60, quality=90)
     streamer.start()

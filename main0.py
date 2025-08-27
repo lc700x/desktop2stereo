@@ -98,7 +98,7 @@ def main(mode="Viewer"):
         else:
             # Streamer settings
             from depth import predict_depth_tensor, make_sbs_tensor
-            from streamer import MP4Streamer
+            from streamer import MJPEGStreamer
             def depth_loop():
                 while True:
                     try:
