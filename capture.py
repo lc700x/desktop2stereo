@@ -1,55 +1,44 @@
 import numpy as np
 import mss
-from gui import OS_NAME
+from utils import OS_NAME, CAPTURE_MODE, CAPTURE_COORDS, MONITOR_INDEX
 
 # DesktopGrabber: wincam (Windows), MSS + AppKit (Mac), MSS (Linux) 
 # Windows 10/11
 if OS_NAME == "Windows":
     from wincam import DXCamera
     class DesktopGrabber:
-        def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
+        def __init__(self, output_resolution=1080, fps=60):
             self.scaled_height = output_resolution
-            self.monitor_index = monitor_index
             self.fps = fps
             self._mss = mss.mss()
-
-            if show_monitor_info:
-                self._log_monitors()
-            if monitor_index >= len(self._mss.monitors):
-                print(f"Monitor {monitor_index} not found, using primary monitor")
-                monitor_index = 1
-            self._mon = self._mss.monitors[monitor_index]
-
-            self.system_width, self.system_height = self.get_screen_resolution(monitor_index)
-            self.scaled_width = round(self.system_width * self.scaled_height / self.system_height)
-            self.system_scale = int(self.system_width / self._mon["width"])
+            self.capture_mode = CAPTURE_MODE
+            self.capture_coords = CAPTURE_COORDS
+            
+            if self.capture_mode == "Monitor":
+                monitor_index = MONITOR_INDEX
+                if monitor_index >= len(self._mss.monitors):
+                    print(f"Monitor {monitor_index} not found, using primary monitor")
+                    monitor_index = 1
+                self._mon = self._mss.monitors[monitor_index]
+                left = self._mon['left']
+                top = self._mon['top']
+                width = self._mon['width']
+                height = self._mon['height']
+            else:
+                # Window capture mode
+                if not self.capture_coords:
+                    raise ValueError("No capture coordinates specified for window capture")
+                left, top, width, height = self.capture_coords
+            
+            self.scaled_width = round(width * self.scaled_height / height)
 
             self.camera = DXCamera(
-                self._mon['left'] * self.system_scale,
-                self._mon['top'] * self.system_scale,
-                self.system_width,
-                self.system_height,
+                left,
+                top,
+                width,
+                height,
                 fps=self.fps,
             )
-            
-            if show_monitor_info:
-                print(f"Using monitor {monitor_index}: {self.system_width}x{self.system_height}")
-                print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
-
-        def _log_monitors(self):
-            print("Available monitors:")
-            for i, mon in enumerate(self._mss.monitors):
-                width, height = self.get_screen_resolution(i)
-                if i == 0:
-                    print(f"  {i}: All monitors - {width}x{height}")
-                else:
-                    system_scale = int(width / mon["width"])
-                    print(f"  {i}: Monitor {i} - {width}x{height} at ({mon['left'] * system_scale}, {mon['top'] * system_scale})")
-
-        def get_screen_resolution(self, index):
-            monitor = self._mss.monitors[index]
-            screen = self._mss.grab(monitor)
-            return screen.size.width, screen.size.height
 
         def __enter__(self):
             self.camera.__enter__()
@@ -64,16 +53,12 @@ if OS_NAME == "Windows":
 
 elif OS_NAME == "Darwin":
     import io
-    import numpy as np
     import cv2
     from PIL import Image
-
-    # macOS-specific imports assumed present in your environment:
-    from AppKit import NSCursor, NSBitmapImageRep, NSPNGFileType
+    from AppKit import NSCursor, NSBitmapImageRep, NSPNGFileType, NSScreen
     import Quartz.CoreGraphics as CG
-    from Quartz import CGCursorIsVisible
-    import mss
-
+    from Quartz import CGCursorIsVisible, NSEvent
+    
     # Cursor loader with caching & precomputation
     def get_cursor_image_and_hotspot():
         """
@@ -227,69 +212,86 @@ elif OS_NAME == "Darwin":
         np.copyto(dst_region, np.clip(res_f32, 0, 255).astype(np.uint8))
         return frame_bgr
 
-    # DesktopGrabber with optimized grab path
     class DesktopGrabber:
-        def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60, with_cursor=True):
+        def __init__(self, output_resolution=1080, show_monitor_info=True, fps=60, with_cursor=True):
             self.scaled_height = output_resolution
-            self.monitor_index = monitor_index
             self.fps = fps
             self.with_cursor = with_cursor
             self._mss = mss.mss()
+            
+            # Get capture coordinates from settings
+            self.capture_mode = CAPTURE_MODE
+            self.capture_coords = CAPTURE_COORDS
+            
+            if self.capture_mode == "Monitor":
+                monitor_index = MONITOR_INDEX
+                if monitor_index >= len(self._mss.monitors):
+                    print(f"Monitor {monitor_index} not found, using primary monitor")
+                    monitor_index = 1
+                self._mon = self._mss.monitors[monitor_index]
+                self.left = self._mon['left']
+                self.top = self._mon['top']
+                self.width = self._mon["width"]
+                self.height = self._mon["height"]
+            else:
+                # Window capture mode
+                if not self.capture_coords:
+                    raise ValueError("No capture coordinates specified for window capture")
+                self.left, self.top, self.width, self.height = self.capture_coords
+            
+            self.scaled_width = round(self.width * self.scaled_height / self.height)
 
-            if show_monitor_info:
-                self._log_monitors()
+        def get_scale(self):
+            # Get current mouse location
+            mouse_location = NSEvent.mouseLocation()
 
-            if monitor_index >= len(self._mss.monitors):
-                print(f"Monitor {monitor_index} not found, using primary monitor")
-                monitor_index = 1
+            # Get list of screens
+            screens = NSScreen.screens()
 
-            self._mon = self._mss.monitors[monitor_index]
-            self.system_width, self.system_height = self.get_screen_resolution(monitor_index)
-            self.scaled_width = round(self.system_width * self.scaled_height / self.system_height)
-            self.system_scale = int(self.system_width / self._mon["width"])
+            for screen in screens:
+                frame = screen.frame()
+                if frame.origin.x <= mouse_location.x <= frame.origin.x + frame.size.width and \
+                frame.origin.y <= mouse_location.y <= frame.origin.y + frame.size.height:
+                    # Found the screen under the cursor
+                    backing_scale = screen.backingScaleFactor()
+                    return backing_scale
 
-            if show_monitor_info:
-                print(f"Using monitor {monitor_index}: {self.system_width}x{self.system_height}")
-                print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
-
-        def _log_monitors(self):
-            print("Available monitors:")
-            for i, mon in enumerate(self._mss.monitors):
-                width, height = self.get_screen_resolution(i)
-                if i == 0:
-                    print(f"  {i}: All monitors - {width}x{height}")
-                else:
-                    system_scale = int(width / mon["width"])
-                    print(f"  {i}: Monitor {i} - {width}x{height} at ({mon['left'] * system_scale}, {mon['top'] * system_scale})")
-
-        def get_screen_resolution(self, index):
-            monitor = self._mss.monitors[index]
-            screen = self._mss.grab(monitor)
-            return screen.size.width, screen.size.height
+            raise RuntimeError("No screen found under cursor")
 
         def grab(self):
+            # Create custom monitor dict for MSS
+            monitor = {
+                "left": self.left,
+                "top": self.top,
+                "width": self.width,
+                "height": self.height
+            }
+            
             # Grab: mss gives a raw BGRA buffer (Pillow style). Convert once to numpy view.
-            shot = self._mss.grab(self._mon)
+            shot = self._mss.grab(monitor)
             arr = np.asarray(shot)  # BGRA uint8 view (no unnecessary copies if mss supports it)
             # Convert to BGR (drop alpha) using OpenCV (fast C path)
             frame_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+            
             # Load cursor and precompute alpha/premultiplied arrays for fast overlay
             if self.with_cursor and CGCursorIsVisible():
                 x, y = get_cursor_position()
-                # Convert to local monitor frame coordinates (origin top-left)
-                cursor_x = (x - self._mon["left"]) * self.system_scale
-                cursor_y = (y - self._mon["top"]) * self.system_scale
-                # Only overlay if cursor is within this monitor's frame
-                if 0 <= cursor_x <= int(self.system_width) and 0 <= cursor_y <= int(self.system_height):
+                system_scale = self.get_scale()
+                # Convert to local frame coordinates
+                if 0 <= x - self.left <= self.width and 0 <= y - self.top <= self.height:
+                    
+                    cursor_x = (x - self.left) * system_scale
+                    cursor_y = (y - self.top) * system_scale
+                    # Only overlay if cursor is within this frame
+                
                     cursor_bgra, hotspot, alpha_f32, premultiplied = get_cursor_image_and_hotspot()
-                    scale_factor = 16 // self.system_scale
+                    scale_factor = 16 // system_scale
                     if cursor_bgra.shape[0] > scale_factor and cursor_bgra.shape[1] > scale_factor:
                         h, w = cursor_bgra.shape[:2]
                         new_w, new_h = int(w / scale_factor), int(h / scale_factor)
                         # resize BGRA; keep alpha channel scaled properly
                         cursor_bgra = cv2.resize(cursor_bgra, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-                        # recompute alpha & premultiplied after resize (fast relative to per-frame cost)
+                        # recompute alpha & premultiplied after resize
                         alpha_f32 = (cursor_bgra[:, :, 3].astype(np.float32) / 255.0)
                         premultiplied = cursor_bgra[:, :, :3].astype(np.float32) * alpha_f32[:, :, None]
 
@@ -297,65 +299,68 @@ elif OS_NAME == "Darwin":
                         self.cursor_hotspot = hotspot
                         self.cursor_alpha = alpha_f32
                         self.cursor_premultiplied = premultiplied
-                else:
-                    self.cursor_bgra = None
-                    self.cursor_hotspot = (0, 0)
-                    self.cursor_alpha = None
-                    self.cursor_premultiplied = None
+                        
+                        if self.with_cursor and self.cursor_bgra is not None:
+                            # overlay in-place using optimized routine
+                            frame_bgr = overlay_cursor_on_frame(
+                                frame_bgr,
+                                self.cursor_bgra,
+                                self.cursor_hotspot,
+                                (cursor_x, cursor_y),
+                                alpha_f32=self.cursor_alpha,
+                                premultiplied_bgr_f32=self.cursor_premultiplied
+                            )
+            else:
+                self.cursor_bgra = None
+                self.cursor_hotspot = (0, 0)
+                self.cursor_alpha = None
+                self.cursor_premultiplied = None
 
-                if self.with_cursor and self.cursor_bgra is not None:
-                        # overlay in-place using optimized routine
-                        frame_bgr = overlay_cursor_on_frame(
-                            frame_bgr,
-                            self.cursor_bgra,
-                            self.cursor_hotspot,
-                            (cursor_x, cursor_y),
-                            alpha_f32=self.cursor_alpha,
-                            premultiplied_bgr_f32=self.cursor_premultiplied
-                        )
-            # Return RGB image & scaled dimensions (match your original return signature)
+            # Return RGB image & scaled dimensions
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             return frame_rgb, (self.scaled_height, self.scaled_width)
 
 
-else: # Old MacOS and Linux
-    print("Use MSS as screen grabber. ")
+else: # Linux and other platforms
+    print("Use MSS as screen grabber.")
     import cv2
     class DesktopGrabber:
-        def __init__(self, monitor_index=1, output_resolution=1080, show_monitor_info=True, fps=60):
+        def __init__(self, output_resolution=1080, fps=60):
             self.scaled_height = output_resolution
-            self.monitor_index = monitor_index
             self.fps = fps
             self._mss = mss.mss(with_cursor=True)
-            if show_monitor_info:
-                self._log_monitors()
-            if monitor_index >= len(self._mss.monitors):
-                print(f"Monitor {monitor_index} not found, using primary monitor")
-                monitor_index = 1
-            self._mon = self._mss.monitors[monitor_index]
-            self.system_width, self.system_height = self.get_screen_resolution(monitor_index)
-            self.scaled_width = round(self.system_width * self.scaled_height / self.system_height)
-            self.system_scale = int(self.system_width / self._mon["width"])
-            if show_monitor_info:
-                print(f"Using monitor {monitor_index}: {self.system_width}x{self.system_height}")
-                print(f"Scaled resolution: {self.scaled_width}x{self.scaled_height}")
+            
+            # Get capture coordinates from settings
+            self.capture_mode = CAPTURE_MODE
+            self.capture_coords = CAPTURE_COORDS
+            
+            if self.capture_mode == "Monitor":
+                monitor_index = MONITOR_INDEX
+                if monitor_index >= len(self._mss.monitors):
+                    print(f"Monitor {monitor_index} not found, using primary monitor")
+                    monitor_index = 1
+                self._mon = self._mss.monitors[monitor_index]
+                self.left = self._mon['left']
+                self.top = self._mon['top']
+                self.width = self._mon["width"]
+                self.height = self._mon["height"]
+            else:
+                # Window capture mode
+                if not self.capture_coords:
+                    raise ValueError("No capture coordinates specified for window capture")
+                self.left, self.top, self.width, self.height = self.capture_coords
 
-        def _log_monitors(self):
-            print("Available monitors:")
-            for i, mon in enumerate(self._mss.monitors):
-                width, height = self.get_screen_resolution(i)
-                if i == 0:
-                    print(f"  {i}: All monitors - {width}x{height}")
-                else:
-                    system_scale = int(width / mon["width"])
-                    print(f"  {i}: Monitor {i} - {width}x{height} at ({mon['left'] * system_scale}, {mon['top'] * system_scale})")
-
-        def get_screen_resolution(self, index):
-            monitor = self._mss.monitors[index]
-            screen = self._mss.grab(monitor)
-            return screen.size.width, screen.size.height
+            self.scaled_width = round(self.width * self.scaled_height / self.height)
 
         def grab(self):
-            shot = self._mss.grab(self._mon)
+            # Create custom monitor dict for MSS
+            monitor = {
+                "left": self.left,
+                "top": self.top,
+                "width": self.width,
+                "height": self.height
+            }
+            
+            shot = self._mss.grab(monitor)
             img = cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2RGB)
             return img, (self.scaled_height, self.scaled_width)

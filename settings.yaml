@@ -1,9 +1,11 @@
+Capture Mode: Monitor
 Monitor Index: 1
+Capture Coordinates: null
 FPS: 60
 Show FPS: true
-Output Resolution: 1080
+Output Resolution: 2160
 IPD: 0.064
-Display Mode: SBS
+Display Mode: Half-SBS
 Model List:
 - depth-anything/Depth-Anything-V2-Large-hf
 - depth-anything/Depth-Anything-V2-Base-hf
@@ -14,20 +16,38 @@ Model List:
 - depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
 - depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
 - depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
+- depth-anything/prompt-depth-anything-vitl-hf
+- depth-anything/prompt-depth-anything-vits-hf
+- depth-anything/prompt-depth-anything-vits-transparent-hf
+- lc700x/Amodal-Depth-Anything-V2-large-hf
 - LiheYoung/depth-anything-large-hf
 - LiheYoung/depth-anything-base-hf
 - LiheYoung/depth-anything-small-hf
+- lc700x/patchfusion-depth-anything-large-hf
+- lc700x/patchfusion-depth-anything-base-hf
+- lc700x/patchfusion-depth-anything-small-hf
 - xingyang1/Distill-Any-Depth-Large-hf
+- lc700x/Distill-Any-Depth-Base-hf
 - xingyang1/Distill-Any-Depth-Small-hf
 - lc700x/Distill-Any-Depth-Base-hf
-- lc700x/dpt-dinov2-giant-kitti
-- lc700x/dpt-dinov2-large-kitti
-- lc700x/dpt-dinov2-base-kitti
+- lc700x/depth-ai-hf
+- lc700x/dpt-dinov2-giant-kitti-hf
+- lc700x/dpt-dinov2-large-kitti-hf
+- lc700x/dpt-dinov2-base-kitti-hf
 - facebook/dpt-dinov2-small-kitti
+- facebook/dpt-dinov2-giant-nyu
+- lc700x/dpt-dinov2-large-nyu-hf
+- lc700x/dpt-dinov2-base-nyu-hf
+- lc700x/dpt-dinov2-small-nyu-hf
 - lc700x/dpt-hybrid-midas-hf
+- Intel/dpt-beit-base-384
+- Intel/dpt-beit-large-512
 - Intel/dpt-large
+- lc700x/dpt-large-redesign-hf
+- Intel/zoedepth-nyu-kitti
+- Intel/zoedepth-nyu
+- Intel/zoedepth-kitti
 - apple/DepthPro-hf
-- hf-tiny-model-private/tiny-random-GLPNForDepthEstimation
 Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 1.0
 Depth Resolution: 384
@@ -36,3 +56,5 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: EN
+Run Mode: Streamer
+Streamer Port: 1400

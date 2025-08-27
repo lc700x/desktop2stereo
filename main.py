@@ -2,14 +2,11 @@ import threading
 import queue
 import glfw
 import time
-
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT
 from capture import DesktopGrabber
-from depth import settings, predict_depth, process, DEVICE_INFO, MODEL_ID
-from viewer import StereoWindow
+from depth import process
 
-MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
-SHOW_FPS, FPS, DEPTH_STRENTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
-TIME_SLEEP = 1.0 / FPS
+TIME_SLEEP = round(1.0 / FPS, 2)
 
 # Queues with size=1 (latest-frame-only logic)
 raw_q = queue.Queue(maxsize=1)
@@ -29,9 +26,12 @@ def put_latest(q, item):
         time.sleep(TIME_SLEEP)  # Drop frame if race condition occurs
 
 def capture_loop():
-    cap = DesktopGrabber(monitor_index=MONITOR_INDEX, output_resolution=OUTPUT_RESOLUTION, fps=FPS)
+    cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS)
     while True:
-        frame_raw, size = cap.grab()
+        try:
+            frame_raw, size = cap.grab()
+        except OSError:
+            exit()
         put_latest(raw_q, (frame_raw, size))
 
 def process_loop():
@@ -43,56 +43,113 @@ def process_loop():
         frame_rgb = process(frame_raw, size)
         put_latest(proc_q, frame_rgb)
 
-def depth_loop():
-    while True:
-        try:
-            frame_rgb = proc_q.get(timeout = TIME_SLEEP)
-        except queue.Empty:
-            continue
-        depth = predict_depth(frame_rgb)
-        put_latest(depth_q, (frame_rgb, depth))
-
-def main():
-    print(f"{DEVICE_INFO}")
-    print(f"Model: {MODEL_ID}")
-
+def main(mode="Viewer"):
     # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
-    threading.Thread(target=depth_loop, daemon=True).start()
-
-    window = StereoWindow(depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
-    frame_rgb, depth = None, None
 
     # FPS calculation variables
     frame_count = 0
-    last_time = time.time()
+    last_time = time.perf_counter()
     fps = 0
-    
-    while not glfw.window_should_close(window.window):
+
+    # Average FPS calculation
+    total_frames = 0
+    # start_time = time.perf_counter()
+
+    streamer = None
+
+    rgb, depth = None, None
+    try: 
+        print(f"[Main] {mode} Started")
+        if mode == "Viewer":
+            from viewer import StereoWindow
+            from depth import predict_depth
+            def depth_loop():
+                while True:
+                    try:
+                        frame_rgb = proc_q.get(timeout = TIME_SLEEP)
+                    except queue.Empty:
+                        continue
+                    depth = predict_depth(frame_rgb)
+                    put_latest(depth_q, (frame_rgb, depth))
+            threading.Thread(target=depth_loop, daemon=True).start()
+            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+            while not glfw.window_should_close(window.window):
+                try:
+                    rgb, depth = depth_q.get_nowait()
+                    window.update_frame(rgb, depth)
+                    if SHOW_FPS:
+                        frame_count += 1
+                        total_frames += 1
+                        current_time = time.perf_counter()
+                        if current_time - last_time >= 1.0:  # Update every second
+                            fps = frame_count / (current_time - last_time)
+                            frame_count = 0
+                            last_time = current_time
+                            glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {fps:.1f} | Depth: {window.depth_ratio:.1f}")
+                except queue.Empty:
+                    pass
+
+                window.render()
+                glfw.swap_buffers(window.window)
+                glfw.poll_events()
+            glfw.terminate()
+        else:
+            # Streamer settings
+            from depth import predict_depth_tensor, make_sbs_tensor
+            from streamer import MJPEGStreamer
+            def depth_loop():
+                while True:
+                    try:
+                        frame_rgb = proc_q.get(timeout = TIME_SLEEP)
+                    except queue.Empty:
+                        continue
+                    depth, rgb = predict_depth_tensor(frame_rgb)
+                    put_latest(depth_q, (rgb, depth))
+            threading.Thread(target=depth_loop, daemon=True).start()
+            STREAM_QUALITY   = 100
+            # start MJPEG streamer
+            streamer = MJPEGStreamer(
+                port=STREAM_PORT,
+                fps=FPS,
+                quality=STREAM_QUALITY
+            )
+            streamer.start()
+
+            while True:
+                try:
+                    rgb, depth = depth_q.get(timeout = TIME_SLEEP)
+                    sbs = make_sbs_tensor(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode = DISPLAY_MODE)
+                    jpg = streamer.encode_jpeg(sbs)
+                    # push into the HTTP MJPEG server
+                    streamer.set_frame(jpg)
+                    # if SHOW_FPS:
+                    #     frame_count += 1
+                    #     current_time = time.perf_counter()
+                    #     if current_time - last_time >= 1.0:  # Update every second
+                    #         current_fps = frame_count / (current_time - last_time)
+                    #         frame_count = 0
+                    #         last_time = current_time
+                    #         print(f"FPS: {current_fps:.2f}")
+                except queue.Empty:
+                        pass
+            
+    except KeyboardInterrupt:
+        print("[Main] Shutting down…")
         
-        try:
-            # Get latest frame, or skip update
-            frame_rgb, depth = depth_q.get_nowait()
-            window.update_frame(frame_rgb, depth)
-            if SHOW_FPS:
-                frame_count += 1
-                current_time = time.time()
-                if current_time - last_time >= 1.0:  # Update every second
-                    fps = frame_count / (current_time - last_time)
-                    frame_count = 0
-                    last_time = current_time
-                    # Update window title with Depth Strength and FPS
-                    glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {fps:.1f} | depth: {window.depth_ratio:.1f}")
-        except queue.Empty:
-            pass  # Reuse previous frame if none available
-
-        window.render()
-        glfw.swap_buffers(window.window)
-        glfw.poll_events()
-
-    glfw.terminate()
+    except Exception as Error:
+        print(f"[Error]: {Error}")
+    finally:
+        # Print average FPS on exit
+        # total_time = time.perf_counter() - start_time
+        # avg_fps = total_frames / total_time if total_time > 0 else 0
+        # print(f"Average FPS: {avg_fps:.2f}")
+        if streamer:
+            streamer.stop()
+        print(f"[Main] {mode} Stopped")
+        exit()
 
 if __name__ == "__main__":
-    main()
+    main(mode=RUN_MODE)
 
