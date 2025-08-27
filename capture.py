@@ -1,55 +1,90 @@
 import numpy as np
 import mss
-from utils import OS_NAME, CAPTURE_MODE, CAPTURE_COORDS, MONITOR_INDEX
+from utils import OS_NAME, CAPTURE_MODE, WINDOW_TITLE, MONITOR_INDEX
 
 # DesktopGrabber: wincam (Windows), MSS + AppKit (Mac), MSS (Linux) 
 # Windows 10/11
 if OS_NAME == "Windows":
+    import win32gui
+    from ctypes import windll
+    import mss
     from wincam import DXCamera
+
+    # call once on startup so coordinates are in physical pixels
+    try:
+        windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+    def get_window_client_bounds(hwnd):
+        """Return (left, top, width, height) in screen (physical) pixels of the client area."""
+        l, t, r, b = win32gui.GetClientRect(hwnd)               # client rect (0,0,w,h)
+        left_top = win32gui.ClientToScreen(hwnd, (l, t))        # convert to screen coords
+        right_bottom = win32gui.ClientToScreen(hwnd, (r, b))
+        left, top = left_top
+        right, bottom = right_bottom
+        return left, top, right - left, bottom - top
+
     class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60):
+        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode="Window"):
             self.scaled_height = output_resolution
             self.fps = fps
             self._mss = mss.mss()
-            self.capture_mode = CAPTURE_MODE
-            self.capture_coords = CAPTURE_COORDS
-            
+            self.capture_mode = capture_mode
+            self.camera = None
+            self.prev_rect = None
+
             if self.capture_mode == "Monitor":
-                monitor_index = MONITOR_INDEX
-                if monitor_index >= len(self._mss.monitors):
-                    print(f"Monitor {monitor_index} not found, using primary monitor")
-                    monitor_index = 1
-                self._mon = self._mss.monitors[monitor_index]
-                left = self._mon['left']
-                top = self._mon['top']
-                width = self._mon['width']
-                height = self._mon['height']
+                mon = self._mss.monitors[1]  # choose appropriate monitor
+                self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
+                self.camera = DXCamera(self.left, self.top, self.width, self.height, fps=self.fps)
+                # enter once if DXCamera is a context manager
+                try:
+                    self.camera.__enter__()
+                except AttributeError:
+                    pass
             else:
-                # Window capture mode
-                if not self.capture_coords:
-                    raise ValueError("No capture coordinates specified for window capture")
-                left, top, width, height = self.capture_coords
-            
-            self.scaled_width = round(width * self.scaled_height / height)
+                if not window_title:
+                    raise ValueError("No window title specified for window capture")
+                self.window_title = window_title
+                self.hwnd = win32gui.FindWindow(None, self.window_title)
+                if not self.hwnd:
+                    raise RuntimeError(f"Window '{self.window_title}' not found")
 
-            self.camera = DXCamera(
-                left,
-                top,
-                width,
-                height,
-                fps=self.fps,
-            )
-
-        def __enter__(self):
-            self.camera.__enter__()
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            self.camera.__exit__(exc_type, exc_val, exc_tb)
+        def _ensure_camera_matches_window(self):
+            left, top, width, height = get_window_client_bounds(self.hwnd)
+            rect = (left, top, width, height)
+            if rect != self.prev_rect:
+                # recreate camera only when rect changed (move/resize)
+                self.prev_rect = rect
+                if self.camera:
+                    try:
+                        self.camera.__exit__(None, None, None)
+                    except AttributeError:
+                        pass
+                    self.camera = None
+                self.camera = DXCamera(left, top, width, height, fps=self.fps)
+                try:
+                    self.camera.__enter__()
+                except AttributeError:
+                    pass
 
         def grab(self):
+            if self.capture_mode != "Monitor":
+                self._ensure_camera_matches_window()
+            # now camera exists and matches current window
             img_array, _ = self.camera.get_rgb_frame()
+            self.scaled_width = round(self.prev_rect[2] * self.scaled_height / self.prev_rect[3])
             return img_array, (self.scaled_height, self.scaled_width)
+
+        def close(self):
+            if self.camera:
+                try:
+                    self.camera.__exit__(None, None, None)
+                except AttributeError:
+                    pass
+                self.camera = None
+
 
 elif OS_NAME == "Darwin":
     import io

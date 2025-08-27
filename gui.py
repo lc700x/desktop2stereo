@@ -10,45 +10,16 @@ from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon, get_local_ip
 if OS_NAME == "Windows":
     try:
         import win32gui
-        import win32con
-        import ctypes
-        from ctypes import wintypes
     except ImportError:
         win32gui = None
 
     def list_windows():
         windows = []
-
-        # Setup for DWM call
-        DWMWA_EXTENDED_FRAME_BOUNDS = 9
-        dwmapi = ctypes.WinDLL("dwmapi")
-        rect_type = wintypes.RECT
-
-        def get_window_rect(hwnd):
-            rect = rect_type()
-            try:
-                # Try extended frame bounds (no shadow/borders)
-                res = dwmapi.DwmGetWindowAttribute(
-                    hwnd,
-                    DWMWA_EXTENDED_FRAME_BOUNDS,
-                    ctypes.byref(rect),
-                    ctypes.sizeof(rect),
-                )
-                if res == 0:  # S_OK
-                    return rect.left, rect.top, rect.right, rect.bottom
-            except Exception:
-                pass
-            # fallback
-            return win32gui.GetWindowRect(hwnd)
-
         def callback(hwnd, _):
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd)
                 if title:
-                    x, y, r, b = get_window_rect(hwnd)
-                    w, h = r - x, b - y
-                    if w > 0 and h > 0:
-                        windows.append((title, w, h, x, y, hwnd))
+                    windows.append((title, hwnd))
             return True
 
         win32gui.EnumWindows(callback, None)
@@ -63,7 +34,7 @@ elif OS_NAME == "Darwin":
     except ImportError:
         CGWindowListCopyWindowInfo = None
 
-    def list_windows(min_width=20, min_height=20):
+    def list_windows():
         windows = []
         options = kCGWindowListOptionOnScreenOnly
         window_info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
@@ -83,9 +54,6 @@ elif OS_NAME == "Darwin":
             title = win.get("kCGWindowName", "") or ""
             owner = win.get("kCGWindowOwnerName", "")
             layer = win.get("kCGWindowLayer", 0)
-            bounds = win.get("kCGWindowBounds", {})
-            w, h = int(bounds.get("Width", 0)), int(bounds.get("Height", 0))
-            x, y = int(bounds.get("X", 0)), int(bounds.get("Y", 0))
 
             # Filtering rules
             if not title.strip():
@@ -94,10 +62,8 @@ elif OS_NAME == "Darwin":
                 continue
             if layer != 0:  # skip menu bar, overlays, etc.
                 continue
-            if w < min_width or h < min_height:
-                continue
 
-            windows.append((title.strip(), w, h, x, y, win["kCGWindowNumber"]))
+            windows.append((title.strip(), win["kCGWindowNumber"]))
 
         return windows
 else:
@@ -105,17 +71,17 @@ else:
     def list_windows():
         windows = []
         try:
-            result = subprocess.check_output(["wmctrl", "-lG"]).decode("utf-8").splitlines()
+            result = subprocess.check_output(["wmctrl", "-l"]).decode("utf-8").splitlines()
             for line in result:
-                parts = line.split(None, 6)
-                if len(parts) >= 7:
-                    win_id, x, y, w, h, _, title = parts
-                    w, h, x, y = int(w), int(h), int(x), int(y)
-                    if title.strip() and w > 0 and h > 0:
-                        windows.append((title.strip(), w, h, x, y, win_id))
+                parts = line.split(None, 3)
+                if len(parts) >= 4:
+                    _, _, _, title = parts
+                    if title.strip():
+                        windows.append((title.strip(), None))
         except Exception as e:
             print("Linux window listing error:", e)
         return windows
+
 # List all available devices
 def get_devices():
     """
@@ -164,7 +130,6 @@ DEFAULTS = {
     "Capture Mode": "Monitor",  # "Monitor" or "Window"
     "Monitor Index": 1,
     "Window Title": "",
-    "Capture Coordinates": None,  # (left, top, width, height)
     "Output Resolution": 1080,
     "FPS": 60,
     "Show FPS": True,
@@ -284,7 +249,7 @@ class ConfigGUI(tk.Tk):
         self.resizable(True, False)
         self.language = "EN"
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
-        self.selected_window_coords = None
+        self.selected_window_name = ""
         self._window_objects = []  # Store window objects for reference
 
         try:
@@ -371,14 +336,11 @@ class ConfigGUI(tk.Tk):
         self.capture_mode_cb.bind("<<ComboboxSelected>>", self.on_capture_mode_change)
         
         # Monitor Index (only shown when capture mode is Monitor)
-
         self.monitor_var = tk.StringVar()
         self.monitor_menu = ttk.OptionMenu(self.content_frame, self.monitor_var, "")
 
-
         self.window_var = tk.StringVar()
         self.window_cb = ttk.Combobox(self.content_frame, textvariable=self.window_var,state="readonly")
-        # self.window_cb.grid(row=0, column=0, sticky="ew", **self.pad)
         self.window_cb.bind("<<ComboboxSelected>>", self.on_window_selected)
         
         self.btn_refresh = ttk.Button(self.content_frame, text="Refresh", command=self.refresh_monitor_and_window)
@@ -508,7 +470,7 @@ class ConfigGUI(tk.Tk):
         self.status_label.grid(row=1, column=0, sticky="we")  # no padding
     
     def refresh_window_list(self):
-        """Refresh the list of available windows with optimized performance"""
+        """Refresh the list of available windows"""
         try:
             windows = list_windows()
 
@@ -522,14 +484,22 @@ class ConfigGUI(tk.Tk):
             window_list = []
             self._window_objects = []
 
-            for title, w, h, x, y, handle in windows:
-                size_str = f"{w}x{h}"
-                window_list.append(f"{title} [{size_str}]")
-                # Store as tuple
-                self._window_objects.append((title, w, h, x, y, handle))
+            for title, handle in windows:
+                window_list.append(title)
+                self._window_objects.append((title, handle))
 
             self.window_cb["values"] = window_list
-            if window_list:
+            
+            # Try to select the saved window by name
+            if self.selected_window_name:
+                for i, (title, _) in enumerate(self._window_objects):
+                    if title == self.selected_window_name:
+                        self.window_cb.current(i)
+                        self.update_status(
+                            f"{UI_TEXTS[self.language]['Selected window:']} {title}"
+                        )
+                        break
+            elif window_list:
                 self.window_cb.current(0)
                 self.on_window_selected()
 
@@ -538,6 +508,7 @@ class ConfigGUI(tk.Tk):
                 UI_TEXTS[self.language]["Error"],
                 f"Error refreshing window list: {str(e)}"
             )
+
     def refresh_monitor_and_window(self):
         """Allow user to get latest monitor/window list"""
         if self.capture_mode_key == "Window":
@@ -579,17 +550,16 @@ class ConfigGUI(tk.Tk):
             return
 
         selected_index = None
-        for i, (title, w, h, x, y, handle) in enumerate(self._window_objects):
-            size = f"{w}x{h}" if w and h else "Unknown size"
-            if selected_text == f"{title} [{size}]":
+        for i, (title, handle) in enumerate(self._window_objects):
+            if selected_text == title:
                 selected_index = i
                 break
 
         if selected_index is not None:
-            title, w, h, x, y, handle = self._window_objects[selected_index]
-            self.selected_window_coords = (int(x), int(y), int(w), int(h))
+            title, handle = self._window_objects[selected_index]
+            self.selected_window_name = title
             self.update_status(
-                f"{UI_TEXTS[self.language]['Selected window:']} {title} ({w}x{h})"
+                f"{UI_TEXTS[self.language]['Selected window:']} {title}"
             )
 
     def on_capture_mode_change(self, *args):
@@ -779,19 +749,24 @@ class ConfigGUI(tk.Tk):
         return self.monitor_label_to_index
 
     def read_yaml(self, path):
-        with open(path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        except UnicodeDecodeError:
+            # Fallback to try other common encodings if UTF-8 fails
+            try:
+                with open(path, "r", encoding="gbk") as f:
+                    return yaml.safe_load(f) or {}
+            except Exception as e:
+                print(f"Failed to load settings.yaml with GBK encoding: {e}")
+                return {}
 
     def save_yaml(self, path, cfg):
         if not HAVE_YAML:
             messagebox.showerror(UI_TEXTS[self.language]["Error"],
                                 UI_TEXTS[self.language]["PyYAML not installed, cannot save YAML file."])
             return False
-        try:
-            # Convert any tuples to lists before saving
-            if isinstance(cfg.get("Capture Coordinates"), tuple):
-                cfg["Capture Coordinates"] = list(cfg["Capture Coordinates"])
-                
+        try:                
             with open(path, "w", encoding="utf-8") as f:
                 yaml.dump(cfg, f, allow_unicode=True, sort_keys=False)
             return True
@@ -801,10 +776,6 @@ class ConfigGUI(tk.Tk):
             return False
 
     def apply_config(self, cfg, keep_optional=True):
-        # Convert any lists to tuples for Capture Coordinates
-        if isinstance(cfg.get("Capture Coordinates"), list):
-            cfg["Capture Coordinates"] = tuple(cfg["Capture Coordinates"])
-        
         # Monitor settings
         monitor_idx = cfg.get("Monitor Index", DEFAULTS["Monitor Index"])
         label_for_idx = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == monitor_idx), None)
@@ -814,8 +785,8 @@ class ConfigGUI(tk.Tk):
             self.monitor_var.set(next(iter(self.monitor_label_to_index)))
 
         # Window settings
-        self.window_var.set(cfg.get("Window Title", DEFAULTS["Window Title"]))
-        self.selected_window_coords = cfg.get("Capture Coordinates", DEFAULTS["Capture Coordinates"])
+        self.selected_window_name = cfg.get("Window Title", DEFAULTS["Window Title"])
+        self.window_var.set(self.selected_window_name)
 
         if not keep_optional:  # no update for device
             device_idx = cfg.get("Device", DEFAULTS["Device"])
@@ -851,13 +822,8 @@ class ConfigGUI(tk.Tk):
         # Run mode + streamer settings
         run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Viewer"))
         self.run_mode_key = run_mode
-        host = cfg.get("Streamer Host") or DEFAULTS.get("Streamer Host")
         port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", 1400))
-        if host:
-            self.streamer_host_var.set(f"http://{host}:{port}")
-        else:
-            # default local ip
-            self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
+        self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
         self.streamer_port_var.set(str(port))
         # Capture mode
         capture_mode = cfg.get("Capture Mode", DEFAULTS.get("Capture Mode", "Monitor"))
@@ -868,6 +834,7 @@ class ConfigGUI(tk.Tk):
         self.on_capture_mode_change()
 
     def load_defaults(self):
+        self.selected_window_name = DEFAULTS["Window Title"]
         self.apply_config(DEFAULTS)
 
     def reset_to_defaults(self):
@@ -890,7 +857,7 @@ class ConfigGUI(tk.Tk):
         cfg = {
             "Capture Mode": self.capture_mode_key,
             "Monitor Index": self.monitor_label_to_index.get(self.monitor_var.get(), DEFAULTS["Monitor Index"]),
-            "Capture Coordinates": self.selected_window_coords,
+            "Window Title": self.selected_window_name if self.capture_mode_key == "Window" else "",
             "FPS": int(self.fps_cb.get()),
             "Show FPS": self.showfps_var.get(),
             "Output Resolution": int(self.res_cb.get()),

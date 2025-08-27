@@ -1,6 +1,19 @@
 import yaml
 import os, platform, socket
 
+def read_yaml(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except UnicodeDecodeError:
+        # Fallback to try other common encodings if UTF-8 fails
+        try:
+            with open(path, "r", encoding="gbk") as f:
+                return yaml.safe_load(f) or {}
+        except Exception as e:
+            print(f"Failed to load settings.yaml with GBK encoding: {e}")
+            return {}
+
 def get_local_ip():
     """Return the local IP address by creating a UDP socket to a public IP."""
     try:
@@ -19,11 +32,7 @@ def crop_icon(icon_img):
     return icon_img
 
 # load customized settings
-with open("settings.yaml") as settings_yaml:
-    try:
-        settings = yaml.safe_load(settings_yaml)
-    except yaml.YAMLError as exc:
-        print(exc)
+settings = read_yaml("settings.yaml")
 
 # Get OS name
 OS_NAME = platform.system()
@@ -65,7 +74,7 @@ MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], sett
 SHOW_FPS, FPS, DEPTH_STRENTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 IPD = settings["IPD"]
 CAPTURE_MODE = settings["Capture Mode"]
-CAPTURE_COORDS = settings["Capture Coordinates"]
+WINDOW_TITLE = settings["Window Title"]
 
 STREAM_PORT = settings["Streamer Port"]
 LOCAL_IP = get_local_ip()

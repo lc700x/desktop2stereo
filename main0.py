@@ -55,7 +55,7 @@ def main(mode="Viewer"):
 
     # Average FPS calculation
     total_frames = 0
-    start_time = time.perf_counter()
+    # start_time = time.perf_counter()
 
     streamer = None
 
@@ -109,7 +109,6 @@ def main(mode="Viewer"):
                     put_latest(depth_q, (rgb, depth))
             threading.Thread(target=depth_loop, daemon=True).start()
             STREAM_QUALITY   = 100
-            STREAM_HOST = "0.0.0.0"
             # start MJPEG streamer
             streamer = MJPEGStreamer(
                 port=STREAM_PORT,
@@ -125,19 +124,22 @@ def main(mode="Viewer"):
                     jpg = streamer.encode_jpeg(sbs)
                     # push into the HTTP MJPEG server
                     streamer.set_frame(jpg)
-                    if SHOW_FPS:
-                        frame_count += 1
-                        current_time = time.perf_counter()
-                        if current_time - last_time >= 1.0:  # Update every second
-                            current_fps = frame_count / (current_time - last_time)
-                            frame_count = 0
-                            last_time = current_time
-                            print(f"FPS: {current_fps:.2f}")
+                    # if SHOW_FPS:
+                    #     frame_count += 1
+                    #     current_time = time.perf_counter()
+                    #     if current_time - last_time >= 1.0:  # Update every second
+                    #         current_fps = frame_count / (current_time - last_time)
+                    #         frame_count = 0
+                    #         last_time = current_time
+                    #         print(f"FPS: {current_fps:.2f}")
                 except queue.Empty:
                         pass
             
     except KeyboardInterrupt:
-        print("\n[Main] Shutting down…")
+        print("[Main] Shutting down…")
+        
+    except Exception as Error:
+        print(f"[Error]: {Error}")
     finally:
         # Print average FPS on exit
         # total_time = time.perf_counter() - start_time

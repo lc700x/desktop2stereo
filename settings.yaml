@@ -1,13 +1,9 @@
 Capture Mode: Window
-Monitor Index: 2
-Capture Coordinates:
-- 133
-- 30
-- 2240
-- 1152
-FPS: 120
+Monitor Index: 1
+Window Title: Desktop2Stereo v2.3 GUI
+FPS: 60
 Show FPS: true
-Output Resolution: 1152
+Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
@@ -52,13 +48,13 @@ Model List:
 - Intel/zoedepth-nyu
 - Intel/zoedepth-kitti
 - apple/DepthPro-hf
-Depth Model: depth-anything/prompt-depth-anything-vits-hf
+Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 1.0
-Depth Resolution: 192
+Depth Resolution: 384
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: EN
-Run Mode: Streamer
+Run Mode: Viewer
 Streamer Port: 1400

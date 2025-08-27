@@ -1,18 +1,120 @@
 import os
-import sys, time
+import sys
 import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon
+from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon, get_local_ip
 
-# Add pywinctl import
-try:
-    import pywinctl as pwc
-    HAVE_PYWINCTL = True
-except ImportError:
-    HAVE_PYWINCTL = False
+# Get window lists
+if OS_NAME == "Windows":
+    try:
+        import win32gui
+        import ctypes
+        from ctypes import wintypes
+    except ImportError:
+        win32gui = None
 
+    def list_windows():
+        windows = []
+
+        # Setup for DWM call
+        DWMWA_EXTENDED_FRAME_BOUNDS = 9
+        dwmapi = ctypes.WinDLL("dwmapi")
+        rect_type = wintypes.RECT
+
+        def get_window_rect(hwnd):
+            rect = rect_type()
+            try:
+                # Try extended frame bounds (no shadow/borders)
+                res = dwmapi.DwmGetWindowAttribute(
+                    hwnd,
+                    DWMWA_EXTENDED_FRAME_BOUNDS,
+                    ctypes.byref(rect),
+                    ctypes.sizeof(rect),
+                )
+                if res == 0:  # S_OK
+                    return rect.left, rect.top, rect.right, rect.bottom
+            except Exception:
+                pass
+            # fallback
+            return win32gui.GetWindowRect(hwnd)
+
+        def callback(hwnd, _):
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd)
+                if title:
+                    x, y, r, b = get_window_rect(hwnd)
+                    w, h = r - x, b - y
+                    if w > 0 and h > 0:
+                        windows.append((title, w, h, x, y, hwnd))
+            return True
+
+        win32gui.EnumWindows(callback, None)
+        return windows
+elif OS_NAME == "Darwin":
+    try:
+        from Quartz import (
+            CGWindowListCopyWindowInfo,
+            kCGWindowListOptionOnScreenOnly,
+            kCGNullWindowID,
+        )
+    except ImportError:
+        CGWindowListCopyWindowInfo = None
+
+    def list_windows(min_width=20, min_height=20):
+        windows = []
+        options = kCGWindowListOptionOnScreenOnly
+        window_info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
+
+        # System UI processes we want to ignore
+        blacklist = {
+            "Window Server",
+            "ControlCenter",
+            "NotificationCenter",
+            "Spotlight",
+            "Dock",
+            "SystemUIServer",
+            "CoreServicesUIAgent",
+        }
+
+        for win in window_info:
+            title = win.get("kCGWindowName", "") or ""
+            owner = win.get("kCGWindowOwnerName", "")
+            layer = win.get("kCGWindowLayer", 0)
+            bounds = win.get("kCGWindowBounds", {})
+            w, h = int(bounds.get("Width", 0)), int(bounds.get("Height", 0))
+            x, y = int(bounds.get("X", 0)), int(bounds.get("Y", 0))
+
+            # Filtering rules
+            if not title.strip():
+                continue
+            if owner in blacklist:
+                continue
+            if layer != 0:  # skip menu bar, overlays, etc.
+                continue
+            if w < min_width or h < min_height:
+                continue
+
+            windows.append((title.strip(), w, h, x, y, win["kCGWindowNumber"]))
+
+        return windows
+else:
+    import subprocess
+    def list_windows():
+        windows = []
+        try:
+            result = subprocess.check_output(["wmctrl", "-lG"]).decode("utf-8").splitlines()
+            for line in result:
+                parts = line.split(None, 6)
+                if len(parts) >= 7:
+                    win_id, x, y, w, h, _, title = parts
+                    w, h, x, y = int(w), int(h), int(x), int(y)
+                    if title.strip() and w > 0 and h > 0:
+                        windows.append((title.strip(), w, h, x, y, win_id))
+        except Exception as e:
+            print("Linux window listing error:", e)
+        return windows
 # List all available devices
 def get_devices():
     """
@@ -76,14 +178,15 @@ DEFAULTS = {
     "HF Endpoint": "https://hf-mirror.com",
     "Device": 0,
     "Language": "EN",
+    "Run Mode": "Viewer",
+    "Streamer Host": None,
+    "Streamer Port": 1400,
 }
 
 UI_TEXTS = {
     "EN": {
-        "Capture Mode:": "Capture Mode:",
-        ""
-        "Monitor Index:": "Monitor Index:",
-        "Window Title:": "Window Title:",
+        "Monitor": "Monitor",
+        "Window": "Window",
         "Refresh": "Refresh",
         "FPS:": "FPS:",
         "Show FPS": "Show FPS",
@@ -112,15 +215,22 @@ UI_TEXTS = {
         "Loaded settings.yaml at startup": "Loaded settings.yaml at startup",
         "Running": "Running...",
         "Stopped": "Stopped.",
-        "Countdown": "Settings saved to settings.yaml, starting Stereo Viewer...",
-        "Window selection not available": "Window selection not available (pywinctl not installed)",
+        "Countdown": "Settings saved to settings.yaml, starting...",
+        "A thread already running!": "A thread already running!",
         "No windows found": "No windows found",
-        "Selected window:": "Selected window:"
+        "Selected window:": "Selected window:",
+        "Run Mode:": "Run Mode:",
+        "Viewer": "Viewer",
+        "Streamer": "Streamer",
+        "Streamer Port:": "Streamer Port:",
+        "Streamer URL:": "Streamer URL",
+        "Host:": "Host:",
+        "Invalid port number (1-65535)": "Invalid port number (must be between 1-65535)",
+        "Invalid port number": "Port must be a number",
     },
     "CN": {
-        "Capture Mode:": "捕获模式:",
-        "Monitor Index:": "显示器索引:",
-        "Window Title:": "窗口标题:",
+        "Monitor": "显示器",
+        "Window": "窗口",
         "Refresh": "刷新",
         "FPS:": "帧率:",
         "Show FPS": "显示帧率",
@@ -149,19 +259,28 @@ UI_TEXTS = {
         "Loaded settings.yaml at startup": "启动时已加载 settings.yaml",
         "Running": "运行中...",
         "Stopped": "已停止。",
-        "Countdown": "设置已保存到 settings.yaml，启动Stereo Viewer...",
-        "Window selection not available": "窗口选择不可用 (未安装pywinctl)",
+        "Countdown": "设置已保存到 settings.yaml，启动中...",
+        "A thread already running!": "一个进程已经运行！",
         "No windows found": "未找到窗口",
-        "Selected window:": "已选择窗口:"
+        "Selected window:": "已选择窗口:",
+        "Run Mode:": "运行模式:",
+        "Viewer": "本地查看",
+        "Streamer": "网络推流",
+        "Streamer Port:": "推流端口:",
+        "Streamer URL": "推流网址:",
+        "Host": "主机:",
+        "Invalid port number (1-65535)": "端口号无效 (必须介于1-65535之间)",
+        "Invalid port number": "端口必须是数字",
     }
 }
 
 class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.pad = {"padx": 8, "pady": 6}
         self.title(f"Desktop2Stereo v{VERSION} GUI")
-        self.minsize(780, 500)  # Increased height for new controls
-        self.resizable(False, False)
+        self.minsize(800, 420)  # Increased height for new controls
+        self.resizable(True, False)
         self.language = "EN"
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
         self.selected_window_coords = None
@@ -175,6 +294,12 @@ class ConfigGUI(tk.Tk):
             self.iconphoto(True, icon_photo)
         except Exception as e:
             print(f"Warning: Could not load icon.ico - {e}")
+
+        # internal run mode key: 'Viewer' or 'Streamer'
+        self.run_mode_key = DEFAULTS.get("Run Mode", "Viewer")
+        
+        # internal capture mode key: 'Monitor' or 'Window'
+        self.capture_mode_key = DEFAULTS.get("Capture Mode", "Monitor")
 
         self.create_widgets()
         self.monitor_label_to_index = self.populate_monitors()
@@ -198,11 +323,37 @@ class ConfigGUI(tk.Tk):
             self.update_language_texts()
 
         self.language_var.set(self.language)
+        self.protocol("WM_DELETE_WINDOW", self.on_close) # Bind to Close of GUI to turn off all threads
         self.process = None  # Keep track of the spawned process
 
-    def create_widgets(self):
-        pad = {"padx": 8, "pady": 6}
+    def on_close(self):
+        """Handle GUI window closing: stop process & cleanup."""
+        # Stop running process if any
+        if self.process and self.process.poll() is None:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+            except Exception as e:
+                messagebox.showerror(
+                    UI_TEXTS[self.language]["Error"],
+                    f"Failed to stop process on exit: {e}"
+                )
+            finally:
+                self.process = None
 
+        # Cancel any scheduled after() callbacks (like _monitor_process)
+        try:
+            if hasattr(self, "_after_id") and self._after_id:
+                self.after_cancel(self._after_id)
+        except Exception:
+            pass
+
+        # Now destroy GUI
+        self.destroy()
+    
+    def create_widgets(self):
         # Main content frame
         self.content_frame = ttk.Frame(self)
         self.content_frame.grid(row=0, column=0, sticky="nsew", padx=40, pady=20)
@@ -212,133 +363,140 @@ class ConfigGUI(tk.Tk):
         self.rowconfigure(1, weight=0)   # status bar fixed
         self.columnconfigure(0, weight=1)
         
-        # Capture Mode
-        self.label_capture_mode = ttk.Label(self.content_frame, text="Capture Mode:")
-        self.label_capture_mode.grid(row=0, column=0, sticky="w", **pad)
-        self.capture_mode_var = tk.StringVar()
-        self.capture_mode_menu = ttk.OptionMenu(self.content_frame, self.capture_mode_var, "Monitor", "Monitor", "Window", command=self.on_capture_mode_change)
-        self.capture_mode_menu.grid(row=0, column=1, sticky="w", **pad)
+        # Capture Mode (Monitor / Window)
+        self.capture_mode_var_label = tk.StringVar()
+        self.capture_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.capture_mode_var_label, state="readonly", width=8)
+        self.capture_mode_cb.grid(row=2, column=0, sticky="ew", **self.pad)
+        self.capture_mode_cb.bind("<<ComboboxSelected>>", self.on_capture_mode_change)
         
         # Monitor Index (only shown when capture mode is Monitor)
-        self.label_monitor = ttk.Label(self.content_frame, text="Monitor Index:")
-        self.label_monitor.grid(row=1, column=0, sticky="w", **pad)
+
         self.monitor_var = tk.StringVar()
         self.monitor_menu = ttk.OptionMenu(self.content_frame, self.monitor_var, "")
-        self.monitor_menu.grid(row=1, column=1, sticky="w", **pad)
-        
-        # Window Selection (only shown when capture mode is Window)
-        self.label_window = ttk.Label(self.content_frame, text="Window Title:")
-        self.label_window.grid(row=1, column=0, sticky="w", **pad)
-        
-       # Window Selection Frame
-        self.window_frame = ttk.Frame(self.content_frame)
-        self.window_frame.grid(row=1, column=1, columnspan=3, sticky="ew")
+
 
         self.window_var = tk.StringVar()
-        self.window_cb = ttk.Combobox(self.window_frame, textvariable=self.window_var,state="readonly")
-        self.window_cb.grid(row=0, column=0, sticky="ew", **pad)
+        self.window_cb = ttk.Combobox(self.content_frame, textvariable=self.window_var,state="readonly")
+        # self.window_cb.grid(row=0, column=0, sticky="ew", **self.pad)
         self.window_cb.bind("<<ComboboxSelected>>", self.on_window_selected)
         
-        self.btn_refresh = ttk.Button(self.window_frame, text="Refresh", command=self.refresh_window_list)
-        self.btn_refresh.grid(row=0, column=1,  sticky="we", **pad)
+        self.btn_refresh = ttk.Button(self.content_frame, text="Refresh", command=self.refresh_monitor_and_window)
+        self.btn_refresh.grid(row=2, column=3, sticky="we", **self.pad)
         
         # Language
         self.label_language = ttk.Label(self.content_frame, text="Set Language:")
-        self.label_language.grid(row=0, column=2, sticky="we", **pad)
+        self.label_language.grid(row=0, column=2, sticky="we", **self.pad)
         self.language_var = tk.StringVar()
         self.language_cb = ttk.Combobox(self.content_frame, textvariable=self.language_var, state="readonly", values=["English", "简体中文"])
-        self.language_cb.grid(row=0, column=3, sticky="ew", **pad)
+        self.language_cb.grid(row=0, column=3, sticky="ew", **self.pad)
         self.language_cb.bind("<<ComboboxSelected>>", self.on_language_change)
         
         # Device
         self.label_device = ttk.Label(self.content_frame, text="Device:")
-        self.label_device.grid(row=2, column=0, sticky="w", **pad)
+        self.label_device.grid(row=3, column=0, sticky="w", **self.pad)
         self.device_var = tk.StringVar()
         self.device_menu = ttk.OptionMenu(self.content_frame, self.device_var, "")
-        self.device_menu.grid(row=2, column=1, sticky="w", **pad)
+        self.device_menu.grid(row=3, column=1, sticky="w", **self.pad)
         
         # FP16 and Show FPS
         self.fp16_var = tk.BooleanVar()
         self.fp16_cb = ttk.Checkbutton(self.content_frame, text="FP16", variable=self.fp16_var)
-        self.fp16_cb.grid(row=2, column=2, sticky="w", **pad)
+        self.fp16_cb.grid(row=3, column=2, sticky="w", **self.pad)
         
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
-        self.showfps_cb.grid(row=2, column=3, sticky="w", **pad)
+        self.showfps_cb.grid(row=3, column=3, sticky="w", **self.pad)
         
         # Output Resolution
         self.label_res = ttk.Label(self.content_frame, text="Output Resolution:")
-        self.label_res.grid(row=3, column=0, sticky="w", **pad)
+        self.label_res.grid(row=4, column=0, sticky="w", **self.pad)
         self.res_values = ["480", "720", "1080", "1440", "2160"]
         self.res_cb = ttk.Combobox(self.content_frame, values=self.res_values, state="normal")
-        self.res_cb.grid(row=3, column=1, sticky="ew", **pad)
+        self.res_cb.grid(row=4, column=1, sticky="ew", **self.pad)
         
         # FPS
         self.label_fps = ttk.Label(self.content_frame, text="FPS:")
-        self.label_fps.grid(row=3, column=2, sticky="w", **pad)
+        self.label_fps.grid(row=4, column=2, sticky="w", **self.pad)
         self.fps_values = ["30", "60", "75", "90", "120"]
         self.fps_cb = ttk.Combobox(self.content_frame, values=self.fps_values, state="normal")
-        self.fps_cb.grid(row=3, column=3, sticky="ew", **pad)
+        self.fps_cb.grid(row=4, column=3, sticky="ew", **self.pad)
         
         # Download path
         self.label_download = ttk.Label(self.content_frame, text="Download Path:")
-        self.label_download.grid(row=6, column=0, sticky="w", **pad)
+        self.label_download.grid(row=7, column=0, sticky="w", **self.pad)
         self.download_var = tk.StringVar()
         self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
-        self.download_entry.grid(row=6, column=1, columnspan=2, sticky="ew", **pad)
+        self.download_entry.grid(row=7, column=1, columnspan=2, sticky="ew", **self.pad)
         self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
-        self.btn_browse.grid(row=6, column=3, sticky="ew", **pad)
+        self.btn_browse.grid(row=7, column=3, sticky="ew", **self.pad)
         
         # Depth Resolution and Depth Strength
         self.label_depth_res = ttk.Label(self.content_frame, text="Depth Resolution:")
-        self.label_depth_res.grid(row=4, column=0, sticky="w", **pad)
+        self.label_depth_res.grid(row=5, column=0, sticky="w", **self.pad)
         self.depth_res_values = ["48", "96", "192", "384", "576", "768", "960", "1152", "1344", "1536"]
         self.depth_res_cb = ttk.Combobox(self.content_frame, values=self.depth_res_values, state="normal")
-        self.depth_res_cb.grid(row=4, column=1, sticky="ew", **pad)
+        self.depth_res_cb.grid(row=5, column=1, sticky="ew", **self.pad)
         
         self.label_depth_strength = ttk.Label(self.content_frame, text="Depth Strength:")
-        self.label_depth_strength.grid(row=4, column=2, sticky="w", **pad)
+        self.label_depth_strength.grid(row=5, column=2, sticky="w", **self.pad)
         self.depth_strength_values = ["1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0", "4.5", "5.0"]
         self.depth_strength_cb = ttk.Combobox(self.content_frame, values=self.depth_strength_values, state="normal")
-        self.depth_strength_cb.grid(row=4, column=3, sticky="ew", **pad)
+        self.depth_strength_cb.grid(row=5, column=3, sticky="ew", **self.pad)
         
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
-        self.label_display_mode.grid(row=5, column=0, sticky="w", **pad)
+        self.label_display_mode.grid(row=6, column=0, sticky="w", **self.pad)
         self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB"]
         self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
-        self.display_mode_cb.grid(row=5, column=1, sticky="ew", **pad)
+        self.display_mode_cb.grid(row=6, column=1, sticky="ew", **self.pad)
         
         # IPD
         self.label_ipd = ttk.Label(self.content_frame, text="IPD (m):")
-        self.label_ipd.grid(row=5, column=2, sticky="w", **pad)
+        self.label_ipd.grid(row=6, column=2, sticky="w", **self.pad)
         self.ipd_var = tk.StringVar()
         self.ipd_entry = ttk.Entry(self.content_frame, textvariable=self.ipd_var)
-        self.ipd_entry.grid(row=5, column=3, sticky="ew", **pad)
+        self.ipd_entry.grid(row=6, column=3, sticky="ew", **self.pad)
         
         # Depth Model
         self.label_depth_model = ttk.Label(self.content_frame, text="Depth Model:")
-        self.label_depth_model.grid(row=7, column=0, sticky="w", **pad)
+        self.label_depth_model.grid(row=8, column=0, sticky="w", **self.pad)
         self.depth_model_var = tk.StringVar()
         self.depth_model_cb = ttk.Combobox(self.content_frame, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
-        self.depth_model_cb.grid(row=7, column=1, columnspan=2, sticky="ew", **pad)
+        self.depth_model_cb.grid(row=8, column=1, columnspan=2, sticky="ew", **self.pad)
         
+        # Run Mode (viewer / streamer)
+        self.label_run_mode = ttk.Label(self.content_frame, text="Run Mode:")
+        self.label_run_mode.grid(row=0, column=0, sticky="w", **self.pad)
+        self.run_mode_var_label = tk.StringVar()
+        self.run_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.run_mode_var_label, state="readonly")
+        self.run_mode_cb.grid(row=0, column=1, sticky="ew", **self.pad)
+        self.run_mode_cb.bind("<<ComboboxSelected>>", self.on_run_mode_change)
+
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
-        self.label_hf_endpoint.grid(row=8, column=0, sticky="w", **pad)
+        self.label_hf_endpoint.grid(row=9, column=0, sticky="w", **self.pad)
         self.hf_endpoint_var = tk.StringVar()
         self.hf_endpoint_entry = ttk.Entry(self.content_frame, textvariable=self.hf_endpoint_var)
-        self.hf_endpoint_entry.grid(row=8, column=1, sticky="ew", **pad)
+        self.hf_endpoint_entry.grid(row=9, column=1, sticky="ew", **self.pad)
         
-        # Buttons
+        # Streamer Host and Port (only visible when run mode is streamer)
+        self.label_streamer_host = ttk.Label(self.content_frame, text="Streamer URL:")
+        self.streamer_host_var = tk.StringVar()
+        self.streamer_host_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_host_var, state="readonly", foreground="#3E83F7")
+        self.label_streamer_port = ttk.Label(self.content_frame, text="Streamer Port:")
+        self.streamer_port_var = tk.StringVar()
+        self.streamer_port_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_port_var)
+        self.streamer_port_var.trace_add("write", self.update_host_url)
+
+        # Buttons (moved down a bit to make room)
         self.btn_reset = ttk.Button(self.content_frame, text="Reset", command=self.reset_to_defaults)
-        self.btn_reset.grid(row=7, column=3, sticky="ew", **pad)
+        self.btn_reset.grid(row=8, column=3, sticky="ew", **self.pad)
         
         self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
-        self.btn_stop.grid(row=8, column=2, sticky="ew", **pad)
+        self.btn_stop.grid(row=9, column=2, sticky="ew", **self.pad)
         
         self.btn_run = ttk.Button(self.content_frame, text="Run", command=self.save_settings)
-        self.btn_run.grid(row=8, column=3, sticky="ew", **pad)
+        self.btn_run.grid(row=9, column=3, sticky="ew", **self.pad)
         
         # Column weights inside content frame
         for col in range(4):
@@ -347,42 +505,12 @@ class ConfigGUI(tk.Tk):
         # Status bar at bottom
         self.status_label = tk.Label(self, text="", anchor="w", relief="sunken", padx=20, pady=4)
         self.status_label.grid(row=1, column=0, sticky="we")  # no padding
-
-        # make refresh align vertically with run button
-        self.content_frame.grid_columnconfigure(3, weight=1)  # ensures col=3 aligns across all rows
-        self.window_frame.grid_columnconfigure(0, weight=3)
-        self.window_frame.grid_columnconfigure(1, weight=1)
-        # Initialize capture mode UI
-        self.on_capture_mode_change()
-
+    
     def refresh_window_list(self):
         """Refresh the list of available windows with optimized performance"""
-        if not HAVE_PYWINCTL:
-            messagebox.showerror(
-                UI_TEXTS[self.language]["Error"],
-                UI_TEXTS[self.language]["Window selection not available"]
-            )
-            return
-
         try:
-            # First attempt - get windows with titles
-            try:
-                windows = pwc.getWindowsWithTitle("")
-                windows = [w for w in windows if w.title]  # Filter windows with empty titles
-            except Exception as e:
-                print(f"Window detection error: {e}")
-                windows = []
+            windows = list_windows()
 
-            # Second attempt - fallback to all windows if first failed
-            if not windows:
-                try:
-                    all_windows = pwc.getAllWindows()
-                    windows = [w for w in all_windows if w.title]
-                except Exception as e:
-                    print(f"Alternative window detection failed: {e}")
-                    windows = []
-
-            # If still no windows, show warning and return
             if not windows:
                 messagebox.showwarning(
                     UI_TEXTS[self.language]["Warning"],
@@ -390,38 +518,16 @@ class ConfigGUI(tk.Tk):
                 )
                 return
 
-            # Optimized window processing
             window_list = []
             self._window_objects = []
-            
-            # Process windows in chunks for better performance
-            chunk_size = 50  # Process 50 windows at a time
-            for i in range(0, len(windows), chunk_size):
-                chunk = windows[i:i + chunk_size]
-                for win in chunk:
-                    try:
-                        title = win.title.strip() if win.title else "Untitled"
-                        
-                        # Only get size if we need to display it
-                        size_str = ""
-                        try:
-                            if hasattr(win, 'width') and hasattr(win, 'height'):
-                                if win.width and win.height:
-                                    size_str = f"{win.width}x{win.height}"
-                        except Exception:
-                            pass
-                        
-                        if not size_str:
-                            continue
-                        
-                        window_list.append(f"{title} [{size_str}]")
-                        self._window_objects.append(win)
-                    except Exception as e:
-                        print(f"Error processing window: {e}")
-                        continue
 
-            # Update the combobox
-            self.window_cb['values'] = window_list
+            for title, w, h, x, y, handle in windows:
+                size_str = f"{w}x{h}"
+                window_list.append(f"{title} [{size_str}]")
+                # Store as tuple
+                self._window_objects.append((title, w, h, x, y, handle))
+
+            self.window_cb["values"] = window_list
             if window_list:
                 self.window_cb.current(0)
                 self.on_window_selected()
@@ -431,58 +537,80 @@ class ConfigGUI(tk.Tk):
                 UI_TEXTS[self.language]["Error"],
                 f"Error refreshing window list: {str(e)}"
             )
+    def refresh_monitor_and_window(self):
+        """Allow user to get latest monitor/window list"""
+        if self.capture_mode_key == "Window":
+            self.refresh_window_list()
+        else:
+            self.populate_monitors()
+        self.update_host_url() # refresh URL
+    
+    def update_host_url(self, *args):
+        """Update the host URL when port changes and validate the port number"""
+        port = self.streamer_port_var.get()
+        if port:
+            try:
+                port_num = int(port)
+                if 1 <= port_num <= 65535:
+                    self.streamer_host_var.set(f"http://{get_local_ip()}:{port_num}")
+                else:
+                    messagebox.showerror(
+                        UI_TEXTS[self.language]["Error"],
+                        UI_TEXTS[self.language].get("Invalid port number (1-65535)", "Invalid port number (must be between 1-65535)")
+                    )
+                    # Reset to default port if invalid
+                    self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+            except ValueError:
+                messagebox.showerror(
+                    UI_TEXTS[self.language]["Error"],
+                    UI_TEXTS[self.language].get("Invalid port number", "Port must be a number")
+                )
+                # Reset to default port if invalid
+                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+
     def on_window_selected(self, event=None):
         """Handle window selection from the combobox"""
-        if not hasattr(self, '_window_objects') or not self._window_objects:
+        if not hasattr(self, "_window_objects") or not self._window_objects:
             return
 
         selected_text = self.window_var.get()
         if not selected_text:
             return
 
-        # Find the corresponding window object
         selected_index = None
-        for i, win in enumerate(self._window_objects):
-            title = win.title if win.title else "Untitled"
-            size = f"{win.width}x{win.height}" if win.width and win.height else "Unknown size"
+        for i, (title, w, h, x, y, handle) in enumerate(self._window_objects):
+            size = f"{w}x{h}" if w and h else "Unknown size"
             if selected_text == f"{title} [{size}]":
                 selected_index = i
                 break
 
         if selected_index is not None:
-            selected_win = self._window_objects[selected_index]
-            self.selected_window_coords = (
-                selected_win.left,
-                selected_win.top,
-                selected_win.width,
-                selected_win.height
-            )
+            title, w, h, x, y, handle = self._window_objects[selected_index]
+            self.selected_window_coords = (int(x), int(y), int(w), int(h))
             self.update_status(
-                f"{UI_TEXTS[self.language]['Selected window:']} {selected_win.title} "
-                f"({selected_win.width}x{selected_win.height})"
+                f"{UI_TEXTS[self.language]['Selected window:']} {title} ({w}x{h})"
             )
 
     def on_capture_mode_change(self, *args):
         """Show/hide monitor or window controls based on capture mode"""
-        mode = self.capture_mode_var.get()
-        if mode == "Monitor":
-            self.label_monitor.grid()
-            self.monitor_menu.grid()
-            self.label_window.grid_remove()
-            self.window_frame.grid_remove()
+        label = self.capture_mode_var_label.get()
+        texts = UI_TEXTS[self.language]
+        monitor_label = texts.get("Monitor", "Monitor")
+        
+        # Update the internal capture_mode_key based on the selected label
+        if label == monitor_label:
+            self.capture_mode_key = "Monitor"
+            self.monitor_menu.grid(row=2, column=1, columnspan=2, sticky="w", **self.pad)
+            self.window_cb.grid_remove()
         else:  # Window
-            self.label_monitor.grid_remove()
+            self.capture_mode_key = "Window"
             self.monitor_menu.grid_remove()
-            self.label_window.grid()
-            self.window_frame.grid()
+            self.window_cb.grid(row=2, column=1, columnspan=2, sticky="ew", **self.pad)
             # Refresh window list automatically when switching to Window mode
             self.refresh_window_list()
 
     def update_language_texts(self):
         texts = UI_TEXTS[self.language]
-        self.label_capture_mode.config(text=texts["Capture Mode:"])
-        self.label_monitor.config(text=texts["Monitor Index:"])
-        self.label_window.config(text=texts["Window Title:"])
         self.btn_refresh.config(text=texts["Refresh"])
         self.label_fps.config(text=texts["FPS:"])
         self.showfps_cb.config(text=texts["Show FPS"])
@@ -501,6 +629,36 @@ class ConfigGUI(tk.Tk):
         self.btn_stop.config(text=texts["Stop"])
         self.btn_run.config(text=texts["Run"])
         self.label_language.config(text=texts["Set Language:"])
+        # Update run mode labels & combobox values
+        self.label_run_mode.config(text=texts.get("Run Mode:", "Run Mode:"))
+        localized_run_vals = [texts.get("Viewer", "Viewer"), texts.get("Streamer", "Streamer")]
+        self.run_mode_cb["values"] = localized_run_vals
+        
+
+        # Select the appropriate label
+        if self.run_mode_key == "Viewer":
+            self.run_mode_var_label.set(localized_run_vals[0])
+        else:
+            self.run_mode_var_label.set(localized_run_vals[1])
+            
+        # Update capture mode combobox values
+        localized_capture_vals = [texts.get("Monitor", "Monitor"), texts.get("Window", "Window")]
+        self.capture_mode_cb["values"] = localized_capture_vals
+        
+        # Select the appropriate label based on current capture_mode_key
+        if self.capture_mode_key == "Monitor":
+            self.capture_mode_var_label.set(localized_capture_vals[0])
+        else:
+            self.capture_mode_var_label.set(localized_capture_vals[1])
+        
+        # Trigger the capture mode change handler to update UI
+        self.on_capture_mode_change()
+
+        # Streamer host/port labels
+        self.label_streamer_host.config(text=texts.get("Streamer URL", "Streamer URL"))
+        self.label_streamer_port.config(text=texts.get("Streamer Port:", "Streamer Port:"))
+
+        # language combobox values
         self.language_cb["values"] = list(UI_TEXTS.keys())
         
         # Update status bar translation
@@ -510,11 +668,11 @@ class ConfigGUI(tk.Tk):
                 "Loaded settings.yaml at startup": texts["Loaded settings.yaml at startup"],
                 "Running": texts["Running"],
                 "Stopped": texts["Stopped"],
-                "Settings saved to settings.yaml, starting Stereo Viewer...": texts["Countdown"],
+                "Settings saved to settings.yaml, starting...": texts["Countdown"],
                 "启动时已加载 settings.yaml": texts["Loaded settings.yaml at startup"],
                 "运行中...": texts["Running"],
                 "已停止。": texts["Stopped"],
-                "设置已保存到 settings.yaml，启动Stereo Viewer...": texts["Countdown"]
+                "设置已保存到 settings.yaml，启动中...": texts["Countdown"]
             }
             if current_text in mapping:
                 self.status_label.config(text=mapping[current_text])
@@ -524,6 +682,30 @@ class ConfigGUI(tk.Tk):
         if selected in UI_TEXTS:
             self.language = selected
             self.update_language_texts()
+
+    def on_run_mode_change(self, event=None):
+        """Toggle visibility of streamer-specific controls when run mode changes."""
+        label = self.run_mode_var_label.get()
+        texts = UI_TEXTS[self.language]
+        streamer_label = texts.get("Streamer", "Streamer")
+        if label == streamer_label:
+            self.run_mode_key = "Streamer"
+            if not self.streamer_port_var.get():
+                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+            # populate host with detected local IP if empty
+            self.streamer_host_var.set(f"http://{get_local_ip()}:{self.streamer_port_var.get()}")
+            # grid the controls
+            self.label_streamer_host.grid(row=1, column=0, sticky="w", padx=8, pady=6)
+            self.streamer_host_entry.grid(row=1, column=1, sticky="ew", padx=8, pady=6)
+            self.label_streamer_port.grid(row=1, column=2, sticky="w", padx=8, pady=6)
+            self.streamer_port_entry.grid(row=1, column=3, sticky="ew", padx=8, pady=6)
+        else:
+            self.run_mode_key = "Viewer"
+            # hide streamer controls
+            self.label_streamer_host.grid_remove()
+            self.streamer_host_entry.grid_remove()
+            self.label_streamer_port.grid_remove()
+            self.streamer_port_entry.grid_remove()
 
     def browse_download(self):
         path = filedialog.askdirectory(initialdir=self.download_var.get() or ".")
@@ -621,8 +803,6 @@ class ConfigGUI(tk.Tk):
         # Convert any lists to tuples for Capture Coordinates
         if isinstance(cfg.get("Capture Coordinates"), list):
             cfg["Capture Coordinates"] = tuple(cfg["Capture Coordinates"])
-        # Capture mode
-        self.capture_mode_var.set(cfg.get("Capture Mode", DEFAULTS["Capture Mode"]))
         
         # Monitor settings
         monitor_idx = cfg.get("Monitor Index", DEFAULTS["Monitor Index"])
@@ -667,7 +847,23 @@ class ConfigGUI(tk.Tk):
         if not keep_optional:  # no update for language
             self.language_var.set(cfg.get("Language", DEFAULTS["Language"]))
 
-        # Update UI based on capture mode
+        # Run mode + streamer settings
+        run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Viewer"))
+        self.run_mode_key = run_mode
+        host = cfg.get("Streamer Host") or DEFAULTS.get("Streamer Host")
+        port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", 1400))
+        if host:
+            self.streamer_host_var.set(f"http://{host}:{port}")
+        else:
+            # default local ip
+            self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
+        self.streamer_port_var.set(str(port))
+        # Capture mode
+        capture_mode = cfg.get("Capture Mode", DEFAULTS.get("Capture Mode", "Monitor"))
+        self.capture_mode_key = capture_mode
+        # Update run mode visibility
+        self.update_language_texts()
+        self.on_run_mode_change()
         self.on_capture_mode_change()
 
     def load_defaults(self):
@@ -681,8 +877,17 @@ class ConfigGUI(tk.Tk):
         self.status_label.config(text=msg)
 
     def save_settings(self):
+        # Validate port
+        try:
+            port_val = int(self.streamer_port_var.get()) if self.streamer_port_var.get() else DEFAULTS.get("Streamer Port", 1400)
+            if not (1 <= port_val <= 65535):
+                raise ValueError("Port out of range")
+        except Exception:
+            messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Invalid port: {self.streamer_port_var.get()}")
+            return
+
         cfg = {
-            "Capture Mode": self.capture_mode_var.get(),
+            "Capture Mode": self.capture_mode_key,
             "Monitor Index": self.monitor_label_to_index.get(self.monitor_var.get(), DEFAULTS["Monitor Index"]),
             "Capture Coordinates": self.selected_window_coords,
             "FPS": int(self.fps_cb.get()),
@@ -699,6 +904,8 @@ class ConfigGUI(tk.Tk):
             "HF Endpoint": self.hf_endpoint_var.get(),
             "Device": self.device_label_to_index.get(self.device_var.get()),
             "Language": self.language,
+            "Run Mode": self.run_mode_key,
+            "Streamer Port": port_val,
         }
         success = self.save_yaml("settings.yaml", cfg)
         if success:
@@ -707,6 +914,14 @@ class ConfigGUI(tk.Tk):
             self._countdown_and_run(countdown_seconds)
 
     def _countdown_and_run(self, seconds):
+        if self.process and self.process.poll() is None:
+            # Process is already running
+            messagebox.showwarning(
+                UI_TEXTS[self.language]["Warning"],
+                UI_TEXTS[self.language]["A thread already running!"]
+            )
+            return
+
         if seconds > 0:
             self.update_status(
                 UI_TEXTS[self.language]["Countdown"].format(seconds=seconds)
@@ -714,13 +929,16 @@ class ConfigGUI(tk.Tk):
             self.after(1000, lambda: self._countdown_and_run(seconds - 1))
         else:
             try:
-                self.process = subprocess.Popen([sys.executable, "main.py"])
+                print(f"[Main] Initializing Desktop2Stereo {self.run_mode_key}…")
+                cmd = [sys.executable, "main.py"]
+
+                self.process = subprocess.Popen(cmd)
                 self.update_status(UI_TEXTS[self.language]["Running"])
                 self._monitor_process()  # start monitoring after launch
             except Exception as e:
                 messagebox.showerror(
                     UI_TEXTS[self.language]["Error"],
-                    f"Failed to run main.py: {e}"
+                    f"Failed to run process: {e}"
                 )
                 self.update_status(UI_TEXTS[self.language]["Stopped"])
 
@@ -733,7 +951,7 @@ class ConfigGUI(tk.Tk):
         else:
             # Keep checking every second
             self.after(1000, self._monitor_process)
-                
+                    
     def stop_process(self):
         if self.process and self.process.poll() is None:  # still running
             try:
@@ -742,12 +960,17 @@ class ConfigGUI(tk.Tk):
             except subprocess.TimeoutExpired:
                 self.process.kill()
             except Exception as e:
-                messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Failed to stop process: {e}")
+                messagebox.showerror(
+                    UI_TEXTS[self.language]["Error"],
+                    f"Failed to stop process: {e}"
+                )
             finally:
                 self.process = None
                 self.update_status(UI_TEXTS[self.language]["Stopped"])
+                print(f"[Main] {self.run_mode_key} Stopped")
         else:
             self.update_status(UI_TEXTS[self.language]["Stopped"])
+            print(f"[Main] {self.run_mode_key} Stopped")
 
 if __name__ == "__main__":
     app = ConfigGUI()
