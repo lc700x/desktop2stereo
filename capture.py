@@ -8,21 +8,36 @@ if OS_NAME == "Windows":
     import win32gui
     from ctypes import windll
     from wincam import DXCamera
+    import logging
 
-    # call once on startup so coordinates are in physical pixels
+    logging.basicConfig(level=logging.INFO)
+
+    # make sure we use physical pixels
     try:
         windll.user32.SetProcessDPIAware()
     except Exception:
         pass
 
     def get_window_client_bounds(hwnd):
-        """Return (left, top, width, height) in screen (physical) pixels of the client area."""
+        """Return (left, top, width, height) in screen (physical) pixels of the client area.
+        Returns None if window is not suitable for capture (minimized, zero-sized, not visible).
+        """
+        if not win32gui.IsWindow(hwnd):
+            return None
+        if not win32gui.IsWindowVisible(hwnd):
+            return None
+        if win32gui.IsIconic(hwnd):  # minimized
+            return None
         l, t, r, b = win32gui.GetClientRect(hwnd)               # client rect (0,0,w,h)
         left_top = win32gui.ClientToScreen(hwnd, (l, t))        # convert to screen coords
         right_bottom = win32gui.ClientToScreen(hwnd, (r, b))
         left, top = left_top
         right, bottom = right_bottom
-        return left, top, right - left, bottom - top
+        width = right - left
+        height = bottom - top
+        if width <= 0 or height <= 0:
+            return None
+        return left, top, width, height
 
     class DesktopGrabber:
         def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE):
@@ -30,48 +45,173 @@ if OS_NAME == "Windows":
             self.fps = fps
             self._mss = mss.mss()
             self.capture_mode = capture_mode
-            self.camera = None
+            self.camera = None       # DXCamera instance when used
+            self.use_mss_for_next = False
             self.prev_rect = None
+            self.window_title = window_title
 
             if self.capture_mode == "Monitor":
-                mon = self._mss.monitors[1]  # choose appropriate monitor
+                mon = self._mss.monitors[1]  # choose appropriate monitor (primary)
                 self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
                 self.camera = DXCamera(self.left, self.top, self.width, self.height, fps=self.fps)
-                # enter once if DXCamera is a context manager
                 try:
                     self.camera.__enter__()
                 except AttributeError:
                     pass
             else:
-                self.window_title = window_title
                 self.hwnd = win32gui.FindWindow(None, self.window_title)
                 if not self.hwnd:
                     raise RuntimeError(f"Window '{self.window_title}' not found")
 
+        def _monitor_contains(self, mon, rect):
+            mon_left, mon_top = mon['left'], mon['top']
+            mon_right = mon_left + mon['width']
+            mon_bottom = mon_top + mon['height']
+            left, top, w, h = rect
+            right = left + w
+            bottom = top + h
+            return left >= mon_left and top >= mon_top and right <= mon_right and bottom <= mon_bottom
+
+        def _monitor_intersection_area(self, mon, rect):
+            mon_left, mon_top = mon['left'], mon['top']
+            mon_right = mon_left + mon['width']
+            mon_bottom = mon_top + mon['height']
+            left, top, w, h = rect
+            right = left + w
+            bottom = top + h
+            inter_w = max(0, min(mon_right, right) - max(mon_left, left))
+            inter_h = max(0, min(mon_bottom, bottom) - max(mon_top, top))
+            return inter_w * inter_h
+
+        def _choose_monitor_and_rect(self, rect):
+            """Return (use_dx, mon, clamped_rect).
+               - If rect fits fully in a monitor -> use_dx=True and clamped_rect is original rect.
+               - Else choose monitor with max intersection and clamp rect to that monitor (use_dx=True).
+               - If you want to capture the full cross-monitor rect -> use_dx=False and clamped_rect is original rect.
+            """
+            # Option: choose whether we prefer clamping or full cross-monitor capture.
+            # For DXCamera we must provide a single-monitor rect. Here we prefer clamping so DXCamera can be used.
+            left, top, w, h = rect
+            right = left + w
+            bottom = top + h
+
+            # If rectangle already entirely inside virtual monitor 0? we still need a single physical monitor.
+            best_mon = None
+            for mon in self._mss.monitors[1:]:
+                if self._monitor_contains(mon, rect):
+                    # fully contained -> perfect for DXCamera
+                    return True, mon, rect
+
+            # Not fully contained — pick monitor with largest intersection
+            best_mon = None
+            best_area = -1
+            for mon in self._mss.monitors[1:]:
+                area = self._monitor_intersection_area(mon, rect)
+                if area > best_area:
+                    best_area = area
+                    best_mon = mon
+
+            if best_mon is None or best_area <= 0:
+                # nothing intersects (window offscreen?) fallback to primary monitor
+                best_mon = self._mss.monitors[1]
+                # clamp to primary monitor fully
+            # clamp rect to chosen monitor bounds
+            mon_left, mon_top = best_mon['left'], best_mon['top']
+            mon_right = mon_left + best_mon['width']
+            mon_bottom = mon_top + best_mon['height']
+            new_left = max(left, mon_left)
+            new_top = max(top, mon_top)
+            new_right = min(right, mon_right)
+            new_bottom = min(bottom, mon_bottom)
+            new_w = max(0, new_right - new_left)
+            new_h = max(0, new_bottom - new_top)
+            if new_w == 0 or new_h == 0:
+                # fallback to capturing the whole monitor if clamp collapses
+                new_left, new_top, new_w, new_h = mon_left, mon_top, best_mon['width'], best_mon['height']
+
+            return True, best_mon, (new_left, new_top, new_w, new_h)
+
         def _ensure_camera_matches_window(self):
-            left, top, width, height = get_window_client_bounds(self.hwnd)
-            rect = (left, top, width, height)
-            if rect != self.prev_rect:
-                # recreate camera only when rect changed (move/resize)
-                self.prev_rect = rect
+            bounds = get_window_client_bounds(self.hwnd)
+            if bounds is None:
+                # window not capturable right now (minimized or not visible). release camera
                 if self.camera:
                     try:
                         self.camera.__exit__(None, None, None)
                     except AttributeError:
                         pass
                     self.camera = None
-                self.camera = DXCamera(left, top, width, height, fps=self.fps)
+                self.prev_rect = None
+                return
+
+            left, top, width, height = bounds
+            # avoid negative coordinates — logic below will handle via clamping
+            rect = (left, top, width, height)
+            if rect == self.prev_rect:
+                return  # nothing changed
+
+            self.prev_rect = rect
+
+            # Decide which monitor and whether to use DXCamera or mss
+            use_dx, chosen_mon, chosen_rect = self._choose_monitor_and_rect(rect)
+
+            # recreate camera/use_mss only if necessary
+            # If we will use mss for the full window (not implemented as separate mode here),
+            # you could set self.use_mss_for_next True and not create DXCamera.
+            # Here we always map to a single-monitor rect for DXCamera to avoid the "Monitor not found" error.
+            # If you prefer to capture the whole cross-monitor area, set use_dx = False and handle in grab().
+            if self.camera:
+                try:
+                    self.camera.__exit__(None, None, None)
+                except AttributeError:
+                    pass
+                self.camera = None
+
+            new_left, new_top, new_w, new_h = chosen_rect
+            try:
+                self.camera = DXCamera(new_left, new_top, new_w, new_h, fps=self.fps)
+                self.use_mss_for_next = False
                 try:
                     self.camera.__enter__()
                 except AttributeError:
                     pass
+            except Exception as e:
+                # if DXCamera still fails, fallback to mss for captures
+                logging.warning("DXCamera init failed, falling back to mss: %s", e)
+                self.camera = None
+                self.use_mss_for_next = True
+                # save the original requested rect to use for mss grabs
+                self.mss_rect = rect
 
         def grab(self):
             if self.capture_mode != "Monitor":
                 self._ensure_camera_matches_window()
-            # now camera exists and matches current window
-            img_array, _ = self.camera.get_rgb_frame()
-            return img_array, self.scaled_height
+
+            # if we have a DXCamera instance, use it
+            if self.camera and not self.use_mss_for_next:
+                try:
+                    img_array, _meta = self.camera.get_rgb_frame()
+                    return img_array, self.scaled_height
+                except Exception as e:
+                    logging.warning("DXCamera.get_rgb_frame failed; falling back to mss for this frame: %s", e)
+                    # fallthrough to mss capture
+
+            # Fallback: use mss to capture the requested rectangle (self.prev_rect holds client bounds)
+            if getattr(self, "prev_rect", None):
+                left, top, w, h = self.prev_rect
+            elif hasattr(self, "mss_rect"):
+                left, top, w, h = self.mss_rect
+            else:
+                # final fallback: capture primary monitor
+                mon = self._mss.monitors[1]
+                left, top, w, h = mon['left'], mon['top'], mon['width'], mon['height']
+
+            bbox = {"left": int(left), "top": int(top), "width": int(w), "height": int(h)}
+            sct_img = self._mss.grab(bbox)
+            # mss returns BGRA; convert to RGB numpy array
+            arr = np.array(sct_img)[:, :, :3]   # (H, W, BGR)
+            rgb = arr[..., ::-1]               # BGR -> RGB
+            return rgb, self.scaled_height
 
         def close(self):
             if self.camera:
@@ -80,6 +220,8 @@ if OS_NAME == "Windows":
                 except AttributeError:
                     pass
                 self.camera = None
+            # nothing to close for mss
+
 
 
 elif OS_NAME == "Darwin":

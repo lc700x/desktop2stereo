@@ -785,7 +785,7 @@ class ConfigGUI(tk.Tk):
             self.monitor_var.set(next(iter(self.monitor_label_to_index)))
 
         # Window settings
-        self.selected_window_name = cfg.get("Window Title", DEFAULTS["Window Title"])
+        self.selected_window_name = cfg.get(DEFAULTS["Window Title"])
         self.window_var.set(self.selected_window_name)
 
         if not keep_optional:  # no update for device

@@ -26,13 +26,16 @@ def put_latest(q, item):
         time.sleep(TIME_SLEEP)  # Drop frame if race condition occurs
 
 def capture_loop():
-    cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS)
-    while True:
-        try:
-            frame_raw, size = cap.grab()
-        except OSError:
-            exit()
-        put_latest(raw_q, (frame_raw, size))
+    try:
+        cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS)
+        while True:
+            try:
+                frame_raw, size = cap.grab()
+            except OSError:
+                exit()
+            put_latest(raw_q, (frame_raw, size))
+    except RuntimeError as e:
+        print("[Error]:", e)
 
 def process_loop():
     while True:
@@ -137,6 +140,8 @@ def main(mode="Viewer"):
             
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
+    except Exception as e:
+        print("[Error]:", e)
     finally:
         # Print average FPS on exit
         # total_time = time.perf_counter() - start_time
