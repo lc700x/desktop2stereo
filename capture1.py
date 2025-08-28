@@ -7,16 +7,11 @@ if OS_NAME == "Windows":
     from windows_capture import WindowsCapture, Frame, InternalCaptureControl
     class DesktopGrabber:
         def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, 
-                    capture_mode=CAPTURE_MODE, crop_top=0, crop_left=0, 
-                    crop_right=0, crop_bottom=0):
+                    capture_mode=CAPTURE_MODE):
             self.scaled_height = output_resolution
             self.fps = fps
             self.capture_mode = capture_mode
             self.window_title = window_title
-            self.crop_top = crop_top
-            self.crop_left = crop_left
-            self.crop_right = crop_right
-            self.crop_bottom = crop_bottom
             
             self.latest_frame = None
             self._lock = threading.Lock()
@@ -77,8 +72,8 @@ if OS_NAME == "Windows":
                 if self.latest_frame is None:
                     return None, self.scaled_height
                 img_array = self.latest_frame
-                img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_BGRA2RGB)
-            return img_array, self.scaled_height
+                img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGRA2RGB)
+            return img_rgb, self.scaled_height
 
 
 elif OS_NAME == "Darwin":
