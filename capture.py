@@ -326,8 +326,6 @@ elif OS_NAME == "Darwin":
                     raise RuntimeError(f"Window '{self.window_title}' not found")
                 self.left, self.top, self.width, self.height = bounds
 
-            self.scaled_width = round(self.width * self.scaled_height / self.height)
-
         def _ensure_rect(self):
             if self.capture_mode != "Monitor":
                 bounds = get_window_client_bounds_mac(self.window_title)
@@ -337,21 +335,77 @@ elif OS_NAME == "Darwin":
                     return
                 self.prev_rect = bounds
                 self.left, self.top, self.width, self.height = bounds
-                self.scaled_width = round(self.width * self.scaled_height / self.height)
+        
+        def get_scale(self):
+            # Get current mouse location
+            mouse_location = NSEvent.mouseLocation()
 
+            # Get list of screens
+            screens = NSScreen.screens()
+
+            for screen in screens:
+                frame = screen.frame()
+                if frame.origin.x <= mouse_location.x <= frame.origin.x + frame.size.width and \
+                frame.origin.y <= mouse_location.y <= frame.origin.y + frame.size.height:
+                    # Found the screen under the cursor
+                    backing_scale = screen.backingScaleFactor()
+                    return backing_scale
+
+            raise RuntimeError("No screen found under cursor")
+        
         def grab(self):
             self._ensure_rect()
             monitor = {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
             shot = self._mss.grab(monitor)
             arr = np.asarray(shot)
             frame_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
-            # TODO: optionally overlay cursor using existing functions
+            if self.with_cursor and CGCursorIsVisible():
+                x, y = get_cursor_position()
+                system_scale = self.get_scale()
+                # Convert to local frame coordinates
+                if 0 <= x - self.left <= self.width and 0 <= y - self.top <= self.height:
+                    
+                    cursor_x = (x - self.left) * system_scale
+                    cursor_y = (y - self.top) * system_scale
+                    # Only overlay if cursor is within this frame
+                
+                    cursor_bgra, hotspot, alpha_f32, premultiplied = get_cursor_image_and_hotspot()
+                    scale_factor = 16 // system_scale
+                    if cursor_bgra.shape[0] > scale_factor and cursor_bgra.shape[1] > scale_factor:
+                        h, w = cursor_bgra.shape[:2]
+                        new_w, new_h = int(w / scale_factor), int(h / scale_factor)
+                        # resize BGRA; keep alpha channel scaled properly
+                        cursor_bgra = cv2.resize(cursor_bgra, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                        # recompute alpha & premultiplied after resize
+                        alpha_f32 = (cursor_bgra[:, :, 3].astype(np.float32) / 255.0)
+                        premultiplied = cursor_bgra[:, :, :3].astype(np.float32) * alpha_f32[:, :, None]
+
+                        self.cursor_bgra = cursor_bgra
+                        self.cursor_hotspot = hotspot
+                        self.cursor_alpha = alpha_f32
+                        self.cursor_premultiplied = premultiplied
+                        
+                        if self.with_cursor and self.cursor_bgra is not None:
+                            # overlay in-place using optimized routine
+                            frame_bgr = overlay_cursor_on_frame(
+                                frame_bgr,
+                                self.cursor_bgra,
+                                self.cursor_hotspot,
+                                (cursor_x, cursor_y),
+                                alpha_f32=self.cursor_alpha,
+                                premultiplied_bgr_f32=self.cursor_premultiplied
+                            )
+            else:
+                self.cursor_bgra = None
+                self.cursor_hotspot = (0, 0)
+                self.cursor_alpha = None
+                self.cursor_premultiplied = None
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            return frame_rgb, (self.scaled_height, self.scaled_width)
+            return frame_rgb, self.scaled_height
 
 
 elif OS_NAME.startswith("Linux"):
-    from Xlib import display, X, Xutil
+    from Xlib import display
     import cv2
 
     def get_window_client_bounds_linux(window_title):
