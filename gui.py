@@ -641,8 +641,8 @@ class ConfigGUI(tk.Tk):
             current_text = self.status_label.cget("text")
             mapping = {
                 "Loaded settings.yaml at startup": texts["Loaded settings.yaml at startup"],
-                "Running": texts["Running"],
-                "Stopped": texts["Stopped"],
+                "Running...": texts["Running"],
+                "Stopped.": texts["Stopped"],
                 "Settings saved to settings.yaml, starting...": texts["Countdown"],
                 "启动时已加载 settings.yaml": texts["Loaded settings.yaml at startup"],
                 "运行中...": texts["Running"],
