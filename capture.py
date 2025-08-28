@@ -1,64 +1,156 @@
 import numpy as np
 import mss
-from utils import OS_NAME, CAPTURE_MODE, CAPTURE_COORDS, MONITOR_INDEX
+from utils import OS_NAME, CAPTURE_MODE, WINDOW_TITLE, MONITOR_INDEX, WINDOW_TITLE
 
-# DesktopGrabber: wincam (Windows), MSS + AppKit (Mac), MSS (Linux) 
-# Windows 10/11
 if OS_NAME == "Windows":
+    import win32gui
+    from ctypes import windll
     from wincam import DXCamera
+    import logging
+    logging.basicConfig(level=logging.INFO)
+
+    try:
+        windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+    def get_window_client_bounds(hwnd):
+        """Return (left, top, width, height) in screen pixels; None if window not capturable."""
+        if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
+            return None
+        l, t, r, b = win32gui.GetClientRect(hwnd)
+        left, top = win32gui.ClientToScreen(hwnd, (l, t))
+        right, bottom = win32gui.ClientToScreen(hwnd, (r, b))
+        width, height = right - left, bottom - top
+        if width <= 0 or height <= 0:
+            return None
+        return left, top, width, height
+
     class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60):
+        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE):
             self.scaled_height = output_resolution
             self.fps = fps
             self._mss = mss.mss()
-            self.capture_mode = CAPTURE_MODE
-            self.capture_coords = CAPTURE_COORDS
-            
+            self.capture_mode = capture_mode
+            self.camera = None
+            self.prev_rect = None
+            self.window_title = window_title
+
             if self.capture_mode == "Monitor":
-                monitor_index = MONITOR_INDEX
-                if monitor_index >= len(self._mss.monitors):
-                    print(f"Monitor {monitor_index} not found, using primary monitor")
-                    monitor_index = 1
-                self._mon = self._mss.monitors[monitor_index]
-                left = self._mon['left']
-                top = self._mon['top']
-                width = self._mon['width']
-                height = self._mon['height']
+                mon = self._mss.monitors[1]
+                self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
+                self.camera = DXCamera(self.left, self.top, self.width, self.height, fps=self.fps)
+                try: self.camera.__enter__()
+                except AttributeError: pass
             else:
-                # Window capture mode
-                if not self.capture_coords:
-                    raise ValueError("No capture coordinates specified for window capture")
-                left, top, width, height = self.capture_coords
-            
-            self.scaled_width = round(width * self.scaled_height / height)
+                self.hwnd = win32gui.FindWindow(None, self.window_title)
+                if not self.hwnd:
+                    raise RuntimeError(f"Window '{self.window_title}' not found")
 
-            self.camera = DXCamera(
-                left,
-                top,
-                width,
-                height,
-                fps=self.fps,
-            )
+        def _monitor_contains(self, mon, rect):
+            left, top, w, h = rect
+            right, bottom = left + w, top + h
+            mon_left, mon_top = mon['left'], mon['top']
+            mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
+            return left >= mon_left and top >= mon_top and right <= mon_right and bottom <= mon_bottom
 
-        def __enter__(self):
-            self.camera.__enter__()
-            return self
+        def _monitor_intersection_area(self, mon, rect):
+            left, top, w, h = rect
+            right, bottom = left + w, top + h
+            mon_left, mon_top = mon['left'], mon['top']
+            mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
+            inter_w = max(0, min(mon_right, right) - max(mon_left, left))
+            inter_h = max(0, min(mon_bottom, bottom) - max(mon_top, top))
+            return inter_w * inter_h
 
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            self.camera.__exit__(exc_type, exc_val, exc_tb)
+        def _choose_monitor_and_rect(self, rect):
+            """Clamp rect to single monitor for DXCamera capture."""
+            left, top, w, h = rect
+            right, bottom = left + w, top + h
+
+            for mon in self._mss.monitors[1:]:
+                if self._monitor_contains(mon, rect):
+                    return mon, rect
+
+            best_mon, best_area = None, -1
+            for mon in self._mss.monitors[1:]:
+                area = self._monitor_intersection_area(mon, rect)
+                if area > best_area:
+                    best_area = area
+                    best_mon = mon
+
+            if best_mon is None or best_area <= 0:
+                best_mon = self._mss.monitors[1]
+
+            mon_left, mon_top = best_mon['left'], best_mon['top']
+            mon_right, mon_bottom = mon_left + best_mon['width'], mon_top + best_mon['height']
+            new_left = max(left, mon_left)
+            new_top = max(top, mon_top)
+            new_right = min(right, mon_right)
+            new_bottom = min(bottom, mon_bottom)
+            new_w = max(0, new_right - new_left)
+            new_h = max(0, new_bottom - new_top)
+            if new_w == 0 or new_h == 0:
+                new_left, new_top, new_w, new_h = mon_left, mon_top, best_mon['width'], best_mon['height']
+
+            return best_mon, (new_left, new_top, new_w, new_h)
+
+        def _ensure_camera_matches_window(self):
+            bounds = get_window_client_bounds(self.hwnd)
+            if bounds is None:
+                if self.camera:
+                    try: self.camera.__exit__(None, None, None)
+                    except AttributeError: pass
+                    self.camera = None
+                self.prev_rect = None
+                return
+
+            if bounds == self.prev_rect:
+                return
+            self.prev_rect = bounds
+
+            mon, rect = self._choose_monitor_and_rect(bounds)
+            if self.camera:
+                try: self.camera.__exit__(None, None, None)
+                except AttributeError: pass
+            self.camera = DXCamera(*rect, fps=self.fps)
+            try: self.camera.__enter__()
+            except AttributeError: pass
 
         def grab(self):
+            if self.capture_mode != "Monitor":
+                self._ensure_camera_matches_window()
             img_array, _ = self.camera.get_rgb_frame()
-            return img_array, (self.scaled_height, self.scaled_width)
+            return img_array, self.scaled_height
+
+        def close(self):
+            if self.camera:
+                try: self.camera.__exit__(None, None, None)
+                except AttributeError: pass
+                self.camera = None
+
 
 elif OS_NAME == "Darwin":
-    import io
-    import cv2
+    import io, cv2
     from PIL import Image
-    from AppKit import NSCursor, NSBitmapImageRep, NSPNGFileType, NSScreen
     import Quartz.CoreGraphics as CG
+    from AppKit import NSCursor, NSBitmapImageRep, NSPNGFileType, NSScreen
     from Quartz import CGCursorIsVisible, NSEvent
-    
+
+    def get_window_client_bounds_mac(window_title):
+        """Return (x, y, w, h) for a window by title; None if not found."""
+        import Quartz
+        options = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
+        windows = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID)
+        for win in windows:
+            title = win.get("kCGWindowName", "")
+            owner = win.get("kCGWindowOwnerName", "")
+            if title == window_title or owner == window_title:
+                bounds = win.get("kCGWindowBounds", None)
+                if bounds:
+                    return int(bounds.get("X",0)), int(bounds.get("Y",0)), int(bounds.get("Width",0)), int(bounds.get("Height",0))
+        return None
+
     # Cursor loader with caching & precomputation
     def get_cursor_image_and_hotspot():
         """
@@ -213,34 +305,37 @@ elif OS_NAME == "Darwin":
         return frame_bgr
 
     class DesktopGrabber:
-        def __init__(self, output_resolution=1080, show_monitor_info=True, fps=60, with_cursor=True):
+        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, with_cursor=True):
             self.scaled_height = output_resolution
             self.fps = fps
             self.with_cursor = with_cursor
+            self.window_title = window_title
+            self.capture_mode = capture_mode
             self._mss = mss.mss()
-            
-            # Get capture coordinates from settings
-            self.capture_mode = CAPTURE_MODE
-            self.capture_coords = CAPTURE_COORDS
-            
-            if self.capture_mode == "Monitor":
-                monitor_index = MONITOR_INDEX
-                if monitor_index >= len(self._mss.monitors):
-                    print(f"Monitor {monitor_index} not found, using primary monitor")
-                    monitor_index = 1
-                self._mon = self._mss.monitors[monitor_index]
-                self.left = self._mon['left']
-                self.top = self._mon['top']
-                self.width = self._mon["width"]
-                self.height = self._mon["height"]
-            else:
-                # Window capture mode
-                if not self.capture_coords:
-                    raise ValueError("No capture coordinates specified for window capture")
-                self.left, self.top, self.width, self.height = self.capture_coords
-            
-            self.scaled_width = round(self.width * self.scaled_height / self.height)
+            self.prev_rect = None
 
+            if self.capture_mode == "Monitor":
+                mon_index = MONITOR_INDEX
+                if mon_index >= len(self._mss.monitors):
+                    mon_index = 1
+                mon = self._mss.monitors[mon_index]
+                self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
+            else:
+                bounds = get_window_client_bounds_mac(self.window_title)
+                if bounds is None:
+                    raise RuntimeError(f"Window '{self.window_title}' not found")
+                self.left, self.top, self.width, self.height = bounds
+
+        def _ensure_rect(self):
+            if self.capture_mode != "Monitor":
+                bounds = get_window_client_bounds_mac(self.window_title)
+                if bounds is None:
+                    return
+                if bounds == self.prev_rect:
+                    return
+                self.prev_rect = bounds
+                self.left, self.top, self.width, self.height = bounds
+        
         def get_scale(self):
             # Get current mouse location
             mouse_location = NSEvent.mouseLocation()
@@ -257,23 +352,13 @@ elif OS_NAME == "Darwin":
                     return backing_scale
 
             raise RuntimeError("No screen found under cursor")
-
+        
         def grab(self):
-            # Create custom monitor dict for MSS
-            monitor = {
-                "left": self.left,
-                "top": self.top,
-                "width": self.width,
-                "height": self.height
-            }
-            
-            # Grab: mss gives a raw BGRA buffer (Pillow style). Convert once to numpy view.
+            self._ensure_rect()
+            monitor = {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
             shot = self._mss.grab(monitor)
-            arr = np.asarray(shot)  # BGRA uint8 view (no unnecessary copies if mss supports it)
-            # Convert to BGR (drop alpha) using OpenCV (fast C path)
+            arr = np.asarray(shot)
             frame_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
-            
-            # Load cursor and precompute alpha/premultiplied arrays for fast overlay
             if self.with_cursor and CGCursorIsVisible():
                 x, y = get_cursor_position()
                 system_scale = self.get_scale()
@@ -315,52 +400,74 @@ elif OS_NAME == "Darwin":
                 self.cursor_hotspot = (0, 0)
                 self.cursor_alpha = None
                 self.cursor_premultiplied = None
-
-            # Return RGB image & scaled dimensions
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            return frame_rgb, (self.scaled_height, self.scaled_width)
+            return frame_rgb, self.scaled_height
 
 
-else: # Linux and other platforms
-    print("Use MSS as screen grabber.")
+elif OS_NAME.startswith("Linux"):
+    from Xlib import display
     import cv2
+
+    def get_window_client_bounds_linux(window_title):
+        d = display.Display()
+        root = d.screen().root
+        def search(w):
+            try:
+                name = w.get_wm_name()
+            except:
+                return None
+            if name == window_title:
+                geom = w.get_geometry()
+                abs_pos = w.translate_coords(root, 0, 0)
+                return abs_pos.x, abs_pos.y, geom.width, geom.height
+            try:
+                for c in w.query_tree().children:
+                    r = search(c)
+                    if r:
+                        return r
+            except:
+                pass
+            return None
+        return search(root)
+
     class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60):
+        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE):
             self.scaled_height = output_resolution
             self.fps = fps
-            self._mss = mss.mss(with_cursor=True)
-            
-            # Get capture coordinates from settings
-            self.capture_mode = CAPTURE_MODE
-            self.capture_coords = CAPTURE_COORDS
-            
+            self.window_title = window_title
+            self.capture_mode = capture_mode
+            self._mss = mss.mss()
+            self.prev_rect = None
+
             if self.capture_mode == "Monitor":
-                monitor_index = MONITOR_INDEX
-                if monitor_index >= len(self._mss.monitors):
-                    print(f"Monitor {monitor_index} not found, using primary monitor")
-                    monitor_index = 1
-                self._mon = self._mss.monitors[monitor_index]
-                self.left = self._mon['left']
-                self.top = self._mon['top']
-                self.width = self._mon["width"]
-                self.height = self._mon["height"]
+                mon_index = MONITOR_INDEX
+                if mon_index >= len(self._mss.monitors):
+                    mon_index = 1
+                mon = self._mss.monitors[mon_index]
+                self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
             else:
-                # Window capture mode
-                if not self.capture_coords:
-                    raise ValueError("No capture coordinates specified for window capture")
-                self.left, self.top, self.width, self.height = self.capture_coords
+                bounds = get_window_client_bounds_linux(self.window_title)
+                if bounds is None:
+                    raise RuntimeError(f"Window '{self.window_title}' not found")
+                self.left, self.top, self.width, self.height = bounds
 
             self.scaled_width = round(self.width * self.scaled_height / self.height)
 
+        def _ensure_rect(self):
+            if self.capture_mode != "Monitor":
+                bounds = get_window_client_bounds_linux(self.window_title)
+                if bounds is None:
+                    return
+                if bounds == self.prev_rect:
+                    return
+                self.prev_rect = bounds
+                self.left, self.top, self.width, self.height = bounds
+                self.scaled_width = round(self.width * self.scaled_height / self.height)
+
         def grab(self):
-            # Create custom monitor dict for MSS
-            monitor = {
-                "left": self.left,
-                "top": self.top,
-                "width": self.width,
-                "height": self.height
-            }
-            
+            self._ensure_rect()
+            monitor = {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
             shot = self._mss.grab(monitor)
-            img = cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2RGB)
-            return img, (self.scaled_height, self.scaled_width)
+            arr = np.asarray(shot)
+            frame_rgb = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
+            return frame_rgb, (self.scaled_height, self.scaled_width)
