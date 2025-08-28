@@ -136,7 +136,7 @@ def main(mode="Viewer"):
                             last_time = current_time
                             print(f"FPS: {current_fps:.2f}")
                 except queue.Empty:
-                        pass
+                    pass
             
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")

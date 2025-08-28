@@ -1,9 +1,9 @@
-Capture Mode: Window
+Capture Mode: Monitor
 Monitor Index: 1
-Window Title: depth.py - desktop2stereo - Visual Studio Code
+Window Title: ''
 FPS: 60
 Show FPS: true
-Output Resolution: 480
+Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
@@ -48,13 +48,13 @@ Model List:
 - Intel/zoedepth-nyu
 - Intel/zoedepth-kitti
 - apple/DepthPro-hf
-Depth Model: apple/DepthPro-hf
+Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 1.0
-Depth Resolution: 1536
+Depth Resolution: 384
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
-Language: CN
+Language: EN
 Run Mode: Streamer
 Streamer Port: 1400

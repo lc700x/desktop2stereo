@@ -33,6 +33,7 @@ class MJPEGStreamer:
         self.sbs_width = None
         self.sbs_height = None
         self.index_bytes = None
+        
         self.delay = 1.0 / fps
 
         # Lightweight HTML page (no process_token code)
@@ -195,7 +196,7 @@ class MJPEGStreamer:
         if self.sbs_width is None or self.sbs_height is None:
             self.sbs_height, self.sbs_width = arr.shape[:2]
             self.index_bytes = self.template.format(
-                fps=self.fps,
+                fps=self.fps and int(1/self.delay) or 60,
                 width=self.sbs_width,
                 height=self.sbs_height
             ).encode("utf-8")
