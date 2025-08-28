@@ -1,9 +1,9 @@
 Capture Mode: Window
 Monitor Index: 1
-Window Title: 【邓紫棋的VLOG】幸福开箱 之 【启示路】恒藏版小说！！！_哔哩哔哩_bilibili 🔊
+Window Title: depth.py - desktop2stereo - Visual Studio Code
 FPS: 60
 Show FPS: true
-Output Resolution: 1080
+Output Resolution: 480
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
@@ -48,13 +48,13 @@ Model List:
 - Intel/zoedepth-nyu
 - Intel/zoedepth-kitti
 - apple/DepthPro-hf
-Depth Model: depth-anything/Depth-Anything-V2-Small-hf
+Depth Model: apple/DepthPro-hf
 Depth Strength: 1.0
-Depth Resolution: 384
+Depth Resolution: 1536
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
-Language: EN
-Run Mode: Viewer
+Language: CN
+Run Mode: Streamer
 Streamer Port: 1400

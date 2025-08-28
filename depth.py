@@ -40,7 +40,16 @@ print(f"{DEVICE_INFO}")
 print(f"Model: {MODEL_ID}")
 
 # Load model with same configuration as example
-model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, torch_dtype=DTYPE, cache_dir=CACHE_PATH, weights_only=True).half().to(DEVICE).eval()
+if FP16:
+    model = AutoModelForDepthEstimation.from_pretrained(
+        MODEL_ID, torch_dtype=torch.float16,
+        cache_dir=CACHE_PATH, weights_only=True
+    ).half().to(DEVICE).eval()
+else:
+    model = AutoModelForDepthEstimation.from_pretrained(
+        MODEL_ID, torch_dtype=torch.float32,
+        cache_dir=CACHE_PATH, weights_only=True
+    ).to(DEVICE).eval()
 
 MODEL_DTYPE = next(model.parameters()).dtype
 # Normalization parameters (same as example)
@@ -88,17 +97,18 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     """
     # Convert to tensor and normalize (similar to pipeline's preprocessing)
     tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE, non_blocking=True) # CPU → CPU tensor (uint8)
-    tensor = tensor.permute(2, 0, 1).float() / 255  # HWC → CHW, 0-1 range
+    tensor = tensor.permute(2, 0, 1).float().contiguous() / 255  # HWC → CHW, 0-1 range
     tensor = tensor.unsqueeze(0) # set to improve performance
 
     # Resize and normalize (same as pipeline)
     tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
-    tensor = (tensor - MEAN) / STD
+    tensor = ((tensor - MEAN) / STD).contiguous()  # ensure contiguous before model
 
     # Inference with thread safety
     with lock:
-        tensor = tensor.to(dtype=MODEL_DTYPE)
-        depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
+        with torch.no_grad():
+            tensor = tensor.to(dtype=MODEL_DTYPE).contiguous()
+            depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
 
     # Post-processing (same as pipeline)
     h, w = image_rgb.shape[:2]
@@ -126,15 +136,16 @@ def predict_depth_tensor(img_rgb):
 
     # Inference with thread safety
     with lock:
-        rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE) # CPU → CPU tensor (uint8)
-        tensor = rgb_tensor.permute(2, 0, 1).float() / 255  # HWC → CHW, 0-1 range
-        tensor = tensor.unsqueeze(0) # set to improve performance
+        with torch.no_grad():
+            rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE) # CPU → CPU tensor (uint8)
+            tensor = rgb_tensor.permute(2, 0, 1).float().contiguous() / 255  # HWC → CHW, 0-1 range
+            tensor = tensor.unsqueeze(0) # set to improve performance
 
-        # Resize and normalize (same as pipeline)
-        tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
-        tensor = (tensor - MEAN) / STD
-        tensor = tensor.to(dtype=MODEL_DTYPE)
-        depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
+            # Resize and normalize (same as pipeline)
+            tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
+            tensor = ((tensor - MEAN) / STD).contiguous()
+            tensor = tensor.to(dtype=MODEL_DTYPE).contiguous()
+            depth = model(pixel_values=tensor).predicted_depth
 
     # Post-processing (same as pipeline)
     h, w = img_rgb.shape[:2]
@@ -241,7 +252,7 @@ def make_sbs_tensor(
     rgb: torch.Tensor,
     depth: torch.Tensor,
     ipd_uv: float = 0.064,
-    depth_strength: float = 0.1,
+    depth_strength: float = 1.0,
     display_mode: str = "Half-SBS",   # "Full-SBS" | "Half-SBS" | "TAB"
 ):
     """
@@ -259,17 +270,10 @@ def make_sbs_tensor(
         # quick checks and canonicalize shapes
         rgb_c = rgb.permute(2, 0, 1).contiguous()
         C, H, W = rgb_c.shape
-
-        # compute per-pixel integer shift (H, W)
-        depth_sampled = depth[::8, ::8].float()
-        depth_min = torch.quantile(depth_sampled, 0.2)
-        depth_max = torch.quantile(depth_sampled, 0.98)
-        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
-        depth = torch.clamp(depth, 0.0, 1.0)
         
         inv = torch.ones((H, W), device=DEVICE, dtype=DTYPE) - depth
         max_px = ipd_uv * W
-        shifts = (inv * max_px * depth_strength / 5).round().to(torch.long, non_blocking=True)
+        shifts = (inv * max_px * depth_strength / 10).round().to(torch.long, non_blocking=True)
 
         # half-shift each eye
         shifts_half = (shifts // 2).clamp(min=0, max=W // 2)
