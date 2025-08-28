@@ -258,10 +258,10 @@ def make_sbs_tensor(
     with lock:  # <<< Thread safety for all GPU ops
         # quick checks and canonicalize shapes
         rgb_c = rgb.permute(2, 0, 1).contiguous()
-        _, H, W = rgb_c.shape
+        C, H, W = rgb_c.shape
 
         # compute per-pixel integer shift (H, W)
-        depth_sampled = depth[::8, ::8]
+        depth_sampled = depth[::8, ::8].float()
         depth_min = torch.quantile(depth_sampled, 0.2)
         depth_max = torch.quantile(depth_sampled, 0.98)
         depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)

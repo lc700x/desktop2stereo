@@ -140,7 +140,7 @@ def main(mode="Viewer"):
             
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
-    except Exception as e:
+    except Exception as e: # deactivate for debug
         print("[Error]:", e)
     finally:
         # Print average FPS on exit
