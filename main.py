@@ -100,7 +100,7 @@ def main(mode="Viewer"):
             glfw.terminate()
         else:
             # Streamer settings
-            from depth import predict_depth_tensor, make_sbs_tensor
+            from depth import predict_depth_tensor
             from streamer import MJPEGStreamer
             def depth_loop():
                 while True:
@@ -123,10 +123,7 @@ def main(mode="Viewer"):
             while True:
                 try:
                     rgb, depth = depth_q.get(timeout = TIME_SLEEP)
-                    sbs = make_sbs_tensor(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode = DISPLAY_MODE)
-                    jpg = streamer.encode_jpeg(sbs)
-                    # push into the HTTP MJPEG server
-                    streamer.set_frame(jpg)
+                    streamer.set_frame(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
                     if SHOW_FPS:
                         frame_count += 1
                         current_time = time.perf_counter()
