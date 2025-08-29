@@ -6,6 +6,7 @@ from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon, get_local_ip
 
+DEFAULT_PORT = 1122
 # Get window lists
 if OS_NAME == "Windows":
     try:
@@ -146,7 +147,7 @@ DEFAULTS = {
     "Language": "EN",
     "Run Mode": "Viewer",
     "Streamer Host": None,
-    "Streamer Port": 1400,
+    "Streamer Port": DEFAULT_PORT,
 }
 
 UI_TEXTS = {
@@ -549,14 +550,14 @@ class ConfigGUI(tk.Tk):
                         UI_TEXTS[self.language].get("Invalid port number (1-65535)", "Invalid port number (must be between 1-65535)")
                     )
                     # Reset to default port if invalid
-                    self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+                    self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
             except ValueError:
                 messagebox.showerror(
                     UI_TEXTS[self.language]["Error"],
                     UI_TEXTS[self.language].get("Invalid port number", "Port must be a number")
                 )
                 # Reset to default port if invalid
-                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
 
     def on_window_selected(self, event=None):
         """Handle window selection from the combobox"""
@@ -680,7 +681,7 @@ class ConfigGUI(tk.Tk):
         if label == streamer_label:
             self.run_mode_key = "Streamer"
             if not self.streamer_port_var.get():
-                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
             # populate host with detected local IP if empty
             self.streamer_host_var.set(f"http://{get_local_ip()}:{self.streamer_port_var.get()}")
             # grid the controls
@@ -840,7 +841,7 @@ class ConfigGUI(tk.Tk):
         # Run mode + streamer settings
         run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Viewer"))
         self.run_mode_key = run_mode
-        port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", 1400))
+        port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", DEFAULT_PORT))
         self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
         self.streamer_port_var.set(str(port))
         # Capture mode
@@ -865,7 +866,7 @@ class ConfigGUI(tk.Tk):
     def save_settings(self):
         # Validate port
         try:
-            port_val = int(self.streamer_port_var.get()) if self.streamer_port_var.get() else DEFAULTS.get("Streamer Port", 1400)
+            port_val = int(self.streamer_port_var.get()) if self.streamer_port_var.get() else DEFAULTS.get("Streamer Port", DEFAULT_PORT)
             if not (1 <= port_val <= 65535):
                 raise ValueError("Port out of range")
         except Exception:

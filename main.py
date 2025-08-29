@@ -6,7 +6,8 @@ from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STR
 from capture import DesktopGrabber
 from depth import process
 
-TIME_SLEEP = round(1.0 / FPS, 2)
+# Use precise frame interval
+TIME_SLEEP = 1.0 / FPS
 
 # Queues with size=1 (latest-frame-only logic)
 raw_q = queue.Queue(maxsize=1)
@@ -23,70 +24,66 @@ def put_latest(q, item):
     try:
         q.put_nowait(item)
     except queue.Full:
-        time.sleep(TIME_SLEEP)  # Drop frame if race condition occurs
+        pass  # drop if race condition
 
 def capture_loop():
-    try:
-        cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS)
-        while True:
-            try:
-                frame_raw, size = cap.grab()
-            except OSError:
-                exit()
+    cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS)
+    while True:
+        try:
+            frame_raw, size = cap.grab()
             put_latest(raw_q, (frame_raw, size))
-    except RuntimeError as e:
-        print("[Error]:", e)
+        except OSError:
+            exit()
 
 def process_loop():
     while True:
         try:
-            frame_raw, size = raw_q.get(timeout = TIME_SLEEP)
+            frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
+            frame_rgb = process(frame_raw, size)
+            put_latest(proc_q, frame_rgb)
         except queue.Empty:
             continue
-        frame_rgb = process(frame_raw, size)
-        put_latest(proc_q, frame_rgb)
 
 def main(mode="Viewer"):
-    # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
 
-    # FPS calculation variables
     frame_count = 0
     last_time = time.perf_counter()
-    fps = 0
 
-    # Average FPS calculation
     total_frames = 0
     start_time = time.perf_counter()
 
     streamer = None
 
-    rgb, depth = None, None
-    try: 
+    try:
         print(f"[Main] {mode} Started")
         if mode == "Viewer":
             from viewer import StereoWindow
             from depth import predict_depth
+
             def depth_loop():
                 while True:
                     try:
-                        frame_rgb = proc_q.get(timeout = TIME_SLEEP)
+                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        depth = predict_depth(frame_rgb)
+                        put_latest(depth_q, (frame_rgb, depth))
                     except queue.Empty:
                         continue
-                    depth = predict_depth(frame_rgb)
-                    put_latest(depth_q, (frame_rgb, depth))
+
             threading.Thread(target=depth_loop, daemon=True).start()
             window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+
             while not glfw.window_should_close(window.window):
                 try:
                     rgb, depth = depth_q.get_nowait()
                     window.update_frame(rgb, depth)
+
                     if SHOW_FPS:
                         frame_count += 1
                         total_frames += 1
                         current_time = time.perf_counter()
-                        if current_time - last_time >= 1.0:  # Update every second
+                        if current_time - last_time >= 1.0:
                             fps = frame_count / (current_time - last_time)
                             frame_count = 0
                             last_time = current_time
@@ -97,53 +94,45 @@ def main(mode="Viewer"):
                 window.render()
                 glfw.swap_buffers(window.window)
                 glfw.poll_events()
+
             glfw.terminate()
+
         else:
-            # Streamer settings
             from depth import predict_depth_tensor
             from streamer import MJPEGStreamer
+
             def depth_loop():
                 while True:
                     try:
-                        frame_rgb = proc_q.get(timeout = TIME_SLEEP)
+                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        depth, rgb = predict_depth_tensor(frame_rgb)
+                        put_latest(depth_q, (rgb, depth))
                     except queue.Empty:
                         continue
-                    depth, rgb = predict_depth_tensor(frame_rgb)
-                    put_latest(depth_q, (rgb, depth))
+
             threading.Thread(target=depth_loop, daemon=True).start()
-            STREAM_QUALITY   = 100
-            # start MJPEG streamer
-            streamer = MJPEGStreamer(
-                port=STREAM_PORT,
-                fps=FPS,
-                quality=STREAM_QUALITY
-            )
+
+            streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=100)
             streamer.start()
 
             while True:
                 try:
-                    rgb, depth = depth_q.get(timeout = TIME_SLEEP)
+                    rgb, depth = depth_q.get(timeout=TIME_SLEEP)
                     streamer.set_frame(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
                     if SHOW_FPS:
                         frame_count += 1
                         current_time = time.perf_counter()
-                        if current_time - last_time >= 1.0:  # Update every second
+                        if current_time - last_time >= 1.0:
                             current_fps = frame_count / (current_time - last_time)
                             frame_count = 0
                             last_time = current_time
                             print(f"FPS: {current_fps:.2f}")
                 except queue.Empty:
-                    pass
-            
+                    continue
+
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
-    except Exception as e: # deactivate for debug
-        print("[Error]:", e)
     finally:
-        # Print average FPS on exit
-        # total_time = time.perf_counter() - start_time
-        # avg_fps = total_frames / total_time if total_time > 0 else 0
-        # print(f"Average FPS: {avg_fps:.2f}")
         if streamer:
             streamer.stop()
         print(f"[Main] {mode} Stopped")
@@ -151,4 +140,3 @@ def main(mode="Viewer"):
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)
-
