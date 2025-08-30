@@ -6,6 +6,7 @@ from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon, get_local_ip
 
+DEFAULT_PORT = 1122
 # Get window lists
 if OS_NAME == "Windows":
     try:
@@ -146,7 +147,7 @@ DEFAULTS = {
     "Language": "EN",
     "Run Mode": "Viewer",
     "Streamer Host": None,
-    "Streamer Port": 1400,
+    "Streamer Port": DEFAULT_PORT,
 }
 
 UI_TEXTS = {
@@ -189,10 +190,17 @@ UI_TEXTS = {
         "Viewer": "Viewer",
         "Streamer": "Streamer",
         "Streamer Port:": "Streamer Port:",
-        "Streamer URL:": "Streamer URL",
-        "Host:": "Host:",
+        "Streamer URL": "Streamer URL",
+        "Host": "Host:",
         "Invalid port number (1-65535)": "Invalid port number (must be between 1-65535)",
         "Invalid port number": "Port must be a number",
+        "Please select a window before running in Window capture mode": "Please select a window before running in Window capture mode",
+        "The selected window no longer exists. Please refresh and select a valid window.": "The selected window no longer exists. Please refresh and select a valid window.",
+        "Error refreshing window list:": "Error refreshing window list:",
+        "Failed to stop process on exit:": "Failed to stop process on exit:",
+        "Failed to stop process:": "Failed to stop process:",
+        "Failed to run process:": "Failed to run process:",
+        "Failed to load settings.yaml:": "Failed to load settings.yaml:",
     },
     "CN": {
         "Monitor": "显示器",
@@ -237,6 +245,13 @@ UI_TEXTS = {
         "Host": "主机:",
         "Invalid port number (1-65535)": "端口号无效 (必须介于1-65535之间)",
         "Invalid port number": "端口必须是数字",
+        "Please select a window before running in Window capture mode": "请在窗口捕获模式下选择一个窗口再运行",
+        "The selected window no longer exists. Please refresh and select a valid window.": "所选窗口已不存在。请刷新并选择一个有效的窗口。",
+        "Error refreshing window list:": "刷新窗口列表时出错：",
+        "Failed to stop process on exit:": "退出时停止进程失败：",
+        "Failed to stop process:": "停止进程失败：",
+        "Failed to run process:": "运行进程失败：",
+        "Failed to load settings.yaml:": "加载 settings.yaml 失败：",
     }
 }
 
@@ -281,7 +296,7 @@ class ConfigGUI(tk.Tk):
                 self.update_language_texts()
                 self.update_status(UI_TEXTS[self.language]["Loaded settings.yaml at startup"])
             except Exception as e:
-                print(f"Failed to load settings.yaml: {e}")
+                messagebox.showerror(UI_TEXTS[self.language]["Error"], f"{UI_TEXTS[self.language]['Failed to load settings.yaml:']} {e}")
                 self.load_defaults()
                 self.update_language_texts()
         else:
@@ -304,7 +319,7 @@ class ConfigGUI(tk.Tk):
             except Exception as e:
                 messagebox.showerror(
                     UI_TEXTS[self.language]["Error"],
-                    f"Failed to stop process on exit: {e}"
+                    f"{UI_TEXTS[self.language]['Failed to stop process on exit:']} {e}"
                 )
             finally:
                 self.process = None
@@ -510,7 +525,7 @@ class ConfigGUI(tk.Tk):
         except Exception as e:
             messagebox.showerror(
                 UI_TEXTS[self.language]["Error"],
-                f"Error refreshing window list: {str(e)}"
+                f"{UI_TEXTS[self.language]['Error refreshing window list:']} {str(e)}"
             )
 
     def refresh_monitor_and_window(self):
@@ -535,14 +550,14 @@ class ConfigGUI(tk.Tk):
                         UI_TEXTS[self.language].get("Invalid port number (1-65535)", "Invalid port number (must be between 1-65535)")
                     )
                     # Reset to default port if invalid
-                    self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+                    self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
             except ValueError:
                 messagebox.showerror(
                     UI_TEXTS[self.language]["Error"],
                     UI_TEXTS[self.language].get("Invalid port number", "Port must be a number")
                 )
                 # Reset to default port if invalid
-                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
 
     def on_window_selected(self, event=None):
         """Handle window selection from the combobox"""
@@ -641,8 +656,8 @@ class ConfigGUI(tk.Tk):
             current_text = self.status_label.cget("text")
             mapping = {
                 "Loaded settings.yaml at startup": texts["Loaded settings.yaml at startup"],
-                "Running": texts["Running"],
-                "Stopped": texts["Stopped"],
+                "Running...": texts["Running"],
+                "Stopped.": texts["Stopped"],
                 "Settings saved to settings.yaml, starting...": texts["Countdown"],
                 "启动时已加载 settings.yaml": texts["Loaded settings.yaml at startup"],
                 "运行中...": texts["Running"],
@@ -666,7 +681,7 @@ class ConfigGUI(tk.Tk):
         if label == streamer_label:
             self.run_mode_key = "Streamer"
             if not self.streamer_port_var.get():
-                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
             # populate host with detected local IP if empty
             self.streamer_host_var.set(f"http://{get_local_ip()}:{self.streamer_port_var.get()}")
             # grid the controls
@@ -762,7 +777,7 @@ class ConfigGUI(tk.Tk):
                 with open(path, "r", encoding="gbk") as f:
                     return yaml.safe_load(f) or {}
             except Exception as e:
-                print(f"Failed to load settings.yaml with GBK encoding: {e}")
+                messagebox.showerror(UI_TEXTS[self.language]["Error"], f"{UI_TEXTS[self.language]['Failed to load settings.yaml:']} {e}")
                 return {}
 
     def save_yaml(self, path, cfg):
@@ -826,7 +841,7 @@ class ConfigGUI(tk.Tk):
         # Run mode + streamer settings
         run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Viewer"))
         self.run_mode_key = run_mode
-        port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", 1400))
+        port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", DEFAULT_PORT))
         self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
         self.streamer_port_var.set(str(port))
         # Capture mode
@@ -851,12 +866,32 @@ class ConfigGUI(tk.Tk):
     def save_settings(self):
         # Validate port
         try:
-            port_val = int(self.streamer_port_var.get()) if self.streamer_port_var.get() else DEFAULTS.get("Streamer Port", 1400)
+            port_val = int(self.streamer_port_var.get()) if self.streamer_port_var.get() else DEFAULTS.get("Streamer Port", DEFAULT_PORT)
             if not (1 <= port_val <= 65535):
                 raise ValueError("Port out of range")
         except Exception:
             messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Invalid port: {self.streamer_port_var.get()}")
             return
+
+        # Check if window title exists when in Window capture mode
+        if self.capture_mode_key == "Window":
+            window_title = self.selected_window_name
+            if not window_title:
+                messagebox.showerror(
+                    UI_TEXTS[self.language]["Error"],
+                    UI_TEXTS[self.language]["Please select a window before running in Window capture mode"]
+                )
+                return
+            
+            # Verify the window still exists
+            windows = list_windows()
+            window_exists = any(title == window_title for title, _ in windows)
+            if not window_exists:
+                messagebox.showerror(
+                    UI_TEXTS[self.language]["Error"],
+                    UI_TEXTS[self.language]["The selected window no longer exists. Please refresh and select a valid window."]
+                )
+                return
 
         cfg = {
             "Capture Mode": self.capture_mode_key,
@@ -909,8 +944,7 @@ class ConfigGUI(tk.Tk):
                 self._monitor_process()  # start monitoring after launch
             except Exception as e:
                 messagebox.showerror(
-                    UI_TEXTS[self.language]["Error"],
-                    f"Failed to run process: {e}"
+                    f"{UI_TEXTS[self.language]['Failed to run process:']} {e}"
                 )
                 self.update_status(UI_TEXTS[self.language]["Stopped"])
 
@@ -934,7 +968,7 @@ class ConfigGUI(tk.Tk):
             except Exception as e:
                 messagebox.showerror(
                     UI_TEXTS[self.language]["Error"],
-                    f"Failed to stop process: {e}"
+                    f"{UI_TEXTS[self.language]['Failed to stop process:']} {e}"
                 )
             finally:
                 self.process = None
