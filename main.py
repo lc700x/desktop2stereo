@@ -32,13 +32,15 @@ def capture_loop():
         try:
             frame_raw, size = cap.grab()
             put_latest(raw_q, (frame_raw, size))
-        except OSError:
-            exit()
+        except Exception:
+            continue
 
 def process_loop():
     while True:
         try:
             frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
+            if frame_raw is None:
+                continue
             frame_rgb = process(frame_raw, size)
             put_latest(proc_q, frame_rgb)
         except queue.Empty:
@@ -105,6 +107,10 @@ def main(mode="Viewer"):
                 while True:
                     try:
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        import cv2
+                        cv2.imwrite('output_image.png', frame_rgb)
+                        print("Image saved successfully!")
+                        break
                         depth, rgb = predict_depth_tensor(frame_rgb)
                         put_latest(depth_q, (rgb, depth))
                     except queue.Empty:
@@ -132,11 +138,13 @@ def main(mode="Viewer"):
 
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
-    finally:
-        if streamer:
-            streamer.stop()
-        print(f"[Main] {mode} Stopped")
-        exit()
+    # except Exception as e:
+    #     print(e)
+    # finally:
+    #     if streamer:
+    #         streamer.stop()
+    #     print(f"[Main] {mode} Stopped")
+    #     exit()
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)
