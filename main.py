@@ -33,7 +33,7 @@ def capture_loop():
             frame_raw, size = cap.grab()
             put_latest(raw_q, (frame_raw, size))
         except Exception:
-            continue
+            pass
 
 def process_loop():
     while True:
@@ -44,7 +44,7 @@ def process_loop():
             frame_rgb = process(frame_raw, size)
             put_latest(proc_q, frame_rgb)
         except queue.Empty:
-            continue
+            pass
 
 def main(mode="Viewer"):
     threading.Thread(target=capture_loop, daemon=True).start()
@@ -59,7 +59,6 @@ def main(mode="Viewer"):
     streamer = None
 
     try:
-        print(f"[Main] {mode} Started")
         if mode == "Viewer":
             from viewer import StereoWindow
             from depth import predict_depth
@@ -68,14 +67,16 @@ def main(mode="Viewer"):
                 while True:
                     try:
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        if frame_rgb is None:
+                            continue
                         depth = predict_depth(frame_rgb)
                         put_latest(depth_q, (frame_rgb, depth))
                     except queue.Empty:
-                        continue
+                        pass
 
             threading.Thread(target=depth_loop, daemon=True).start()
             window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
-
+            print(f"[Main] Viewer Started")
             while not glfw.window_should_close(window.window):
                 try:
                     rgb, depth = depth_q.get_nowait()
@@ -107,16 +108,18 @@ def main(mode="Viewer"):
                 while True:
                     try:
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        if frame_rgb is None:
+                            continue
                         depth, rgb = predict_depth_tensor(frame_rgb)
                         put_latest(depth_q, (rgb, depth))
                     except queue.Empty:
-                        continue
+                        pass
 
             threading.Thread(target=depth_loop, daemon=True).start()
-
+            
             streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=100)
             streamer.start()
-
+            print(f"[Main] Streamer Started")
             while True:
                 try:
                     rgb, depth = depth_q.get(timeout=TIME_SLEEP)
@@ -134,13 +137,13 @@ def main(mode="Viewer"):
 
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
-    # except Exception as e:
-    #     print(e)
-    # finally:
-    #     if streamer:
-    #         streamer.stop()
-    #     print(f"[Main] {mode} Stopped")
-    #     exit()
+    except Exception as e:
+        print(e)
+    finally:
+        if streamer:
+            streamer.stop()
+        print(f"[Main] {mode} Stopped")
+        exit()
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)

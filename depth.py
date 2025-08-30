@@ -94,17 +94,17 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     """
     # Convert to tensor and normalize (similar to pipeline's preprocessing)
     tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE, non_blocking=True) # CPU → CPU tensor (uint8)
-    tensor = tensor.permute(2, 0, 1).float().contiguous() / 255  # HWC → CHW, 0-1 range
-    tensor = tensor.unsqueeze(0) # set to improve performance
-
-    # Resize and normalize (same as pipeline)
-    tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
-    tensor = ((tensor - MEAN) / STD).contiguous()  # ensure contiguous before model
 
     # Inference with thread safety
     with lock:
+        tensor = tensor.permute(2, 0, 1).float().contiguous() / 255  # HWC → CHW, 0-1 range
+        tensor = tensor.unsqueeze(0) # set to improve performance
+
+        # Resize and normalize (same as pipeline)
+        tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
+        tensor = ((tensor - MEAN) / STD)  # ensure contiguous before model
         with torch.no_grad():
-            tensor = tensor.to(dtype=MODEL_DTYPE).contiguous()
+            tensor = tensor.to(dtype=MODEL_DTYPE)
             depth = model(pixel_values=tensor).predicted_depth  # (1, H, W)
 
     # Post-processing (same as pipeline)
@@ -131,26 +131,26 @@ def predict_depth_tensor(img_rgb):
     assert img_rgb.ndim == 3 and img_rgb.shape[2] == 3, \
         f"Expected HWC numpy image, got {img_rgb.shape}"
     
-    rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE) # CPU → CPU tensor (uint8)
-    tensor = rgb_tensor.permute(2, 0, 1).float().contiguous() / 255  # HWC → CHW, 0-1 range
-    tensor = tensor.unsqueeze(0) # set to improve performance
-
-    # Resize and normalize (same as pipeline)
-    tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
-    tensor = ((tensor - MEAN) / STD).contiguous()
-    
+    rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE) # CPU → GPU tensor (uint8)
     # Inference with thread safety
     with lock:
+        tensor = rgb_tensor.permute(2, 0, 1).float().contiguous() / 255 
+        tensor = tensor.unsqueeze(0).contiguous()  # Ensure batch dim is contiguous
+        
+        tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), 
+                             mode='bilinear', align_corners=False)
+        tensor = ((tensor - MEAN) / STD)
+        
         with torch.no_grad():
-            tensor = tensor.to(dtype=MODEL_DTYPE).contiguous()
+            tensor = tensor.to(dtype=MODEL_DTYPE)
             depth = model(pixel_values=tensor).predicted_depth
 
-    # Post-processing (same as pipeline)
-    h, w = img_rgb.shape[:2]
-    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0, 0]
+        # Post-processing (same as pipeline)
+        h, w = img_rgb.shape[:2]
+        depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0, 0]
 
-    # Normalize to [0, 1] (same as pipeline output)
-    depth = depth / depth.max().clamp(min=1e-6)
+        # Normalize to [0, 1] (same as pipeline output)
+        depth = depth / depth.max().clamp(min=1e-6)
     return depth, rgb_tensor
     # return depth.detach().cpu().numpy().astype('float32')
     

@@ -972,10 +972,11 @@ class ConfigGUI(tk.Tk):
                 )
             finally:
                 self.process = None
-                self.update_status(UI_TEXTS[self.language]["Stopped"])
+                
+                self.after(3000, self.update_status(UI_TEXTS[self.language]["Stopped"]))
                 print(f"[Main] {self.run_mode_key} Stopped")
         else:
-            self.update_status(UI_TEXTS[self.language]["Stopped"])
+            self.after(3000, lambda: self.update_status(UI_TEXTS[self.language]["Stopped"]))
             print(f"[Main] {self.run_mode_key} Stopped")
 
 if __name__ == "__main__":
