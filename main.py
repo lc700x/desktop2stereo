@@ -107,10 +107,6 @@ def main(mode="Viewer"):
                 while True:
                     try:
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
-                        import cv2
-                        cv2.imwrite('output_image.png', frame_rgb)
-                        print("Image saved successfully!")
-                        break
                         depth, rgb = predict_depth_tensor(frame_rgb)
                         put_latest(depth_q, (rgb, depth))
                     except queue.Empty:
