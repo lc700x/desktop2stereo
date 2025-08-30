@@ -4,7 +4,7 @@ import glfw
 import time
 from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT
 from capture import DesktopGrabber
-from depth import process
+from depth import process, make_sbs
 
 # Use precise frame interval
 TIME_SLEEP = 1.0 / FPS
@@ -97,7 +97,7 @@ def main(mode="Viewer"):
             glfw.terminate()
 
         else:
-            from depth import make_sbs
+            from depth import predict_depth_tensor, make_sbs
             from streamer import MJPEGStreamer
 
             def depth_loop():
@@ -106,8 +106,8 @@ def main(mode="Viewer"):
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
                     except queue.Empty:
                         continue
-                    sbs = make_sbs(frame_rgb, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
-                    put_latest(depth_q, sbs)
+                    depth, rgb = predict_depth_tensor(frame_rgb)
+                    put_latest(depth_q, (rgb, depth))
 
             threading.Thread(target=depth_loop, daemon=True).start()
             
@@ -116,7 +116,8 @@ def main(mode="Viewer"):
             print(f"[Main] Streamer Started")
             while True:
                 try:
-                    sbs = depth_q.get(timeout=TIME_SLEEP)
+                    rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+                    sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
                     streamer.set_frame(sbs)
                     if SHOW_FPS:
                         frame_count += 1
@@ -131,13 +132,13 @@ def main(mode="Viewer"):
 
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
-    except Exception as e:
-        print(e)
-    finally:
-        if streamer:
-            streamer.stop()
-        print(f"[Main] {mode} Stopped")
-        exit()
+    # except Exception as e:
+    #     print(e)
+    # finally:
+    #     if streamer:
+    #         streamer.stop()
+    #     print(f"[Main] {mode} Stopped")
+    #     exit()
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)
