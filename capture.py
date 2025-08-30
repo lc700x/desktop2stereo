@@ -27,7 +27,7 @@ if OS_NAME == "Windows":
         return left, top, width, height
 
     class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE):
+        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX):
             self.scaled_height = output_resolution
             self.fps = fps
             self._mss = mss.mss()
@@ -37,7 +37,7 @@ if OS_NAME == "Windows":
             self.window_title = window_title
 
             if self.capture_mode == "Monitor":
-                mon = self._mss.monitors[1]
+                mon = self._mss.monitors[monitor_index]
                 self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
                 self.camera = DXCamera(self.left, self.top, self.width, self.height, fps=self.fps)
                 try: self.camera.__enter__()

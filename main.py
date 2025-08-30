@@ -31,20 +31,18 @@ def capture_loop():
     while True:
         try:
             frame_raw, size = cap.grab()
-            put_latest(raw_q, (frame_raw, size))
-        except Exception:
-            pass
+        except queue.Empty:
+            continue
+        put_latest(raw_q, (frame_raw, size))
 
 def process_loop():
     while True:
         try:
             frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
-            if frame_raw is None:
-                continue
-            frame_rgb = process(frame_raw, size)
-            put_latest(proc_q, frame_rgb)
         except queue.Empty:
-            pass
+            continue
+        frame_rgb = process(frame_raw, size)
+        put_latest(proc_q, frame_rgb)
 
 def main(mode="Viewer"):
     threading.Thread(target=capture_loop, daemon=True).start()
@@ -67,12 +65,10 @@ def main(mode="Viewer"):
                 while True:
                     try:
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
-                        if frame_rgb is None:
-                            continue
-                        depth = predict_depth(frame_rgb)
-                        put_latest(depth_q, (frame_rgb, depth))
                     except queue.Empty:
-                        pass
+                        continue
+                    depth = predict_depth(frame_rgb)
+                    put_latest(depth_q, (frame_rgb, depth))
 
             threading.Thread(target=depth_loop, daemon=True).start()
             window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
@@ -101,19 +97,17 @@ def main(mode="Viewer"):
             glfw.terminate()
 
         else:
-            from depth import predict_depth_tensor
+            from depth import make_sbs
             from streamer import MJPEGStreamer
 
             def depth_loop():
                 while True:
                     try:
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
-                        if frame_rgb is None:
-                            continue
-                        depth, rgb = predict_depth_tensor(frame_rgb)
-                        put_latest(depth_q, (rgb, depth))
                     except queue.Empty:
-                        pass
+                        continue
+                    sbs = make_sbs(frame_rgb, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+                    put_latest(depth_q, sbs)
 
             threading.Thread(target=depth_loop, daemon=True).start()
             
@@ -122,8 +116,8 @@ def main(mode="Viewer"):
             print(f"[Main] Streamer Started")
             while True:
                 try:
-                    rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-                    streamer.set_frame(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+                    sbs = depth_q.get(timeout=TIME_SLEEP)
+                    streamer.set_frame(sbs)
                     if SHOW_FPS:
                         frame_count += 1
                         current_time = time.perf_counter()

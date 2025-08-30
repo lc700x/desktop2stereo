@@ -2,8 +2,6 @@ import threading
 import time, os
 import numpy as np
 import cv2
-import torch
-import torch.nn.functional as F
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
 from utils import get_local_ip
@@ -169,21 +167,13 @@ class MJPEGStreamer:
             pass
         self.new_raw_event.set()
 
-    def set_frame(self, rgb_or_tensor, depth_tensor=None, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
+    def set_frame(self, frame_np):
         """
         Set the current frame to be streamed. This will also update the cached HTML
         page if the output resolution changes so newly-connecting clients see the
         correct initial dimensions.
         """
         with self.lock:
-            if depth_tensor is not None:
-                frame_np = self.make_sbs(rgb_or_tensor, depth_tensor, ipd_uv, depth_strength, display_mode)
-            else:
-                frame_np = rgb_or_tensor
-
-            if frame_np is None:
-                return
-
             h, w = frame_np.shape[:2]
 
             # If the output resolution changed, update cached index page so new
@@ -205,67 +195,6 @@ class MJPEGStreamer:
 
             self.raw_frame = frame_np
             self.new_raw_event.set()
-
-    def make_sbs(self, rgb: torch.Tensor, depth: torch.Tensor, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
-        """
-        Create a side-by-side stereo image from RGB and depth.
-        """
-        if rgb.ndim == 3 and rgb.shape[0] in [1,3]:
-            rgb_c = rgb
-        elif rgb.ndim == 3:
-            rgb_c = rgb.permute(2,0,1).contiguous()
-        else:
-            raise ValueError("rgb tensor must be (C,H,W) or (H,W,C)")
-        C,H,W = rgb_c.shape
-        device = rgb_c.device
-
-        inv = torch.ones((H,W), device=device, dtype=rgb_c.dtype) - depth
-        max_px = ipd_uv * W
-        shifts = (inv * max_px * depth_strength / 10).round().to(torch.long, non_blocking=True)
-        shifts_half = (shifts//2).clamp(0, W//2)
-
-        xs = torch.arange(W, device=device).unsqueeze(0).expand(H,W)
-        left_idx = (xs + shifts_half).clamp(0,W-1)
-        right_idx = (xs - shifts_half).clamp(0,W-1)
-        idx_left = left_idx.unsqueeze(0).expand(C,H,W)
-        idx_right = right_idx.unsqueeze(0).expand(C,H,W)
-
-        with torch.no_grad():
-            gen_left = torch.gather(rgb_c,2,idx_left)
-            gen_right = torch.gather(rgb_c,2,idx_right)
-
-            def pad_to_aspect(img, target_ratio=(16,9)):
-                _, h, w = img.shape
-                t_w, t_h = target_ratio
-                r_img = w/h
-                r_t = t_w/t_h
-                if abs(r_img-r_t)<0.001:
-                    return img
-                elif r_img>r_t:
-                    new_H = int(round(w/r_t))
-                    pad_top = (new_H-h)//2
-                    pad_bottom = new_H-h-pad_top
-                    return F.pad(img,(0,0,pad_top,pad_bottom),value=0)
-                else:
-                    new_W = int(round(h*r_t))
-                    pad_left = (new_W-w)//2
-                    pad_right = new_W-w-pad_left
-                    return F.pad(img,(pad_left,pad_right,0,0),value=0)
-
-            left = pad_to_aspect(gen_left)
-            right = pad_to_aspect(gen_right)
-
-            if display_mode=="TAB":
-                out = torch.cat([left,right],dim=1)
-            else:
-                out = torch.cat([left,right],dim=2)
-
-            if display_mode!="Full-SBS":
-                out = F.interpolate(out.unsqueeze(0),size=left.shape[1:],mode="area")[0]
-
-            out = out.clamp(0,255).to(torch.uint8)
-            out_np = out.permute(1,2,0).contiguous().cpu().numpy()
-        return out_np
 
     def _encoder_loop(self):
         while not self.shutdown.is_set():
