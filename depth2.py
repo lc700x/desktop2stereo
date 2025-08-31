@@ -71,6 +71,36 @@ ROW_FLOW_V3_URL = "iw3_row_flow_v3.pth"
 _tile_size_validators = {}
 _models = {}
 
+
+try:
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+    from contextlib import nullcontext
+
+    def use_flash_attention(flag):
+        if flag:
+            return nullcontext()
+        else:
+            return sdpa_kernel([SDPBackend.MATH])
+
+except ModuleNotFoundError:
+    def use_flash_attention(flag):
+        return torch.backends.cuda.sdp_kernel(enable_flash=flag, enable_math=True, enable_mem_efficient=flag)
+
+try:
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+    from contextlib import nullcontext
+
+    def use_flash_attention(flag):
+        if flag:
+            return nullcontext()
+        else:
+            return sdpa_kernel([SDPBackend.MATH])
+
+except ModuleNotFoundError:
+    def use_flash_attention(flag):
+        return torch.backends.cuda.sdp_kernel(enable_flash=flag, enable_math=True, enable_mem_efficient=flag)
+
+
 def replication_pad2d_naive(x, padding, detach=False):
     assert x.ndim == 4 and len(padding) == 4
     left, right, top, bottom = padding
@@ -257,10 +287,11 @@ def sliced_sdp(q, k, v, num_heads, attn_mask=None, dropout_p=0.0, is_causal=Fals
     q = q.view(B, QN, num_heads, qkv_dim).permute(0, 2, 1, 3)
     k = k.view(B, KN, num_heads, qkv_dim).permute(0, 2, 1, 3)
     v = v.view(B, KN, num_heads, qkv_dim).permute(0, 2, 1, 3)
-
-    x = F.scaled_dot_product_attention(q, k, v,
-                                        attn_mask=attn_mask, dropout_p=dropout_p,
-                                        is_causal=is_causal)
+    use_flash = B <= 65535  # avoid CUDA error: invalid configuration argument.
+    with use_flash_attention(use_flash):
+        x = F.scaled_dot_product_attention(q, k, v,
+                                            attn_mask=attn_mask, dropout_p=dropout_p,
+                                            is_causal=is_causal)
     # B, N, (H, C // H)
     return x.permute(0, 2, 1, 3).reshape(B, QN, qkv_dim * num_heads)
 
@@ -299,19 +330,19 @@ class Model(nn.Module):
 
     def export_onnx(self, f, **kwargs):
         raise NotImplementedError()
-
 class ReplicationPad2d(nn.Module):
     def __init__(self, padding):
         super().__init__()
-        if sys.platform == "darwin":
-            # macOS, detach=False for compatibility
-            self.pad = lambda x: replication_pad2d_naive(x, padding, detach=False)
+        if isinstance(padding, int):
+            self.padding = (padding, padding, padding, padding)
+        elif len(padding) == 2:
+            # (left/right, top/bottom) to (left, right, top, bottom)
+            self.padding = (padding[0], padding[0], padding[1], padding[1])
         else:
-            self.pad = nn.ReplicationPad2d(padding)
-
+            self.padding = tuple(padding)
+    
     def forward(self, x):
-        return self.pad(x)
-
+        return F.pad(x, self.padding, mode='replicate')
 class MHA(nn.Module):
     def __init__(self, embed_dim, num_heads, qkv_dim=None):
         super().__init__()
@@ -724,8 +755,12 @@ def apply_divergence_nn_delta(model, c, depth, divergence, convergence, steps,
     if shift > 0:
         c = torch.flip(c, (3,))
         depth = torch.flip(depth, (3,))
-
+        
+    # Ensure depth is 4D [B, C, H, W]
+    if depth.ndim == 3:
+        depth = depth.unsqueeze(1)  # Add channel dimension
     B, _, H, W = depth.shape
+    
     divergence_step = divergence / steps
     grid = make_grid(B, W, H, c.device)
     delta_scale = torch.tensor(1.0 / (W // 2 - 1), dtype=c.dtype, device=c.device)
@@ -733,14 +768,21 @@ def apply_divergence_nn_delta(model, c, depth, divergence, convergence, steps,
     delta_steps = []
 
     for j in range(steps):
-        # Create input tensor with depth and divergence features
+        # Ensure depth_mapped is 4D [B, 1, H, W]
         depth_mapped = get_mapper(mapper)(depth_warp)
+        if depth_mapped.ndim == 3:
+            depth_mapped = depth_mapped.unsqueeze(1)
+            
         div_val, conv_val = make_divergence_feature_value(divergence_step, convergence, W)
         div_feat = torch.full_like(depth_mapped, div_val)
         conv_feat = torch.full_like(depth_mapped, conv_val)
         x = torch.cat([depth_mapped, div_feat, conv_feat], dim=1)
         
-        with torch.cuda.amp.autocast(enabled=enable_amp):
+        # Updated autocast usage
+        if enable_amp:
+            with torch.amp.autocast(device_type='cuda' if 'cuda' in str(DEVICE) else 'cpu', enabled=True):
+                delta = model(x)
+        else:
             delta = model(x)
 
         delta_steps.append(delta)
@@ -756,7 +798,6 @@ def apply_divergence_nn_delta(model, c, depth, divergence, convergence, steps,
         z = torch.flip(z, (3,))
 
     return z
-
 def create_stereo_images(rgb_tensor, depth_tensor, divergence=2.0, convergence=0.0):
     """
     Generate left/right eye images from RGB and depth tensors
@@ -848,11 +889,18 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> np.ndarray:
     
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
     with lock:
-        # Convert inputs
+        # Convert inputs to proper 4D tensors
         rgb_tensor = rgb_c.float() / 255.0
-        depth_tensor = depth.unsqueeze(0)
+        if rgb_tensor.ndim == 3:
+            rgb_tensor = rgb_tensor.unsqueeze(0)  # [1, C, H, W]
+            
+        depth_tensor = depth
+        if depth_tensor.ndim == 2:
+            depth_tensor = depth_tensor.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+        elif depth_tensor.ndim == 3:
+            depth_tensor = depth_tensor.unsqueeze(1)  # [1, 1, H, W]
         
-        # Calculate divergence (convert UV to percentage)
+        # Calculate divergence
         divergence = ipd_uv * 100 * depth_strength
         
         # Generate stereo images
@@ -862,38 +910,66 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-
             divergence=divergence
         )
         
-        # Pad to target aspect ratio
         def pad_to_aspect(img, target_ratio=(16,9)):
-            _, h, w = img.shape
-            t_w, t_h = target_ratio
-            r_img = w/h
-            r_t = t_w/t_h
-            if abs(r_img-r_t)<0.001:
-                return img
-            elif r_img>r_t:
-                new_H = int(round(w/r_t))
-                pad_top = (new_H-h)//2
-                pad_bottom = new_H-h-pad_top
-                return F.pad(img,(0,0,pad_top,pad_bottom),value=0)
+            """Pad image to target aspect ratio"""
+            # Handle both 3D (C,H,W) and 4D (B,C,H,W) tensors
+            if img.dim() == 4:
+                _, C, H, W = img.shape
+                is_batched = True
             else:
-                new_W = int(round(h*r_t))
-                pad_left = (new_W-w)//2
-                pad_right = new_W-w-pad_left
-                return F.pad(img,(pad_left,pad_right,0,0),value=0)
+                C, H, W = img.shape
+                is_batched = False
+            
+            t_w, t_h = target_ratio
+            r_img = W / H
+            r_t = t_w / t_h
+            
+            if abs(r_img - r_t) < 0.001:
+                return img
+            elif r_img > r_t:
+                new_H = int(round(W / r_t))
+                pad_top = (new_H - H) // 2
+                pad_bottom = new_H - H - pad_top
+                padding = (0, 0, pad_top, pad_bottom)
+            else:
+                new_W = int(round(H * r_t))
+                pad_left = (new_W - W) // 2
+                pad_right = new_W - W - pad_left
+                padding = (pad_left, pad_right, 0, 0)
+            
+            # Apply padding based on tensor dimensions
+            if is_batched:
+                # For 4D: (B, C, H, W) - pad last two dimensions
+                return F.pad(img, padding, value=0)
+            else:
+                # For 3D: (C, H, W) - pad last two dimensions
+                return F.pad(img, padding, value=0)
+
         
+        # Pad to target aspect ratio
         left = pad_to_aspect(left)
         right = pad_to_aspect(right)
 
         if display_mode=="TAB":
-            out = torch.cat([left,right],dim=1)
+            out = torch.cat([left, right], dim=2)  # Stack vertically
         else:
-            out = torch.cat([left,right],dim=2)
+            out = torch.cat([left, right], dim=3)   # Stack horizontally
 
-        if display_mode!="Full-SBS":
-            out = F.interpolate(out.unsqueeze(0),size=left.shape[1:],mode="area")[0]
+        if display_mode != "Full-SBS":
+            # Determine target size based on display mode
+            if display_mode == "TAB":
+                target_size = (left.shape[2] // 2, left.shape[3])
+            else:
+                target_size = (left.shape[2], left.shape[3] // 2)
+            
+            out = F.interpolate(out, size=target_size, mode="area")
 
-        out = out.clamp(0,255).to(torch.uint8)
-        return out.permute(1,2,0).contiguous().cpu().numpy()
-
+        # Convert to uint8
+        out = (out * 255).clamp(0, 255).to(torch.uint8)
+        
+        # Convert to numpy (H, W, C)
+        if out.dim() == 4:
+            out = out[0]  # Remove batch dimension
+        return out.permute(1, 2, 0).contiguous().cpu().numpy()
 # Preload stereo model at startup
 get_stereo_model()

@@ -4,7 +4,7 @@ import glfw
 import time
 from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT
 from capture import DesktopGrabber
-from depth import process, make_sbs
+from depth import process
 
 # Use precise frame interval
 TIME_SLEEP = 1.0 / FPS

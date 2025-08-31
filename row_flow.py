@@ -9,6 +9,21 @@ ROW_FLOW_V3_URL = "iw3_row_flow_v3.pth"
 _tile_size_validators = {}
 _models = {}
 
+try:
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+    from contextlib import nullcontext
+
+    def use_flash_attention(flag):
+        if flag:
+            return nullcontext()
+        else:
+            return sdpa_kernel([SDPBackend.MATH])
+
+except ModuleNotFoundError:
+    def use_flash_attention(flag):
+        return torch.backends.cuda.sdp_kernel(enable_flash=flag, enable_math=True, enable_mem_efficient=flag)
+
+
 def replication_pad2d_naive(x, padding, detach=False):
     assert x.ndim == 4 and len(padding) == 4
     left, right, top, bottom = padding
@@ -198,11 +213,11 @@ def sliced_sdp(q, k, v, num_heads, attn_mask=None, dropout_p=0.0, is_causal=Fals
     k = k.view(B, KN, num_heads, qkv_dim).permute(0, 2, 1, 3)
     v = v.view(B, KN, num_heads, qkv_dim).permute(0, 2, 1, 3)
 
-    # use_flash = B <= 65535  # avoid CUDA error: invalid configuration argument.
-    # with use_flash_attention(use_flash):
-    x = F.scaled_dot_product_attention(q, k, v,
-                                        attn_mask=attn_mask, dropout_p=dropout_p,
-                                        is_causal=is_causal)
+    use_flash = B <= 65535  # avoid CUDA error: invalid configuration argument.
+    with use_flash_attention(use_flash):
+        x = F.scaled_dot_product_attention(q, k, v,
+                                            attn_mask=attn_mask, dropout_p=dropout_p,
+                                            is_causal=is_causal)
     # B, N, (H, C // H)
     return x.permute(0, 2, 1, 3).reshape(B, QN, qkv_dim * num_heads)
 
