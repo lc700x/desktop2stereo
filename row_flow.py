@@ -618,339 +618,333 @@ def _bench(name):
     torch.cuda.synchronize()
     print(1 / ((time.time() - t) / (B * N)), "FPS")
 
-
-if __name__ == "__main__":
-    # 480 FPS on RTX3070Ti
-    _bench("sbs.row_flow_v3")
-    
-
-    def softplus01_legacy(depth, c=6):
-        min_v = math.log(1 + math.exp(0 * 12.0 - c)) / (12 - c)
-        max_v = math.log(1 + math.exp(1 * 12.0 - c)) / (12 - c)
-        v = torch.log(1. + torch.exp(depth * 12.0 - c)) / (12 - c)
-        return (v - min_v) / (max_v - min_v)
+def softplus01_legacy(depth, c=6):
+    min_v = math.log(1 + math.exp(0 * 12.0 - c)) / (12 - c)
+    max_v = math.log(1 + math.exp(1 * 12.0 - c)) / (12 - c)
+    v = torch.log(1. + torch.exp(depth * 12.0 - c)) / (12 - c)
+    return (v - min_v) / (max_v - min_v)
 
 
-    def softplus01(x, bias, scale):
-        # x: 0-1 normalized
-        min_v = math.log(1 + math.exp((0 - bias) * scale))
-        max_v = math.log(1 + math.exp((1 - bias) * scale))
-        v = torch.log(1. + torch.exp((x - bias) * scale))
-        return (v - min_v) / (max_v - min_v)
+def softplus01(x, bias, scale):
+    # x: 0-1 normalized
+    min_v = math.log(1 + math.exp((0 - bias) * scale))
+    max_v = math.log(1 + math.exp((1 - bias) * scale))
+    v = torch.log(1. + torch.exp((x - bias) * scale))
+    return (v - min_v) / (max_v - min_v)
 
 
-    def inv_softplus01(x, bias, scale):
-        min_v = ((torch.zeros(1, dtype=x.dtype, device=x.device) - bias) * scale).expm1().clamp(min=1e-6).log()
-        max_v = ((torch.ones(1, dtype=x.dtype, device=x.device) - bias) * scale).expm1().clamp(min=1e-6).log()
-        v = ((x - bias) * scale).expm1().clamp(min=1e-6).log()
-        return (v - min_v) / (max_v - min_v)
+def inv_softplus01(x, bias, scale):
+    min_v = ((torch.zeros(1, dtype=x.dtype, device=x.device) - bias) * scale).expm1().clamp(min=1e-6).log()
+    max_v = ((torch.ones(1, dtype=x.dtype, device=x.device) - bias) * scale).expm1().clamp(min=1e-6).log()
+    v = ((x - bias) * scale).expm1().clamp(min=1e-6).log()
+    return (v - min_v) / (max_v - min_v)
 
 
-    def distance_to_disparity(x, c):
-        c1 = 1.0 + c
-        min_v = c / c1
-        return ((c / (c1 - x)) - min_v) / (1.0 - min_v)
+def distance_to_disparity(x, c):
+    c1 = 1.0 + c
+    min_v = c / c1
+    return ((c / (c1 - x)) - min_v) / (1.0 - min_v)
 
 
-    def inv_distance_to_disparity(x, c):
-        return ((c + 1) * x) / (x + c)
+def inv_distance_to_disparity(x, c):
+    return ((c + 1) * x) / (x + c)
 
 
-    def shift_relative_depth(x, min_distance, max_distance=16):
-        # convert x from dispariy space to distance space
-        # reference: https://github.com/LiheYoung/Depth-Anything/issues/72#issuecomment-1937892879
-        provisional_max_distance = min_distance + max_distance
-        A = 1.0 / provisional_max_distance
-        B = (1.0 / min_distance) - (1.0 / provisional_max_distance)
-        distance = 1 / (A + B * x)
+def shift_relative_depth(x, min_distance, max_distance=16):
+    # convert x from dispariy space to distance space
+    # reference: https://github.com/LiheYoung/Depth-Anything/issues/72#issuecomment-1937892879
+    provisional_max_distance = min_distance + max_distance
+    A = 1.0 / provisional_max_distance
+    B = (1.0 / min_distance) - (1.0 / provisional_max_distance)
+    distance = 1 / (A + B * x)
 
-        # shift distance in distance space. old min_distance -> 1
-        new_min_distance = 1.0
-        distance = (new_min_distance - min_distance) + distance
+    # shift distance in distance space. old min_distance -> 1
+    new_min_distance = 1.0
+    distance = (new_min_distance - min_distance) + distance
 
-        # back to disparity space
-        new_x = 1.0 / distance
+    # back to disparity space
+    new_x = 1.0 / distance
 
-        # scale output to 0-1 range
-        # NOTE: Do not use new_x.amin()/new_x.amax() to avoid re-normalization.
-        #       This condition is required when using EMA normalization with look-ahead buffers.
-        min_value = 1.0 / (max_distance + 1)
-        value_range = 1.0 - 1.0 / (max_distance + 1)
-        new_x = (new_x - min_value) / value_range
+    # scale output to 0-1 range
+    # NOTE: Do not use new_x.amin()/new_x.amax() to avoid re-normalization.
+    #       This condition is required when using EMA normalization with look-ahead buffers.
+    min_value = 1.0 / (max_distance + 1)
+    value_range = 1.0 - 1.0 / (max_distance + 1)
+    new_x = (new_x - min_value) / value_range
 
-        return new_x
+    return new_x
+
+
     
     
-        
-        
-        
-    def backward_warp(c, grid, delta, delta_scale):
-        grid = grid + delta * delta_scale
-        if c.shape[2] != grid.shape[2] or c.shape[3] != grid.shape[3]:
-            grid = F.interpolate(grid, size=c.shape[-2:],
-                                mode="bilinear", align_corners=True, antialias=False)
-        grid = grid.permute(0, 2, 3, 1)
-        if DEVICE == "MPS":
-            # MPS does not support bicubic and border
-            mode = "bilinear"
-            padding_mode = "reflection"
-        else:
-            mode = "bilinear"
-            padding_mode = "border"
+    
+def backward_warp(c, grid, delta, delta_scale):
+    grid = grid + delta * delta_scale
+    if c.shape[2] != grid.shape[2] or c.shape[3] != grid.shape[3]:
+        grid = F.interpolate(grid, size=c.shape[-2:],
+                            mode="bilinear", align_corners=True, antialias=False)
+    grid = grid.permute(0, 2, 3, 1)
+    if DEVICE == "MPS":
+        # MPS does not support bicubic and border
+        mode = "bilinear"
+        padding_mode = "reflection"
+    else:
+        mode = "bilinear"
+        padding_mode = "border"
 
-        z = F.grid_sample(c, grid, mode=mode, padding_mode=padding_mode, align_corners=True)
-        z = torch.clamp(z, 0, 1)
-        return z
-    
-    def make_grid(batch, width, height, device):
-        # TODO: xpu: torch.meshgrid causes fallback from XPU to CPU, but it is faster to simply do nothing
-        mesh_y, mesh_x = torch.meshgrid(torch.linspace(-1, 1, height, device=device),
-                                        torch.linspace(-1, 1, width, device=device), indexing="ij")
-        mesh_y = mesh_y.reshape(1, 1, height, width).expand(batch, 1, height, width)
-        mesh_x = mesh_x.reshape(1, 1, height, width).expand(batch, 1, height, width)
-        grid = torch.cat((mesh_x, mesh_y), dim=1)
-        return grid
-    
-    def resolve_mapper_function(name):
-        # https://github.com/nagadomi/nunif/assets/287255/0071a65a-62ff-4928-850c-0ad22bceba41
-        if name == "pow2":
-            return lambda x: x ** 2
-        elif name == "none":
-            return lambda x: x
-        elif name == "softplus":
-            return softplus01_legacy
-        elif name == "softplus2":
-            return lambda x: softplus01_legacy(x) ** 2
-        elif name in {"mul_1", "mul_2", "mul_3"}:
-            # for Relative Depth
-            # https://github.com/nagadomi/nunif/assets/287255/2be5c0de-cb72-4c9c-9e95-4855c0730e5c
-            param = {
-                # none 1x
-                "mul_1": {"bias": 0.343, "scale": 12},  # smooth 1.5x
-                "mul_2": {"bias": 0.515, "scale": 12},  # smooth 2x
-                "mul_3": {"bias": 0.687, "scale": 12},  # smooth 3x
-            }[name]
-            return lambda x: softplus01(x, **param)
-        elif name in {"inv_mul_1", "inv_mul_2", "inv_mul_3"}:
-            # for Relative Depth
-            # https://github.com/nagadomi/nunif/assets/287255/f580b405-b0bf-4c6a-8362-66372b2ed930
-            param = {
-                # none 1x
-                "inv_mul_1": {"bias": -0.002102, "scale": 7.8788},  # inverse smooth 1.5x
-                "inv_mul_2": {"bias": -0.0003, "scale": 6.2626},    # inverse smooth 2x
-                "inv_mul_3": {"bias": -0.0001, "scale": 3.4343},    # inverse smooth 3x
-            }[name]
-            return lambda x: inv_softplus01(x, **param)
-        elif name in {"shift_30", "shift_20", "shift_14", "shift_08", "shift_06", "shift_045"}:
-            # for Relative Depth
-            # https://github.com/user-attachments/assets/7c953aae-101e-4337-82b4-10a073863d47
-            param = {
-                "shift_30": {"min_distance": 3.0},
-                "shift_20": {"min_distance": 2.0},
-                "shift_14": {"min_distance": 1.4},
-                "shift_08": {"min_distance": 0.8},
-                "shift_06": {"min_distance": 0.6},
-                "shift_045": {"min_distance": 0.45},
-            }[name]
-            return lambda x: shift_relative_depth(x, **param)
-        elif name in {"div_25", "div_10", "div_6", "div_4", "div_2", "div_1"}:
-            # for Metric Depth (inverse distance)
-            # TODO: There is no good reason for this parameter step
-            # https://github.com/nagadomi/nunif/assets/287255/46c6b292-040f-4820-93fc-9e001cd53375
-            param = {
-                "div_25": 2.5,
-                "div_10": 1,
-                "div_6": 0.6,
-                "div_4": 0.4,
-                "div_2": 0.2,
-                "div_1": 0.1,
-            }[name]
-            return lambda x: distance_to_disparity(x, param)
-        else:
-            raise NotImplementedError(f"mapper={name}")
+    z = F.grid_sample(c, grid, mode=mode, padding_mode=padding_mode, align_corners=True)
+    z = torch.clamp(z, 0, 1)
+    return z
 
-    def chain(x, functions):
-        for f in functions:
-            x = f(x)
-        return x
-    
-    def get_mapper(name):
-        if ":" in name:
-            names = name.split(":")
-        else:
-            names = [name]
-        functions = []
-        for name in names:
-            if "+" in name:
-                # weighted average (interpolation)
-                name, weight = name.split("=")
-                if not weight:
-                    weight = 0.5
-                else:
-                    weight = float(weight)
-                    assert 0.0 <= weight <= 1.0
-                mapper_a, mapper_b = name.split("+")
-                mapper_a = resolve_mapper_function(mapper_a)
-                mapper_b = resolve_mapper_function(mapper_b)
-                functions.append(lambda x: mapper_a(x) * (1 - weight) + mapper_b(x) * weight)
+def make_grid(batch, width, height, device):
+    # TODO: xpu: torch.meshgrid causes fallback from XPU to CPU, but it is faster to simply do nothing
+    mesh_y, mesh_x = torch.meshgrid(torch.linspace(-1, 1, height, device=device),
+                                    torch.linspace(-1, 1, width, device=device), indexing="ij")
+    mesh_y = mesh_y.reshape(1, 1, height, width).expand(batch, 1, height, width)
+    mesh_x = mesh_x.reshape(1, 1, height, width).expand(batch, 1, height, width)
+    grid = torch.cat((mesh_x, mesh_y), dim=1)
+    return grid
+
+def resolve_mapper_function(name):
+    # https://github.com/nagadomi/nunif/assets/287255/0071a65a-62ff-4928-850c-0ad22bceba41
+    if name == "pow2":
+        return lambda x: x ** 2
+    elif name == "none":
+        return lambda x: x
+    elif name == "softplus":
+        return softplus01_legacy
+    elif name == "softplus2":
+        return lambda x: softplus01_legacy(x) ** 2
+    elif name in {"mul_1", "mul_2", "mul_3"}:
+        # for Relative Depth
+        # https://github.com/nagadomi/nunif/assets/287255/2be5c0de-cb72-4c9c-9e95-4855c0730e5c
+        param = {
+            # none 1x
+            "mul_1": {"bias": 0.343, "scale": 12},  # smooth 1.5x
+            "mul_2": {"bias": 0.515, "scale": 12},  # smooth 2x
+            "mul_3": {"bias": 0.687, "scale": 12},  # smooth 3x
+        }[name]
+        return lambda x: softplus01(x, **param)
+    elif name in {"inv_mul_1", "inv_mul_2", "inv_mul_3"}:
+        # for Relative Depth
+        # https://github.com/nagadomi/nunif/assets/287255/f580b405-b0bf-4c6a-8362-66372b2ed930
+        param = {
+            # none 1x
+            "inv_mul_1": {"bias": -0.002102, "scale": 7.8788},  # inverse smooth 1.5x
+            "inv_mul_2": {"bias": -0.0003, "scale": 6.2626},    # inverse smooth 2x
+            "inv_mul_3": {"bias": -0.0001, "scale": 3.4343},    # inverse smooth 3x
+        }[name]
+        return lambda x: inv_softplus01(x, **param)
+    elif name in {"shift_30", "shift_20", "shift_14", "shift_08", "shift_06", "shift_045"}:
+        # for Relative Depth
+        # https://github.com/user-attachments/assets/7c953aae-101e-4337-82b4-10a073863d47
+        param = {
+            "shift_30": {"min_distance": 3.0},
+            "shift_20": {"min_distance": 2.0},
+            "shift_14": {"min_distance": 1.4},
+            "shift_08": {"min_distance": 0.8},
+            "shift_06": {"min_distance": 0.6},
+            "shift_045": {"min_distance": 0.45},
+        }[name]
+        return lambda x: shift_relative_depth(x, **param)
+    elif name in {"div_25", "div_10", "div_6", "div_4", "div_2", "div_1"}:
+        # for Metric Depth (inverse distance)
+        # TODO: There is no good reason for this parameter step
+        # https://github.com/nagadomi/nunif/assets/287255/46c6b292-040f-4820-93fc-9e001cd53375
+        param = {
+            "div_25": 2.5,
+            "div_10": 1,
+            "div_6": 0.6,
+            "div_4": 0.4,
+            "div_2": 0.2,
+            "div_1": 0.1,
+        }[name]
+        return lambda x: distance_to_disparity(x, param)
+    else:
+        raise NotImplementedError(f"mapper={name}")
+
+def chain(x, functions):
+    for f in functions:
+        x = f(x)
+    return x
+
+def get_mapper(name):
+    if ":" in name:
+        names = name.split(":")
+    else:
+        names = [name]
+    functions = []
+    for name in names:
+        if "+" in name:
+            # weighted average (interpolation)
+            name, weight = name.split("=")
+            if not weight:
+                weight = 0.5
             else:
-                functions.append(resolve_mapper_function(name))
-
-        return lambda x: chain(x, functions)
-    
-    def make_divergence_feature_value(divergence, convergence, image_width):
-        # assert image_width <= 2048
-        divergence_pix = divergence * 0.5 * 0.01 * image_width
-        divergence_feature_value = divergence_pix / 32.0
-        convergence_feature_value = (-divergence_pix * convergence) / 32.0
-
-        return divergence_feature_value, convergence_feature_value
-    
-    def make_input_tensor(c, depth, divergence, convergence,
-                      image_width, mapper="pow2", preserve_screen_border=False):
-        depth = depth.squeeze(0)  # CHW -> HW
-        depth = get_mapper(mapper)(depth)
-        divergence_value, convergence_value = make_divergence_feature_value(divergence, convergence, image_width)
-        divergence_feat = torch.full_like(depth, divergence_value, device=depth.device)
-        convergence_feat = torch.full_like(depth, convergence_value, device=depth.device)
-
-        if preserve_screen_border:
-            # Force set screen border parallax to zero.
-            # Note that this does not work with tiled rendering (training code)
-            border_pix = round(divergence * 0.75 * 0.01 * image_width * (depth.shape[-1] / image_width))
-            if border_pix > 0:
-                border_weight_l = torch.linspace(0.0, 1.0, border_pix, device=depth.device)
-                border_weight_r = torch.linspace(1.0, 0.0, border_pix, device=depth.device)
-                divergence_feat[:, :border_pix] = (border_weight_l[None, :].expand_as(divergence_feat[:, :border_pix]) *
-                                                divergence_feat[:, :border_pix])
-                divergence_feat[:, -border_pix:] = (border_weight_r[None, :].expand_as(divergence_feat[:, -border_pix:]) *
-                                                    divergence_feat[:, -border_pix:])
-                convergence_feat[:, :border_pix] = (border_weight_l[None, :].expand_as(convergence_feat[:, :border_pix]) *
-                                                    convergence_feat[:, :border_pix])
-                convergence_feat[:, -border_pix:] = (border_weight_r[None, :].expand_as(convergence_feat[:, -border_pix:]) *
-                                                    convergence_feat[:, -border_pix:])
-    
-    def autocast(device, dtype=None, enabled=True):
-        if DEVICE == "cpu":
-            # autocast on cpu is extremely slow for unknown reasons
-            # disabled
-            amp_device_type = "cpu"
-            amp_dtype = torch.bfloat16
-            if enabled:
-                enabled = False
-        elif DEVICE == "mps":  # TODO: xpu work or not
-            # currently pytorch does not support mps autocast
-            # disabled
-            amp_device_type = "cpu"
-            amp_dtype = torch.bfloat16
-            if enabled:
-                enabled = False
-        elif torch.cuda.is_avaliable():
-            amp_device_type = device.split(":")[0] if isinstance(device, str) else device.type
-            amp_dtype = dtype
-            if False:
-                # TODO: I think better to do this, but leave it to the user (use --disable-amp option)
-                cuda_capability = torch.cuda.get_device_capability(device)
-                if enabled and cuda_capability < (7, 0):
-                    enabled = False
+                weight = float(weight)
+                assert 0.0 <= weight <= 1.0
+            mapper_a, mapper_b = name.split("+")
+            mapper_a = resolve_mapper_function(mapper_a)
+            mapper_b = resolve_mapper_function(mapper_b)
+            functions.append(lambda x: mapper_a(x) * (1 - weight) + mapper_b(x) * weight)
         else:
-            # Unknown device
-            amp_device_type = device.split(":")[0] if isinstance(device, str) else device.type
-            amp_dtype = dtype
+            functions.append(resolve_mapper_function(name))
 
-        return torch.autocast(device_type=amp_device_type, dtype=amp_dtype, enabled=enabled)
-    
-    def apply_divergence_nn_delta(model, c, depth, divergence, convergence, steps,
-                              mapper, shift, preserve_screen_border, enable_amp):
-        steps = 1 if steps is None else steps
-        # BCHW
-        assert model.delta_output
-        if shift > 0:
-            c = torch.flip(c, (3,))
-            depth = torch.flip(depth, (3,))
+    return lambda x: chain(x, functions)
 
-        B, _, H, W = depth.shape
-        divergence_step = divergence / steps
-        grid = make_grid(B, W, H, c.device)
-        delta_scale = torch.tensor(1.0 / (W // 2 - 1), dtype=c.dtype, device=c.device)
-        depth_warp = depth
-        delta_steps = []
+def make_divergence_feature_value(divergence, convergence, image_width):
+    # assert image_width <= 2048
+    divergence_pix = divergence * 0.5 * 0.01 * image_width
+    divergence_feature_value = divergence_pix / 32.0
+    convergence_feature_value = (-divergence_pix * convergence) / 32.0
 
-        for j in range(steps):
-            x = torch.stack([make_input_tensor(None, depth_warp[i],
-                                            divergence=divergence_step,
-                                            convergence=convergence,
-                                            image_width=W,
-                                            mapper=mapper,
-                                            preserve_screen_border=preserve_screen_border)
-                            for i in range(depth_warp.shape[0])])
-            with autocast(device=depth.device, enabled=enable_amp):
-                delta = model(x)
+    return divergence_feature_value, convergence_feature_value
 
-            delta_steps.append(delta)
-            if j + 1 < steps:
-                depth_warp = backward_warp(depth_warp, grid, delta, delta_scale)
+def make_input_tensor(c, depth, divergence, convergence,
+                    image_width, mapper="pow2", preserve_screen_border=False):
+    depth = depth.squeeze(0)  # CHW -> HW
+    depth = get_mapper(mapper)(depth)
+    divergence_value, convergence_value = make_divergence_feature_value(divergence, convergence, image_width)
+    divergence_feat = torch.full_like(depth, divergence_value, device=depth.device)
+    convergence_feat = torch.full_like(depth, convergence_value, device=depth.device)
 
-        c_warp = c
-        for delta in delta_steps:
-            c_warp = backward_warp(c_warp, grid, delta, delta_scale)
-        z = c_warp
+    if preserve_screen_border:
+        # Force set screen border parallax to zero.
+        # Note that this does not work with tiled rendering (training code)
+        border_pix = round(divergence * 0.75 * 0.01 * image_width * (depth.shape[-1] / image_width))
+        if border_pix > 0:
+            border_weight_l = torch.linspace(0.0, 1.0, border_pix, device=depth.device)
+            border_weight_r = torch.linspace(1.0, 0.0, border_pix, device=depth.device)
+            divergence_feat[:, :border_pix] = (border_weight_l[None, :].expand_as(divergence_feat[:, :border_pix]) *
+                                            divergence_feat[:, :border_pix])
+            divergence_feat[:, -border_pix:] = (border_weight_r[None, :].expand_as(divergence_feat[:, -border_pix:]) *
+                                                divergence_feat[:, -border_pix:])
+            convergence_feat[:, :border_pix] = (border_weight_l[None, :].expand_as(convergence_feat[:, :border_pix]) *
+                                                convergence_feat[:, :border_pix])
+            convergence_feat[:, -border_pix:] = (border_weight_r[None, :].expand_as(convergence_feat[:, -border_pix:]) *
+                                                convergence_feat[:, -border_pix:])
 
-        if shift > 0:
-            z = torch.flip(z, (3,))
+def autocast(device, dtype=None, enabled=True):
+    if DEVICE == "cpu":
+        # autocast on cpu is extremely slow for unknown reasons
+        # disabled
+        amp_device_type = "cpu"
+        amp_dtype = torch.bfloat16
+        if enabled:
+            enabled = False
+    elif DEVICE == "mps":  # TODO: xpu work or not
+        # currently pytorch does not support mps autocast
+        # disabled
+        amp_device_type = "cpu"
+        amp_dtype = torch.bfloat16
+        if enabled:
+            enabled = False
+    elif torch.cuda.is_avaliable():
+        amp_device_type = device.split(":")[0] if isinstance(device, str) else device.type
+        amp_dtype = dtype
+        if False:
+            # TODO: I think better to do this, but leave it to the user (use --disable-amp option)
+            cuda_capability = torch.cuda.get_device_capability(device)
+            if enabled and cuda_capability < (7, 0):
+                enabled = False
+    else:
+        # Unknown device
+        amp_device_type = device.split(":")[0] if isinstance(device, str) else device.type
+        amp_dtype = dtype
 
-        return z
-    
-    def apply_divergence_nn_LR(model, c, depth, divergence, convergence, steps,
-                           mapper, synthetic_view, preserve_screen_border, enable_amp):
-        assert synthetic_view in {"both", "right", "left"}
-        steps = 1 if steps is None else steps
+    return torch.autocast(device_type=amp_device_type, dtype=amp_dtype, enabled=enabled)
+
+def apply_divergence_nn_delta(model, c, depth, divergence, convergence, steps,
+                            mapper, shift, preserve_screen_border, enable_amp):
+    steps = 1 if steps is None else steps
+    # BCHW
+    # assert model.delta_output
+    if shift > 0:
+        c = torch.flip(c, (3,))
+        depth = torch.flip(depth, (3,))
+
+    B, _, H, W = depth.shape
+    divergence_step = divergence / steps
+    grid = make_grid(B, W, H, c.device)
+    delta_scale = torch.tensor(1.0 / (W // 2 - 1), dtype=c.dtype, device=c.device)
+    depth_warp = depth
+    delta_steps = []
+
+    for j in range(steps):
+        x = torch.stack([make_input_tensor(None, depth_warp[i],
+                                        divergence=divergence_step,
+                                        convergence=convergence,
+                                        image_width=W,
+                                        mapper=mapper,
+                                        preserve_screen_border=preserve_screen_border)
+                        for i in range(depth_warp.shape[0])])
+        with autocast(device=depth.device, enabled=enable_amp):
+            delta = model(x)
+
+        delta_steps.append(delta)
+        if j + 1 < steps:
+            depth_warp = backward_warp(depth_warp, grid, delta, delta_scale)
+
+    c_warp = c
+    for delta in delta_steps:
+        c_warp = backward_warp(c_warp, grid, delta, delta_scale)
+    z = c_warp
+
+    if shift > 0:
+        z = torch.flip(z, (3,))
+
+    return z
+
+def apply_divergence_nn_LR(model, c, depth, divergence, convergence, steps,
+                        mapper, synthetic_view, preserve_screen_border, enable_amp):
+    assert synthetic_view in {"both", "right", "left"}
+    steps = 1 if steps is None else steps
 
 
-        left_eye = apply_divergence_nn_delta(model, c, depth, divergence, convergence, steps,
-                                    mapper=mapper, shift=-1,
+    left_eye = apply_divergence_nn_delta(model, c, depth, divergence, convergence, steps,
+                                mapper=mapper, shift=-1,
+                                preserve_screen_border=preserve_screen_border,
+                                enable_amp=enable_amp)
+    right_eye = apply_divergence_nn_delta(model, c, depth, divergence, convergence, steps,
+                                    mapper=mapper, shift=1,
                                     preserve_screen_border=preserve_screen_border,
                                     enable_amp=enable_amp)
-        right_eye = apply_divergence_nn_delta(model, c, depth, divergence, convergence, steps,
-                                        mapper=mapper, shift=1,
-                                        preserve_screen_border=preserve_screen_border,
-                                        enable_amp=enable_amp)
 
-        return left_eye, right_eye
-    def apply_divergence(depth, im, args, side_model):
-        batch = True
-        if depth.ndim != 4:
-            # CHW
-            depth = depth.unsqueeze(0)
-            im = im.unsqueeze(0)
-            batch = False
-        else:
-            # BCHW
-            pass
+    return left_eye, right_eye
+def apply_divergence(depth, im, args, side_model):
+    batch = True
+    if depth.ndim != 4:
+        # CHW
+        depth = depth.unsqueeze(0)
+        im = im.unsqueeze(0)
+        batch = False
+    else:
+        # BCHW
+        pass
 
-        if args.stereo_width is not None:
-            # NOTE: use src aspect ratio instead of depth aspect ratio
-            H, W = im.shape[2:]
-            stereo_width = min(W, args.stereo_width)
-            if depth.shape[3] != stereo_width:
-                new_w = stereo_width
-                new_h = int(H * (stereo_width / W))
-                depth = F.interpolate(depth, size=(new_h, new_w),
-                                      mode="bilinear", align_corners=True, antialias=True)
-                depth = torch.clamp(depth, 0, 1)
-        left_eye, right_eye = apply_divergence_nn_LR(
-            side_model, im, depth,
-            args.divergence, args.convergence, args.warp_steps,
-            mapper=args.mapper,
-            synthetic_view=args.synthetic_view,
-            preserve_screen_border=args.preserve_screen_border,
-            enable_amp=not args.disable_amp)
+    if args.stereo_width is not None:
+        # NOTE: use src aspect ratio instead of depth aspect ratio
+        H, W = im.shape[2:]
+        stereo_width = min(W, args.stereo_width)
+        if depth.shape[3] != stereo_width:
+            new_w = stereo_width
+            new_h = int(H * (stereo_width / W))
+            depth = F.interpolate(depth, size=(new_h, new_w),
+                                    mode="bilinear", align_corners=True, antialias=True)
+            depth = torch.clamp(depth, 0, 1)
+    left_eye, right_eye = apply_divergence_nn_LR(
+        side_model, im, depth,
+        args.divergence, args.convergence, args.warp_steps,
+        mapper=args.mapper,
+        synthetic_view=args.synthetic_view,
+        preserve_screen_border=args.preserve_screen_border,
+        enable_amp=not args.disable_amp)
 
-        if not batch:
-            left_eye = left_eye.squeeze(0)
-            right_eye = right_eye.squeeze(0)
+    if not batch:
+        left_eye = left_eye.squeeze(0)
+        right_eye = right_eye.squeeze(0)
 
-        return left_eye, right_eye
-    
-            
+    return left_eye, right_eye
+
         
+    

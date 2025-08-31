@@ -156,10 +156,10 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-
         depth = pad_to_aspect(depth.unsqueeze(0)).squeeze(0)
 
         try:
-            ref_input = torch.cat([(rgb_c/255).permute(2,0,1), (left/255).permute(2,0,1), (right/255).permute(2,0,1), depth.unsqueeze(0)], dim=0).unsqueeze(0).float()
+            ref_input = torch.cat([rgb_c/255.0, left/255.0, right/255.0, depth.unsqueeze(0)], dim=0).unsqueeze(0).float()
             with torch.no_grad():
                 ref_out = refiner(ref_input).squeeze(0)
-            right_f = (ref_out[[2,1,0],:,:] * 255 ).half()
+            right_f = (ref_out * 255.0 ).half()
         except Exception:
             right_f = right.half()
 

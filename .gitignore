@@ -16,3 +16,4 @@ Python310
 settings.yaml
 test*
 datasets
+*.png
