@@ -2,8 +2,6 @@ import threading
 import time, os
 import numpy as np
 import cv2
-import torch
-import torch.nn.functional as F
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
 from utils import get_local_ip
@@ -13,8 +11,8 @@ ICON_PATH = "icon2.ico"
 
 # Custom WSGI server class that supports threading
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
-    allow_reuse_address = True  # Allows quick restart of server
-    block_on_close = False      # Makes server shutdown faster
+    allow_reuse_address = True
+    block_on_close = False
 
 class MJPEGStreamer:
     def __init__(self, host="0.0.0.0", port=1303, fps=60, quality=90):
@@ -23,29 +21,24 @@ class MJPEGStreamer:
         """
         # MJPEG stream boundary marker
         self.boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-        self.quality = int(quality)  # JPEG quality parameter
-        self.fps = fps               # Target frame rate
-        self.delay = 1.0 / fps       # Delay between frames based on FPS
+        self.quality = int(quality)
+        self.fps = fps
+        self.delay = 1.0 / fps
 
-        # Frame storage and synchronization
-        self.raw_frame = None       # Stores the latest raw frame (numpy RGB array)
-        self.encoded_frame = None   # Stores the latest JPEG encoded frame
-        self.lock = threading.Lock()  # Protects access to shared resources
+        self.raw_frame = None       # latest frame (numpy RGB)
+        self.encoded_frame = None   # latest JPEG
+        self.lock = threading.Lock()
 
-        # Event flags for thread coordination
-        self.shutdown = threading.Event()        # Signals when to stop all threads
-        self.new_raw_event = threading.Event()   # Signals when new raw frame is available
-        self.new_encoded_event = threading.Event()  # Signals when new encoded frame is ready
+        self.shutdown = threading.Event()
+        self.new_raw_event = threading.Event()
+        self.new_encoded_event = threading.Event()
 
-        # Stream dimensions (set when first frame arrives)
-        self.sbs_width = None    # Width of side-by-side output
-        self.sbs_height = None   # Height of side-by-side output
-        self.index_bytes = None  # Cached HTML page bytes
+        # Stream dimensions
+        self.sbs_width = None
+        self.sbs_height = None
+        self.index_bytes = None
 
-        # HTML template for the viewer page with placeholders for FPS and dimensions
-        # NOTE: the JS now dynamically resizes the canvas/video based on the actual
-        # naturalWidth/naturalHeight of the MJPEG <img> frames, so clients will
-        # automatically adapt if the server output resolution changes.
+        # HTML template with auto reconnect and fullscreen
         self.template = """<!DOCTYPE html>
 <html>
     <head>
@@ -55,6 +48,8 @@ class MJPEGStreamer:
         <title>Desktop2Stereo Streamer</title>
         <script>
             const FPS = {fps};
+            const WIDTH = {width};
+            const HEIGHT = {height};
             const STREAM_URI = "/stream.mjpg";
 
             window.onload = () => {{
@@ -172,21 +167,13 @@ class MJPEGStreamer:
             pass
         self.new_raw_event.set()
 
-    def set_frame(self, rgb_or_tensor, depth_tensor=None, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
+    def set_frame(self, frame_np):
         """
         Set the current frame to be streamed. This will also update the cached HTML
         page if the output resolution changes so newly-connecting clients see the
         correct initial dimensions.
         """
         with self.lock:
-            if depth_tensor is not None:
-                frame_np = self.make_sbs(rgb_or_tensor, depth_tensor, ipd_uv, depth_strength, display_mode)
-            else:
-                frame_np = rgb_or_tensor
-
-            if frame_np is None:
-                return
-
             h, w = frame_np.shape[:2]
 
             # If the output resolution changed, update cached index page so new
@@ -209,144 +196,33 @@ class MJPEGStreamer:
             self.raw_frame = frame_np
             self.new_raw_event.set()
 
-    def make_sbs(self, rgb: torch.Tensor, depth: torch.Tensor, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
-        """
-        Create a side-by-side stereo image from RGB and depth.
-        """
-        if rgb.ndim == 3 and rgb.shape[0] in [1,3]:
-            rgb_c = rgb
-        elif rgb.ndim == 3:
-            rgb_c = rgb.permute(2,0,1).contiguous()
-        else:
-            raise ValueError("rgb tensor must be (C,H,W) or (H,W,C)")
-
-        C,H,W = rgb_c.shape
-        device = rgb_c.device
-
-        inv = torch.ones((H,W), device=device, dtype=rgb_c.dtype) - depth
-        max_px = ipd_uv * W
-        shifts = (inv * max_px * depth_strength / 10).round().to(torch.long, non_blocking=True)
-        shifts_half = (shifts//2).clamp(0, W//2)
-
-        xs = torch.arange(W, device=device).unsqueeze(0).expand(H,W)
-        left_idx = (xs + shifts_half).clamp(0,W-1)
-        right_idx = (xs - shifts_half).clamp(0,W-1)
-        idx_left = left_idx.unsqueeze(0).expand(C,H,W)
-        idx_right = right_idx.unsqueeze(0).expand(C,H,W)
-
-        with torch.no_grad():
-            gen_left = torch.gather(rgb_c, 2, idx_left)
-            gen_right = torch.gather(rgb_c, 2, idx_right)
-
-            def pad_to_aspect(img, target_ratio=(16,9)):
-                """Pad image (C,H,W) to the nearest integer size with the requested
-                aspect ratio (target_ratio = (width,height)).
-
-                This implementation avoids float equality checks, ensures pad
-                amounts are non-negative integers, and caps absurdly-large pad
-                dimensions to prevent memory blow-ups when input sizes are
-                unexpectedly huge.
-                """
-                if img is None:
-                    return img
-                _, h, w = img.shape
-                if h == 0 or w == 0:
-                    return img
-
-                t_w, t_h = int(target_ratio[0]), int(target_ratio[1])
-
-                # If current aspect already matches target exactly (integer check)
-                if w * t_h == h * t_w:
-                    return img
-
-                # Cap max allowed padded dimension (safety to avoid runaway memory)
-                MAX_DIM = 10000
-
-                # If image is wider than target -> pad vertically
-                if w * t_h > h * t_w:
-                    # new height to meet target ratio
-                    new_h = (w * t_h) // t_w
-                    new_h = min(max(new_h, h), MAX_DIM)
-                    pad_total = max(0, new_h - h)
-                    pad_top = pad_total // 2
-                    pad_bottom = pad_total - pad_top
-                    return F.pad(img, (0, 0, pad_top, pad_bottom), value=0)
-                else:
-                    # pad horizontally
-                    new_w = (h * t_w) // t_h
-                    new_w = min(max(new_w, w), MAX_DIM)
-                    pad_total = max(0, new_w - w)
-                    pad_left = pad_total // 2
-                    pad_right = pad_total - pad_left
-                    return F.pad(img, (pad_left, pad_right, 0, 0), value=0)
-
-            left = pad_to_aspect(gen_left)
-            right = pad_to_aspect(gen_right)
-
-            if display_mode == "TAB":
-                out = torch.cat([left, right], dim=1)
-            else:
-                out = torch.cat([left, right], dim=2)
-
-            if display_mode != "Full-SBS":
-                # Downsample to a reasonable size (using left's single-view shape)
-                target_size = left.shape[1:]
-                out = F.interpolate(out.unsqueeze(0), size=target_size, mode="area")[0]
-
-            out = out.clamp(0,255).to(torch.uint8)
-            out_np = out.permute(1,2,0).contiguous().cpu().numpy()
-        return out_np
-
     def _encoder_loop(self):
-        """Background thread that continuously encodes frames to JPEG."""
         while not self.shutdown.is_set():
             if not self.new_raw_event.wait(timeout=1):
                 continue
-            # clear the event first so set_frame can notify future frames
             self.new_raw_event.clear()
 
-            # copy the latest raw_frame under lock to avoid read/modify races
-            with self.lock:
-                raw = None if self.raw_frame is None else np.copy(self.raw_frame)
-
+            raw = self.raw_frame
             if raw is None:
                 continue
-
             try:
-                # Convert RGB to BGR and encode as JPEG from a local copy
                 bgr = np.ascontiguousarray(raw[..., ::-1])
                 success, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
                 if success:
-                    # store immutable bytes atomically
                     self.encoded_frame = buf.tobytes()
-                    self.new_encoded_event.set()  # Notify stream generator
+                    self.new_encoded_event.set()
             except Exception as e:
                 print("[MJPEGStreamer] Encoding error:", e)
 
     def _generate(self):
-        """Generator that yields MJPEG frames for the HTTP stream."""
         while not self.shutdown.is_set():
             if not self.new_encoded_event.wait(timeout=1):
                 continue
-            # clear event immediately so encoder can set the next frame
             self.new_encoded_event.clear()
-
-            # take an atomic snapshot of the current encoded bytes
             f = self.encoded_frame
-            if not f:
-                continue
-
-            try:
-                # include Content-Length to make clients more robust
-                header = b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(f)
-                yield header + f + b"\r\n"
-            except GeneratorExit:
-                break
-            except Exception as e:
-                print("[MJPEGStreamer] _generate error:", e)
-            time.sleep(self.delay)  # Maintain target frame rate
-
-        # final sentinel
+            if f:
+                yield self.boundary + f + b"\r\n"
+                time.sleep(self.delay)
         yield b""
 
     def encode_jpeg(self, arr: np.ndarray) -> bytes:
