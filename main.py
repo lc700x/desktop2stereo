@@ -33,6 +33,8 @@ def capture_loop():
             frame_raw, size = cap.grab()
         except queue.Empty:
             continue
+        except Exception:
+            pass
         put_latest(raw_q, (frame_raw, size))
 
 def process_loop():
