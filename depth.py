@@ -1,6 +1,7 @@
-# depth.py (updated with shape fix)
+# depth.py (optimized with TinyRefiner for FPS)
 import torch
 torch.set_num_threads(1)
+import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -26,114 +27,118 @@ def get_device(index=0):
     return torch.device("cpu"), "Using CPU device"
 
 DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
-
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
 
 print(f"{DEVICE_INFO}")
 print(f"Model: {MODEL_ID}")
 
+# Load depth model
 model = AutoModelForDepthEstimation.from_pretrained(
     MODEL_ID,
     torch_dtype=torch.float16 if FP16 else torch.float32,
     cache_dir=CACHE_PATH,
     weights_only=True
 ).to(DEVICE).eval()
-
 if FP16:
     model.half()
-
 MODEL_DTYPE = next(model.parameters()).dtype
-MEAN = torch.tensor([0.485, 0.456, 0.406], device=DEVICE).view(1, 3, 1, 1)
-STD = torch.tensor([0.229, 0.224, 0.225], device=DEVICE).view(1, 3, 1, 1)
-
+MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
+STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
 with torch.no_grad():
-    dummy = torch.zeros(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=DEVICE, dtype=MODEL_DTYPE)
+    dummy = torch.zeros(1,3,DEPTH_RESOLUTION,DEPTH_RESOLUTION, device=DEVICE, dtype=MODEL_DTYPE)
     model(pixel_values=dummy)
 
 lock = Lock()
 
-# fast_mask_fill fixed for multi-channel
-def fast_mask_fill(x: torch.Tensor, iterations: int = 2):
-    b, c, h, w = x.shape
-    mask = (x == 0).float()
-    kernel = torch.ones(c, 1, 3, 3, device=x.device, dtype=x.dtype)
-    for _ in range(iterations):
-        neigh_sum = F.conv2d(x, kernel, padding=1, groups=c)
-        neigh_count = F.conv2d((1 - mask), kernel, padding=1, groups=c)
-        avg = neigh_sum / (neigh_count + 1e-6)
-        x = torch.where(mask.bool(), avg, x)
-        mask = (x == 0).float()
-    return x
+# --- TinyRefiner definition ---
+class TinyRefiner(nn.Module):
+    def __init__(self, in_channels=10, out_channels=3, features=32):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, features, 3, padding=1)
+        self.conv2 = nn.Conv2d(features, features, 3, padding=1)
+        self.conv3 = nn.Conv2d(features, features, 3, padding=1)
+        self.conv4 = nn.Conv2d(features, out_channels, 3, padding=1)
+        self.relu = nn.ReLU(inplace=True)
+    def forward(self,x):
+        x = self.relu(self.conv1(x))
+        x = self.relu(self.conv2(x))
+        x = self.relu(self.conv3(x))
+        x = self.conv4(x)
+        return torch.sigmoid(x)
 
-# main functions
-def process_tensor(img_rgb: np.ndarray, height) -> np.ndarray:
+# Load refiner weights
+REFINER_WEIGHTS_PATH = "refiner_kitti.pt"
+refiner = TinyRefiner().to(DEVICE).eval()
+try:
+    sd = torch.load(REFINER_WEIGHTS_PATH, map_location=DEVICE, weights_only=True)
+    refiner.load_state_dict(sd)
+except Exception as e:
+    print(f"Refiner failed to load, falling back to CPU")
+    sd = torch.load(REFINER_WEIGHTS_PATH, map_location="cpu", weights_only=True)
+    refiner.load_state_dict(sd)
+
+# --- main functions ---
+def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
     if height < img_rgb.shape[0]:
-        width = int(img_rgb.shape[1] / img_rgb.shape[0] * height)
-        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
-    rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE)
-    return rgb_tensor
+        width = int(img_rgb.shape[1]/img_rgb.shape[0]*height)
+        img_rgb = cv2.resize(img_rgb,(width,height), interpolation=cv2.INTER_AREA)
+    return torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE)
 
 def process(img_rgb: np.ndarray, height) -> np.ndarray:
     if height < img_rgb.shape[0]:
-        width = int(img_rgb.shape[1] / img_rgb.shape[0] * height)
-        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
+        width = int(img_rgb.shape[1]/img_rgb.shape[0]*height)
+        img_rgb = cv2.resize(img_rgb,(width,height), interpolation=cv2.INTER_AREA)
     return img_rgb
 
 def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
-    tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE, non_blocking=True)
+    tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
     with lock:
-        tensor = tensor.permute(2, 0, 1).float().contiguous() / 255
-        tensor = tensor.unsqueeze(0)
-        tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
-        tensor = ((tensor - MEAN) / STD).contiguous()
+        tensor = tensor.permute(2,0,1).float().unsqueeze(0)/255
+        tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
+        tensor = ((tensor-MEAN)/STD).contiguous()
         with torch.no_grad():
-            tensor = tensor.to(dtype=MODEL_DTYPE).contiguous()
+            tensor = tensor.to(dtype=MODEL_DTYPE)
             depth = model(pixel_values=tensor).predicted_depth
-    h, w = image_rgb.shape[:2]
-    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0, 0]
-    depth = depth / depth.max().clamp(min=1e-6)
-    return depth
+    h,w = image_rgb.shape[:2]
+    depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
+    return depth/depth.max().clamp(min=1e-6)
 
-def predict_depth_tensor(image_rgb: np.ndarray) -> np.ndarray:
+def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
     with lock:
-        tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE, non_blocking=True)
-        rgb_c = tensor.permute(2, 0, 1).contiguous()
-        tensor = rgb_c / 255
-        tensor = tensor.unsqueeze(0)
-        tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
-        tensor = ((tensor - MEAN) / STD).contiguous()
+        tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
+        rgb_c = tensor.permute(2,0,1).contiguous()
+        tensor = rgb_c.unsqueeze(0)/255
+        tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
+        tensor = ((tensor-MEAN)/STD).contiguous()
         with torch.no_grad():
-            tensor = tensor.to(dtype=MODEL_DTYPE).contiguous()
+            tensor = tensor.to(dtype=MODEL_DTYPE)
             depth = model(pixel_values=tensor).predicted_depth
-        h, w = image_rgb.shape[:2]
-        depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0, 0]
-        depth = depth / depth.max().clamp(min=1e-6)
+        h,w = image_rgb.shape[:2]
+        depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
+        depth = depth/depth.max().clamp(min=1e-6)
         return depth, rgb_c
 
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
     with lock:
         C,H,W = rgb_c.shape
-        inv = torch.ones((H, W), device=DEVICE, dtype=DTYPE) - depth
-        max_px = ipd_uv * W
-        shifts = (inv * max_px * depth_strength / 10).round().to(torch.long, non_blocking=True)
-        shifts_half = (shifts//2).clamp(0, W//2)
+        inv = torch.ones((H,W), device=DEVICE,dtype=DTYPE)-depth
+        max_px = ipd_uv*W
+        shifts = (inv*max_px*depth_strength/10).round().to(torch.long)
+        shifts_half = (shifts//2).clamp(0,W//2)
 
         xs = torch.arange(W, device=DEVICE).unsqueeze(0).expand(H,W)
-        left_idx = (xs + shifts_half).clamp(0,W-1)
-        right_idx = (xs - shifts_half).clamp(0,W-1)
-        idx_left = left_idx.unsqueeze(0).expand(C,H,W)
-        idx_right = right_idx.unsqueeze(0).expand(C,H,W)
+        idx_left = (xs+shifts_half).clamp(0,W-1).unsqueeze(0).expand(C,H,W)
+        idx_right = (xs-shifts_half).clamp(0,W-1).unsqueeze(0).expand(C,H,W)
         gen_left = torch.gather(rgb_c,2,idx_left)
         gen_right = torch.gather(rgb_c,2,idx_right)
 
-        def pad_to_aspect(img, target_ratio=(16,9)):
-            _, h, w = img.shape
-            t_w, t_h = target_ratio
+        def pad_to_aspect(img,target_ratio=(16,9)):
+            _,h,w = img.shape
+            t_w,t_h = target_ratio
             r_img = w/h
             r_t = t_w/t_h
-            if abs(r_img-r_t)<0.001:
-                return img
+            if abs(r_img-r_t)<0.001: return img
             elif r_img>r_t:
                 new_H = int(round(w/r_t))
                 pad_top = (new_H-h)//2
@@ -150,10 +155,18 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-
         rgb_c = pad_to_aspect(rgb_c)
         depth = pad_to_aspect(depth.unsqueeze(0)).squeeze(0)
 
+        try:
+            ref_input = torch.cat([(rgb_c/255).permute(2,0,1), (left/255).permute(2,0,1), (right/255).permute(2,0,1), depth.unsqueeze(0)], dim=0).unsqueeze(0).float()
+            with torch.no_grad():
+                ref_out = refiner(ref_input).squeeze(0)
+            right_f = (ref_out[[2,1,0],:,:] * 255 ).half()
+        except Exception:
+            right_f = right.half()
+
         if display_mode=="TAB":
-            out = torch.cat([left,right],dim=1)
+            out = torch.cat([left,right_f],dim=1)
         else:
-            out = torch.cat([left,right],dim=2)
+            out = torch.cat([left,right_f],dim=2)
 
         if display_mode!="Full-SBS":
             out = F.interpolate(out.unsqueeze(0),size=left.shape[1:],mode="area")[0]

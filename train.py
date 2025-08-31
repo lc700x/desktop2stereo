@@ -10,6 +10,21 @@ import glob
 import os
 import numpy as np
 
+class TinyRefiner(nn.Module):
+    def __init__(self, in_channels=10, out_channels=3, features=32):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, features, 3, padding=1)
+        self.conv2 = nn.Conv2d(features, features, 3, padding=1)
+        self.conv3 = nn.Conv2d(features, features, 3, padding=1)
+        self.conv4 = nn.Conv2d(features, out_channels, 3, padding=1)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        x = self.relu(self.conv1(x))
+        x = self.relu(self.conv2(x))
+        x = self.relu(self.conv3(x))
+        x = self.conv4(x)
+        return torch.sigmoid(x)  # output normalized 0-1
 
 
 
@@ -17,18 +32,26 @@ import numpy as np
 
 class KITTIStereoDataset(Dataset):
     def __init__(self, root_dir, split="training", resize=(256,512)):
-        self.left_images = sorted(glob.glob(os.path.join(root_dir, split, "image_2", "*.png")))
-        self.right_images = sorted(glob.glob(os.path.join(root_dir, split, "image_3", "*.png")))
-        self.disp_images = sorted(glob.glob(os.path.join(root_dir, split, "disp_occ_0", "*.png")))
+        left_images = sorted(glob.glob(os.path.join(root_dir, split, "image_2", "*.png")))
+        right_images = sorted(glob.glob(os.path.join(root_dir, split, "image_3", "*.png")))
+        disp_images = sorted(glob.glob(os.path.join(root_dir, split, "disp_occ_0", "*.png")))
+
+        # Keep only files that exist in all three lists
+        self.samples = []
+        for l,r,d in zip(left_images, right_images, disp_images):
+            if os.path.exists(l) and os.path.exists(r) and os.path.exists(d):
+                self.samples.append((l,r,d))
+
         self.resize = resize
 
     def __len__(self):
-        return len(self.left_images)
+        return len(self.samples)
 
     def __getitem__(self, idx):
-        left = cv2.imread(self.left_images[idx])[:, :, ::-1]  # BGR -> RGB
-        right = cv2.imread(self.right_images[idx])[:, :, ::-1]
-        disp = cv2.imread(self.disp_images[idx], cv2.IMREAD_UNCHANGED).astype(np.float32) / 256.0  # KITTI stores disparity*256
+        left_path, right_path, disp_path = self.samples[idx]
+        left = cv2.imread(left_path)[:, :, ::-1]
+        right = cv2.imread(right_path)[:, :, ::-1]
+        disp = cv2.imread(disp_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / 256.0
 
         if self.resize is not None:
             h, w = self.resize
@@ -36,17 +59,12 @@ class KITTIStereoDataset(Dataset):
             right = cv2.resize(right, (w, h), interpolation=cv2.INTER_AREA)
             disp = cv2.resize(disp, (w, h), interpolation=cv2.INTER_NEAREST)
 
-        # Convert to tensor
-        to_tensor = T.ToTensor()
-        left_tensor = to_tensor(left)
-        right_tensor = to_tensor(right)
-        disp_tensor = torch.from_numpy(disp).unsqueeze(0)  # 1,H,W
+        left_tensor = torch.from_numpy(left).permute(2,0,1).float() / 255.0
+        right_tensor = torch.from_numpy(right).permute(2,0,1).float() / 255.0
+        disp_tensor = torch.from_numpy(disp).unsqueeze(0)
 
-        # Input to TinyRefiner = [left, left, right, depth] -> 3+3+3+1=10 channels
         inp = torch.cat([left_tensor, left_tensor, right_tensor, disp_tensor], dim=0)
-
-        return inp, right_tensor  # target is ground-truth right image
-
+        return inp, right_tensor
 
 # Perceptual Loss
 
@@ -107,4 +125,4 @@ def train_kitti(data_root, save_path="refiner_kitti.pt", epochs=20, batch_size=8
 
 # Run training
 if __name__ == "__main__":
-    train_kitti(data_root="datasets/KITTI", epochs=10, batch_size=8, device="cuda")
+    train_kitti(data_root="datasets/KITTI", epochs=200, batch_size=24, device="cuda")

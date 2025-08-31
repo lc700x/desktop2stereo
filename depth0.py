@@ -56,10 +56,11 @@ STD = torch.tensor([0.229, 0.224, 0.225], device=DEVICE).view(1, 3, 1, 1)
 # Warm-up with dummy input
 with torch.no_grad():
     dummy = torch.zeros(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=DEVICE, dtype=MODEL_DTYPE)
-    model(pixel_values=dummy)    
+    model(pixel_values=dummy)
 
 lock = Lock()
 
+# main functions
 def process_tensor(img_rgb: np.ndarray, height) -> np.ndarray:
     """
     Process raw BGR image: convert to RGB and apply downscale if set.
@@ -69,7 +70,7 @@ def process_tensor(img_rgb: np.ndarray, height) -> np.ndarray:
     if height < img_rgb.shape[0]:
         width = int(img_rgb.shape[1] / img_rgb.shape[0] * height)
         img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
-    rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE) # CPU → CPU tensor (uint8)
+    rgb_tensor = torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE)
     return rgb_tensor
 
 def process(img_rgb: np.ndarray, height) -> np.ndarray:
@@ -190,6 +191,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-
                 pad_left = (new_W-w)//2
                 pad_right = new_W-w-pad_left
                 return F.pad(img,(pad_left,pad_right,0,0),value=0)
+
         left = pad_to_aspect(gen_left)
         right = pad_to_aspect(gen_right)
 
@@ -204,4 +206,3 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-
         out = out.clamp(0,255).to(torch.uint8)
     sbs = out.permute(1,2,0).contiguous().cpu().numpy()
     return sbs
-    

@@ -202,7 +202,7 @@ class StereoWindow:
     def on_key_event(self, window, key, scancode, action, mods):
         """Optimized key event handling"""
         if action == glfw.PRESS:
-            if key == glfw.KEY_SPACE:
+            if key == glfw.KEY_ENTER:
                 self.toggle_fullscreen()
             elif key == glfw.KEY_ESCAPE:
                 glfw.set_window_should_close(window, True)
