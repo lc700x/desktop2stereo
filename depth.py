@@ -67,16 +67,15 @@ class TinyRefiner(nn.Module):
         x = self.conv4(x)
         return torch.sigmoid(x)
 
-# Load refiner weights
-REFINER_WEIGHTS_PATH = "refiner_kitti.pt"
-refiner = TinyRefiner().to(DEVICE).eval()
-try:
-    sd = torch.load(REFINER_WEIGHTS_PATH, map_location=DEVICE, weights_only=True)
-    refiner.load_state_dict(sd)
-except Exception as e:
-    print(f"Refiner failed to load, falling back to CPU")
-    sd = torch.load(REFINER_WEIGHTS_PATH, map_location="cpu", weights_only=True)
-    refiner.load_state_dict(sd)
+# # Load refiner weights
+# REFINER_WEIGHTS_PATH = "refiner_kitti.pt"
+# refiner = TinyRefiner().to(DEVICE).eval()
+# try:
+#     sd = torch.load(REFINER_WEIGHTS_PATH, map_location=DEVICE, weights_only=True)
+#     refiner.load_state_dict(sd)
+# except Exception as e:
+#     sd = torch.load(REFINER_WEIGHTS_PATH, map_location="cpu", weights_only=True)
+#     refiner.load_state_dict(sd)
 
 # --- main functions ---
 def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
@@ -103,12 +102,15 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     h,w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
     # Normalize depth with adaptive range
-    depth_sampled = depth[::8, ::8].to(torch.float32)
-    depth_min = torch.quantile(depth_sampled, 0.2)
-    depth_max = torch.quantile(depth_sampled, 0.98)
+    if "MPS" in DEVICE_INFO:
+        depth_sampled = depth[::8, ::8].to(torch.float32)
+        depth_min = torch.quantile(depth_sampled, 0.2)
+        depth_max = torch.quantile(depth_sampled, 0.98)
 
-    depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
-    depth = depth.clamp(0, 1)
+        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
+        depth = depth.clamp(0, 1)
+    else:
+        depth = depth / depth.max().clamp(min=1e-6)
     return depth
 
 def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
@@ -123,67 +125,118 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
             depth = model(pixel_values=tensor).predicted_depth
         h,w = image_rgb.shape[:2]
         depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
-        # Normalize depth with adaptive range
-        depth_sampled = depth[::8, ::8].to(torch.float32)
-        depth_min = torch.quantile(depth_sampled, 0.2)
-        depth_max = torch.quantile(depth_sampled, 0.98)
+        if "MPS" in DEVICE_INFO:
+            depth_sampled = depth[::8, ::8].to(torch.float32)
+            depth_min = torch.quantile(depth_sampled, 0.2)
+            depth_max = torch.quantile(depth_sampled, 0.98)
 
-        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
-        depth = depth.clamp(0, 1)
+            depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
+            depth = depth.clamp(0, 1)
+        else:
+            depth = depth / depth.max().clamp(min=1e-6)
         return depth, rgb_c
 
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
+    C, H, W = rgb_c.shape
+    device = rgb_c.device
+
+    # Precompute pixel coordinates (cache this tensor outside if called repeatedly!)
+    xs = torch.arange(W, device=device).view(1, -1)  # shape [1,W]
+
+    # Depth inversion & shifts
+    inv = 1.0 - depth
+    max_px = ipd_uv * W
+    shifts_half = ((inv * max_px * depth_strength / 10) / 2).round().clamp(0, W // 2).to(torch.int32)
+
+    # Build shifted indices efficiently (broadcasting instead of expand)
+    idx_left = (xs + shifts_half).clamp(0, W - 1)
+    idx_right = (xs - shifts_half).clamp(0, W - 1)
+
+    # Index select across width (faster than gather with full expand)
+    gen_left = torch.take_along_dim(rgb_c, idx_left.unsqueeze(0).expand(C, H, W), dim=2)
+    gen_right = torch.take_along_dim(rgb_c, idx_right.unsqueeze(0).expand(C, H, W), dim=2)
+
+    # Aspect ratio padding (do once, avoid recomputation)
+    def pad_to_aspect(img, target_ratio=(16, 9)):
+        _, h, w = img.shape
+        t_w, t_h = target_ratio
+        r_img, r_t = w / h, t_w / t_h
+        if abs(r_img - r_t) < 1e-3:
+            return img
+        if r_img > r_t:  # too wide
+            new_h = int(round(w / r_t))
+            pad_top = (new_h - h) // 2
+            return F.pad(img, (0, 0, pad_top, new_h - h - pad_top))
+        else:  # too tall
+            new_w = int(round(h * r_t))
+            pad_left = (new_w - w) // 2
+            return F.pad(img, (pad_left, new_w - w - pad_left, 0, 0))
+
+    left, right = pad_to_aspect(gen_left), pad_to_aspect(gen_right)
+
+    if display_mode == "TAB":
+        out = torch.cat([left, right], dim=1)
+    else:  # SBS
+        out = torch.cat([left, right], dim=2)
     with lock:
-        C,H,W = rgb_c.shape
-        inv = torch.ones((H,W), device=DEVICE,dtype=DTYPE)-depth
-        max_px = ipd_uv*W
-        shifts = (inv*max_px*depth_strength/10).round().to(torch.long)
-        shifts_half = (shifts//2).clamp(0,W//2)
-
-        xs = torch.arange(W, device=DEVICE).unsqueeze(0).expand(H,W)
-        idx_left = (xs+shifts_half).clamp(0,W-1).unsqueeze(0).expand(C,H,W)
-        idx_right = (xs-shifts_half).clamp(0,W-1).unsqueeze(0).expand(C,H,W)
-        gen_left = torch.gather(rgb_c,2,idx_left)
-        gen_right = torch.gather(rgb_c,2,idx_right)
-
-        def pad_to_aspect(img,target_ratio=(16,9)):
-            _,h,w = img.shape
-            t_w,t_h = target_ratio
-            r_img = w/h
-            r_t = t_w/t_h
-            if abs(r_img-r_t)<0.001: return img
-            elif r_img>r_t:
-                new_H = int(round(w/r_t))
-                pad_top = (new_H-h)//2
-                pad_bottom = new_H-h-pad_top
-                return F.pad(img,(0,0,pad_top,pad_bottom),value=0)
-            else:
-                new_W = int(round(h*r_t))
-                pad_left = (new_W-w)//2
-                pad_right = new_W-w-pad_left
-                return F.pad(img,(pad_left,pad_right,0,0),value=0)
-
-        left = pad_to_aspect(gen_left)
-        right = pad_to_aspect(gen_right)
-        rgb_c = pad_to_aspect(rgb_c)
-        depth = pad_to_aspect(depth.unsqueeze(0)).squeeze(0)
-
-        try:
-            ref_input = torch.cat([rgb_c/255.0, left/255.0, right/255.0, depth.unsqueeze(0)], dim=0).unsqueeze(0).float()
-            with torch.no_grad():
-                ref_out = refiner(ref_input).squeeze(0)
-            right_f = (ref_out * 255.0 ).half()
-        except Exception:
-            right_f = right.half()
-
-        if display_mode=="TAB":
-            out = torch.cat([left,right_f],dim=1)
-        else:
-            out = torch.cat([left,right_f],dim=2)
-
-        if display_mode!="Full-SBS":
-            out = F.interpolate(out.unsqueeze(0),size=left.shape[1:],mode="area")[0]
-
-        out = out.clamp(0,255).to(torch.uint8)
-    sbs = out.permute(1,2,0).contiguous().cpu().numpy()
+        if display_mode != "Full-SBS":
+            out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
+    sbs = out.clamp(0, 255).to(torch.uint8).permute(1, 2, 0).contiguous().cpu().numpy()
     return sbs
+
+
+# def make_sbs_refiner(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
+#     with lock:
+#         C,H,W = rgb_c.shape
+#         inv = torch.ones((H,W), device=DEVICE,dtype=DTYPE)-depth
+#         max_px = ipd_uv*W
+#         shifts = (inv*max_px*depth_strength/10).round().to(torch.long)
+#         shifts_half = (shifts//2).clamp(0,W//2)
+
+#         xs = torch.arange(W, device=DEVICE).unsqueeze(0).expand(H,W)
+#         idx_left = (xs+shifts_half).clamp(0,W-1).unsqueeze(0).expand(C,H,W)
+#         idx_right = (xs-shifts_half).clamp(0,W-1).unsqueeze(0).expand(C,H,W)
+#         gen_left = torch.gather(rgb_c,2,idx_left)
+#         gen_right = torch.gather(rgb_c,2,idx_right)
+
+#         def pad_to_aspect(img,target_ratio=(16,9)):
+#             _,h,w = img.shape
+#             t_w,t_h = target_ratio
+#             r_img = w/h
+#             r_t = t_w/t_h
+#             if abs(r_img-r_t)<0.001: return img
+#             elif r_img>r_t:
+#                 new_H = int(round(w/r_t))
+#                 pad_top = (new_H-h)//2
+#                 pad_bottom = new_H-h-pad_top
+#                 return F.pad(img,(0,0,pad_top,pad_bottom),value=0)
+#             else:
+#                 new_W = int(round(h*r_t))
+#                 pad_left = (new_W-w)//2
+#                 pad_right = new_W-w-pad_left
+#                 return F.pad(img,(pad_left,pad_right,0,0),value=0)
+
+#         left = pad_to_aspect(gen_left)
+#         right = pad_to_aspect(gen_right)
+#         rgb_c = pad_to_aspect(rgb_c)
+#         depth = pad_to_aspect(depth.unsqueeze(0)).squeeze(0)
+
+#         try:
+#             ref_input = torch.cat([rgb_c/255.0, left/255.0, right/255.0, depth.unsqueeze(0)], dim=0).unsqueeze(0).float()
+#             with torch.no_grad():
+#                 ref_out = refiner(ref_input).squeeze(0)
+#             right_f = (ref_out * 255.0 ).half()
+#         except Exception:
+#             right_f = right.half()
+
+#         if display_mode=="TAB":
+#             out = torch.cat([left,right_f],dim=1)
+#         else:
+#             out = torch.cat([left,right_f],dim=2)
+
+#         if display_mode!="Full-SBS":
+#             out = F.interpolate(out.unsqueeze(0),size=left.shape[1:],mode="area")[0]
+
+#         out = out.clamp(0,255).to(torch.uint8)
+#     sbs = out.permute(1,2,0).contiguous().cpu().numpy()
+#     return sbs
