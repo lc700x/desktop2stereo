@@ -61,6 +61,7 @@ if OS_NAME == "Windows":
 
 # App Version
 VERSION = 2.3
+DEFAULT_PORT = 1122
 
 # Get settings
 RUN_MODE = settings["Run Mode"]

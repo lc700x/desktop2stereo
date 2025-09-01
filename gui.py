@@ -4,9 +4,8 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon, get_local_ip
+from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, DEFAULT_PORT, crop_icon, get_local_ip
 
-DEFAULT_PORT = 1122
 # Get window lists
 if OS_NAME == "Windows":
     try:

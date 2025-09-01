@@ -1,13 +1,11 @@
 import numpy as np
 import mss
-from utils import OS_NAME, CAPTURE_MODE, WINDOW_TITLE, MONITOR_INDEX, WINDOW_TITLE
+from utils import OS_NAME, CAPTURE_MODE, MONITOR_INDEX, WINDOW_TITLE
 
 if OS_NAME == "Windows":
     import win32gui
     from ctypes import windll
     from wincam import DXCamera
-    import logging
-    logging.basicConfig(level=logging.INFO)
 
     try:
         windll.user32.SetProcessDPIAware()
