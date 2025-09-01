@@ -92,10 +92,10 @@ def process(img_rgb: np.ndarray, height) -> np.ndarray:
 
 def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
+    tensor = tensor.permute(2,0,1).float().unsqueeze(0)/255
+    tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
+    tensor = ((tensor-MEAN)/STD).contiguous()
     with lock:
-        tensor = tensor.permute(2,0,1).float().unsqueeze(0)/255
-        tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
-        tensor = ((tensor-MEAN)/STD).contiguous()
         with torch.no_grad():
             tensor = tensor.to(dtype=MODEL_DTYPE)
             depth = model(pixel_values=tensor).predicted_depth
@@ -119,10 +119,10 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
     tensor = rgb_c.unsqueeze(0)/255
     tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
     tensor = ((tensor-MEAN)/STD).contiguous()
-    with torch.no_grad():
-        tensor = tensor.to(dtype=MODEL_DTYPE)
-        depth = model(pixel_values=tensor).predicted_depth
-        
+    with lock:
+        with torch.no_grad():
+            tensor = tensor.to(dtype=MODEL_DTYPE)
+            depth = model(pixel_values=tensor).predicted_depth
     h,w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
     
@@ -182,7 +182,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-
     with lock:
         if display_mode != "Full-SBS":
             out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
-    sbs = out.clamp(0, 255).to(torch.uint8).permute(1, 2, 0).contiguous().cpu().numpy()
+        sbs = out.clamp(0, 255).to(torch.uint8).permute(1, 2, 0).contiguous().cpu().numpy()
     return sbs
 
 
