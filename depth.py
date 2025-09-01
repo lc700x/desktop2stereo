@@ -130,7 +130,7 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
 
         depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
         depth = depth.clamp(0, 1)
-        return depth
+        return depth, rgb_c
 
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
     with lock:
