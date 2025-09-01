@@ -261,7 +261,7 @@ class ConfigGUI(tk.Tk):
         self.pad = {"padx": 8, "pady": 6}
         self.title(f"Desktop2Stereo v{VERSION} GUI")
         self.minsize(800, 420)  # Increased height for new controls
-        self.resizable(True, False)
+        self.resizable(False, False)
         self.language = "EN"
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
         self.selected_window_name = ""
@@ -946,6 +946,7 @@ class ConfigGUI(tk.Tk):
                 messagebox.showerror(
                     f"{UI_TEXTS[self.language]['Failed to run process:']} {e}"
                 )
+                print(f"[Main] {self.run_mode_key} Stopped")
                 self.update_status(UI_TEXTS[self.language]["Stopped"])
 
     def _monitor_process(self):
@@ -953,6 +954,7 @@ class ConfigGUI(tk.Tk):
         if self.process and self.process.poll() is not None:
             # Process ended or was killed outside
             self.process = None
+            print(f"[Main] {self.run_mode_key} Stopped")
             self.update_status(UI_TEXTS[self.language]["Stopped"])
         else:
             # Keep checking every second
@@ -972,11 +974,12 @@ class ConfigGUI(tk.Tk):
                 )
             finally:
                 self.process = None
-                self.update_status(UI_TEXTS[self.language]["Stopped"])
                 print(f"[Main] {self.run_mode_key} Stopped")
+                self.update_status(UI_TEXTS[self.language]["Stopped"])
         else:
-            self.update_status(UI_TEXTS[self.language]["Stopped"])
             print(f"[Main] {self.run_mode_key} Stopped")
+            self.update_status(UI_TEXTS[self.language]["Stopped"])
+            
 
 if __name__ == "__main__":
     app = ConfigGUI()

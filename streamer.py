@@ -215,14 +215,25 @@ class MJPEGStreamer:
                 print("[MJPEGStreamer] Encoding error:", e)
 
     def _generate(self):
+        next_frame_time = time.perf_counter()
         while not self.shutdown.is_set():
+            # Wait for a new frame
             if not self.new_encoded_event.wait(timeout=1):
                 continue
             self.new_encoded_event.clear()
+
             f = self.encoded_frame
             if f:
                 yield self.boundary + f + b"\r\n"
-                time.sleep(self.delay)
+
+            # Enforce consistent pacing
+            next_frame_time += self.delay
+            sleep_time = next_frame_time - time.perf_counter()
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            else:
+                # Frame processing fell behind, reset clock
+                next_frame_time = time.perf_counter()
         yield b""
 
     def encode_jpeg(self, arr: np.ndarray) -> bytes:

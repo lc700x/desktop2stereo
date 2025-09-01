@@ -114,27 +114,28 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     return depth
 
 def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
-    with lock:
-        tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
-        rgb_c = tensor.permute(2,0,1).contiguous()
-        tensor = rgb_c.unsqueeze(0)/255
-        tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
-        tensor = ((tensor-MEAN)/STD).contiguous()
-        with torch.no_grad():
-            tensor = tensor.to(dtype=MODEL_DTYPE)
-            depth = model(pixel_values=tensor).predicted_depth
-        h,w = image_rgb.shape[:2]
-        depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
-        if "MPS" in DEVICE_INFO:
-            depth_sampled = depth[::8, ::8].to(torch.float32)
-            depth_min = torch.quantile(depth_sampled, 0.2)
-            depth_max = torch.quantile(depth_sampled, 0.98)
+    tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
+    rgb_c = tensor.permute(2,0,1).contiguous()
+    tensor = rgb_c.unsqueeze(0)/255
+    tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
+    tensor = ((tensor-MEAN)/STD).contiguous()
+    with torch.no_grad():
+        tensor = tensor.to(dtype=MODEL_DTYPE)
+        depth = model(pixel_values=tensor).predicted_depth
+        
+    h,w = image_rgb.shape[:2]
+    depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
+    
+    if "MPS" in DEVICE_INFO:
+        depth_sampled = depth[::8, ::8].to(torch.float32)
+        depth_min = torch.quantile(depth_sampled, 0.2)
+        depth_max = torch.quantile(depth_sampled, 0.98)
 
-            depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
-            depth = depth.clamp(0, 1)
-        else:
-            depth = depth / depth.max().clamp(min=1e-6)
-        return depth, rgb_c
+        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
+        depth = depth.clamp(0, 1)
+    else:
+        depth = depth / depth.max().clamp(min=1e-6)
+    return depth, rgb_c
 
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
     C, H, W = rgb_c.shape

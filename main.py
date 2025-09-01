@@ -34,7 +34,7 @@ def capture_loop():
         except queue.Empty:
             continue
         except Exception:
-            pass
+            continue
         put_latest(raw_q, (frame_raw, size))
 
 def process_loop():
