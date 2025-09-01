@@ -112,6 +112,13 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
 
     # Normalize to [0, 1] (same as pipeline output)
     depth = depth / depth.max().clamp(min=1e-6)
+    # Normalize depth with adaptive range
+    depth_sampled = depth[::8, ::8].to(torch.float32)
+    depth_min = torch.quantile(depth_sampled, 0.2)
+    depth_max = torch.quantile(depth_sampled, 0.98)
+
+    depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
+    depth = depth.clamp(0, 1)
     return depth
     # return depth.detach().cpu().numpy().astype('float32')
     
@@ -144,8 +151,14 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> np.ndarray:
         h, w = image_rgb.shape[:2]
         depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0, 0]
 
-        # Normalize to [0, 1] (same as pipeline output)
+        # Normalize to [0, 1] (same as pipeline output) 
         depth = depth / depth.max().clamp(min=1e-6)
+        depth_sampled = depth[::8, ::8].to(torch.float32)
+        depth_min = torch.quantile(depth_sampled, 0.2)
+        depth_max = torch.quantile(depth_sampled, 0.98)
+
+        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
+        depth = depth.clamp(0, 1)
         return depth, rgb_c
         # return depth.detach().cpu().numpy().astype('float32')
     
@@ -204,4 +217,5 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-
         out = out.clamp(0,255).to(torch.uint8)
     sbs = out.permute(1,2,0).contiguous().cpu().numpy()
     return sbs
+
     
