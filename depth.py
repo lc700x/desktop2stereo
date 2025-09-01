@@ -138,52 +138,52 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
     return depth, rgb_c
 
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
-    C, H, W = rgb_c.shape
-    device = rgb_c.device
-
-    # Precompute pixel coordinates (cache this tensor outside if called repeatedly!)
-    xs = torch.arange(W, device=device).view(1, -1)  # shape [1,W]
-
-    # Depth inversion & shifts
-    inv = 1.0 - depth
-    max_px = ipd_uv * W
-    shifts_half = ((inv * max_px * depth_strength / 10) / 2).round().clamp(0, W // 2).to(torch.int32)
-
-    # Build shifted indices efficiently (broadcasting instead of expand)
-    idx_left = (xs + shifts_half).clamp(0, W - 1)
-    idx_right = (xs - shifts_half).clamp(0, W - 1)
-
-    # Index select across width (faster than gather with full expand)
-    gen_left = torch.take_along_dim(rgb_c, idx_left.unsqueeze(0).expand(C, H, W), dim=2)
-    gen_right = torch.take_along_dim(rgb_c, idx_right.unsqueeze(0).expand(C, H, W), dim=2)
-
-    # Aspect ratio padding (do once, avoid recomputation)
-    def pad_to_aspect(img, target_ratio=(16, 9)):
-        _, h, w = img.shape
-        t_w, t_h = target_ratio
-        r_img, r_t = w / h, t_w / t_h
-        if abs(r_img - r_t) < 1e-3:
-            return img
-        if r_img > r_t:  # too wide
-            new_h = int(round(w / r_t))
-            pad_top = (new_h - h) // 2
-            return F.pad(img, (0, 0, pad_top, new_h - h - pad_top))
-        else:  # too tall
-            new_w = int(round(h * r_t))
-            pad_left = (new_w - w) // 2
-            return F.pad(img, (pad_left, new_w - w - pad_left, 0, 0))
-
-    left, right = pad_to_aspect(gen_left), pad_to_aspect(gen_right)
-
-    if display_mode == "TAB":
-        out = torch.cat([left, right], dim=1)
-    else:  # SBS
-        out = torch.cat([left, right], dim=2)
     with lock:
+        C, H, W = rgb_c.shape
+        device = rgb_c.device
+
+        # Precompute pixel coordinates (cache this tensor outside if called repeatedly!)
+        xs = torch.arange(W, device=device).view(1, -1)  # shape [1,W]
+
+        # Depth inversion & shifts
+        inv = 1.0 - depth
+        max_px = ipd_uv * W
+        shifts_half = ((inv * max_px * depth_strength / 10) / 2).round().clamp(0, W // 2).to(torch.int32)
+
+        # Build shifted indices efficiently (broadcasting instead of expand)
+        idx_left = (xs + shifts_half).clamp(0, W - 1)
+        idx_right = (xs - shifts_half).clamp(0, W - 1)
+
+        # Index select across width (faster than gather with full expand)
+        gen_left = torch.take_along_dim(rgb_c, idx_left.unsqueeze(0).expand(C, H, W), dim=2)
+        gen_right = torch.take_along_dim(rgb_c, idx_right.unsqueeze(0).expand(C, H, W), dim=2)
+
+        # Aspect ratio padding (do once, avoid recomputation)
+        def pad_to_aspect(img, target_ratio=(16, 9)):
+            _, h, w = img.shape
+            t_w, t_h = target_ratio
+            r_img, r_t = w / h, t_w / t_h
+            if abs(r_img - r_t) < 1e-3:
+                return img
+            if r_img > r_t:  # too wide
+                new_h = int(round(w / r_t))
+                pad_top = (new_h - h) // 2
+                return F.pad(img, (0, 0, pad_top, new_h - h - pad_top))
+            else:  # too tall
+                new_w = int(round(h * r_t))
+                pad_left = (new_w - w) // 2
+                return F.pad(img, (pad_left, new_w - w - pad_left, 0, 0))
+
+        left, right = pad_to_aspect(gen_left), pad_to_aspect(gen_right)
+
+        if display_mode == "TAB":
+            out = torch.cat([left, right], dim=1)
+        else:  # SBS
+            out = torch.cat([left, right], dim=2)
         if display_mode != "Full-SBS":
             out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
         sbs = out.clamp(0, 255).to(torch.uint8).permute(1, 2, 0).contiguous().cpu().numpy()
-    return sbs
+        return sbs
 
 
 # def make_sbs_refiner(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
