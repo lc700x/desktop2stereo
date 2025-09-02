@@ -78,6 +78,39 @@ class TinyRefiner(nn.Module):
 #     refiner.load_state_dict(sd)
 
 # --- main functions ---
+def edge_dilate(depth: torch.Tensor, dilation_size: int = 2) -> torch.Tensor:
+    """
+    Perform edge dilation on depth map using max pooling (PyTorch / DirectML compatible).
+
+    Args:
+        depth (torch.Tensor): Normalized depth map tensor with shape [H, W] or [B, 1, H, W], values in [0,1].
+        dilation_size (int): Size of the dilation kernel; 0 disables dilation.
+
+    Returns:
+        torch.Tensor: Dilated depth map tensor with the same shape as input.
+    """
+    if dilation_size <= 0:
+        return depth
+
+    # Ensure 4D shape for pooling: [B, C, H, W]
+    if depth.dim() == 2:
+        depth = depth.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
+    elif depth.dim() == 3:
+        depth = depth.unsqueeze(1)  # [B,1,H,W]
+
+    kernel_size = dilation_size if dilation_size % 2 == 1 else dilation_size + 1  # odd kernel size is typical
+
+    # Apply max pooling as morphological dilation
+    dilated = F.max_pool2d(depth, kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
+
+    # Remove extra dims if needed
+    if dilated.shape[0] == 1 and dilated.shape[1] == 1:
+        return dilated.squeeze(0).squeeze(0)
+    elif dilated.shape[1] == 1:
+        return dilated.squeeze(1)
+    else:
+        return dilated
+
 def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
     if height < img_rgb.shape[0]:
         width = int(img_rgb.shape[1]/img_rgb.shape[0]*height)
@@ -111,6 +144,7 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
         depth = depth.clamp(0, 1)
     else:
         depth = depth / depth.max().clamp(min=1e-6)
+    depth = edge_dilate(depth)
     return depth
 
 def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
@@ -135,6 +169,7 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
         depth = depth.clamp(0, 1)
     else:
         depth = depth / depth.max().clamp(min=1e-6)
+    depth = edge_dilate(depth)
     return depth, rgb_c
 
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
