@@ -78,6 +78,39 @@ class TinyRefiner(nn.Module):
 #     refiner.load_state_dict(sd)
 
 # --- main functions ---
+def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
+    """
+    Apply anti-aliasing to reduce jagged edges in depth maps.
+    
+    Args:
+        depth (torch.Tensor): Normalized depth map tensor [H,W] or [B,1,H,W] with values in [0,1].
+        strength (float): Blur strength; higher = smoother edges. Recommended range [0.5, 2.0].
+    
+    Returns:
+        torch.Tensor: Smoothed depth map with same shape.
+    """
+    if depth.dim() == 2:
+        depth = depth.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
+    elif depth.dim() == 3:
+        depth = depth.unsqueeze(1)  # [B,1,H,W]
+
+    # Kernel size scales with strength
+    k = int(3 * strength) | 1  # force odd number
+    if k < 3:
+        return depth.squeeze()
+
+    # Gaussian blur kernel
+    sigma = 0.5 * strength
+    coords = torch.arange(k, device=depth.device, dtype=depth.dtype) - k // 2
+    gauss = torch.exp(-(coords**2) / (2 * sigma**2))
+    gauss /= gauss.sum()
+
+    # Separable convolution (X then Y)
+    depth = F.conv2d(depth, gauss.view(1,1,1,-1), padding=(0, k//2), groups=1)
+    depth = F.conv2d(depth, gauss.view(1,1,-1,1), padding=(k//2, 0), groups=1)
+
+    return depth.squeeze()
+
 def edge_dilate(depth: torch.Tensor, dilation_size: int = 2) -> torch.Tensor:
     """
     Perform edge dilation on depth map using max pooling (PyTorch / DirectML compatible).
@@ -144,7 +177,8 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
         depth = depth.clamp(0, 1)
     else:
         depth = depth / depth.max().clamp(min=1e-6)
-    depth = edge_dilate(depth)
+    # depth = edge_dilate(depth, dilation_size=20)
+    depth = anti_alias(depth, strength=50)
     return depth
 
 def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
@@ -169,7 +203,8 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
         depth = depth.clamp(0, 1)
     else:
         depth = depth / depth.max().clamp(min=1e-6)
-    depth = edge_dilate(depth)
+    # depth = edge_dilate(depth, dilation_size=20)
+    depth = anti_alias(depth, strength=50)
     return depth, rgb_c
 
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
