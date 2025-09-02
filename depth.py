@@ -1,13 +1,12 @@
 # depth.py (optimized with TinyRefiner for FPS)
 import torch
 torch.set_num_threads(1)
-import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, DILATION_SIZE, AA_STRENTH
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -40,8 +39,10 @@ model = AutoModelForDepthEstimation.from_pretrained(
     cache_dir=CACHE_PATH,
     weights_only=True
 ).to(DEVICE).eval()
+
 if FP16:
     model.half()
+
 MODEL_DTYPE = next(model.parameters()).dtype
 MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
 STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
@@ -51,33 +52,118 @@ with torch.no_grad():
 
 lock = Lock()
 
-# --- TinyRefiner definition ---
-class TinyRefiner(nn.Module):
-    def __init__(self, in_channels=10, out_channels=3, features=32):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, features, 3, padding=1)
-        self.conv2 = nn.Conv2d(features, features, 3, padding=1)
-        self.conv3 = nn.Conv2d(features, features, 3, padding=1)
-        self.conv4 = nn.Conv2d(features, out_channels, 3, padding=1)
-        self.relu = nn.ReLU(inplace=True)
-    def forward(self,x):
-        x = self.relu(self.conv1(x))
-        x = self.relu(self.conv2(x))
-        x = self.relu(self.conv3(x))
-        x = self.conv4(x)
-        return torch.sigmoid(x)
+# main functions
+def depth_guided_fill(rgb: torch.Tensor, depth: torch.Tensor, idx_map: torch.Tensor) -> torch.Tensor:
+    """
+    Depth-guided hole filling for horizontally shifted images.
+    - rgb: [C, H, W] (same dtype/device as rgb_c)
+    - depth: [H, W] normalized in [0,1]
+    - idx_map: [H, W] long tensor giving source column indices for each target column
+      (this is the same idx_left / idx_right used for torch.take_along_dim)
+    Returns:
+      rgb with holes filled in-place (but still returns the tensor).
+    """
+    # Ensure proper types
+    C, H, W = rgb.shape
+    device = rgb.device
 
-# # Load refiner weights
-# REFINER_WEIGHTS_PATH = "refiner_kitti.pt"
-# refiner = TinyRefiner().to(DEVICE).eval()
-# try:
-#     sd = torch.load(REFINER_WEIGHTS_PATH, map_location=DEVICE, weights_only=True)
-#     refiner.load_state_dict(sd)
-# except Exception as e:
-#     sd = torch.load(REFINER_WEIGHTS_PATH, map_location="cpu", weights_only=True)
-#     refiner.load_state_dict(sd)
+    # Work in float for interpolation/copy
+    orig_dtype = rgb.dtype
+    rgb = rgb.to(torch.float32)
 
-# --- main functions ---
+    # Loop per row (vectorized inside each row)
+    for y in range(H):
+        idx_row = idx_map[y]  # shape [W], dtype long/int
+        # Build occupancy: which source columns were used by any target
+        occ = torch.zeros((W,), dtype=torch.bool, device=device)
+        # Mark used source columns
+        occ[idx_row] = True
+
+        # If no holes on this row, continue
+        if occ.all():
+            continue
+
+        valid_cols = torch.nonzero(occ).squeeze(1)
+        hole_cols = torch.nonzero(~occ).squeeze(1)
+
+        # If no valid columns (degenerate), skip
+        if valid_cols.numel() == 0:
+            continue
+
+        # Sort valid columns (should already be sorted but be safe)
+        valid_cols, _ = torch.sort(valid_cols)
+
+        # Use searchsorted to find nearest valid columns for each hole
+        # insertion indices i satisfy valid_cols[i-1] < hole <= valid_cols[i]
+        ins = torch.searchsorted(valid_cols, hole_cols)
+
+        # Determine left/right existence
+        left_exists = ins > 0
+        right_exists = ins < valid_cols.numel()
+
+        # Build left_idx / right_idx (valid column indices) with safe defaults
+        left_idx = torch.zeros_like(ins)
+        right_idx = torch.zeros_like(ins)
+        if left_exists.any():
+            left_idx[left_exists] = valid_cols[ins[left_exists] - 1]
+        if right_exists.any():
+            right_idx[right_exists] = valid_cols[ins[right_exists]]
+
+        # Gather depths at those source columns (for selection)
+        # If left/right do not exist for a hole, their depths will be ignored
+        left_depth = depth[y, left_idx]
+        right_depth = depth[y, right_idx]
+
+        # For each channel, pick values from the side with greater depth (farther away)
+        for c in range(C):
+            row = rgb[c, y]  # shape [W]
+            left_vals = row[left_idx]   # values at nearest-left valid col (for each hole)
+            right_vals = row[right_idx] # nearest-right valid col values
+
+            # Prepare filled values tensor (float32)
+            filled = torch.empty_like(left_vals)
+
+            # Cases:
+            # 1) only left exists -> copy left
+            only_left = left_exists & (~right_exists)
+            if only_left.any():
+                filled[only_left] = left_vals[only_left]
+
+            # 2) only right exists -> copy right
+            only_right = (~left_exists) & right_exists
+            if only_right.any():
+                filled[only_right] = right_vals[only_right]
+
+            # 3) both exist -> choose side with greater depth (prefer background)
+            both = left_exists & right_exists
+            if both.any():
+                choose_left = left_depth[both] >= right_depth[both]
+                # where choose_left True -> left, else -> right
+                idx_both = torch.nonzero(both).squeeze(1)
+                if idx_both.numel() > 0:
+                    # assign elementwise
+                    bl = idx_both[choose_left]
+                    br = idx_both[~choose_left]
+                    if bl.numel() > 0:
+                        filled[bl] = left_vals[bl]
+                    if br.numel() > 0:
+                        filled[br] = right_vals[br]
+
+            # Edge safety: if neither side exists (shouldn't happen), copy nearest valid column (fallback)
+            neither = (~left_exists) & (~right_exists)
+            if neither.any():
+                # fallback: copy mean of whole row valid pixels
+                fallback_val = row[valid_cols].mean() if valid_cols.numel() > 0 else 0.0
+                filled[neither] = fallback_val
+
+            # Write back into the row at hole columns
+            row[hole_cols] = filled
+            rgb[c, y] = row
+
+    # Convert back to original dtype and return
+    return rgb.to(orig_dtype)
+
+
 def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
     """
     Apply anti-aliasing to reduce jagged edges in depth maps.
@@ -177,8 +263,10 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
         depth = depth.clamp(0, 1)
     else:
         depth = depth / depth.max().clamp(min=1e-6)
-    # depth = edge_dilate(depth, dilation_size=20)
-    depth = anti_alias(depth, strength=50)
+
+    depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
+    depth = anti_alias(depth, strength=AA_STRENTH)
+    
     return depth
 
 def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
@@ -203,8 +291,10 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
         depth = depth.clamp(0, 1)
     else:
         depth = depth / depth.max().clamp(min=1e-6)
-    # depth = edge_dilate(depth, dilation_size=20)
-    depth = anti_alias(depth, strength=50)
+        
+    depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
+    depth = anti_alias(depth, strength=AA_STRENTH)
+    
     return depth, rgb_c
 
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
@@ -218,7 +308,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-
         # Depth inversion & shifts
         inv = 1.0 - depth
         max_px = ipd_uv * W
-        shifts_half = ((inv * max_px * depth_strength / 10) / 2).round().clamp(0, W // 2).to(torch.int32)
+        shifts_half = ((inv * max_px * float(depth_strength) / 10) / 2).round().clamp(0, W // 2).to(torch.int32)
 
         # Build shifted indices efficiently (broadcasting instead of expand)
         idx_left = (xs + shifts_half).clamp(0, W - 1)
@@ -254,60 +344,3 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-
             out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
         sbs = out.clamp(0, 255).to(torch.uint8).permute(1, 2, 0).contiguous().cpu().numpy()
         return sbs
-
-
-# def make_sbs_refiner(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
-#     with lock:
-#         C,H,W = rgb_c.shape
-#         inv = torch.ones((H,W), device=DEVICE,dtype=DTYPE)-depth
-#         max_px = ipd_uv*W
-#         shifts = (inv*max_px*depth_strength/10).round().to(torch.long)
-#         shifts_half = (shifts//2).clamp(0,W//2)
-
-#         xs = torch.arange(W, device=DEVICE).unsqueeze(0).expand(H,W)
-#         idx_left = (xs+shifts_half).clamp(0,W-1).unsqueeze(0).expand(C,H,W)
-#         idx_right = (xs-shifts_half).clamp(0,W-1).unsqueeze(0).expand(C,H,W)
-#         gen_left = torch.gather(rgb_c,2,idx_left)
-#         gen_right = torch.gather(rgb_c,2,idx_right)
-
-#         def pad_to_aspect(img,target_ratio=(16,9)):
-#             _,h,w = img.shape
-#             t_w,t_h = target_ratio
-#             r_img = w/h
-#             r_t = t_w/t_h
-#             if abs(r_img-r_t)<0.001: return img
-#             elif r_img>r_t:
-#                 new_H = int(round(w/r_t))
-#                 pad_top = (new_H-h)//2
-#                 pad_bottom = new_H-h-pad_top
-#                 return F.pad(img,(0,0,pad_top,pad_bottom),value=0)
-#             else:
-#                 new_W = int(round(h*r_t))
-#                 pad_left = (new_W-w)//2
-#                 pad_right = new_W-w-pad_left
-#                 return F.pad(img,(pad_left,pad_right,0,0),value=0)
-
-#         left = pad_to_aspect(gen_left)
-#         right = pad_to_aspect(gen_right)
-#         rgb_c = pad_to_aspect(rgb_c)
-#         depth = pad_to_aspect(depth.unsqueeze(0)).squeeze(0)
-
-#         try:
-#             ref_input = torch.cat([rgb_c/255.0, left/255.0, right/255.0, depth.unsqueeze(0)], dim=0).unsqueeze(0).float()
-#             with torch.no_grad():
-#                 ref_out = refiner(ref_input).squeeze(0)
-#             right_f = (ref_out * 255.0 ).half()
-#         except Exception:
-#             right_f = right.half()
-
-#         if display_mode=="TAB":
-#             out = torch.cat([left,right_f],dim=1)
-#         else:
-#             out = torch.cat([left,right_f],dim=2)
-
-#         if display_mode!="Full-SBS":
-#             out = F.interpolate(out.unsqueeze(0),size=left.shape[1:],mode="area")[0]
-
-#         out = out.clamp(0,255).to(torch.uint8)
-#     sbs = out.permute(1,2,0).contiguous().cpu().numpy()
-#     return sbs

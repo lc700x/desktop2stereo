@@ -2,7 +2,7 @@ import threading
 import queue
 import glfw
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY
 from capture import DesktopGrabber
 from depth import process
 
@@ -113,7 +113,7 @@ def main(mode="Viewer"):
 
             threading.Thread(target=depth_loop, daemon=True).start()
             
-            streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=100)
+            streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
             streamer.start()
             print(f"[Main] Streamer Started")
             while True:

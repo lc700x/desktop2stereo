@@ -63,6 +63,11 @@ if OS_NAME == "Windows":
 VERSION = 2.3
 DEFAULT_PORT = 1122
 
+# Image Processing Parameters
+DILATION_SIZE = 2 # 0-100
+AA_STRENTH = 80 # 0-100
+STREAM_QUALITY = 90
+
 # Get settings
 RUN_MODE = settings["Run Mode"]
 MODEL_ID = settings["Depth Model"]

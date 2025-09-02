@@ -416,9 +416,16 @@ class ConfigGUI(tk.Tk):
         
         self.label_depth_strength = ttk.Label(self.content_frame, text="Depth Strength:")
         self.label_depth_strength.grid(row=5, column=2, sticky="w", **self.pad)
-        self.depth_strength_values = ["1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0", "4.5", "5.0"]
-        self.depth_strength_cb = ttk.Combobox(self.content_frame, values=self.depth_strength_values, state="normal")
-        self.depth_strength_cb.grid(row=5, column=3, sticky="ew", **self.pad)
+
+        # Create a spinbox instead of combobox
+        self.depth_strength_spin = ttk.Spinbox(
+            self.content_frame,
+            from_=1.0,  # Minimum value
+            to=12.0,    # Maximum value
+            increment=0.5,  # Step size
+            state="normal"
+        )
+        self.depth_strength_spin.grid(row=5, column=3, sticky="ew", **self.pad)
         
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
@@ -431,8 +438,15 @@ class ConfigGUI(tk.Tk):
         self.label_ipd = ttk.Label(self.content_frame, text="IPD (m):")
         self.label_ipd.grid(row=6, column=2, sticky="w", **self.pad)
         self.ipd_var = tk.StringVar()
-        self.ipd_entry = ttk.Entry(self.content_frame, textvariable=self.ipd_var)
-        self.ipd_entry.grid(row=6, column=3, sticky="ew", **self.pad)
+        self.ipd_spin = ttk.Spinbox(
+            self.content_frame,
+            from_=0.050,  # Minimum value
+            to=0.076,    # Maximum value
+            increment=0.002,  # Step size
+            textvariable=self.ipd_var,
+            state="normal"
+        )
+        self.ipd_spin.grid(row=6, column=3, sticky="ew", **self.pad)
         
         # Depth Model
         self.label_depth_model = ttk.Label(self.content_frame, text="Depth Model:")
@@ -830,7 +844,7 @@ class ConfigGUI(tk.Tk):
 
         self.depth_res_cb.set(cfg.get("Depth Resolution", DEFAULTS["Depth Resolution"]))
         self.display_mode_cb.set(cfg.get("Display Mode", DEFAULTS["Display Mode"]))
-        self.depth_strength_cb.set(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
+        self.depth_strength_spin.set(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
         self.fp16_var.set(cfg.get("FP16", DEFAULTS["FP16"]))
         self.download_var.set(cfg.get("Download Path", DEFAULTS["Download Path"]))
         self.hf_endpoint_var.set(cfg.get("HF Endpoint", DEFAULTS["HF Endpoint"]))
@@ -903,7 +917,7 @@ class ConfigGUI(tk.Tk):
             "Display Mode": self.display_mode_cb.get(),
             "Model List": list(self.depth_model_cb["values"]),
             "Depth Model": self.depth_model_var.get(),
-            "Depth Strength": float(self.depth_strength_cb.get()),
+            "Depth Strength": float(self.depth_strength_spin.get()),
             "Depth Resolution": int(self.depth_res_cb.get()),
             "FP16": self.fp16_var.get(),
             "Download Path": self.download_var.get(),
