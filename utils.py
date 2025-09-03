@@ -65,7 +65,7 @@ DEFAULT_PORT = 1122
 
 # Image Processing Parameters
 DILATION_SIZE = 2 # 0-100
-AA_STRENTH = 80 # 0-100
+AA_STRENTH = 2 # 0-100
 STREAM_QUALITY = 90
 
 # Get settings

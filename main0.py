@@ -100,8 +100,7 @@ def main(mode="Viewer"):
 
         else:
             from depth import predict_depth_tensor, make_sbs
-            from streamer import WebRTCStreamer
-            import asyncio
+            from streamer import MJPEGStreamer
 
             def depth_loop():
                 while True:
@@ -114,44 +113,24 @@ def main(mode="Viewer"):
 
             threading.Thread(target=depth_loop, daemon=True).start()
             
-            stream_queue = queue.Queue(maxsize=1)
-            streamer = WebRTCStreamer(stream_queue, port=STREAM_PORT)
-            
-            async def async_main(frame_count=frame_count, last_time=last_time):
-                # Start the streamer server
-                asyncio.create_task(streamer.start())
-                # Push SBS frames into queue
-                while True:
-                    try:
-                        rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-                        sbs = make_sbs(
-                            rgb,
-                            depth,
-                            ipd_uv=IPD,
-                            depth_strength=DEPTH_STRENTH,
-                            display_mode=DISPLAY_MODE
-                        )
-
-                        # Only push if the previous frame has been consumed
-                        if stream_queue.empty():
-                            stream_queue.put_nowait(sbs)
-                        
-                        if SHOW_FPS:
-                            frame_count += 1
-                            current_time = time.perf_counter()
-                            if current_time - last_time >= 1.0:
-                                current_fps = frame_count / (current_time - last_time)
-                                frame_count = 0
-                                last_time = current_time
-                                print(f"FPS: {current_fps:.2f}")
-
-                        # Throttle to target FPS
-                        await asyncio.sleep(TIME_SLEEP)
-
-                    except queue.Empty:
-                        await asyncio.sleep(TIME_SLEEP)
-
-            asyncio.run(async_main())
+            streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
+            streamer.start()
+            print(f"[Main] Streamer Started")
+            while True:
+                try:
+                    rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+                    sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+                    streamer.set_frame(sbs)
+                    if SHOW_FPS:
+                        frame_count += 1
+                        current_time = time.perf_counter()
+                        if current_time - last_time >= 1.0:
+                            current_fps = frame_count / (current_time - last_time)
+                            frame_count = 0
+                            last_time = current_time
+                            print(f"FPS: {current_fps:.2f}")
+                except queue.Empty:
+                    continue
 
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
