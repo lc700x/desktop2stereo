@@ -1,39 +1,49 @@
 import asyncio
+import queue
 import numpy as np
 import av
 from aiohttp import web
-from aiortc import RTCPeerConnection, VideoStreamTrack, RTCSessionDescription
-import queue
+from aiortc import RTCPeerConnection, VideoStreamTrack, RTCSessionDescription, RTCIceServer
+
 class SBSVideoTrack(VideoStreamTrack):
-    """
-    Video track for streaming SBS frames from a queue.
-    Always displays the latest available frame, avoids flickering black frames.
-    """
-    def __init__(self, frame_queue):
+    def __init__(self, frame_queue, fps):
         super().__init__()
         self.frame_queue = frame_queue
-        self.latest_frame = np.zeros((480, 640, 3), dtype=np.uint8)  # initial black frame
+        # Initialize with higher resolution black frame
+        self.latest_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        self.last_pts = 0
+        self.frame_count = 0
+        self.fps = fps
 
     async def recv(self):
         pts, time_base = await self.next_timestamp()
+        
+        # Smooth frame timing
+        if self.frame_count == 0:
+            self.last_pts = pts
+        
+        # Get the newest frame without blocking
+        try:
+            self.latest_frame = self.frame_queue.get_nowait()
+        except queue.Empty:
+            pass  # Keep previous frame if no new one available
 
-        # Try to get the newest frame from the queue
-        while True:
-            try:
-                self.latest_frame = self.frame_queue.get_nowait()
-            except queue.Empty:
-                break  # no more frames in queue, keep latest_frame
-
+        # Create video frame with proper timing
         frame = av.VideoFrame.from_ndarray(self.latest_frame, format="rgb24")
-        frame.pts = pts
+        frame.pts = self.last_pts
         frame.time_base = time_base
+        
+        # Increment pts by frame duration (assuming 30fps)
+        self.last_pts += int(90000 / self.fps)  # 90000 is the clock rate for video
+        self.frame_count += 1
+        
         return frame
 
 class WebRTCStreamer:
     """
     WebRTC streamer using aiohttp to serve HTML + SDP endpoints.
     """
-    def __init__(self, frame_queue, host="0.0.0.0", port=8080):
+    def __init__(self, frame_queue, host="0.0.0.0", port=8080, fps=60):
         self.frame_queue = frame_queue
         self.host = host
         self.port = port
@@ -41,6 +51,7 @@ class WebRTCStreamer:
         self.app = web.Application()
         self.app.router.add_get("/", self.index)
         self.app.router.add_post("/offer", self.offer)
+        self.fps = fps
 
     async def index(self, request):
         """Serve the HTML page with only the video element filling the browser."""
@@ -67,15 +78,36 @@ class WebRTCStreamer:
         <body>
             <video id="video" autoplay playsinline controls></video>
             <script>
-                const pc = new RTCPeerConnection();
-                const video = document.getElementById("video");
-
-                pc.ontrack = (event) => { video.srcObject = event.streams[0]; };
-
-                async function startStream() {
-                    const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: false });
+            const pc = new RTCPeerConnection({
+                iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+                bundlePolicy: "max-bundle",
+                rtcpMuxPolicy: "require"
+            });
+            
+            // Enable hardware acceleration if available
+            const video = document.getElementById("video");
+            video.playsInline = true;
+            video.setAttribute("webkit-playsinline", "");
+            
+            // Configure video constraints for better quality
+            const mediaConstraints = {
+                offerToReceiveVideo: true,
+                offerToReceiveAudio: false,
+                iceRestart: false
+            };
+            
+            pc.ontrack = (event) => {
+                if (event.track.kind === "video") {
+                    video.srcObject = event.streams[0];
+                    video.onloadedmetadata = () => video.play();
+                }
+            };
+            
+            async function startStream() {
+                try {
+                    const offer = await pc.createOffer(mediaConstraints);
                     await pc.setLocalDescription(offer);
-
+                    
                     const resp = await fetch("/offer", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -84,13 +116,16 @@ class WebRTCStreamer:
                             type: pc.localDescription.type
                         })
                     });
-
+                    
                     const answer = await resp.json();
                     await pc.setRemoteDescription(answer);
+                } catch (err) {
+                    console.error("Streaming error:", err);
                 }
-
-                startStream();
-            </script>
+            }
+            
+            startStream();
+        </script>
         </body>
         </html>
         """
@@ -102,24 +137,45 @@ class WebRTCStreamer:
         """
         params = await request.json()
         offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
-
+        
         pc = RTCPeerConnection()
         self.pcs.add(pc)
 
-        # 1️⃣ Add video track BEFORE setting remote description
-        pc.addTrack(SBSVideoTrack(self.frame_queue))
+        track = SBSVideoTrack(self.frame_queue, fps=self.fps)
+        pc.addTrack(track)
 
-        # 2️⃣ Set remote description from browser offer
+        # Set remote description from browser offer
         await pc.setRemoteDescription(offer)
 
-        # 3️⃣ Create and set local SDP answer
         answer = await pc.createAnswer()
+    
+        # Enhanced SDP modification for better quality
+        answer.sdp = self.optimize_sdp(answer.sdp)
+        
         await pc.setLocalDescription(answer)
-
-        return web.json_response(
-            {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
-        )
-
+        return web.json_response({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type})
+    
+    def optimize_sdp(self, sdp):
+        """Optimize SDP for better video quality"""
+        lines = sdp.split('\n')
+        new_lines = []
+        
+        # Set higher bitrate (8000 kbps)
+        bitrate = 8000
+        
+        # Add video quality parameters
+        for line in lines:
+            if line.startswith('a=mid:video'):
+                new_lines.append(line)
+                new_lines.append('b=AS:' + str(bitrate))
+            elif line.startswith('a=rtpmap:') and 'H264' in line:
+                # Add H.264 parameters for better quality
+                new_lines.append(line)
+                new_lines.append('a=fmtp:96 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f')
+            else:
+                new_lines.append(line)
+        
+        return '\n'.join(new_lines)
     async def start(self):
         runner = web.AppRunner(self.app)
         await runner.setup()

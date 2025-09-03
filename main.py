@@ -115,7 +115,7 @@ def main(mode="Viewer"):
             threading.Thread(target=depth_loop, daemon=True).start()
             
             stream_queue = queue.Queue(maxsize=1)
-            streamer = WebRTCStreamer(stream_queue, port=STREAM_PORT)
+            streamer = WebRTCStreamer(stream_queue, port=STREAM_PORT, fps=FPS)
             
             async def async_main(frame_count=frame_count, last_time=last_time):
                 # Start the streamer server
