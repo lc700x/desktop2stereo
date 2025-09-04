@@ -216,7 +216,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-
         # Depth inversion & shifts
         inv = 1.0 - depth
         max_px = ipd_uv * W
-        shifts_half = (inv * max_px * 0.1 * depth_strength).round().clamp(0, W // 2).to(torch.int32)
+        shifts_half = (inv * max_px * 0.05 * depth_strength).round().clamp(0, W // 2).to(torch.int32)
 
         # Build shifted indices efficiently (broadcasting instead of expand)
         idx_left = (xs + shifts_half).clamp(0, W - 1)
