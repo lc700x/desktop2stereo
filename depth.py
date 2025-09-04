@@ -172,7 +172,7 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     # Normalize depth with adaptive range
     depth_sampled = depth[::16, ::16]
     depth_range = depth_sampled.max() - depth_sampled.min()
-    depth = (depth - depth_sampled.min() + depth_range * 0.2) / (depth_range * 0.8 + 1e-6)
+    depth = (depth - depth_sampled.min() + depth_range * 0.02) / (depth_range * 0.98 + 1e-6)
     depth = depth.clamp(0, 1)
     depth = depth / depth.max().clamp(min=1e-6)
     
@@ -193,7 +193,10 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
             depth = model(pixel_values=tensor).predicted_depth
     h,w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
-    depth = (depth - depth.min()) / (depth.max() - depth.min() + 1e-6)
+    # Normalize depth with adaptive range
+    depth_sampled = depth[::16, ::16]
+    depth_range = depth_sampled.max() - depth_sampled.min()
+    depth = (depth - depth_sampled.min() + depth_range * 0.02) / (depth_range * 0.98 + 1e-6)
     depth = depth.clamp(0, 1)
     depth = depth / depth.max().clamp(min=1e-6)
     
