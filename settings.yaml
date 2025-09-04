@@ -1,6 +1,6 @@
-Capture Mode: Monitor
+Capture Mode: Window
 Monitor Index: 1
-Window Title: ''
+Window Title: 【邓紫棋的VLOG】幸福开箱 之 【启示路】恒藏版小说！！！_哔哩哔哩_bilibili 🔊
 FPS: 60
 Show FPS: true
 Output Resolution: 1080
@@ -50,11 +50,11 @@ Model List:
 - apple/DepthPro-hf
 Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
-Depth Resolution: 384
+Depth Resolution: 192
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: EN
-Run Mode: Viewer
+Run Mode: Streamer
 Streamer Port: 1122
