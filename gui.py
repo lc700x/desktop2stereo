@@ -135,7 +135,7 @@ DEFAULTS = {
     "Show FPS": True,
     "Model List": DEFAULT_MODEL_LIST,
     "Depth Model": DEFAULT_MODEL_LIST[2],
-    "Depth Strength": 1.0,
+    "Depth Strength": 2.0,
     "Depth Resolution": 384,
     "IPD": 0.064,
     "Display Mode": "Half-SBS",
@@ -421,7 +421,7 @@ class ConfigGUI(tk.Tk):
         self.depth_strength_spin = ttk.Spinbox(
             self.content_frame,
             from_=1.0,  # Minimum value
-            to=12.0,    # Maximum value
+            to=5.0,    # Maximum value
             increment=0.5,  # Step size
             state="normal"
         )

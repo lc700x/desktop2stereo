@@ -53,117 +53,33 @@ with torch.no_grad():
 lock = Lock()
 
 # main functions
-def depth_guided_fill(rgb: torch.Tensor, depth: torch.Tensor, idx_map: torch.Tensor) -> torch.Tensor:
+def apply_foreground_scale_torch(depth: torch.Tensor, scale: float) -> torch.Tensor:
     """
-    Depth-guided hole filling for horizontally shifted images.
-    - rgb: [C, H, W] (same dtype/device as rgb_c)
-    - depth: [H, W] normalized in [0,1]
-    - idx_map: [H, W] long tensor giving source column indices for each target column
-      (this is the same idx_left / idx_right used for torch.take_along_dim)
+    Apply foreground/background scaling to a depth map.
+
+    Args:
+        depth (torch.Tensor): depth map of shape (H, W, 1), values normalized in [0, 1].
+                              0 = near (foreground), 1 = far (background).
+        scale (float): scaling factor
+                       > 0: foreground closer, background further
+                       < 0: foreground flatter, background closer
+                       = 0: no change
+
     Returns:
-      rgb with holes filled in-place (but still returns the tensor).
+        torch.Tensor: scaled depth map of same shape as input
     """
-    # Ensure proper types
-    C, H, W = rgb.shape
-    device = rgb.device
+    if not torch.is_floating_point(depth):
+        depth = depth.float()
 
-    # Work in float for interpolation/copy
-    orig_dtype = rgb.dtype
-    rgb = rgb.to(torch.float32)
-
-    # Loop per row (vectorized inside each row)
-    for y in range(H):
-        idx_row = idx_map[y]  # shape [W], dtype long/int
-        # Build occupancy: which source columns were used by any target
-        occ = torch.zeros((W,), dtype=torch.bool, device=device)
-        # Mark used source columns
-        occ[idx_row] = True
-
-        # If no holes on this row, continue
-        if occ.all():
-            continue
-
-        valid_cols = torch.nonzero(occ).squeeze(1)
-        hole_cols = torch.nonzero(~occ).squeeze(1)
-
-        # If no valid columns (degenerate), skip
-        if valid_cols.numel() == 0:
-            continue
-
-        # Sort valid columns (should already be sorted but be safe)
-        valid_cols, _ = torch.sort(valid_cols)
-
-        # Use searchsorted to find nearest valid columns for each hole
-        # insertion indices i satisfy valid_cols[i-1] < hole <= valid_cols[i]
-        ins = torch.searchsorted(valid_cols, hole_cols)
-
-        # Determine left/right existence
-        left_exists = ins > 0
-        right_exists = ins < valid_cols.numel()
-
-        # Build left_idx / right_idx (valid column indices) with safe defaults
-        left_idx = torch.zeros_like(ins)
-        right_idx = torch.zeros_like(ins)
-        if left_exists.any():
-            left_idx[left_exists] = valid_cols[ins[left_exists] - 1]
-        if right_exists.any():
-            right_idx[right_exists] = valid_cols[ins[right_exists]]
-
-        # Gather depths at those source columns (for selection)
-        # If left/right do not exist for a hole, their depths will be ignored
-        left_depth = depth[y, left_idx]
-        right_depth = depth[y, right_idx]
-
-        # For each channel, pick values from the side with greater depth (farther away)
-        for c in range(C):
-            row = rgb[c, y]  # shape [W]
-            left_vals = row[left_idx]   # values at nearest-left valid col (for each hole)
-            right_vals = row[right_idx] # nearest-right valid col values
-
-            # Prepare filled values tensor (float32)
-            filled = torch.empty_like(left_vals)
-
-            # Cases:
-            # 1) only left exists -> copy left
-            only_left = left_exists & (~right_exists)
-            if only_left.any():
-                filled[only_left] = left_vals[only_left]
-
-            # 2) only right exists -> copy right
-            only_right = (~left_exists) & right_exists
-            if only_right.any():
-                filled[only_right] = right_vals[only_right]
-
-            # 3) both exist -> choose side with greater depth (prefer background)
-            both = left_exists & right_exists
-            if both.any():
-                choose_left = left_depth[both] >= right_depth[both]
-                # where choose_left True -> left, else -> right
-                idx_both = torch.nonzero(both).squeeze(1)
-                if idx_both.numel() > 0:
-                    # assign elementwise
-                    bl = idx_both[choose_left]
-                    br = idx_both[~choose_left]
-                    if bl.numel() > 0:
-                        filled[bl] = left_vals[bl]
-                    if br.numel() > 0:
-                        filled[br] = right_vals[br]
-
-            # Edge safety: if neither side exists (shouldn't happen), copy nearest valid column (fallback)
-            neither = (~left_exists) & (~right_exists)
-            if neither.any():
-                # fallback: copy mean of whole row valid pixels
-                fallback_val = row[valid_cols].mean() if valid_cols.numel() > 0 else 0.0
-                filled[neither] = fallback_val
-
-            # Write back into the row at hole columns
-            row[hole_cols] = filled
-            rgb[c, y] = row
-
-    # Convert back to original dtype and return
-    return rgb.to(orig_dtype)
-
-
+    if scale > 0:
+        # Exaggerate separation: foreground closer, background further
+        return torch.pow(depth, 1.0 + scale)
+    elif scale < 0:
+        # Compress foreground, pull background closer
+        return 1.0 - torch.pow(1.0 - depth, 1.0 + abs(scale))
+    else:
+        return depth
+    
 def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
     """
     Apply anti-aliasing to reduce jagged edges in depth maps.
@@ -254,16 +170,12 @@ def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
     h,w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
     # Normalize depth with adaptive range
-    if "MPS" in DEVICE_INFO:
-        depth_sampled = depth[::8, ::8].to(torch.float32)
-        depth_min = torch.quantile(depth_sampled, 0.2)
-        depth_max = torch.quantile(depth_sampled, 0.98)
-
-        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
-        depth = depth.clamp(0, 1)
-    else:
-        depth = depth / depth.max().clamp(min=1e-6)
-
+    depth_sampled = depth[::16, ::16]
+    depth_range = depth_sampled.max() - depth_sampled.min()
+    depth = (depth - depth_sampled.min() + depth_range * 0.2) / (depth_range * 0.8 + 1e-6)
+    depth = depth.clamp(0, 1)
+    depth = depth / depth.max().clamp(min=1e-6)
+    
     depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
     depth = anti_alias(depth, strength=AA_STRENTH)
     
@@ -281,17 +193,10 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
             depth = model(pixel_values=tensor).predicted_depth
     h,w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
+    depth = (depth - depth.min()) / (depth.max() - depth.min() + 1e-6)
+    depth = depth.clamp(0, 1)
+    depth = depth / depth.max().clamp(min=1e-6)
     
-    if "MPS" in DEVICE_INFO:
-        depth_sampled = depth[::8, ::8].to(torch.float32)
-        depth_min = torch.quantile(depth_sampled, 0.2)
-        depth_max = torch.quantile(depth_sampled, 0.98)
-
-        depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
-        depth = depth.clamp(0, 1)
-    else:
-        depth = depth / depth.max().clamp(min=1e-6)
-        
     depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
     depth = anti_alias(depth, strength=AA_STRENTH)
     
@@ -308,7 +213,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-
         # Depth inversion & shifts
         inv = 1.0 - depth
         max_px = ipd_uv * W
-        shifts_half = ((inv * max_px * float(depth_strength) / 10) / 2).round().clamp(0, W // 2).to(torch.int32)
+        shifts_half = (inv * max_px * 0.1 * depth_strength).round().clamp(0, W // 2).to(torch.int32)
 
         # Build shifted indices efficiently (broadcasting instead of expand)
         idx_left = (xs + shifts_half).clamp(0, W - 1)

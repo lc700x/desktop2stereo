@@ -211,9 +211,9 @@ class StereoWindow:
             elif key == glfw.KEY_LEFT:
                 self.move_to_adjacent_monitor(-1)
             elif key == glfw.KEY_DOWN:
-                self.depth_ratio = max(0, self.depth_ratio - 1.0)
+                self.depth_ratio = max(0, self.depth_ratio - 0.5)
             elif key == glfw.KEY_UP:
-                self.depth_ratio = min(20, self.depth_ratio + 1.0)
+                self.depth_ratio = min(10, self.depth_ratio + 0.5)
             elif key == glfw.KEY_0:
                 self.depth_ratio = self.depth_ratio_original
             elif key == glfw.KEY_TAB:
@@ -223,6 +223,7 @@ class StereoWindow:
     def update_frame(self, rgb, depth):
         if hasattr(depth, 'detach'):
             depth = depth.detach().cpu().numpy()
+        # Normalize depth with adaptive range
         depth = depth.astype('float32', copy=False)
         h, w, _ = rgb.shape
         if self._texture_size != (w, h):
