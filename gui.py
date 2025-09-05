@@ -311,19 +311,25 @@ class ConfigGUI(tk.Tk):
         # Stop running process if any
         if self.process and self.process.poll() is None:
             try:
-                self.process.terminate()
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+                # Use platform-appropriate termination method
+                if os.name == 'nt':  # Windows
+                    subprocess.call(['taskkill', '/F', '/T', '/PID', str(self.process.pid)])
+                else:  # Unix/macOS
+                    os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
             except Exception as e:
-                messagebox.showerror(
-                    UI_TEXTS[self.language]["Error"],
-                    f"{UI_TEXTS[self.language]['Failed to stop process on exit:']} {e}"
-                )
+                try:
+                    # Fallback to simpler termination method
+                    self.process.terminate()
+                    self.process.wait(timeout=2)
+                except:
+                    try:
+                        self.process.kill()
+                    except:
+                        pass
             finally:
                 self.process = None
 
-        # Cancel any scheduled after() callbacks (like _monitor_process)
+        # Cancel any scheduled after() callbacks
         try:
             if hasattr(self, "_after_id") and self._after_id:
                 self.after_cancel(self._after_id)
@@ -421,7 +427,7 @@ class ConfigGUI(tk.Tk):
         self.depth_strength_spin = ttk.Spinbox(
             self.content_frame,
             from_=1.0,  # Minimum value
-            to=5.0,    # Maximum value
+            to=10.0,    # Maximum value
             increment=0.5,  # Step size
             state="normal"
         )

@@ -1,9 +1,9 @@
-Capture Mode: Window
+Capture Mode: Monitor
 Monitor Index: 1
-Window Title: 【邓紫棋的VLOG】幸福开箱 之 【启示路】恒藏版小说！！！_哔哩哔哩_bilibili 🔊
+Window Title: ''
 FPS: 60
 Show FPS: true
-Output Resolution: 1080
+Output Resolution: 2160
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
@@ -49,8 +49,8 @@ Model List:
 - Intel/zoedepth-kitti
 - apple/DepthPro-hf
 Depth Model: depth-anything/Depth-Anything-V2-Small-hf
-Depth Strength: 2.0
-Depth Resolution: 192
+Depth Strength: 6.0
+Depth Resolution: 384
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
