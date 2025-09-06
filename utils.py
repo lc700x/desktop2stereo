@@ -61,17 +61,12 @@ if OS_NAME == "Windows":
 
 # App Version
 VERSION = 2.3
-DEFAULT_PORT = 1122
 
-# Image Processing Parameters
-DILATION_SIZE = 1 # 0-5
-AA_STRENTH = 2 # 0-10
-if OS_NAME != "Darwin":
-    DILATION_SIZE *= 10 # 0-100
-    AA_STRENTH *= 40 # 0-100
-else:
-    AA_STRENTH *= 4
-STREAM_QUALITY = 90
+# Streamer Settings
+DEFAULT_PORT = 1122
+STREAM_QUALITY = settings["Stream Quality"]
+STREAM_PORT = settings["Streamer Port"]
+LOCAL_IP = get_local_ip()
 
 # Get settings
 RUN_MODE = settings["Run Mode"]
@@ -87,5 +82,14 @@ IPD = settings["IPD"]
 CAPTURE_MODE = settings["Capture Mode"]
 WINDOW_TITLE = settings["Window Title"]
 
-STREAM_PORT = settings["Streamer Port"]
-LOCAL_IP = get_local_ip()
+# Image Processing Parameters
+DILATION_SIZE = settings["Edge Dilation"] # 0-10
+AA_STRENTH = settings["Anti-aliasing"] # 0-10
+
+# Adjust anti-aliasing and dept dilution value for Mac
+if OS_NAME != "Darwin":
+    DILATION_SIZE *= 5 # 0-100
+    AA_STRENTH *= 40 # 0-100
+else:
+    DILATION_SIZE *= 0.5 # 0-100
+    AA_STRENTH *= 4

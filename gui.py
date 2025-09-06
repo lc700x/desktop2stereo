@@ -137,6 +137,8 @@ DEFAULTS = {
     "Depth Model": DEFAULT_MODEL_LIST[2],
     "Depth Strength": 2.0,
     "Depth Resolution": 384,
+    "Anti-aliasing": 2,
+    "Edge Dilation": 1,
     "IPD": 0.064,
     "Display Mode": "Half-SBS",
     "FP16": True,
@@ -147,6 +149,7 @@ DEFAULTS = {
     "Run Mode": "Viewer",
     "Streamer Host": None,
     "Streamer Port": DEFAULT_PORT,
+    "Stream Quality": 90
 }
 
 UI_TEXTS = {
@@ -162,6 +165,8 @@ UI_TEXTS = {
         "Depth Model:": "Depth Model:",
         "Depth Strength:": "Depth Strength:",
         "Depth Resolution:": "Depth Resolution:",
+        "Anti-aliasing:": "Anti-aliasing:",
+        "Edge Dilation:": "Edge Dilation:",
         "FP16": "FP16",
         "Download Path:": "Download Path:",
         "Browse...": "Browse...",
@@ -189,7 +194,10 @@ UI_TEXTS = {
         "Viewer": "Viewer",
         "Streamer": "Streamer",
         "Streamer Port:": "Streamer Port:",
-        "Streamer URL": "Streamer URL",
+        "Streamer URL": "Streamer URL:",
+        "Copy URL": "Copy URL",
+        "Open Browser": "Open Browser",
+        "Stream Quality:": "Stream Quality:",
         "Host": "Host:",
         "Invalid port number (1-65535)": "Invalid port number (must be between 1-65535)",
         "Invalid port number": "Port must be a number",
@@ -213,6 +221,8 @@ UI_TEXTS = {
         "Depth Model:": "深度模型:",
         "Depth Strength:": "深度强度:",
         "Depth Resolution:": "深度分辨率:",
+        "Anti-aliasing:": "抗锯齿:",
+        "Edge Dilation:": "边缘淡化:",
         "FP16": "半精度浮点 (F16)",
         "Download Path:": "下载路径:",
         "Browse...": "浏览...",
@@ -241,6 +251,9 @@ UI_TEXTS = {
         "Streamer": "网络推流",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
+        "Copy URL": "复制网址",
+        "Open Browser": "打开浏览器",
+        "Stream Quality:": "推流质量:",
         "Host": "主机:",
         "Invalid port number (1-65535)": "端口号无效 (必须介于1-65535之间)",
         "Invalid port number": "端口必须是数字",
@@ -350,10 +363,18 @@ class ConfigGUI(tk.Tk):
         self.rowconfigure(1, weight=0)   # status bar fixed
         self.columnconfigure(0, weight=1)
         
+        # Run Mode (viewer / streamer)
+        self.label_run_mode = ttk.Label(self.content_frame, text="Run Mode:")
+        self.label_run_mode.grid(row=0, column=0, sticky="w", **self.pad)
+        self.run_mode_var_label = tk.StringVar()
+        self.run_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.run_mode_var_label, state="readonly")
+        self.run_mode_cb.grid(row=0, column=1, sticky="ew", **self.pad)
+        self.run_mode_cb.bind("<<ComboboxSelected>>", self.on_run_mode_change)
+        
         # Capture Mode (Monitor / Window)
         self.capture_mode_var_label = tk.StringVar()
         self.capture_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.capture_mode_var_label, state="readonly", width=8)
-        self.capture_mode_cb.grid(row=2, column=0, sticky="ew", **self.pad)
+        self.capture_mode_cb.grid(row=3, column=0, sticky="ew", **self.pad)
         self.capture_mode_cb.bind("<<ComboboxSelected>>", self.on_capture_mode_change)
         
         # Monitor Index (only shown when capture mode is Monitor)
@@ -365,7 +386,7 @@ class ConfigGUI(tk.Tk):
         self.window_cb.bind("<<ComboboxSelected>>", self.on_window_selected)
         
         self.btn_refresh = ttk.Button(self.content_frame, text="Refresh", command=self.refresh_monitor_and_window)
-        self.btn_refresh.grid(row=2, column=3, sticky="we", **self.pad)
+        self.btn_refresh.grid(row=3, column=3, sticky="we", **self.pad)
         
         # Language
         self.label_language = ttk.Label(self.content_frame, text="Set Language:")
@@ -377,73 +398,72 @@ class ConfigGUI(tk.Tk):
         
         # Device
         self.label_device = ttk.Label(self.content_frame, text="Device:")
-        self.label_device.grid(row=3, column=0, sticky="w", **self.pad)
+        self.label_device.grid(row=4, column=0, sticky="w", **self.pad)
         self.device_var = tk.StringVar()
         self.device_menu = ttk.OptionMenu(self.content_frame, self.device_var, "")
-        self.device_menu.grid(row=3, column=1, sticky="w", **self.pad)
+        self.device_menu.grid(row=4, column=1, sticky="w", **self.pad)
         
         # FP16 and Show FPS
         self.fp16_var = tk.BooleanVar()
         self.fp16_cb = ttk.Checkbutton(self.content_frame, text="FP16", variable=self.fp16_var)
-        self.fp16_cb.grid(row=3, column=2, sticky="w", **self.pad)
+        self.fp16_cb.grid(row=4, column=2, sticky="w", **self.pad)
         
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
-        self.showfps_cb.grid(row=3, column=3, sticky="w", **self.pad)
+        self.showfps_cb.grid(row=4, column=3, sticky="w", **self.pad)
         
         # Output Resolution
         self.label_res = ttk.Label(self.content_frame, text="Output Resolution:")
-        self.label_res.grid(row=4, column=0, sticky="w", **self.pad)
+        self.label_res.grid(row=5, column=0, sticky="w", **self.pad)
         self.res_values = ["480", "720", "1080", "1440", "2160"]
         self.res_cb = ttk.Combobox(self.content_frame, values=self.res_values, state="normal")
-        self.res_cb.grid(row=4, column=1, sticky="ew", **self.pad)
+        self.res_cb.grid(row=5, column=1, sticky="ew", **self.pad)
         
         # FPS
         self.label_fps = ttk.Label(self.content_frame, text="FPS:")
-        self.label_fps.grid(row=4, column=2, sticky="w", **self.pad)
+        self.label_fps.grid(row=5, column=2, sticky="w", **self.pad)
         self.fps_values = ["30", "60", "75", "90", "120"]
         self.fps_cb = ttk.Combobox(self.content_frame, values=self.fps_values, state="normal")
-        self.fps_cb.grid(row=4, column=3, sticky="ew", **self.pad)
+        self.fps_cb.grid(row=5, column=3, sticky="ew", **self.pad)
         
-        # Download path
-        self.label_download = ttk.Label(self.content_frame, text="Download Path:")
-        self.label_download.grid(row=7, column=0, sticky="w", **self.pad)
-        self.download_var = tk.StringVar()
-        self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
-        self.download_entry.grid(row=7, column=1, columnspan=2, sticky="ew", **self.pad)
-        self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
-        self.btn_browse.grid(row=7, column=3, sticky="ew", **self.pad)
         
         # Depth Resolution and Depth Strength
         self.label_depth_res = ttk.Label(self.content_frame, text="Depth Resolution:")
-        self.label_depth_res.grid(row=5, column=0, sticky="w", **self.pad)
+        self.label_depth_res.grid(row=6, column=0, sticky="w", **self.pad)
         self.depth_res_values = ["48", "96", "192", "384", "576", "768", "960", "1152", "1344", "1536"]
         self.depth_res_cb = ttk.Combobox(self.content_frame, values=self.depth_res_values, state="normal")
-        self.depth_res_cb.grid(row=5, column=1, sticky="ew", **self.pad)
+        self.depth_res_cb.grid(row=6, column=1, sticky="ew", **self.pad)
         
         self.label_depth_strength = ttk.Label(self.content_frame, text="Depth Strength:")
-        self.label_depth_strength.grid(row=5, column=2, sticky="w", **self.pad)
-
-        # Create a spinbox instead of combobox
-        self.depth_strength_spin = ttk.Spinbox(
-            self.content_frame,
-            from_=1.0,  # Minimum value
-            to=10.0,    # Maximum value
-            increment=0.5,  # Step size
-            state="normal"
-        )
-        self.depth_strength_spin.grid(row=5, column=3, sticky="ew", **self.pad)
+        self.label_depth_strength.grid(row=6, column=2, sticky="w", **self.pad)
+        self.depth_strength_values = [f"{i/2.0:.1f}" for i in range(21)]  # 0-10
+        self.depth_strength_cb = ttk.Combobox(self.content_frame, values=self.depth_strength_values, state="normal")
+        self.depth_strength_cb.grid(row=6, column=3, sticky="ew", **self.pad)
         
+        # Anti-aliasing
+        self.label_antialiasing = ttk.Label(self.content_frame, text="Anti-aliasing:")
+        self.label_antialiasing.grid(row=7, column=0, sticky="w", **self.pad)
+        self.antialiasing_values = [str(i) for i in range(11)]  # 0-10
+        self.antialiasing_cb = ttk.Combobox(self.content_frame, values=self.antialiasing_values, state="normal")
+        self.antialiasing_cb.grid(row=7, column=1, sticky="ew", **self.pad)
+        
+        # Edge Dilation
+        self.label_edge_dilation = ttk.Label(self.content_frame, text="Edge Dilation:")
+        self.label_edge_dilation.grid(row=7, column=2, sticky="w", **self.pad)
+        self.edge_dilation_values = [str(i) for i in range(11)]  # 0-10
+        self.edge_dilation_cb = ttk.Combobox(self.content_frame, values=self.edge_dilation_values, state="normal")
+        self.edge_dilation_cb.grid(row=7, column=3, sticky="ew", **self.pad)
+
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
-        self.label_display_mode.grid(row=6, column=0, sticky="w", **self.pad)
+        self.label_display_mode.grid(row=8, column=0, sticky="w", **self.pad)
         self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB"]
         self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
-        self.display_mode_cb.grid(row=6, column=1, sticky="ew", **self.pad)
+        self.display_mode_cb.grid(row=8, column=1, sticky="ew", **self.pad)
         
         # IPD
         self.label_ipd = ttk.Label(self.content_frame, text="IPD (m):")
-        self.label_ipd.grid(row=6, column=2, sticky="w", **self.pad)
+        self.label_ipd.grid(row=8, column=2, sticky="w", **self.pad)
         self.ipd_var = tk.StringVar()
         self.ipd_spin = ttk.Spinbox(
             self.content_frame,
@@ -453,29 +473,30 @@ class ConfigGUI(tk.Tk):
             textvariable=self.ipd_var,
             state="normal"
         )
-        self.ipd_spin.grid(row=6, column=3, sticky="ew", **self.pad)
+        self.ipd_spin.grid(row=8, column=3, sticky="ew", **self.pad)
+        
+        # Download path
+        self.label_download = ttk.Label(self.content_frame, text="Download Path:")
+        self.label_download.grid(row=9, column=0, sticky="w", **self.pad)
+        self.download_var = tk.StringVar()
+        self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
+        self.download_entry.grid(row=9, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
+        self.btn_browse.grid(row=9, column=3, sticky="ew", **self.pad)
         
         # Depth Model
         self.label_depth_model = ttk.Label(self.content_frame, text="Depth Model:")
-        self.label_depth_model.grid(row=8, column=0, sticky="w", **self.pad)
+        self.label_depth_model.grid(row=10, column=0, sticky="w", **self.pad)
         self.depth_model_var = tk.StringVar()
         self.depth_model_cb = ttk.Combobox(self.content_frame, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
-        self.depth_model_cb.grid(row=8, column=1, columnspan=2, sticky="ew", **self.pad)
-        
-        # Run Mode (viewer / streamer)
-        self.label_run_mode = ttk.Label(self.content_frame, text="Run Mode:")
-        self.label_run_mode.grid(row=0, column=0, sticky="w", **self.pad)
-        self.run_mode_var_label = tk.StringVar()
-        self.run_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.run_mode_var_label, state="readonly")
-        self.run_mode_cb.grid(row=0, column=1, sticky="ew", **self.pad)
-        self.run_mode_cb.bind("<<ComboboxSelected>>", self.on_run_mode_change)
+        self.depth_model_cb.grid(row=10, column=1, columnspan=2, sticky="ew", **self.pad)
 
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
-        self.label_hf_endpoint.grid(row=9, column=0, sticky="w", **self.pad)
+        self.label_hf_endpoint.grid(row=11, column=0, sticky="w", **self.pad)
         self.hf_endpoint_var = tk.StringVar()
         self.hf_endpoint_entry = ttk.Entry(self.content_frame, textvariable=self.hf_endpoint_var)
-        self.hf_endpoint_entry.grid(row=9, column=1, sticky="ew", **self.pad)
+        self.hf_endpoint_entry.grid(row=11, column=1, sticky="ew", **self.pad)
         
         # Streamer Host and Port (only visible when run mode is streamer)
         self.label_streamer_host = ttk.Label(self.content_frame, text="Streamer URL:")
@@ -485,16 +506,25 @@ class ConfigGUI(tk.Tk):
         self.streamer_port_var = tk.StringVar()
         self.streamer_port_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_port_var)
         self.streamer_port_var.trace_add("write", self.update_host_url)
+        
+        # Stream Quality
+        self.label_stream_quality = ttk.Label(self.content_frame, text="Stream Quality:")
+        self.stream_quality_values = [str(i) for i in range(100, 49, -5)]  # 0-100 in steps of -5
+        self.stream_quality_cb = ttk.Combobox(self.content_frame, values=self.stream_quality_values, state="normal")
+        
+         # URL Action Buttons
+        self.btn_copy_url = ttk.Button(self.content_frame, text="Copy URL", command=self.copy_url_to_clipboard)
+        self.btn_open_browser = ttk.Button(self.content_frame, text="Open Browser",  command=self.open_url_in_browser)
 
         # Buttons (moved down a bit to make room)
         self.btn_reset = ttk.Button(self.content_frame, text="Reset", command=self.reset_to_defaults)
-        self.btn_reset.grid(row=8, column=3, sticky="ew", **self.pad)
+        self.btn_reset.grid(row=10, column=3, sticky="ew", **self.pad)
         
         self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
-        self.btn_stop.grid(row=9, column=2, sticky="ew", **self.pad)
+        self.btn_stop.grid(row=11, column=2, sticky="ew", **self.pad)
         
         self.btn_run = ttk.Button(self.content_frame, text="Run", command=self.save_settings)
-        self.btn_run.grid(row=9, column=3, sticky="ew", **self.pad)
+        self.btn_run.grid(row=11, column=3, sticky="ew", **self.pad)
         
         # Column weights inside content frame
         for col in range(4):
@@ -578,7 +608,24 @@ class ConfigGUI(tk.Tk):
                 )
                 # Reset to default port if invalid
                 self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
+    def copy_url_to_clipboard(self):
+        """Copy the streamer URL to clipboard"""
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(self.streamer_host_var.get())
+            self.update_status(f"Copied URL: {self.streamer_host_var.get()}")
+        except Exception as e:
+            messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Failed to copy URL: {e}")
 
+    def open_url_in_browser(self):
+        """Open the streamer URL in default browser"""
+        url = self.streamer_host_var.get()
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            self.update_status(f"Opening URL in browser: {url}")
+        except Exception as e:
+            messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Failed to open browser: {e}")
     def on_window_selected(self, event=None):
         """Handle window selection from the combobox"""
         if not hasattr(self, "_window_objects") or not self._window_objects:
@@ -610,12 +657,12 @@ class ConfigGUI(tk.Tk):
         # Update the internal capture_mode_key based on the selected label
         if label == monitor_label:
             self.capture_mode_key = "Monitor"
-            self.monitor_menu.grid(row=2, column=1, columnspan=2, sticky="w", **self.pad)
+            self.monitor_menu.grid(row=3, column=1, columnspan=2, sticky="w", **self.pad)
             self.window_cb.grid_remove()
         else:  # Window
             self.capture_mode_key = "Window"
             self.monitor_menu.grid_remove()
-            self.window_cb.grid(row=2, column=1, columnspan=2, sticky="ew", **self.pad)
+            self.window_cb.grid(row=3, column=1, columnspan=2, sticky="ew", **self.pad)
             # Refresh window list automatically when switching to Window mode
             self.refresh_window_list()
 
@@ -630,6 +677,8 @@ class ConfigGUI(tk.Tk):
         self.label_depth_model.config(text=texts["Depth Model:"])
         self.label_depth_res.config(text=texts["Depth Resolution:"])
         self.label_depth_strength.config(text=texts["Depth Strength:"])
+        self.label_antialiasing.config(text=UI_TEXTS[self.language]["Anti-aliasing:"])
+        self.label_edge_dilation.config(text=UI_TEXTS[self.language]["Edge Dilation:"])
         self.fp16_cb.config(text=texts["FP16"])
         self.label_download.config(text=texts["Download Path:"])
         self.label_hf_endpoint.config(text=texts["HF Endpoint:"])
@@ -667,6 +716,9 @@ class ConfigGUI(tk.Tk):
         # Streamer host/port labels
         self.label_streamer_host.config(text=texts.get("Streamer URL", "Streamer URL"))
         self.label_streamer_port.config(text=texts.get("Streamer Port:", "Streamer Port:"))
+        self.label_stream_quality.config(text=UI_TEXTS[self.language]["Stream Quality:"])
+        self.btn_copy_url.config(text=UI_TEXTS[self.language]["Copy URL"])
+        self.btn_open_browser.config(text=UI_TEXTS[self.language]["Open Browser"])
 
         # language combobox values
         self.language_cb["values"] = list(UI_TEXTS.keys())
@@ -707,8 +759,12 @@ class ConfigGUI(tk.Tk):
             # grid the controls
             self.label_streamer_host.grid(row=1, column=0, sticky="w", padx=8, pady=6)
             self.streamer_host_entry.grid(row=1, column=1, sticky="ew", padx=8, pady=6)
-            self.label_streamer_port.grid(row=1, column=2, sticky="w", padx=8, pady=6)
-            self.streamer_port_entry.grid(row=1, column=3, sticky="ew", padx=8, pady=6)
+            self.label_streamer_port.grid(row=2, column=0, sticky="w", padx=8, pady=6)
+            self.streamer_port_entry.grid(row=2, column=1, sticky="ew", padx=8, pady=6)
+            self.label_stream_quality.grid(row=2, column=2, sticky="w", **self.pad)
+            self.stream_quality_cb.grid(row=2, column=3, sticky="ew", **self.pad)
+            self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
+            self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
         else:
             self.run_mode_key = "Viewer"
             # hide streamer controls
@@ -716,6 +772,10 @@ class ConfigGUI(tk.Tk):
             self.streamer_host_entry.grid_remove()
             self.label_streamer_port.grid_remove()
             self.streamer_port_entry.grid_remove()
+            self.label_stream_quality.grid_remove()
+            self.stream_quality_cb.grid_remove()
+            self.btn_copy_url.grid_remove()
+            self.btn_open_browser.grid_remove()
 
     def browse_download(self):
         path = filedialog.askdirectory(initialdir=self.download_var.get() or ".")
@@ -851,7 +911,9 @@ class ConfigGUI(tk.Tk):
 
         self.depth_res_cb.set(cfg.get("Depth Resolution", DEFAULTS["Depth Resolution"]))
         self.display_mode_cb.set(cfg.get("Display Mode", DEFAULTS["Display Mode"]))
-        self.depth_strength_spin.set(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
+        self.depth_strength_cb.set(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
+        self.antialiasing_cb.set(str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"])))
+        self.edge_dilation_cb.set(str(cfg.get("Edge Dilation", DEFAULTS["Edge Dilation"])))
         self.fp16_var.set(cfg.get("FP16", DEFAULTS["FP16"]))
         self.download_var.set(cfg.get("Download Path", DEFAULTS["Download Path"]))
         self.hf_endpoint_var.set(cfg.get("HF Endpoint", DEFAULTS["HF Endpoint"]))
@@ -864,6 +926,7 @@ class ConfigGUI(tk.Tk):
         port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", DEFAULT_PORT))
         self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
         self.streamer_port_var.set(str(port))
+        self.stream_quality_cb.set(str(cfg.get("Stream Quality", DEFAULTS["Stream Quality"])))
         # Capture mode
         capture_mode = cfg.get("Capture Mode", DEFAULTS.get("Capture Mode", "Monitor"))
         self.capture_mode_key = capture_mode
@@ -924,7 +987,9 @@ class ConfigGUI(tk.Tk):
             "Display Mode": self.display_mode_cb.get(),
             "Model List": list(self.depth_model_cb["values"]),
             "Depth Model": self.depth_model_var.get(),
-            "Depth Strength": float(self.depth_strength_spin.get()),
+            "Depth Strength": float(self.depth_strength_cb.get()),
+            "Anti-aliasing": int(self.antialiasing_cb.get()),
+            "Edge Dilation": int(self.edge_dilation_cb.get()),
             "Depth Resolution": int(self.depth_res_cb.get()),
             "FP16": self.fp16_var.get(),
             "Download Path": self.download_var.get(),
@@ -933,6 +998,7 @@ class ConfigGUI(tk.Tk):
             "Language": self.language,
             "Run Mode": self.run_mode_key,
             "Streamer Port": port_val,
+            "Stream Quality": int(self.stream_quality_cb.get()),
         }
         success = self.save_yaml("settings.yaml", cfg)
         if success:
