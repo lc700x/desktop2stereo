@@ -312,9 +312,10 @@ class ConfigGUI(tk.Tk):
         if self.process and self.process.poll() is None:
             try:
                 # Use platform-appropriate termination method
-                if os.name == 'nt':  # Windows
+                if OS_NAME == 'Windows':  # Windows
                     subprocess.call(['taskkill', '/F', '/T', '/PID', str(self.process.pid)])
                 else:  # Unix/macOS
+                    import signal
                     os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
             except Exception as e:
                 try:

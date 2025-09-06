@@ -119,7 +119,7 @@ def main(mode="Viewer"):
             while True:
                 try:
                     rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-                    sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+                    sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
                     streamer.set_frame(sbs)
                     if SHOW_FPS:
                         frame_count += 1
@@ -134,13 +134,16 @@ def main(mode="Viewer"):
 
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
-    # except Exception as e:
-    #     print(e)
-    # finally:
-    #     if streamer:
-    #         streamer.stop()
-    #     print(f"[Main] {mode} Stopped")
-    #     exit()
+    except Exception as e:
+        print(e)
+    finally:
+        if streamer:
+            streamer.stop()
+            print(f"[Main] {mode} Stopped")
+        total_time = time.perf_counter() - start_time
+        avg_fps = frame_count / total_time if total_time > 0 else 0
+        # print(f"Average FPS: {avg_fps:.2f}")
+        exit()
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)

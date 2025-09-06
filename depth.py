@@ -205,26 +205,41 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
     
     return depth, rgb_c
 
-def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_strength=1.0, display_mode="Half-SBS"):
+def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS"):
     with lock:
         C, H, W = rgb_c.shape
         device = rgb_c.device
+        depth_strength = 0.1
 
         # Precompute pixel coordinates (cache this tensor outside if called repeatedly!)
-        xs = torch.arange(W, device=device).view(1, -1)  # shape [1,W]
+        xs = torch.arange(W, dtype=torch.float32, device=device).view(1, -1)  # shape [1,W]
 
-        # Depth inversion & shifts
-        inv = 1.0 - depth
+        # Depth inversion & shifts (keep as float for sub-pixel accuracy)
+        inv = 1.0 - depth * depth_ratio
         max_px = ipd_uv * W
-        shifts_half = (inv * max_px * 0.05 * depth_strength).round().clamp(0, W // 2).to(torch.int32)
+        shifts_half = inv * max_px * 0.5 * depth_strength  # [H,W], float
 
-        # Build shifted indices efficiently (broadcasting instead of expand)
-        idx_left = (xs + shifts_half).clamp(0, W - 1)
-        idx_right = (xs - shifts_half).clamp(0, W - 1)
+        # Build shifted indices with broadcasting
+        idx_left = xs + shifts_half
+        idx_right = xs - shifts_half
 
-        # Index select across width (faster than gather with full expand)
-        gen_left = torch.take_along_dim(rgb_c, idx_left.unsqueeze(0).expand(C, H, W), dim=2)
-        gen_right = torch.take_along_dim(rgb_c, idx_right.unsqueeze(0).expand(C, H, W), dim=2)
+        def sample_bilinear(img, idx):
+            # Clamp indices to image bounds for replicate padding
+            idx_clamped = idx.clamp(0, W - 1)
+            floor_idx = torch.floor(idx_clamped).long()
+            ceil_idx = (floor_idx + 1).clamp(0, W - 1)
+            frac = idx_clamped - floor_idx.float()
+
+            # Gather values (expand indices to [C, H, W])
+            floor_val = torch.gather(img, dim=2, index=floor_idx.unsqueeze(0).expand(C, H, W))
+            ceil_val = torch.gather(img, dim=2, index=ceil_idx.unsqueeze(0).expand(C, H, W))
+
+            # Bilinear interpolation
+            return floor_val * (1 - frac).unsqueeze(0).expand(C, -1, -1) + ceil_val * frac.unsqueeze(0).expand(C, -1, -1)
+
+        # Generate views with bilinear resampling
+        gen_left = sample_bilinear(rgb_c, idx_left)
+        gen_right = sample_bilinear(rgb_c, idx_right)
 
         # Aspect ratio padding (do once, avoid recomputation)
         def pad_to_aspect(img, target_ratio=(16, 9)):
