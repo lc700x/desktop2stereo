@@ -64,11 +64,13 @@ VERSION = 2.3
 DEFAULT_PORT = 1122
 
 # Image Processing Parameters
-DILATION_SIZE = 1 # 0-10
-AA_STRENTH = 8 # 0-10
+DILATION_SIZE = 1 # 0-5
+AA_STRENTH = 2 # 0-10
 if OS_NAME != "Darwin":
     DILATION_SIZE *= 10 # 0-100
-    AA_STRENTH *= 10 # 0-100
+    AA_STRENTH *= 40 # 0-100
+else:
+    AA_STRENTH *= 4
 STREAM_QUALITY = 90
 
 # Get settings
