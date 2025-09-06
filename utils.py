@@ -85,11 +85,11 @@ WINDOW_TITLE = settings["Window Title"]
 # Image Processing Parameters
 DILATION_SIZE = settings["Edge Dilation"] # 0-10
 AA_STRENTH = settings["Anti-aliasing"] # 0-10
-
+ 
 # Adjust anti-aliasing and dept dilution value for Mac
 if OS_NAME != "Darwin":
     DILATION_SIZE *= 5 # 0-100
     AA_STRENTH *= 40 # 0-100
 else:
-    DILATION_SIZE *= 0.5 # 0-100
+    DILATION_SIZE //= 2 # 0-100
     AA_STRENTH *= 4
