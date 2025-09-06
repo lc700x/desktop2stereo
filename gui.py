@@ -887,7 +887,7 @@ class ConfigGUI(tk.Tk):
         self.selected_window_name = cfg.get(DEFAULTS["Window Title"])
         self.window_var.set(self.selected_window_name)
 
-        if not keep_optional:  # no update for device
+        if keep_optional:  # no update for device
             device_idx = cfg.get("Device", DEFAULTS["Device"])
             label_for_device_idx = next((lbl for lbl, i in self.device_label_to_index.items() if i == device_idx), None)
             if label_for_device_idx:
@@ -917,7 +917,7 @@ class ConfigGUI(tk.Tk):
         self.fp16_var.set(cfg.get("FP16", DEFAULTS["FP16"]))
         self.download_var.set(cfg.get("Download Path", DEFAULTS["Download Path"]))
         self.hf_endpoint_var.set(cfg.get("HF Endpoint", DEFAULTS["HF Endpoint"]))
-        if not keep_optional:  # no update for language
+        if keep_optional:  # no update for language
             self.language_var.set(cfg.get("Language", DEFAULTS["Language"]))
 
         # Run mode + streamer settings
@@ -937,7 +937,7 @@ class ConfigGUI(tk.Tk):
 
     def load_defaults(self):
         self.selected_window_name = DEFAULTS["Window Title"]
-        self.apply_config(DEFAULTS)
+        self.apply_config(DEFAULTS, keep_optional=False)
 
     def reset_to_defaults(self):
         self.load_defaults()
