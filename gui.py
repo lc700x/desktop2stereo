@@ -208,6 +208,10 @@ UI_TEXTS = {
         "Failed to stop process:": "Failed to stop process:",
         "Failed to run process:": "Failed to run process:",
         "Failed to load settings.yaml:": "Failed to load settings.yaml:",
+        "Failed to copy URL": "Failed to copy URL",
+        "Failed to open browser": "Failed to open browser",
+        "Copied URL": "Copied URL",
+        "Opening URL in browser": "Opening URL in browser"
     },
     "CN": {
         "Monitor": "显示器",
@@ -264,6 +268,10 @@ UI_TEXTS = {
         "Failed to stop process:": "停止进程失败：",
         "Failed to run process:": "运行进程失败：",
         "Failed to load settings.yaml:": "加载 settings.yaml 失败：",
+        "Failed to copy URL": "复制网址失败",
+        "Failed to open browser": "打开浏览器失败",
+        "Copied URL": "已复制网址",
+        "Opening URL in browser": "正在浏览器中打开网址"
     }
 }
 
@@ -608,24 +616,38 @@ class ConfigGUI(tk.Tk):
                 )
                 # Reset to default port if invalid
                 self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
+                
     def copy_url_to_clipboard(self):
         """Copy the streamer URL to clipboard"""
+        current_status = self.status_label.cget("text")  # Save current status
         try:
             self.clipboard_clear()
             self.clipboard_append(self.streamer_host_var.get())
-            self.update_status(f"Copied URL: {self.streamer_host_var.get()}")
+            self.update_status(f"{UI_TEXTS[self.language]['Copied URL']}: {self.streamer_host_var.get()}")
+            # Revert to original status after 2 seconds
+            self.after(2000, lambda: self.update_status(current_status))
         except Exception as e:
-            messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Failed to copy URL: {e}")
+            messagebox.showerror(
+                UI_TEXTS[self.language]["Error"], 
+                f"{UI_TEXTS[self.language]['Failed to copy URL']}: {e}"
+            )
 
     def open_url_in_browser(self):
         """Open the streamer URL in default browser"""
+        current_status = self.status_label.cget("text")  # Save current status
         url = self.streamer_host_var.get()
         try:
             import webbrowser
             webbrowser.open(url)
-            self.update_status(f"Opening URL in browser: {url}")
+            self.update_status(f"{UI_TEXTS[self.language]['Opening URL in browser']}: {url}")
+            # Revert to original status after 2 seconds
+            self.after(2000, lambda: self.update_status(current_status))
         except Exception as e:
-            messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Failed to open browser: {e}")
+            messagebox.showerror(
+                UI_TEXTS[self.language]["Error"], 
+                f"{UI_TEXTS[self.language]['Failed to open browser']}: {e}"
+            )
+    
     def on_window_selected(self, event=None):
         """Handle window selection from the combobox"""
         if not hasattr(self, "_window_objects") or not self._window_objects:

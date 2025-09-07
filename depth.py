@@ -14,16 +14,18 @@ DTYPE = torch.float16 if FP16 else torch.float32
 # Initialize DirectML Device
 def get_device(index=0):
     try:
-        import torch_directml
-        if torch_directml.is_available():
-            return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
-    except ImportError:
-        pass
-    if torch.cuda.is_available():
-        return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
-    if torch.backends.mps.is_available():
-        return torch.device("mps"), "Using Apple Silicon (MPS) device"
-    return torch.device("cpu"), "Using CPU device"
+        try:
+            import torch_directml
+            if torch_directml.is_available():
+                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
+        except ImportError:
+            pass
+        if torch.cuda.is_available():
+            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+        if torch.backends.mps.is_available():
+            return torch.device("mps"), "Using Apple Silicon (MPS) device"
+    except:
+        return torch.device("cpu"), "Using CPU device"
 
 DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
 if torch.cuda.is_available():
@@ -158,7 +160,7 @@ def process(img_rgb: np.ndarray, height) -> np.ndarray:
         img_rgb = cv2.resize(img_rgb,(width,height), interpolation=cv2.INTER_AREA)
     return img_rgb
 
-def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
+def predict_depth(image_rgb: np.ndarray):
     tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
     tensor = tensor.permute(2,0,1).float().unsqueeze(0)/255
     tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
@@ -235,10 +237,6 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
 
         # Bilinear interpolation
         return floor_val * (1 - frac).unsqueeze(0).expand(C, -1, -1) + ceil_val * frac.unsqueeze(0).expand(C, -1, -1)
-    with lock:
-        # Generate views with bilinear resampling
-        gen_left = sample_bilinear(rgb_c, idx_left)
-        gen_right = sample_bilinear(rgb_c, idx_right)
 
     # Aspect ratio padding (do once, avoid recomputation)
     def pad_to_aspect(img, target_ratio=(16, 9)):
@@ -255,14 +253,16 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
             new_w = int(round(h * r_t))
             pad_left = (new_w - w) // 2
             return F.pad(img, (pad_left, new_w - w - pad_left, 0, 0))
-    with lock:
-        left, right = pad_to_aspect(gen_left), pad_to_aspect(gen_right)
+    # Generate views with bilinear resampling
+    gen_left = sample_bilinear(rgb_c, idx_left)
+    gen_right = sample_bilinear(rgb_c, idx_right)
+    left, right = pad_to_aspect(gen_left), pad_to_aspect(gen_right)
 
-        if display_mode == "TAB":
-            out = torch.cat([left, right], dim=1)
-        else:  # SBS
-            out = torch.cat([left, right], dim=2)
-        if display_mode != "Full-SBS":
-            out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
+    if display_mode == "TAB":
+        out = torch.cat([left, right], dim=1)
+    else:  # SBS
+        out = torch.cat([left, right], dim=2)
+    if display_mode != "Full-SBS":
+        out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
     sbs = out.clamp(0, 255).to(torch.uint8).permute(1, 2, 0).contiguous().cpu().numpy()
     return sbs

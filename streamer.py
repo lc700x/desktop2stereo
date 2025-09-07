@@ -175,7 +175,6 @@ class MJPEGStreamer:
         """
         with self.lock:
             h, w = frame_np.shape[:2]
-
             # If the output resolution changed, update cached index page so new
             # clients get the correct metadata. Existing clients will auto-resize
             # in the browser (JS checks the incoming MJPEG frame size), so no

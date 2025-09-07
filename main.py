@@ -99,38 +99,64 @@ def main(mode="Viewer"):
             glfw.terminate()
 
         else:
-            from depth import predict_depth_tensor, make_sbs
+            from depth import predict_depth_tensor, make_sbs, DEVICE_INFO
             from streamer import MJPEGStreamer
-
-            def depth_loop():
-                while True:
-                    try:
-                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
-                    except queue.Empty:
-                        continue
-                    depth, rgb = predict_depth_tensor(frame_rgb)
-                    put_latest(depth_q, (rgb, depth))
+            if "DirectML" in DEVICE_INFO:
+                def depth_loop():
+                    while True:
+                        try:
+                            frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        except queue.Empty:
+                            continue
+                        depth, rgb = predict_depth_tensor(frame_rgb)
+                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+                        put_latest(depth_q, sbs)
+            else:
+                def depth_loop():
+                    while True:
+                        try:
+                            frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        except queue.Empty:
+                            continue
+                        depth, rgb = predict_depth_tensor(frame_rgb)
+                        put_latest(depth_q, (rgb, depth))
 
             threading.Thread(target=depth_loop, daemon=True).start()
             
             streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
             streamer.start()
             print(f"[Main] Streamer Started")
-            while True:
-                try:
-                    rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-                    sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
-                    streamer.set_frame(sbs)
-                    if SHOW_FPS:
-                        frame_count += 1
-                        current_time = time.perf_counter()
-                        if current_time - last_time >= 1.0:
-                            current_fps = frame_count / (current_time - last_time)
-                            frame_count = 0
-                            last_time = current_time
-                            print(f"FPS: {current_fps:.2f}")
-                except queue.Empty:
-                    continue
+            if "DirectML" in DEVICE_INFO: # Fix for unstable dml runtime error
+                while True:
+                    try:
+                        sbs = depth_q.get(timeout=TIME_SLEEP)
+                        streamer.set_frame(sbs)
+                        if SHOW_FPS:
+                            frame_count += 1
+                            current_time = time.perf_counter()
+                            if current_time - last_time >= 1.0:
+                                current_fps = frame_count / (current_time - last_time)
+                                frame_count = 0
+                                last_time = current_time
+                                print(f"FPS: {current_fps:.2f}")
+                    except queue.Empty:
+                        continue
+            else:
+                while True:
+                    try:
+                        rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+                        streamer.set_frame(sbs)
+                        if SHOW_FPS:
+                            frame_count += 1
+                            current_time = time.perf_counter()
+                            if current_time - last_time >= 1.0:
+                                current_fps = frame_count / (current_time - last_time)
+                                frame_count = 0
+                                last_time = current_time
+                                print(f"FPS: {current_fps:.2f}")
+                    except queue.Empty:
+                        continue
 
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
