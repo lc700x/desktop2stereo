@@ -14,16 +14,18 @@ DTYPE = torch.float16 if FP16 else torch.float32
 # Initialize DirectML Device
 def get_device(index=0):
     try:
-        import torch_directml
-        if torch_directml.is_available():
-            return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
-    except ImportError:
-        pass
-    if torch.cuda.is_available():
-        return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
-    if torch.backends.mps.is_available():
-        return torch.device("mps"), "Using Apple Silicon (MPS) device"
-    return torch.device("cpu"), "Using CPU device"
+        try:
+            import torch_directml
+            if torch_directml.is_available():
+                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
+        except ImportError:
+            pass
+        if torch.cuda.is_available():
+            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+        if torch.backends.mps.is_available():
+            return torch.device("mps"), "Using Apple Silicon (MPS) device"
+    except:
+        return torch.device("cpu"), "Using CPU device"
 
 DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
 if torch.cuda.is_available():
@@ -158,7 +160,7 @@ def process(img_rgb: np.ndarray, height) -> np.ndarray:
         img_rgb = cv2.resize(img_rgb,(width,height), interpolation=cv2.INTER_AREA)
     return img_rgb
 
-def predict_depth(image_rgb: np.ndarray) -> np.ndarray:
+def predict_depth(image_rgb: np.ndarray):
     tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
     tensor = tensor.permute(2,0,1).float().unsqueeze(0)/255
     tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
