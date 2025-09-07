@@ -2,9 +2,9 @@ import threading
 import queue
 import glfw
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY
 from capture import DesktopGrabber
-from depth import process, make_sbs
+from depth import process
 
 # Use precise frame interval
 TIME_SLEEP = 1.0 / FPS
@@ -34,7 +34,7 @@ def capture_loop():
         except queue.Empty:
             continue
         except Exception:
-            pass
+            continue
         put_latest(raw_q, (frame_raw, size))
 
 def process_loop():
@@ -113,13 +113,13 @@ def main(mode="Viewer"):
 
             threading.Thread(target=depth_loop, daemon=True).start()
             
-            streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=100)
+            streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
             streamer.start()
             print(f"[Main] Streamer Started")
             while True:
                 try:
                     rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-                    sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+                    sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
                     streamer.set_frame(sbs)
                     if SHOW_FPS:
                         frame_count += 1
@@ -134,13 +134,16 @@ def main(mode="Viewer"):
 
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
-    # except Exception as e:
-    #     print(e)
-    # finally:
-    #     if streamer:
-    #         streamer.stop()
-    #     print(f"[Main] {mode} Stopped")
-    #     exit()
+    except Exception as e:
+        print(e)
+    finally:
+        if streamer:
+            streamer.stop()
+            print(f"[Main] {mode} Stopped")
+        total_time = time.perf_counter() - start_time
+        avg_fps = frame_count / total_time if total_time > 0 else 0
+        # print(f"Average FPS: {avg_fps:.2f}")
+        exit()
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)

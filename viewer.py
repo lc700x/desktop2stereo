@@ -202,7 +202,7 @@ class StereoWindow:
     def on_key_event(self, window, key, scancode, action, mods):
         """Optimized key event handling"""
         if action == glfw.PRESS:
-            if key == glfw.KEY_SPACE:
+            if key == glfw.KEY_ENTER or key == glfw.KEY_SPACE:
                 self.toggle_fullscreen()
             elif key == glfw.KEY_ESCAPE:
                 glfw.set_window_should_close(window, True)
@@ -211,9 +211,9 @@ class StereoWindow:
             elif key == glfw.KEY_LEFT:
                 self.move_to_adjacent_monitor(-1)
             elif key == glfw.KEY_DOWN:
-                self.depth_ratio = max(0, self.depth_ratio - 0.1)
+                self.depth_ratio = max(0, self.depth_ratio - 0.5)
             elif key == glfw.KEY_UP:
-                self.depth_ratio = min(10, self.depth_ratio + 0.1)
+                self.depth_ratio = min(10, self.depth_ratio + 0.5)
             elif key == glfw.KEY_0:
                 self.depth_ratio = self.depth_ratio_original
             elif key == glfw.KEY_TAB:
@@ -350,4 +350,5 @@ class StereoWindow:
                 render_w, render_h
             )
             self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)
