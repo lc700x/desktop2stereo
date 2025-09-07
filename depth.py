@@ -237,10 +237,6 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
 
         # Bilinear interpolation
         return floor_val * (1 - frac).unsqueeze(0).expand(C, -1, -1) + ceil_val * frac.unsqueeze(0).expand(C, -1, -1)
-    with lock:
-        # Generate views with bilinear resampling
-        gen_left = sample_bilinear(rgb_c, idx_left)
-        gen_right = sample_bilinear(rgb_c, idx_right)
 
     # Aspect ratio padding (do once, avoid recomputation)
     def pad_to_aspect(img, target_ratio=(16, 9)):
@@ -257,8 +253,10 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
             new_w = int(round(h * r_t))
             pad_left = (new_w - w) // 2
             return F.pad(img, (pad_left, new_w - w - pad_left, 0, 0))
-    with lock:
-        left, right = pad_to_aspect(gen_left), pad_to_aspect(gen_right)
+    # Generate views with bilinear resampling
+    gen_left = sample_bilinear(rgb_c, idx_left)
+    gen_right = sample_bilinear(rgb_c, idx_right)
+    left, right = pad_to_aspect(gen_left), pad_to_aspect(gen_right)
 
     if display_mode == "TAB":
         out = torch.cat([left, right], dim=1)
