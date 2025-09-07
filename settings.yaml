@@ -52,12 +52,12 @@ Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Edge Dilation: 1
-Depth Resolution: 192
+Depth Resolution: 384
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
-Language: CN
-Run Mode: Streamer
+Language: EN
+Run Mode: Viewer
 Streamer Port: 1122
 Stream Quality: 90
