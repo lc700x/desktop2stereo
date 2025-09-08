@@ -172,12 +172,10 @@ def predict_depth(image_rgb: np.ndarray):
     h,w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
     # Normalize depth with adaptive range
-    depth = depth / depth.max().clamp(min=1e-6)
-    depth_sampled = depth[::8, ::8]
-    depth_range = depth_sampled.max() - depth_sampled.min()
-    # 0 near, 0.6 far
-    depth = (depth - depth_sampled.min()) / (depth_range * 0.6 + 1e-6)
-    depth = depth.clamp(0, 1)
+    depth_range = depth.max() - depth.min()
+    depth = (depth - depth.min()) / (depth_range + 1e-6)
+    depth = depth.clamp(0.1, 0.9)
+    depth = depth / depth.max()
     
     depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
     depth = anti_alias(depth, strength=AA_STRENTH)
@@ -197,12 +195,11 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
     h,w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
     # Normalize depth with adaptive range
-    depth = depth / depth.max().clamp(min=1e-6)
-    depth_sampled = depth[::8, ::8]
-    depth_range = depth_sampled.max() - depth_sampled.min()
-    # 0 near, 0.6 far
-    depth = (depth - depth_sampled.min() + depth_range) / (depth_range * 0.6 + 1e-6)
-    depth = depth.clamp(0, 1)
+    depth_range = depth.max() - depth.min()
+    depth = (depth - depth.min()) / (depth_range + 1e-6)
+    depth = depth.clamp(0.1, 0.9)
+    depth = depth / depth.max()
+    
     depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
     depth = anti_alias(depth, strength=AA_STRENTH)
     
@@ -211,7 +208,7 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS"):
     C, H, W = rgb_c.shape
     device = rgb_c.device
-    depth_strength = 0.1
+    depth_strength = 0.05
 
     # Precompute pixel coordinates (cache this tensor outside if called repeatedly!)
     xs = torch.arange(W, dtype=torch.float32, device=device).view(1, -1)  # shape [1,W]
@@ -219,7 +216,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
     # Depth inversion & shifts (keep as float for sub-pixel accuracy)
     inv = 1.0 - depth * depth_ratio
     max_px = ipd_uv * W
-    shifts_half = inv * max_px * 0.5 * depth_strength  # [H,W], float
+    shifts_half = inv * max_px * depth_strength  # [H,W], float
 
     # Build shifted indices with broadcasting
     idx_left = xs + shifts_half
