@@ -46,7 +46,10 @@ def process_loop():
         frame_rgb = process(frame_raw, size)
         put_latest(proc_q, frame_rgb)
 
-def main(mode="Viewer"):
+def main(mode="Viewer", recorder=True):
+    # if recorder:
+    #     import cv2
+    #     video_writer = None
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
 
@@ -129,8 +132,13 @@ def main(mode="Viewer"):
             if "DirectML" in DEVICE_INFO: # Fix for unstable dml runtime error
                 while True:
                     try:
-                        sbs = depth_q.get(timeout=TIME_SLEEP)
-                        streamer.set_frame(sbs)
+                        if "DirectML" in DEVICE_INFO: # Fix for unstable dml runtime error
+                            sbs = depth_q.get(timeout=TIME_SLEEP)
+                            streamer.set_frame(sbs)
+                        else:
+                            rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+                            sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+                            streamer.set_frame(sbs)
                         if SHOW_FPS:
                             frame_count += 1
                             current_time = time.perf_counter()
@@ -139,22 +147,14 @@ def main(mode="Viewer"):
                                 frame_count = 0
                                 last_time = current_time
                                 print(f"FPS: {current_fps:.2f}")
-                    except queue.Empty:
-                        continue
-            else:
-                while True:
-                    try:
-                        rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
-                        streamer.set_frame(sbs)
-                        if SHOW_FPS:
-                            frame_count += 1
-                            current_time = time.perf_counter()
-                            if current_time - last_time >= 1.0:
-                                current_fps = frame_count / (current_time - last_time)
-                                frame_count = 0
-                                last_time = current_time
-                                print(f"FPS: {current_fps:.2f}")
+                                
+                        # Recorder: write SBS frame to MKV
+                        # if recorder:
+                        #     if video_writer is None:
+                        #         h, w = sbs.shape[:2]
+                        #         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+                        #         video_writer = cv2.VideoWriter("output.mkv", fourcc, FPS, (w, h))
+                            video_writer.write(sbs)
                     except queue.Empty:
                         continue
 
