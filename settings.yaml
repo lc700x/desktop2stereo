@@ -1,13 +1,13 @@
 Capture Mode: Monitor
 Monitor Index: 1
 Window Title: ''
-FPS: 30
+FPS: 60
 Show FPS: true
 Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
-  depth-anything/Depth-Anything-V2-Large-hf:
+  depth-anything/Depth-Anything-V2-Large-h:
     resolutions:
     - 196
     - 238
@@ -341,12 +341,12 @@ Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Edge Dilation: 1
-Depth Resolution: 392
+Depth Resolution: 196
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: EN
-Run Mode: Viewer
+Run Mode: Streamer
 Streamer Port: 1122
 Stream Quality: 90

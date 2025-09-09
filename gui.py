@@ -4,7 +4,10 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, DEFAULT_PORT, crop_icon, get_local_ip
+from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, crop_icon, get_local_ip
+
+# Get model lists
+DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
 
 # Get window lists
 if OS_NAME == "Windows":
@@ -136,7 +139,7 @@ DEFAULTS = {
     "Model List": DEFAULT_MODEL_LIST,
     "Depth Model": DEFAULT_MODEL_LIST[2],
     "Depth Strength": 2.0,
-    "Depth Resolution": 384,
+    "Depth Resolution": 336,
     "Anti-aliasing": 2,
     "Edge Dilation": 1,
     "IPD": 0.064,
@@ -311,11 +314,7 @@ class ConfigGUI(tk.Tk):
             try:
                 self.cfg = self.read_yaml("settings.yaml")
                 self.language = self.cfg.get("Language", DEFAULTS["Language"])
-                if "Model List" in self.cfg and isinstance(self.cfg["Model List"], (list, dict)) and self.cfg["Model List"]:
-                    if isinstance(self.cfg["Model List"], dict):
-                        self.loaded_model_list = list(self.cfg["Model List"].keys())
-                    else:
-                        self.loaded_model_list = self.cfg["Model List"]
+                self.loaded_model_list = DEFAULT_MODEL_LIST
                 self.apply_config(self.cfg)
                 self.update_language_texts()
                 self.update_status(UI_TEXTS[self.language]["Loaded settings.yaml at startup"])
@@ -930,26 +929,19 @@ class ConfigGUI(tk.Tk):
         self.res_cb.set(str(cfg.get("Output Resolution", DEFAULTS["Output Resolution"])))
         self.ipd_var.set(str(cfg.get("IPD", DEFAULTS["IPD"])))
 
-        model_list = cfg.get("Model List", DEFAULTS["Model List"])
-        if not model_list:
-            model_list = DEFAULT_MODEL_LIST
-        
-        # Handle both old (list) and new (dict) format for model list
-        if isinstance(model_list, dict):  # New format with resolutions
-            self.depth_model_cb["values"] = list(model_list.keys())
-        else:  # Old format (list)
-            self.depth_model_cb["values"] = model_list
-        
-        selected_model = cfg.get("Depth Model", 
-                              list(model_list.keys())[0] if isinstance(model_list, dict) and model_list else 
-                              (model_list[0] if model_list else DEFAULTS["Depth Model"]))
+        model_list = DEFAULT_MODEL_LIST
+            
+        self.depth_model_cb["values"] = model_list
+        selected_model = cfg.get("Depth Model", DEFAULTS["Depth Model"])
         
         if selected_model not in self.depth_model_cb["values"]:
             selected_model = self.depth_model_cb["values"][0] if self.depth_model_cb["values"] else DEFAULTS["Depth Model"]
         
         self.depth_model_var.set(selected_model)
-        self.update_depth_resolution_options(selected_model)
-
+        if not keep_optional:
+            self.depth_res_cb.set(cfg.get("Depth Resolution", DEFAULTS["Depth Resolution"]))
+        else:
+            self.update_depth_resolution_options(selected_model)
         self.depth_strength_cb.set(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
         self.display_mode_cb.set(cfg.get("Display Mode", DEFAULTS["Display Mode"]))
         self.antialiasing_cb.set(str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"])))
@@ -976,30 +968,25 @@ class ConfigGUI(tk.Tk):
         self.on_capture_mode_change()
 
     def update_depth_resolution_options(self, model_name):
-        """Update the depth resolution combobox options based on the selected model"""
-        model_list = self.cfg.get("Model List", {})
-        default_resolutions = [196, 238, 294, 336, 392, 448, 518]
+        """Update depth resolution options based on selected model"""
+        model_list = self.cfg.get("Model List", DEFAULTS["Model List"])
         
-        # Get resolutions for the selected model
-        if isinstance(model_list, dict):  # New format with resolutions
-            model_info = model_list.get(model_name, {})
-            resolutions = model_info.get("resolutions", default_resolutions)
-        else:  # Old format (list)
-            resolutions = default_resolutions
+        # Get resolutions for this model
+        resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [336])  # Default to 384 if not found
         
-        # Update the combobox values
+        # Update combobox values
         self.depth_res_cb["values"] = [str(res) for res in resolutions]
         
-        # Try to keep the current value if it's in the new options
+        # Try to maintain current selection if possible
         current_val = self.depth_res_cb.get()
         if current_val not in self.depth_res_cb["values"]:
-            # Find the closest available resolution to the current value
+            # Try to find closest resolution
             try:
                 current_num = int(current_val)
                 closest = min(resolutions, key=lambda x: abs(x - current_num))
                 self.depth_res_cb.set(str(closest))
             except (ValueError, TypeError):
-                # Default to first option if conversion fails
+                # Default to first resolution if we can't convert
                 self.depth_res_cb.set(str(resolutions[0]))
 
     def on_depth_model_change(self, event=None):
@@ -1007,12 +994,27 @@ class ConfigGUI(tk.Tk):
         selected_model = self.depth_model_var.get()
         self.update_depth_resolution_options(selected_model)
 
-    def load_defaults(self):
-        self.selected_window_name = DEFAULTS["Window Title"]
+    def load_defaults(self):   
+        # Apply all defaults
         self.apply_config(DEFAULTS, keep_optional=False)
 
     def reset_to_defaults(self):
+        """Reset to defaults while maintaining model-resolution relationships"""
+        # Store current values that we might want to preserve
+        current_language = self.language
+        current_device = self.device_var.get()
+        
+        # Load the hard defaults
         self.load_defaults()
+        
+        # Restore language and device if needed
+        if current_language in UI_TEXTS:
+            self.language = current_language
+            self.language_var.set(current_language)
+            self.update_language_texts()
+        
+        if current_device in self.device_label_to_index.values():
+            self.device_var.set(current_device)
     
     def update_status(self, msg: str):
         """Update status bar text."""
@@ -1057,7 +1059,7 @@ class ConfigGUI(tk.Tk):
             "Output Resolution": int(self.res_cb.get()),
             "IPD": float(self.ipd_var.get()),
             "Display Mode": self.display_mode_cb.get(),
-            "Model List": self.cfg.get("Model List", DEFAULTS["Model List"]),  # Preserve existing model list structure
+            "Model List": ALL_MODELS,  # Preserve existing model list structure
             "Depth Model": self.depth_model_var.get(),
             "Depth Strength": float(self.depth_strength_cb.get()),
             "Anti-aliasing": int(self.antialiasing_cb.get()),
