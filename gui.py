@@ -938,10 +938,8 @@ class ConfigGUI(tk.Tk):
             selected_model = self.depth_model_cb["values"][0] if self.depth_model_cb["values"] else DEFAULTS["Depth Model"]
         
         self.depth_model_var.set(selected_model)
-        if not keep_optional:
-            self.depth_res_cb.set(cfg.get("Depth Resolution", DEFAULTS["Depth Resolution"]))
-        else:
-            self.update_depth_resolution_options(selected_model)
+        self.update_depth_resolution_options(selected_model)
+        self.depth_res_cb.set(cfg.get("Depth Resolution", DEFAULTS["Depth Resolution"]))
         self.depth_strength_cb.set(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
         self.display_mode_cb.set(cfg.get("Display Mode", DEFAULTS["Display Mode"]))
         self.antialiasing_cb.set(str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"])))
