@@ -71,7 +71,7 @@ LOCAL_IP = get_local_ip()
 # Get settings
 RUN_MODE = settings["Run Mode"]
 MODEL_ID = settings["Depth Model"]
-DEFAULT_MODEL_LIST = settings["Model List"]
+DEFAULT_MODEL_LIST = list(settings["Model List"].keys())
 CACHE_PATH = settings["Download Path"]
 DEPTH_RESOLUTION = settings["Depth Resolution"]
 DEVICE_ID = settings["Device"]

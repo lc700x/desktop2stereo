@@ -286,6 +286,7 @@ class ConfigGUI(tk.Tk):
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
         self.selected_window_name = ""
         self._window_objects = []  # Store window objects for reference
+        self.cfg = {}  # Store the loaded configuration
 
         try:
             icon_img = Image.open("icon.ico")
@@ -308,11 +309,14 @@ class ConfigGUI(tk.Tk):
 
         if os.path.exists("settings.yaml"):
             try:
-                cfg = self.read_yaml("settings.yaml")
-                self.language = cfg.get("Language", DEFAULTS["Language"])
-                if "Model List" in cfg and isinstance(cfg["Model List"], list) and cfg["Model List"]:
-                    self.loaded_model_list = cfg["Model List"]
-                self.apply_config(cfg)
+                self.cfg = self.read_yaml("settings.yaml")
+                self.language = self.cfg.get("Language", DEFAULTS["Language"])
+                if "Model List" in self.cfg and isinstance(self.cfg["Model List"], (list, dict)) and self.cfg["Model List"]:
+                    if isinstance(self.cfg["Model List"], dict):
+                        self.loaded_model_list = list(self.cfg["Model List"].keys())
+                    else:
+                        self.loaded_model_list = self.cfg["Model List"]
+                self.apply_config(self.cfg)
                 self.update_language_texts()
                 self.update_status(UI_TEXTS[self.language]["Loaded settings.yaml at startup"])
             except Exception as e:
@@ -434,12 +438,10 @@ class ConfigGUI(tk.Tk):
         self.fps_cb = ttk.Combobox(self.content_frame, values=self.fps_values, state="normal")
         self.fps_cb.grid(row=5, column=3, sticky="ew", **self.pad)
         
-        
         # Depth Resolution and Depth Strength
         self.label_depth_res = ttk.Label(self.content_frame, text="Depth Resolution:")
         self.label_depth_res.grid(row=6, column=0, sticky="w", **self.pad)
-        self.depth_res_values = ["48", "96", "192", "384", "576", "768", "960", "1152", "1344", "1536"]
-        self.depth_res_cb = ttk.Combobox(self.content_frame, values=self.depth_res_values, state="normal")
+        self.depth_res_cb = ttk.Combobox(self.content_frame, state="normal")
         self.depth_res_cb.grid(row=6, column=1, sticky="ew", **self.pad)
         
         self.label_depth_strength = ttk.Label(self.content_frame, text="Depth Strength:")
@@ -498,6 +500,7 @@ class ConfigGUI(tk.Tk):
         self.depth_model_var = tk.StringVar()
         self.depth_model_cb = ttk.Combobox(self.content_frame, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
         self.depth_model_cb.grid(row=10, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.depth_model_cb.bind("<<ComboboxSelected>>", self.on_depth_model_change)
 
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
@@ -520,9 +523,12 @@ class ConfigGUI(tk.Tk):
         self.stream_quality_values = [str(i) for i in range(100, 49, -5)]  # 0-100 in steps of -5
         self.stream_quality_cb = ttk.Combobox(self.content_frame, values=self.stream_quality_values, state="normal")
         
-         # URL Action Buttons
+        # URL Action Buttons
         self.btn_copy_url = ttk.Button(self.content_frame, text="Copy URL", command=self.copy_url_to_clipboard)
-        self.btn_open_browser = ttk.Button(self.content_frame, text="Open Browser",  command=self.open_url_in_browser)
+        self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
+        
+        self.btn_open_browser = ttk.Button(self.content_frame, text="Open Browser", command=self.open_url_in_browser)
+        self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
 
         # Buttons (moved down a bit to make room)
         self.btn_reset = ttk.Button(self.content_frame, text="Reset", command=self.reset_to_defaults)
@@ -541,7 +547,7 @@ class ConfigGUI(tk.Tk):
         # Status bar at bottom
         self.status_label = tk.Label(self, text="", anchor="w", relief="sunken", padx=20, pady=4)
         self.status_label.grid(row=1, column=0, sticky="we")  # no padding
-    
+
     def refresh_window_list(self):
         """Refresh the list of available windows"""
         try:
@@ -897,6 +903,8 @@ class ConfigGUI(tk.Tk):
             return False
 
     def apply_config(self, cfg, keep_optional=True):
+        self.cfg = cfg  # Store the config for later use
+        
         # Monitor settings
         monitor_idx = cfg.get("Monitor Index", DEFAULTS["Monitor Index"])
         label_for_idx = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == monitor_idx), None)
@@ -925,15 +933,25 @@ class ConfigGUI(tk.Tk):
         model_list = cfg.get("Model List", DEFAULTS["Model List"])
         if not model_list:
             model_list = DEFAULT_MODEL_LIST
-        self.depth_model_cb["values"] = model_list
-        selected_model = cfg.get("Depth Model", model_list[0] if model_list else DEFAULTS["Depth Model"])
-        if selected_model not in model_list:
-            selected_model = model_list[0]
+        
+        # Handle both old (list) and new (dict) format for model list
+        if isinstance(model_list, dict):  # New format with resolutions
+            self.depth_model_cb["values"] = list(model_list.keys())
+        else:  # Old format (list)
+            self.depth_model_cb["values"] = model_list
+        
+        selected_model = cfg.get("Depth Model", 
+                              list(model_list.keys())[0] if isinstance(model_list, dict) and model_list else 
+                              (model_list[0] if model_list else DEFAULTS["Depth Model"]))
+        
+        if selected_model not in self.depth_model_cb["values"]:
+            selected_model = self.depth_model_cb["values"][0] if self.depth_model_cb["values"] else DEFAULTS["Depth Model"]
+        
         self.depth_model_var.set(selected_model)
+        self.update_depth_resolution_options(selected_model)
 
-        self.depth_res_cb.set(cfg.get("Depth Resolution", DEFAULTS["Depth Resolution"]))
-        self.display_mode_cb.set(cfg.get("Display Mode", DEFAULTS["Display Mode"]))
         self.depth_strength_cb.set(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
+        self.display_mode_cb.set(cfg.get("Display Mode", DEFAULTS["Display Mode"]))
         self.antialiasing_cb.set(str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"])))
         self.edge_dilation_cb.set(str(cfg.get("Edge Dilation", DEFAULTS["Edge Dilation"])))
         self.fp16_var.set(cfg.get("FP16", DEFAULTS["FP16"]))
@@ -956,6 +974,38 @@ class ConfigGUI(tk.Tk):
         self.update_language_texts()
         self.on_run_mode_change()
         self.on_capture_mode_change()
+
+    def update_depth_resolution_options(self, model_name):
+        """Update the depth resolution combobox options based on the selected model"""
+        model_list = self.cfg.get("Model List", {})
+        default_resolutions = [196, 238, 294, 336, 392, 448, 518]
+        
+        # Get resolutions for the selected model
+        if isinstance(model_list, dict):  # New format with resolutions
+            model_info = model_list.get(model_name, {})
+            resolutions = model_info.get("resolutions", default_resolutions)
+        else:  # Old format (list)
+            resolutions = default_resolutions
+        
+        # Update the combobox values
+        self.depth_res_cb["values"] = [str(res) for res in resolutions]
+        
+        # Try to keep the current value if it's in the new options
+        current_val = self.depth_res_cb.get()
+        if current_val not in self.depth_res_cb["values"]:
+            # Find the closest available resolution to the current value
+            try:
+                current_num = int(current_val)
+                closest = min(resolutions, key=lambda x: abs(x - current_num))
+                self.depth_res_cb.set(str(closest))
+            except (ValueError, TypeError):
+                # Default to first option if conversion fails
+                self.depth_res_cb.set(str(resolutions[0]))
+
+    def on_depth_model_change(self, event=None):
+        """Handle depth model selection changes"""
+        selected_model = self.depth_model_var.get()
+        self.update_depth_resolution_options(selected_model)
 
     def load_defaults(self):
         self.selected_window_name = DEFAULTS["Window Title"]
@@ -1007,7 +1057,7 @@ class ConfigGUI(tk.Tk):
             "Output Resolution": int(self.res_cb.get()),
             "IPD": float(self.ipd_var.get()),
             "Display Mode": self.display_mode_cb.get(),
-            "Model List": list(self.depth_model_cb["values"]),
+            "Model List": self.cfg.get("Model List", DEFAULTS["Model List"]),  # Preserve existing model list structure
             "Depth Model": self.depth_model_var.get(),
             "Depth Strength": float(self.depth_strength_cb.get()),
             "Anti-aliasing": int(self.antialiasing_cb.get()),
@@ -1019,7 +1069,7 @@ class ConfigGUI(tk.Tk):
             "Device": self.device_label_to_index.get(self.device_var.get()),
             "Language": self.language,
             "Run Mode": self.run_mode_key,
-            "Streamer Port": port_val,
+            "Streamer Port": int(self.streamer_port_var.get()),
             "Stream Quality": int(self.stream_quality_cb.get()),
         }
         success = self.save_yaml("settings.yaml", cfg)
@@ -1052,6 +1102,7 @@ class ConfigGUI(tk.Tk):
                 self._monitor_process()  # start monitoring after launch
             except Exception as e:
                 messagebox.showerror(
+                    UI_TEXTS[self.language]["Error"],
                     f"{UI_TEXTS[self.language]['Failed to run process:']} {e}"
                 )
                 print(f"[Main] {self.run_mode_key} Stopped")
@@ -1087,7 +1138,6 @@ class ConfigGUI(tk.Tk):
         else:
             print(f"[Main] {self.run_mode_key} Stopped")
             self.update_status(UI_TEXTS[self.language]["Stopped"])
-            
 
 if __name__ == "__main__":
     app = ConfigGUI()

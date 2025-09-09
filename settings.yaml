@@ -1,58 +1,347 @@
 Capture Mode: Monitor
 Monitor Index: 1
 Window Title: ''
-FPS: 60
+FPS: 30
 Show FPS: true
 Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
-- depth-anything/Depth-Anything-V2-Large-hf
-- depth-anything/Depth-Anything-V2-Base-hf
-- depth-anything/Depth-Anything-V2-Small-hf
-- depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
-- depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
-- depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
-- depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
-- depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
-- depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
-- depth-anything/prompt-depth-anything-vitl-hf
-- depth-anything/prompt-depth-anything-vits-hf
-- depth-anything/prompt-depth-anything-vits-transparent-hf
-- lc700x/Amodal-Depth-Anything-V2-large-hf
-- LiheYoung/depth-anything-large-hf
-- LiheYoung/depth-anything-base-hf
-- LiheYoung/depth-anything-small-hf
-- lc700x/patchfusion-depth-anything-large-hf
-- lc700x/patchfusion-depth-anything-base-hf
-- lc700x/patchfusion-depth-anything-small-hf
-- xingyang1/Distill-Any-Depth-Large-hf
-- lc700x/Distill-Any-Depth-Base-hf
-- xingyang1/Distill-Any-Depth-Small-hf
-- lc700x/Distill-Any-Depth-Base-hf
-- lc700x/depth-ai-hf
-- lc700x/dpt-dinov2-giant-kitti-hf
-- lc700x/dpt-dinov2-large-kitti-hf
-- lc700x/dpt-dinov2-base-kitti-hf
-- facebook/dpt-dinov2-small-kitti
-- facebook/dpt-dinov2-giant-nyu
-- lc700x/dpt-dinov2-large-nyu-hf
-- lc700x/dpt-dinov2-base-nyu-hf
-- lc700x/dpt-dinov2-small-nyu-hf
-- lc700x/dpt-hybrid-midas-hf
-- Intel/dpt-beit-base-384
-- Intel/dpt-beit-large-512
-- Intel/dpt-large
-- lc700x/dpt-large-redesign-hf
-- Intel/zoedepth-nyu-kitti
-- Intel/zoedepth-nyu
-- Intel/zoedepth-kitti
-- apple/DepthPro-hf
+  depth-anything/Depth-Anything-V2-Large-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Depth-Anything-V2-Base-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Depth-Anything-V2-Small-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/prompt-depth-anything-vitl-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/prompt-depth-anything-vits-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/prompt-depth-anything-vits-transparent-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/Amodal-Depth-Anything-V2-large-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  LiheYoung/depth-anything-large-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  LiheYoung/depth-anything-base-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  LiheYoung/depth-anything-small-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/patchfusion-depth-anything-large-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/patchfusion-depth-anything-base-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/patchfusion-depth-anything-small-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  xingyang1/Distill-Any-Depth-Large-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/Distill-Any-Depth-Base-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  xingyang1/Distill-Any-Depth-Small-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/dpt-dinov2-giant-kitti-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/dpt-dinov2-large-kitti-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/dpt-dinov2-base-kitti-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  facebook/dpt-dinov2-small-kitti:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  facebook/dpt-dinov2-giant-nyu:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/dpt-dinov2-large-nyu-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/dpt-dinov2-base-nyu-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/dpt-dinov2-small-nyu-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/depth-ai-hf:
+    resolutions:
+    - 224
+    - 208
+    - 196
+  lc700x/dpt-hybrid-midas-hf:
+    resolutions:
+    - 384
+  Intel/dpt-beit-base-384:
+    resolutions:
+    - 384
+    - 336
+    - 288
+    - 240
+    - 192
+  Intel/dpt-beit-large-512:
+    resolutions:
+    - 512
+    - 448
+    - 384
+    - 288
+    - 192
+  Intel/dpt-large:
+    resolutions:
+    - 384
+    - 336
+    - 288
+    - 240
+    - 192
+  lc700x/dpt-large-redesign-hf:
+    resolutions:
+    - 384
+    - 336
+    - 288
+    - 240
+    - 192
+  Intel/zoedepth-nyu-kitti:
+    resolutions:
+    - 384
+    - 336
+    - 288
+    - 240
+    - 192
+  Intel/zoedepth-nyu:
+    resolutions:
+    - 384
+    - 336
+    - 288
+    - 240
+    - 192
+  Intel/zoedepth-kitti:
+    resolutions:
+    - 384
+    - 336
+    - 288
+    - 240
+    - 192
+  apple/DepthPro-hf:
+    resolutions:
+    - 1536
 Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Edge Dilation: 1
-Depth Resolution: 384
+Depth Resolution: 392
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
