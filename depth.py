@@ -174,7 +174,7 @@ def predict_depth(image_rgb: np.ndarray):
     # Normalize depth with adaptive range
     depth_range = depth.max() - depth.min()
     depth = (depth - depth.min()) / (depth_range + 1e-6)
-    depth = depth.clamp(0.1, 0.9)
+    depth = depth.clamp(0.2, 0.9)
     depth = depth / depth.max()
     
     depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
@@ -197,7 +197,7 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
     # Normalize depth with adaptive range
     depth_range = depth.max() - depth.min()
     depth = (depth - depth.min()) / (depth_range + 1e-6)
-    depth = depth.clamp(0.1, 0.9)
+    depth = depth.clamp(0.2, 0.9)
     depth = depth / depth.max()
     
     depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
