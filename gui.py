@@ -953,8 +953,9 @@ class ConfigGUI(tk.Tk):
             self.language_var.set(cfg.get("Language", DEFAULTS["Language"]))
 
         # Run mode + streamer settings
-        run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Viewer"))
-        self.run_mode_key = run_mode
+        if keep_optional:
+            run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Viewer"))
+            self.run_mode_key = run_mode
         port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", DEFAULT_PORT))
         self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
         self.streamer_port_var.set(str(port))
