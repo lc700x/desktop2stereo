@@ -178,7 +178,7 @@ class MJPEGStreamer:
                 self.actual_fps = self.frame_count / (current_time - self.last_fps_time)
                 self.frame_count = 0
                 self.last_fps_time = current_time
-                print(f"    FPS: {self.actual_fps:.1f}/{self.target_fps}")
+                print(f"[MJPEGStreamer] FPS: {self.actual_fps:.1f}")
 
             frame_to_send = frame_np.copy()
 

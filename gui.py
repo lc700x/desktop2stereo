@@ -923,9 +923,8 @@ class ConfigGUI(tk.Tk):
                 self.device_var.set(label_for_device_idx)
             elif self.device_label_to_index:
                 self.device_var.set(next(iter(self.device_label_to_index)))
-
+            self.showfps_var.set(cfg.get("Show FPS", DEFAULTS["Show FPS"]))
         self.fps_cb.set(str(cfg.get("FPS", DEFAULTS["FPS"])))
-        self.showfps_var.set(cfg.get("Show FPS", DEFAULTS["Show FPS"]))
         self.res_cb.set(str(cfg.get("Output Resolution", DEFAULTS["Output Resolution"])))
         self.ipd_var.set(str(cfg.get("IPD", DEFAULTS["IPD"])))
 
