@@ -4,7 +4,7 @@ import glfw
 import time
 from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY
 from capture import DesktopGrabber
-from depth import process
+from depth import process, predict_depth
 
 # Use precise frame interval
 TIME_SLEEP = 1.0 / FPS
@@ -46,10 +46,7 @@ def process_loop():
         frame_rgb = process(frame_raw, size)
         put_latest(proc_q, frame_rgb)
 
-def main(mode="Viewer", recorder=True):
-    # if recorder:
-    #     import cv2
-    #     video_writer = None
+def main(mode="Viewer"):
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
 
@@ -64,7 +61,6 @@ def main(mode="Viewer", recorder=True):
     try:
         if mode == "Viewer":
             from viewer import StereoWindow
-            from depth import predict_depth
 
             def depth_loop():
                 while True:
@@ -82,7 +78,6 @@ def main(mode="Viewer", recorder=True):
                 try:
                     rgb, depth = depth_q.get_nowait()
                     window.update_frame(rgb, depth)
-
                     if SHOW_FPS:
                         frame_count += 1
                         total_frames += 1
@@ -102,61 +97,48 @@ def main(mode="Viewer", recorder=True):
             glfw.terminate()
 
         else:
-            from depth import predict_depth_tensor, make_sbs, DEVICE_INFO
+            from depth import make_sbs, DEVICE_INFO
             from streamer import MJPEGStreamer
             if "DirectML" in DEVICE_INFO:
-                def depth_loop():
-                    while True:
-                        try:
-                            frame_rgb = proc_q.get(timeout=TIME_SLEEP)
-                        except queue.Empty:
-                            continue
-                        depth, rgb = predict_depth_tensor(frame_rgb)
-                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
-                        put_latest(depth_q, sbs)
+                def make_output(rgb, depth):
+                    return make_sbs(
+                        rgb, depth,
+                        ipd_uv=IPD,
+                        depth_ratio=DEPTH_STRENTH,
+                        display_mode=DISPLAY_MODE
+                    )
             else:
-                def depth_loop():
-                    while True:
-                        try:
-                            frame_rgb = proc_q.get(timeout=TIME_SLEEP)
-                        except queue.Empty:
-                            continue
-                        depth, rgb = predict_depth_tensor(frame_rgb)
-                        put_latest(depth_q, (rgb, depth))
+                def make_output(rgb, depth):
+                    return (rgb, depth)
+
+
+            def depth_loop():
+                while True:
+                    try:
+                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                    except queue.Empty:
+                        continue
+                    depth, rgb = predict_depth(frame_rgb, return_tuple=True)
+                    put_latest(depth_q, make_output(rgb, depth))
+
 
             threading.Thread(target=depth_loop, daemon=True).start()
             
-            streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
+            streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY, show_fps=SHOW_FPS)
             streamer.start()
             print(f"[Main] Streamer Started")
-            if "DirectML" in DEVICE_INFO: # Fix for unstable dml runtime error
-                while True:
-                    try:
-                        if "DirectML" in DEVICE_INFO: # Fix for unstable dml runtime error
-                            sbs = depth_q.get(timeout=TIME_SLEEP)
-                            streamer.set_frame(sbs)
-                        else:
-                            rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-                            sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
-                            streamer.set_frame(sbs)
-                        if SHOW_FPS:
-                            frame_count += 1
-                            current_time = time.perf_counter()
-                            if current_time - last_time >= 1.0:
-                                current_fps = frame_count / (current_time - last_time)
-                                frame_count = 0
-                                last_time = current_time
-                                print(f"FPS: {current_fps:.2f}")
-                                
-                        # Recorder: write SBS frame to MKV
-                        # if recorder:
-                        #     if video_writer is None:
-                        #         h, w = sbs.shape[:2]
-                        #         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-                        #         video_writer = cv2.VideoWriter("output.mkv", fourcc, FPS, (w, h))
-                            video_writer.write(sbs)
-                    except queue.Empty:
-                        continue
+            
+            while True:
+                try:
+                    if "DirectML" in DEVICE_INFO: # Fix for unstable dml runtime error
+                        sbs = depth_q.get(timeout=TIME_SLEEP)
+                        streamer.set_frame(sbs)
+                    else:
+                        rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+                    streamer.set_frame(sbs)
+                except queue.Empty:
+                    continue
 
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
@@ -165,11 +147,10 @@ def main(mode="Viewer", recorder=True):
     finally:
         if streamer:
             streamer.stop()
-            print(f"[Main] {mode} Stopped")
-        total_time = time.perf_counter() - start_time
-        avg_fps = frame_count / total_time if total_time > 0 else 0
+        #     print(f"[Main] {mode} Stopped")
+        # total_time = time.perf_counter() - start_time
+        # avg_fps = frame_count / total_time if total_time > 0 else 0
         # print(f"Average FPS: {avg_fps:.2f}")
-        exit()
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)

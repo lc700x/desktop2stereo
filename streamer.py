@@ -6,39 +6,37 @@ from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
 from utils import get_local_ip
 
-# Path to favicon file
 ICON_PATH = "icon2.ico"
 
-# Custom WSGI server class that supports threading
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     allow_reuse_address = True
     block_on_close = False
 
 class MJPEGStreamer:
-    def __init__(self, host="0.0.0.0", port=1303, fps=60, quality=90):
-        """
-        Initialize the MJPEG streamer with configuration parameters.
-        """
-        # MJPEG stream boundary marker
+    def __init__(self, host="0.0.0.0", port=1303, fps=60, quality=90, show_fps=True):
         self.boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
         self.quality = int(quality)
         self.fps = fps
         self.delay = 1.0 / fps
+        self.target_fps = fps
+        self.show_fps = show_fps  # NEW: control FPS drawing
 
-        self.raw_frame = None       # latest frame (numpy RGB)
-        self.encoded_frame = None   # latest JPEG
+        self.raw_frame = None
+        self.encoded_frame = None
         self.lock = threading.Lock()
 
         self.shutdown = threading.Event()
         self.new_raw_event = threading.Event()
         self.new_encoded_event = threading.Event()
 
-        # Stream dimensions
+        self.frame_count = 0
+        self.last_fps_time = time.perf_counter()
+        self.actual_fps = 0
+
         self.sbs_width = None
         self.sbs_height = None
         self.index_bytes = None
 
-        # HTML template with auto reconnect and fullscreen
         self.template = """<!DOCTYPE html>
 <html>
     <head>
@@ -124,7 +122,6 @@ class MJPEGStreamer:
 </html>
 """
 
-        # WSGI application handler
         def app(environ, start_response):
             path = environ.get("PATH_INFO", "/")
 
@@ -132,11 +129,13 @@ class MJPEGStreamer:
                 if self.index_bytes is None:
                     start_response("503 Service Unavailable", [("Content-Type", "text/plain")])
                     return [b"Stream not ready yet"]
-                start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+                start_response("200 OK", [("Content-Type", "text/html; charset=utf-8"),
+                                          ("Cache-Control", "no-cache, no-store, must-revalidate")])
                 return [self.index_bytes]
 
             if path == "/stream.mjpg":
-                start_response("200 OK", [("Content-Type", "multipart/x-mixed-replace; boundary=frame")])
+                start_response("200 OK", [("Content-Type", "multipart/x-mixed-replace; boundary=frame"),
+                                          ("Cache-Control", "no-cache, no-store, must-revalidate")])
                 return self._generate()
 
             if path == "/favicon.ico" and os.path.exists(ICON_PATH):
@@ -148,13 +147,12 @@ class MJPEGStreamer:
             start_response("404 Not Found", [("Content-Type", "text/plain")])
             return [b"Not Found"]
 
-        # Create WSGI server instance
         self.server = make_server(host, port, app, ThreadingWSGIServer)
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.encoder_thread = threading.Thread(target=self._encoder_loop, daemon=True)
 
     def start(self):
-        print(f"[MJPEGStreamer] serving on http://{get_local_ip()}:{self.server.server_address[1]}/")
+        print(f"[MJPEGStreamer] Serving at {self.target_fps}FPS on http://{get_local_ip()}:{self.server.server_address[1]}/")
         self.server_thread.start()
         self.encoder_thread.start()
 
@@ -169,30 +167,42 @@ class MJPEGStreamer:
 
     def set_frame(self, frame_np):
         """
-        Set the current frame to be streamed. This will also update the cached HTML
-        page if the output resolution changes so newly-connecting clients see the
-        correct initial dimensions.
+        Set the current frame to be streamed.
+        Draw FPS overlay if show_fps=True
         """
         with self.lock:
+            # Update server FPS
+            self.frame_count += 1
+            current_time = time.perf_counter()
+            if current_time - self.last_fps_time >= 1.0:
+                self.actual_fps = self.frame_count / (current_time - self.last_fps_time)
+                self.frame_count = 0
+                self.last_fps_time = current_time
+                print(f"    FPS: {self.actual_fps:.1f}/{self.target_fps}")
+
+            frame_to_send = frame_np.copy()
+
+            # Draw FPS overlay if enabled
+            if self.show_fps:
+                cv2.putText(frame_to_send,
+                            f"FPS: {self.actual_fps:.1f}",
+                            (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            1.0,
+                            (0, 255, 0),
+                            2)
+
+            # Update index page if resolution changes
             h, w = frame_np.shape[:2]
-            # If the output resolution changed, update cached index page so new
-            # clients get the correct metadata. Existing clients will auto-resize
-            # in the browser (JS checks the incoming MJPEG frame size), so no
-            # manual refresh is needed.
             if (self.sbs_width, self.sbs_height) != (w, h):
                 self.sbs_width = w
                 self.sbs_height = h
                 try:
-                    self.index_bytes = self.template.format(
-                        fps=self.fps,
-                        width=self.sbs_width,
-                        height=self.sbs_height
-                    ).encode("utf-8")
+                    self.index_bytes = self.template.format(fps=self.target_fps, width=w, height=h).encode("utf-8")
                 except Exception:
-                    # Fallback to a minimal page if formatting fails
                     self.index_bytes = b"<html><body>Desktop2Stereo Streamer</body></html>"
 
-            self.raw_frame = frame_np
+            self.raw_frame = frame_to_send
             self.new_raw_event.set()
 
     def _encoder_loop(self):
@@ -216,7 +226,6 @@ class MJPEGStreamer:
     def _generate(self):
         next_frame_time = time.perf_counter()
         while not self.shutdown.is_set():
-            # Wait for a new frame
             if not self.new_encoded_event.wait(timeout=1):
                 continue
             self.new_encoded_event.clear()
@@ -225,15 +234,14 @@ class MJPEGStreamer:
             if f:
                 yield self.boundary + f + b"\r\n"
 
-            # Enforce consistent pacing
             next_frame_time += self.delay
             sleep_time = next_frame_time - time.perf_counter()
             if sleep_time > 0:
-                time.sleep(sleep_time)
+                time.sleep(sleep_time * 0.8)
+                while time.perf_counter() < next_frame_time:
+                    pass
             else:
-                # Frame processing fell behind, reset clock
                 next_frame_time = time.perf_counter()
-        yield b""
 
     def encode_jpeg(self, arr: np.ndarray) -> bytes:
         if arr is None:
