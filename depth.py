@@ -160,29 +160,7 @@ def process(img_rgb: np.ndarray, height) -> np.ndarray:
         img_rgb = cv2.resize(img_rgb,(width,height), interpolation=cv2.INTER_AREA)
     return img_rgb
 
-def predict_depth(image_rgb: np.ndarray):
-    tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
-    tensor = tensor.permute(2,0,1).float().unsqueeze(0)/255
-    tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
-    tensor = ((tensor-MEAN)/STD).contiguous()
-    with lock:
-        with torch.no_grad():
-            tensor = tensor.to(dtype=MODEL_DTYPE)
-            depth = model(pixel_values=tensor).predicted_depth
-    h,w = image_rgb.shape[:2]
-    depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
-    # Normalize depth with adaptive range
-    depth_range = depth.max() - depth.min()
-    depth = (depth - depth.min()) / (depth_range + 1e-6)
-    depth = depth.clamp(0.2, 0.9)
-    depth = depth / depth.max()
-    
-    depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
-    depth = anti_alias(depth, strength=AA_STRENTH)
-    
-    return depth
-
-def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
+def predict_depth(image_rgb: np.ndarray, return_tuple = False):
     tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
     rgb_c = tensor.permute(2,0,1).contiguous()
     tensor = rgb_c.unsqueeze(0)/255
@@ -202,8 +180,10 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
     
     depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
     depth = anti_alias(depth, strength=AA_STRENTH)
-    
-    return depth, rgb_c
+    if return_tuple:
+        return depth, rgb_c
+    else:
+        return depth
 
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS"):
     C, H, W = rgb_c.shape
