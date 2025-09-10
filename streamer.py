@@ -52,6 +52,9 @@ class MJPEGStreamer:
 
             window.onload = () => {{
                 const video = document.getElementById("player-canvas");
+                video.playsInline = true;
+                video.setAttribute('webkit-playsinline', '');
+                video.setAttribute('playsinline', '');
                 let canvas = document.createElement("canvas");
                 let ctx = canvas.getContext("2d");
                 let canvasStream = null;
@@ -207,26 +210,33 @@ class MJPEGStreamer:
 
     def _encoder_loop(self):
         while not self.shutdown.is_set():
-            if not self.new_raw_event.wait(timeout=1):
+            if not self.new_raw_event.wait(timeout=0.1):  # Reduced timeout
                 continue
             self.new_raw_event.clear()
 
-            raw = self.raw_frame
-            if raw is None:
-                continue
-            try:
-                bgr = np.ascontiguousarray(raw[..., ::-1])
-                success, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
-                if success:
-                    self.encoded_frame = buf.tobytes()
-                    self.new_encoded_event.set()
-            except Exception as e:
-                print("[MJPEGStreamer] Encoding error:", e)
+            with self.lock:  # Add lock for thread safety
+                raw = self.raw_frame
+                if raw is None:
+                    continue
+                
+                try:
+                    # Use faster color conversion if possible
+                    bgr = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR) if len(raw.shape) == 3 else raw
+                    success, buf = cv2.imencode(".jpg", bgr, [
+                        cv2.IMWRITE_JPEG_QUALITY, self.quality,
+                        cv2.IMWRITE_JPEG_OPTIMIZE, 1
+                    ])
+                    if success:
+                        self.encoded_frame = buf.tobytes()
+                        self.new_encoded_event.set()
+                except Exception as e:
+                    print("[MJPEGStreamer] Encoding error:", e)
 
     def _generate(self):
         next_frame_time = time.perf_counter()
         while not self.shutdown.is_set():
-            if not self.new_encoded_event.wait(timeout=1):
+            # Wait for new frame with timeout
+            if not self.new_encoded_event.wait(timeout=0.1):
                 continue
             self.new_encoded_event.clear()
 
@@ -234,14 +244,18 @@ class MJPEGStreamer:
             if f:
                 yield self.boundary + f + b"\r\n"
 
+            # Calculate sleep time more precisely
             next_frame_time += self.delay
             sleep_time = next_frame_time - time.perf_counter()
-            if sleep_time > 0:
-                time.sleep(sleep_time * 0.8)
+            
+            if sleep_time > 0.001:  # Only sleep if significant time remains
+                time.sleep(sleep_time * 0.9)  # Slightly more aggressive sleep
+                # Busy wait for last millisecond for better precision
                 while time.perf_counter() < next_frame_time:
                     pass
             else:
-                next_frame_time = time.perf_counter()
+                # We're behind schedule, reset timing
+                next_frame_time = time.perf_counter() + self.delay
 
     def encode_jpeg(self, arr: np.ndarray) -> bytes:
         if arr is None:
