@@ -160,6 +160,9 @@ def process(img_rgb: np.ndarray, height) -> np.ndarray:
         img_rgb = cv2.resize(img_rgb,(width,height), interpolation=cv2.INTER_AREA)
     return img_rgb
 
+def normalize_tensor(tensor):
+    return (tensor - tensor.min())/(tensor.max() - tensor.min()+1e-6)
+
 def predict_depth(image_rgb: np.ndarray, return_tuple = False):
     tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
     rgb_c = tensor.permute(2,0,1).contiguous()
@@ -173,10 +176,9 @@ def predict_depth(image_rgb: np.ndarray, return_tuple = False):
     h,w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
     # Normalize depth with adaptive range
-    depth_range = depth.max() - depth.min()
-    depth = (depth - depth.min()) / (depth_range + 1e-6)
+    depth = normalize_tensor(depth)
     depth = depth.clamp(0.2, 0.9)
-    depth = depth / depth.max()
+    depth = normalize_tensor(depth)
     
     depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
     depth = anti_alias(depth, strength=AA_STRENTH)
