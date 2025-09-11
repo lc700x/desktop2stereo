@@ -176,10 +176,11 @@ def predict_depth(image_rgb: np.ndarray, return_tuple = False):
     h,w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
     # Normalize depth with adaptive range
+    depth_sampled = depth[::8, ::8].to(dtype=torch.float)
+    depth_min = torch.quantile(depth_sampled, 0.6)
+    depth_max = torch.quantile(depth_sampled, 0.95)
+    depth = (depth - depth_min) / (depth_max - depth_min + 1e-6)
     depth = normalize_tensor(depth)
-    depth = depth.clamp(0.2, 0.9)
-    depth = normalize_tensor(depth)
-    
     depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
     depth = anti_alias(depth, strength=AA_STRENTH)
     if return_tuple:
