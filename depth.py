@@ -183,6 +183,268 @@ def predict_depth(image_rgb: np.ndarray, return_tuple = False):
     depth = normalize_tensor(depth)
     depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
     depth = anti_alias(depth, strength=AA_STRENTH)
+# depth.py
+import torch
+torch.set_num_threads(1)
+import torch.nn.functional as F
+from transformers import AutoModelForDepthEstimation
+import numpy as np
+from threading import Lock
+import cv2
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, DILATION_SIZE, AA_STRENTH
+
+# Model configuration
+DTYPE = torch.float16 if FP16 else torch.float32
+
+# Initialize DirectML Device
+def get_device(index=0):
+    try:
+        try:
+            import torch_directml
+            if torch_directml.is_available():
+                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
+        except ImportError:
+            pass
+        if torch.cuda.is_available():
+            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+        if torch.backends.mps.is_available():
+            return torch.device("mps"), "Using Apple Silicon (MPS) device"
+    except:
+        return torch.device("cpu"), "Using CPU device"
+
+DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True
+
+print(f"{DEVICE_INFO}")
+print(f"Model: {MODEL_ID}")
+
+# Load depth model
+model = AutoModelForDepthEstimation.from_pretrained(
+    MODEL_ID,
+    torch_dtype=torch.float16 if FP16 else torch.float32,
+    cache_dir=CACHE_PATH,
+    weights_only=True
+).to(DEVICE).eval()
+
+if FP16:
+    model.half()
+
+MODEL_DTYPE = next(model.parameters()).dtype
+MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
+STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
+with torch.no_grad():
+    dummy = torch.zeros(1,3,DEPTH_RESOLUTION,DEPTH_RESOLUTION, device=DEVICE, dtype=MODEL_DTYPE)
+    model(pixel_values=dummy)
+
+lock = Lock()
+
+
+# Utility and refinement funcs
+def apply_foreground_scale_torch(depth: torch.Tensor, scale: float) -> torch.Tensor:
+    """
+    Apply foreground/background scaling to a depth map.
+    0 = near (foreground), 1 = far (background).
+    """
+    if not torch.is_floating_point(depth):
+        depth = depth.float()
+
+    if scale > 0:
+        # Exaggerate separation: foreground closer, background further
+        return torch.pow(depth, 1.0 + scale)
+    elif scale < 0:
+        # Compress foreground, pull background closer
+        return 1.0 - torch.pow(1.0 - depth, 1.0 + abs(scale))
+    else:
+        return depth
+
+def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
+    """
+    Apply anti-aliasing to reduce jagged edges in depth maps.
+    depth: [H,W] or [B,1,H,W] in [0,1]
+    """
+    if depth.dim() == 2:
+        depth = depth.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
+    elif depth.dim() == 3:
+        depth = depth.unsqueeze(1)  # [B,1,H,W]
+
+    k = int(3 * strength) | 1  # force odd
+    if k < 3:
+        return depth.squeeze()
+
+    sigma = 0.5 * strength + 1e-6
+    coords = torch.arange(k, device=depth.device, dtype=depth.dtype) - k // 2
+    gauss = torch.exp(-(coords**2) / (2 * sigma**2))
+    gauss /= gauss.sum()
+
+    depth = F.conv2d(depth, gauss.view(1,1,1,-1), padding=(0, k//2), groups=1)
+    depth = F.conv2d(depth, gauss.view(1,1,-1,1), padding=(k//2, 0), groups=1)
+
+    return depth.squeeze()
+
+def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
+    if height < img_rgb.shape[0]:
+        width = int(img_rgb.shape[1]/img_rgb.shape[0]*height)
+        img_rgb = cv2.resize(img_rgb,(width,height), interpolation=cv2.INTER_AREA)
+    return torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE)
+
+def process(img_rgb: np.ndarray, height) -> np.ndarray:
+    if height < img_rgb.shape[0]:
+        width = int(img_rgb.shape[1]/img_rgb.shape[0]*height)
+        img_rgb = cv2.resize(img_rgb,(width,height), interpolation=cv2.INTER_AREA)
+    return img_rgb
+
+def normalize_tensor(tensor):
+    return (tensor - tensor.min())/(tensor.max() - tensor.min()+1e-6)
+
+# Robust percentile clipping to avoid outliers dominating normalization
+def percentile_clip(x: torch.Tensor, low=2.0, high=98.0):
+    # x: [H,W] float tensor on device
+    flat = x.flatten()
+    if flat.numel() < 2:
+        return x
+    k_low = max(0, int((low / 100.0) * (flat.numel() - 1)))
+    k_high = min(flat.numel() - 1, int((high / 100.0) * (flat.numel() - 1)))
+    vals, _ = torch.sort(flat)
+    lo = vals[k_low]
+    hi = vals[k_high]
+    x = x.clamp(lo, hi)
+    return (x - lo) / (hi - lo + 1e-6)
+
+# Temporal depth stabilizer (EMA)
+class DepthStabilizer:
+    def __init__(self, alpha=0.9):
+        self.alpha = alpha
+        self.prev = None
+        self.enabled = True
+        self.lock = Lock()
+
+    def __call__(self, depth: torch.Tensor):
+        if not self.enabled:
+            return depth
+        with self.lock:
+            if self.prev is None or self.prev.shape != depth.shape or self.prev.device != depth.device:
+                self.prev = depth.detach()
+                return depth
+            out = self.alpha * self.prev + (1.0 - self.alpha) * depth
+            self.prev = out.detach()
+            return out
+
+depth_stabilizer = DepthStabilizer(alpha=0.9)  # increase alpha for more stability
+
+# Guided-like smoothing (edge-aware)
+def box_blur(x, r: int):
+    if r <= 0:
+        return x
+    k = 2 * r + 1
+    w = torch.ones(1, 1, 1, k, device=x.device, dtype=x.dtype) / k
+    h = torch.ones(1, 1, k, 1, device=x.device, dtype=x.dtype) / k
+    x = F.conv2d(x, w, padding=(0, r), groups=1)
+    x = F.conv2d(x, h, padding=(r, 0), groups=1)
+    return x
+
+def guided_smooth(depth: torch.Tensor, rgb: torch.Tensor, r=2, eps=1e-3):
+    """
+    depth: [H,W] / [1,1,H,W], rgb: [1,3,H,W] in [0,1].
+    """
+    if depth.dim() == 2:
+        depth = depth.unsqueeze(0).unsqueeze(0)
+    elif depth.dim() == 3:
+        depth = depth.unsqueeze(1)
+    if rgb.dim() == 3:
+        rgb = rgb.unsqueeze(0)
+
+    # luminance guidance
+    I = 0.2989 * rgb[:,0:1] + 0.5870 * rgb[:,1:2] + 0.1140 * rgb[:,2:3]
+
+    mean_I = box_blur(I, r)
+    mean_D = box_blur(depth, r)
+    corr_I = box_blur(I * I, r)
+    corr_ID = box_blur(I * depth, r)
+
+    var_I = corr_I - mean_I * mean_I
+    cov_ID = corr_ID - mean_I * mean_D
+
+    a = cov_ID / (var_I + eps)
+    b = mean_D - a * mean_I
+
+    mean_a = box_blur(a, r)
+    mean_b = box_blur(b, r)
+
+    q = mean_a * I + mean_b
+    return q.squeeze()
+
+# Selective edge dilation to reduce holes near edges while avoiding halos
+def edge_dilate_selective(depth: torch.Tensor, dilation_size: int = 2, edge_thresh: float = 0.02):
+    if dilation_size <= 0:
+        return depth
+    if depth.dim() == 2:
+        d = depth.unsqueeze(0).unsqueeze(0)
+    elif depth.dim() == 3:
+        d = depth.unsqueeze(1)
+    else:
+        d = depth
+
+    sobel_x = torch.tensor([[1,0,-1],[2,0,-2],[1,0,-1]], device=d.device, dtype=d.dtype).view(1,1,3,3)/8
+    sobel_y = sobel_x.transpose(2,3)
+    gx = F.conv2d(d, sobel_x, padding=1)
+    gy = F.conv2d(d, sobel_y, padding=1)
+    mag = torch.sqrt(gx*gx + gy*gy)
+
+    m = (mag > edge_thresh).float()
+    kernel_size = dilation_size if dilation_size % 2 == 1 else dilation_size + 1
+    dilated = F.max_pool2d(d, kernel_size=kernel_size, stride=1, padding=kernel_size//2)
+    out = d * (1 - m) + dilated * m
+
+    if out.shape[0] == 1 and out.shape[1] == 1:
+        return out.squeeze(0).squeeze(0)
+    elif out.shape[1] == 1:
+        return out.squeeze(1)
+    else:
+        return out
+
+# Depth prediction
+def predict_depth(image_rgb: np.ndarray, return_tuple=False, 
+                  fg_gamma: float = 2,           # <1 boosts foreground separation
+                  use_temporal_smooth: bool = True):
+    """
+    Returns depth in [0,1], 1=near, 0=far. Optionally returns (depth, rgb_c).
+    """
+    tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)
+    rgb_c = tensor.permute(2,0,1).contiguous()  # [C,H,W]
+    tensor = rgb_c.unsqueeze(0) / 255.0
+    tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
+    tensor = ((tensor - MEAN) / STD).contiguous()
+
+    with lock:
+        with torch.no_grad():
+            tensor = tensor.to(dtype=MODEL_DTYPE)
+            depth = model(pixel_values=tensor).predicted_depth
+
+    h, w = image_rgb.shape[:2]
+    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0,0]
+    
+    # Robust normalize
+    depth = percentile_clip(depth, 2, 98)
+
+    # Foreground emphasis via gamma (0=near,1=far): gamma<1 expands near/far separation
+    depth = torch.clamp(depth, 1e-6, 1).pow(fg_gamma)
+
+    # Edge-aware smoothing guided by RGB
+    # rgb_norm = (rgb_c.unsqueeze(0) / 255.0).to(depth.dtype)  # [1,3,H,W]
+    # depth = guided_smooth(depth, rgb_norm, r=2, eps=1e-3)
+
+    # Selective dilation near edges to plug holes
+    # depth = edge_dilate_selective(depth, dilation_size=DILATION_SIZE, edge_thresh=0.02)
+
+    # Mild AA to reduce jaggies
+    depth = anti_alias(depth, strength=AA_STRENTH)
+    depth = normalize_tensor(depth)
+
+    # Optional temporal stabilization (EMA)
+    if use_temporal_smooth:
+        depth = depth_stabilizer(depth)
+
     if return_tuple:
         return depth, rgb_c
     else:
