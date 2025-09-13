@@ -282,7 +282,7 @@ class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.pad = {"padx": 8, "pady": 6}
-        self.title(f"Desktop2Stereo v{VERSION} GUI")
+        self.title(f"Desktop2Stereo v{VERSION}")
         self.minsize(800, 420)  # Increased height for new controls
         self.resizable(False, False)
         self.language = "EN"

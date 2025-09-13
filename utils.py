@@ -60,7 +60,7 @@ if OS_NAME == "Windows":
         ctypes.windll.user32.SetProcessDPIAware()
 
 # App Version
-VERSION = 2.3
+VERSION = "2.3.3"
 
 # Streamer Settings
 DEFAULT_PORT = 1122
