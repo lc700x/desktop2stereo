@@ -5,6 +5,7 @@ import cv2
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
 from utils import get_local_ip
+from PIL import Image, ImageDraw, ImageFont
 
 ICON_PATH = "icon2.ico"
 
@@ -19,8 +20,15 @@ class MJPEGStreamer:
         self.fps = fps
         self.delay = 1.0 / fps
         self.target_fps = fps
-        self.show_fps = show_fps  # NEW: control FPS drawing
+        self.show_fps = show_fps
 
+        # Font and text sizing (matching viewer.py style)
+        self.font = None
+        self.base_font_size = 40  # Base size for 1280x720 frame
+        self.current_font_size = self.base_font_size
+        self.text_padding = 10
+        self.text_spacing = 5
+        
         self.raw_frame = None
         self.encoded_frame = None
         self.lock = threading.Lock()
@@ -59,7 +67,7 @@ class MJPEGStreamer:
                 let ctx = canvas.getContext("2d");
                 let canvasStream = null;
 
-                // Create an <img> that will receive the MJPEG stream. For MJPEG the
+                // Create an  that will receive the MJPEG stream. For MJPEG the
                 // image's onload handler fires for each frame, which lets us detect
                 // size changes and redraw without a full page refresh.
                 const img = new Image();
@@ -86,7 +94,7 @@ class MJPEGStreamer:
                 }}
 
                 let last_timestamp = 0;
-                // Draw each time the <img> fires onload (MJPEG frames), and also use
+                // Draw each time the  fires onload (MJPEG frames), and also use
                 // requestAnimationFrame to throttle to FPS.
                 img.onload = () => {{
                     const w = img.naturalWidth || img.width || canvas.width;
@@ -154,8 +162,54 @@ class MJPEGStreamer:
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.encoder_thread = threading.Thread(target=self._encoder_loop, daemon=True)
 
+    def _update_font(self, frame_size):
+        """Update font size based on frame dimensions (matching viewer.py style)"""
+        if frame_size is None or frame_size[0] == 0 or frame_size[1] == 0:
+            return
+            
+        # Calculate dynamic font size based on frame height
+        base_height = 1080  # Reference height
+        scale_factor = min(frame_size[0] / base_height, 2.0)  # Cap scaling at 2x
+        self.current_font_size = int(self.base_font_size * scale_factor * 0.8)  # Slightly smaller than linear scale
+        
+        try:
+            self.font = ImageFont.truetype("arial.ttf", self.current_font_size)
+        except:
+            try:
+                # Try to load a default font with the calculated size
+                self.font = ImageFont.load_default()
+                # Scale default font if possible
+                if hasattr(self.font, 'size'):
+                    self.font.size = self.current_font_size
+            except:
+                self.font = None
+        
+        # Update padding and spacing based on font size
+        self.text_padding = max(5, int(self.current_font_size * 0.4))
+        self.text_spacing = max(2, int(self.current_font_size * 0.2))
+
+    def _add_fps_overlay(self, rgb_frame):
+        """Add FPS overlay to the frame (matching viewer.py style)"""
+        if not self.show_fps or self.font is None:
+            return rgb_frame
+            
+        # Convert numpy array to PIL Image
+        img = Image.fromarray(rgb_frame)
+        draw = ImageDraw.Draw(img)
+        
+        # Calculate text position
+        text_x = self.text_padding
+        text_y = self.text_padding
+        
+        # Draw FPS text (green color matching viewer.py)
+        fps_text = f"FPS: {self.actual_fps:.1f}"
+        draw.text((text_x, text_y), fps_text, font=self.font, fill=(0, 255, 0))
+        
+        # Convert back to numpy array
+        return np.array(img)
+
     def start(self):
-        print(f"[MJPEGStreamer] Serving at {self.target_fps}FPS on http://{get_local_ip()}:{self.server.server_address[1]}/")
+        print(f"[MJPEGStreamer] Serving on http://{get_local_ip()}:{self.server.server_address[1]}/")
         self.server_thread.start()
         self.encoder_thread.start()
 
@@ -185,18 +239,15 @@ class MJPEGStreamer:
 
             frame_to_send = frame_np.copy()
 
-            # Draw FPS overlay if enabled
+            # Update font size based on frame dimensions
+            self._update_font(frame_to_send.shape[:2])
+            
+            # Add FPS overlay if enabled (matching viewer.py style)
             if self.show_fps:
-                cv2.putText(frame_to_send,
-                            f"FPS: {self.actual_fps:.1f}",
-                            (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            1.0,
-                            (0, 255, 0),
-                            2)
+                frame_to_send = self._add_fps_overlay(frame_to_send)
 
             # Update index page if resolution changes
-            h, w = frame_np.shape[:2]
+            h, w = frame_to_send.shape[:2]
             if (self.sbs_width, self.sbs_height) != (w, h):
                 self.sbs_width = w
                 self.sbs_height = h

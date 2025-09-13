@@ -2,6 +2,10 @@
 import glfw
 import moderngl
 import numpy as np
+import time
+from PIL import Image, ImageDraw, ImageFont
+import io
+import math
 
 # Get OS name and settings
 from utils import OS_NAME, crop_icon
@@ -53,7 +57,7 @@ def add_logo(window):
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
     
-    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS"):
+    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", show_fps=True):
         # Initialize with default values
         self.window_size = (1280, 720)
         self.title = "Stereo SBS Viewer"
@@ -68,6 +72,27 @@ class StereoWindow:
         self.display_mode = display_mode
         self._texture_size = None
         self.monitor_index = 0
+        self.show_fps = show_fps
+        self.frame_size = (1280, 720)
+        
+        # FPS tracking variables
+        self.frame_count = 0
+        self.last_fps_time = time.perf_counter()
+        self.actual_fps = 0.0
+        self.start_time = time.perf_counter()
+        self.total_frames = 0
+        
+        # Depth ratio display variables
+        self.last_depth_change_time = 0
+        self.show_depth_ratio = False
+        self.depth_display_duration = 2.0  # Show depth for 2 seconds after change
+        
+        # Font and text sizing
+        self.font = None
+        self.base_font_size = 40  # Base size for 1280x720 window
+        self.current_font_size = self.base_font_size
+        self.text_padding = 10
+        self.text_spacing = 5
         
         # Initialize GLFW
         if not glfw.init():
@@ -106,6 +131,38 @@ class StereoWindow:
         
         # Set callbacks
         glfw.set_key_callback(self.window, self.on_key_event)
+        glfw.set_window_size_callback(self.window, self._on_window_resize)
+        
+        # Load initial font
+        self._update_font()
+
+    def _on_window_resize(self, window, width, height):
+        """Handle window resize events"""
+        self.window_size = (width, height)
+        self._update_font()
+
+    def _update_font(self):
+        """Update font size based on window dimensions"""
+        # Calculate dynamic font size based on window height
+        base_height = 1080  # Reference height
+        scale_factor = min(self.frame_size[0] / base_height, 2.0)  # Cap scaling at 2x
+        self.current_font_size = int(self.base_font_size * scale_factor * 0.8)  # Slightly smaller than linear scale
+        
+        try:
+            self.font = ImageFont.truetype("arial.ttf", self.current_font_size)
+        except:
+            try:
+                # Try to load a default font with the calculated size
+                self.font = ImageFont.load_default()
+                # Scale default font if possible
+                if hasattr(self.font, 'size'):
+                    self.font.size = self.current_font_size
+            except:
+                self.font = None
+        
+        # Update padding and spacing based on font size
+        self.text_padding = max(5, int(self.current_font_size * 0.4))
+        self.text_spacing = max(2, int(self.current_font_size * 0.2))
 
     def _create_quad_vao(self):
         """Optimized quad creation with static data"""
@@ -119,6 +176,55 @@ class StereoWindow:
         return self.ctx.vertex_array(
             self.prog, [(vbo, '2f 2f', 'in_position', 'in_uv')]
         )
+
+    def _add_overlay(self, rgb_frame):
+        """Add FPS and depth ratio overlay to the frame"""
+        if not (self.show_fps or self.show_depth_ratio) or self.font is None:
+            return rgb_frame
+        self.frame_size = rgb_frame.shape[:2]
+        # Convert numpy array to PIL Image
+        img = Image.fromarray(rgb_frame)
+        draw = ImageDraw.Draw(img)
+        
+        # Calculate text positions based on window size
+        text_x = self.text_padding
+        text_y = self.text_padding
+        
+        # Update FPS counter if enabled
+        if self.show_fps:
+            self.frame_count += 1
+            self.total_frames += 1
+            current_time = time.perf_counter()
+            
+            # Calculate FPS over 1 second window
+            if current_time - self.last_fps_time >= 1.0:
+                self.actual_fps = self.frame_count / (current_time - self.last_fps_time)
+                self.frame_count = 0
+                self.last_fps_time = current_time
+            
+            # Draw FPS text
+            fps_text = f"FPS: {self.actual_fps:.1f}"
+            draw.text((text_x, text_y), fps_text, font=self.font, fill=(0, 255, 0))
+            text_y += self.current_font_size + self.text_spacing
+        
+        # Check if we should show depth ratio
+        current_time = time.perf_counter()
+        if current_time - self.last_depth_change_time < self.depth_display_duration:
+            self.show_depth_ratio = True
+        else:
+            self.show_depth_ratio = False
+            
+        # Draw depth ratio if enabled
+        if self.show_depth_ratio:
+            depth_text = f"Depth: {self.depth_ratio:.1f}"
+            draw.text((text_x, text_y), depth_text, font=self.font, fill=(0, 255, 255))
+        
+        # Convert back to numpy array
+        
+        # # Update window title with FPS and depth ratio
+        # title = f"Stereo Viewer | FPS: {self.actual_fps:.1f} | Depth: {self.depth_ratio:.1f}"
+        # glfw.set_window_title(self.window, title)
+        return np.array(img)
 
     def position_on_monitor(self, monitor_index=0):
         """Optimized monitor positioning"""
@@ -212,13 +318,18 @@ class StereoWindow:
                 self.move_to_adjacent_monitor(-1)
             elif key == glfw.KEY_DOWN:
                 self.depth_ratio = max(0, self.depth_ratio - 0.5)
+                self.last_depth_change_time = time.perf_counter()
             elif key == glfw.KEY_UP:
                 self.depth_ratio = min(10, self.depth_ratio + 0.5)
+                self.last_depth_change_time = time.perf_counter()
             elif key == glfw.KEY_0:
                 self.depth_ratio = self.depth_ratio_original
+                self.last_depth_change_time = time.perf_counter()
             elif key == glfw.KEY_TAB:
                 idx = self._modes.index(self.display_mode)
                 self.display_mode = self._modes[(idx + 1) % len(self._modes)]
+            elif key == glfw.KEY_F:  # Add FPS toggle with F key
+                self.show_fps = not self.show_fps
 
     def update_frame(self, rgb, depth):
         """Optimized texture updates with minimal allocations"""
@@ -227,7 +338,10 @@ class StereoWindow:
             depth = depth.detach().cpu().numpy()
         depth = depth.astype('float32', copy=False)
         
-        h, w, _ = rgb.shape
+        # Add overlay to the frame
+        rgb_with_overlay = self._add_overlay(rgb)
+        
+        h, w, _ = rgb_with_overlay.shape
         if self._texture_size != (w, h):
             # Release old textures if they exist
             if self.color_tex:
@@ -246,7 +360,7 @@ class StereoWindow:
             self._texture_size = (w, h)
 
         # Upload texture data with minimal copies
-        self.color_tex.write(rgb.astype('uint8', copy=False).tobytes())
+        self.color_tex.write(rgb_with_overlay.astype('uint8', copy=False).tobytes())
         self.depth_tex.write((self.depth_ratio * depth).astype('float32', copy=False).tobytes())
 
     def _compute_render_size(self, max_w, max_h, src_w, src_h):

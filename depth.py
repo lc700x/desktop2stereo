@@ -1,4 +1,4 @@
-# depth.py (optimized with TinyRefiner for FPS)
+# depth.py
 import torch
 torch.set_num_threads(1)
 import torch.nn.functional as F
@@ -6,7 +6,7 @@ from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, DILATION_SIZE, AA_STRENTH
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -54,8 +54,64 @@ with torch.no_grad():
 
 lock = Lock()
 
-# main functions
-def apply_foreground_scale_torch(depth: torch.Tensor, scale: float) -> torch.Tensor:
+def apply_stretch(x: torch.Tensor, low: float = 2.0, high: float = 98.0) -> torch.Tensor:
+    """
+    Percentile-based clipping + normalization.
+    Fully DirectML compatible (no torch.clamp).
+    """
+    if x.numel() < 2:
+        return x
+
+    # Downsample to reduce cost
+    x_sampled = x[::8, ::8] if x.dim() == 2 else x.flatten()[::8]
+    flat = x_sampled.flatten()
+
+    if flat.numel() < 2:
+        return x
+
+    # Sort values
+    vals, _ = torch.sort(flat)
+
+    # Compute percentile indices
+    k_low = int((low / 100.0) * (vals.numel() - 1))
+    k_high = int((high / 100.0) * (vals.numel() - 1))
+    k_low = max(0, min(k_low, vals.numel() - 1))
+    k_high = max(0, min(k_high, vals.numel() - 1))
+
+    lo = vals[k_low]
+    hi = vals[k_high]
+
+    # Avoid divide-by-zero
+    scale = hi - lo
+    if scale <= 0:
+        return torch.zeros_like(x)
+
+    # Manual clamp: DirectML supports min/max
+    x = torch.maximum(x, lo)
+    x = torch.minimum(x, hi)
+
+    return (x - lo) / (scale + 1e-6)
+
+def apply_gamma(depth: torch.Tensor, gamma: float = 0.8) -> torch.Tensor:
+    """
+    Apply gamma correction to exaggerate depth differences.
+    Here 1=near, 0=far.
+    gamma < 1 -> expand far (background)
+    gamma > 1 -> expand near (foreground)
+    """
+    depth = torch.clamp(depth, 0.0, 1.0)
+    return depth.pow(gamma)
+
+def apply_sigmoid(depth: torch.Tensor, k: float = 10.0, midpoint: float = 0.5) -> torch.Tensor:
+    """
+    Apply sigmoid mapping to emphasize mid-range depth.
+    Larger k makes it steeper.
+    1=near, 0=far convention.
+    """
+    depth = torch.clamp(depth, 0.0, 1.0)
+    return 1.0 / (1.0 + torch.exp(-k * (depth - midpoint)))
+
+def apply_foreground_scale(depth: torch.Tensor, scale: float) -> torch.Tensor:
     """
     Apply foreground/background scaling to a depth map.
 
@@ -115,39 +171,6 @@ def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
 
     return depth.squeeze()
 
-def edge_dilate(depth: torch.Tensor, dilation_size: int = 2) -> torch.Tensor:
-    """
-    Perform edge dilation on depth map using max pooling (PyTorch / DirectML compatible).
-
-    Args:
-        depth (torch.Tensor): Normalized depth map tensor with shape [H, W] or [B, 1, H, W], values in [0,1].
-        dilation_size (int): Size of the dilation kernel; 0 disables dilation.
-
-    Returns:
-        torch.Tensor: Dilated depth map tensor with the same shape as input.
-    """
-    if dilation_size <= 0:
-        return depth
-
-    # Ensure 4D shape for pooling: [B, C, H, W]
-    if depth.dim() == 2:
-        depth = depth.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
-    elif depth.dim() == 3:
-        depth = depth.unsqueeze(1)  # [B,1,H,W]
-
-    kernel_size = dilation_size if dilation_size % 2 == 1 else dilation_size + 1  # odd kernel size is typical
-
-    # Apply max pooling as morphological dilation
-    dilated = F.max_pool2d(depth, kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
-
-    # Remove extra dims if needed
-    if dilated.shape[0] == 1 and dilated.shape[1] == 1:
-        return dilated.squeeze(0).squeeze(0)
-    elif dilated.shape[1] == 1:
-        return dilated.squeeze(1)
-    else:
-        return dilated
-
 def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
     if height < img_rgb.shape[0]:
         width = int(img_rgb.shape[1]/img_rgb.shape[0]*height)
@@ -163,30 +186,93 @@ def process(img_rgb: np.ndarray, height) -> np.ndarray:
 def normalize_tensor(tensor):
     return (tensor - tensor.min())/(tensor.max() - tensor.min()+1e-6)
 
-def predict_depth(image_rgb: np.ndarray, return_tuple = False):
-    tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
-    rgb_c = tensor.permute(2,0,1).contiguous()
-    tensor = rgb_c.unsqueeze(0)/255
-    tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
-    tensor = ((tensor-MEAN)/STD).contiguous()
+# Temporal depth stabilizer (EMA)
+class DepthStabilizer:
+    def __init__(self, alpha=0.9):
+        self.alpha = alpha
+        self.prev = None
+        self.enabled = True
+        self.lock = Lock()
+
+    def __call__(self, depth: torch.Tensor):
+        if not self.enabled:
+            return depth
+        with self.lock:
+            if self.prev is None or self.prev.shape != depth.shape or self.prev.device != depth.device:
+                self.prev = depth.detach()
+                return depth
+            out = self.alpha * self.prev + (1.0 - self.alpha) * depth
+            self.prev = out.detach()
+            return out
+
+depth_stabilizer = DepthStabilizer(alpha=0.9)  # increase alpha for more stability
+
+# Piecewise gamma remap
+def apply_piecewise(
+    depth: torch.Tensor,
+    split: float = 0.5,
+    near_gamma: float = 2.0,
+    far_gamma: float = 0.8
+    ) -> torch.Tensor:
+    """
+    Efficient piecewise gamma remap for depth maps.
+    Assumes 1=near, 0=far.
+    near_gamma -> [split, 1]
+    far_gamma  -> [0, split]
+    """
+    depth = depth.clamp(0.0, 1.0)
+
+    # Near branch
+    near_val = (((depth - split).clamp(min=0) / (1 - split + 1e-6))
+                .pow(near_gamma) * (1 - split)) + split
+
+    # Far branch
+    far_val = (((depth).clamp(max=split) / (split + 1e-6))
+               .pow(far_gamma) * split)
+
+    # Select branch without indexing
+    out = torch.where(depth >= split, near_val, far_val)
+    return out
+
+def predict_depth(image_rgb: np.ndarray, return_tuple=False,
+                  use_temporal_smooth: bool = True):
+    """
+    Returns depth in [0,1], 1=near, 0=far. Optionally returns (depth, rgb_c).
+    """
+    tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)
+    rgb_c = tensor.permute(2,0,1).contiguous()  # [C,H,W]
+    tensor = rgb_c.unsqueeze(0) / 255.0
+    tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
+    tensor = ((tensor - MEAN) / STD).contiguous()
+
     with lock:
         with torch.no_grad():
             tensor = tensor.to(dtype=MODEL_DTYPE)
             depth = model(pixel_values=tensor).predicted_depth
-    h,w = image_rgb.shape[:2]
-    depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
-    # Normalize depth with adaptive range
-    depth = normalize_tensor(depth)
-    depth = depth.clamp(0.2, 0.9)
-    depth = normalize_tensor(depth)
+
+    h, w = image_rgb.shape[:2]
+    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0,0]
     
-    depth = edge_dilate(depth, dilation_size=DILATION_SIZE)
+    # Robust normalize and Post dept processing
+    depth = apply_stretch(depth, 5, 95)
+    depth = apply_sigmoid(depth, k=4, midpoint=0.618)
+    depth = apply_piecewise(depth, split=0.618, near_gamma=1.2, far_gamma=0.6)
+    depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
+    depth = normalize_tensor(depth)
+    # Mild AA to reduce jaggies
     depth = anti_alias(depth, strength=AA_STRENTH)
+    
+
+    # Optional temporal stabilization (EMA)
+    if use_temporal_smooth:
+        depth = depth_stabilizer(depth)
+
     if return_tuple:
         return depth, rgb_c
     else:
         return depth
-
+    
+# generate left and right eye view    
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS"):
     C, H, W = rgb_c.shape
     device = rgb_c.device

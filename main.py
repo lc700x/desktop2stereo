@@ -49,13 +49,6 @@ def process_loop():
 def main(mode="Viewer"):
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
-
-    frame_count = 0
-    last_time = time.perf_counter()
-
-    total_frames = 0
-    start_time = time.perf_counter()
-
     streamer = None
 
     try:
@@ -72,21 +65,12 @@ def main(mode="Viewer"):
                     put_latest(depth_q, (frame_rgb, depth))
 
             threading.Thread(target=depth_loop, daemon=True).start()
-            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS)
             print(f"[Main] Viewer Started")
             while not glfw.window_should_close(window.window):
                 try:
                     rgb, depth = depth_q.get_nowait()
                     window.update_frame(rgb, depth)
-                    if SHOW_FPS:
-                        frame_count += 1
-                        total_frames += 1
-                        current_time = time.perf_counter()
-                        if current_time - last_time >= 1.0:
-                            fps = frame_count / (current_time - last_time)
-                            frame_count = 0
-                            last_time = current_time
-                            glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {fps:.1f} | Depth: {window.depth_ratio:.1f}")
                 except queue.Empty:
                     pass
 
@@ -147,10 +131,7 @@ def main(mode="Viewer"):
     finally:
         if streamer:
             streamer.stop()
-        #     print(f"[Main] {mode} Stopped")
-        # total_time = time.perf_counter() - start_time
-        # avg_fps = frame_count / total_time if total_time > 0 else 0
-        # print(f"Average FPS: {avg_fps:.2f}")
+            print(f"[Main] {mode} Stopped")
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)
