@@ -155,7 +155,7 @@ class MJPEGStreamer:
         self.encoder_thread = threading.Thread(target=self._encoder_loop, daemon=True)
 
     def start(self):
-        print(f"[MJPEGStreamer] Serving at {self.target_fps}FPS on http://{get_local_ip()}:{self.server.server_address[1]}/")
+        print(f"[MJPEGStreamer] Serving on http://{get_local_ip()}:{self.server.server_address[1]}/")
         self.server_thread.start()
         self.encoder_thread.start()
 

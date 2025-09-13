@@ -122,7 +122,7 @@ try:
     import mss
 except Exception:
     mss = None
-
+"Foreground Scale"
 try:
     import yaml
     HAVE_YAML = True
@@ -141,7 +141,7 @@ DEFAULTS = {
     "Depth Strength": 2.0,
     "Depth Resolution": 336,
     "Anti-aliasing": 2,
-    "Edge Dilation": 1,
+    "Foreground Scale": 1.0,
     "IPD": 0.064,
     "Display Mode": "Half-SBS",
     "FP16": True,
@@ -169,7 +169,7 @@ UI_TEXTS = {
         "Depth Strength:": "Depth Strength:",
         "Depth Resolution:": "Depth Resolution:",
         "Anti-aliasing:": "Anti-aliasing:",
-        "Edge Dilation:": "Edge Dilation:",
+        "Foreground Scale:": "Foreground Scale:",
         "FP16": "FP16",
         "Download Path:": "Download Path:",
         "Browse...": "Browse...",
@@ -229,7 +229,7 @@ UI_TEXTS = {
         "Depth Strength:": "深度强度:",
         "Depth Resolution:": "深度分辨率:",
         "Anti-aliasing:": "抗锯齿:",
-        "Edge Dilation:": "边缘淡化:",
+        "Foreground Scale:": "前景缩放:",
         "FP16": "半精度浮点 (F16)",
         "Download Path:": "下载路径:",
         "Browse...": "浏览...",
@@ -457,11 +457,11 @@ class ConfigGUI(tk.Tk):
         self.antialiasing_cb.grid(row=7, column=1, sticky="ew", **self.pad)
         
         # Edge Dilation
-        self.label_edge_dilation = ttk.Label(self.content_frame, text="Edge Dilation:")
-        self.label_edge_dilation.grid(row=7, column=2, sticky="w", **self.pad)
-        self.edge_dilation_values = [str(i) for i in range(11)]  # 0-10
-        self.edge_dilation_cb = ttk.Combobox(self.content_frame, values=self.edge_dilation_values, state="normal")
-        self.edge_dilation_cb.grid(row=7, column=3, sticky="ew", **self.pad)
+        self.label_foreground_scale = ttk.Label(self.content_frame, text="Foreground Scale:")
+        self.label_foreground_scale.grid(row=7, column=2, sticky="w", **self.pad)
+        self.foreground_scale_values = [f"{i/2.0:.1f}" for i in range(-10, 10)] # -5 (squeeze depth scale) to 5 (extend depth scale)
+        self.foreground_scale_cb = ttk.Combobox(self.content_frame, values=self.foreground_scale_values, state="normal")
+        self.foreground_scale_cb.grid(row=7, column=3, sticky="ew", **self.pad)
 
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
@@ -705,7 +705,7 @@ class ConfigGUI(tk.Tk):
         self.label_depth_res.config(text=texts["Depth Resolution:"])
         self.label_depth_strength.config(text=texts["Depth Strength:"])
         self.label_antialiasing.config(text=UI_TEXTS[self.language]["Anti-aliasing:"])
-        self.label_edge_dilation.config(text=UI_TEXTS[self.language]["Edge Dilation:"])
+        self.label_foreground_scale.config(text=UI_TEXTS[self.language]["Foreground Scale:"])
         self.fp16_cb.config(text=texts["FP16"])
         self.label_download.config(text=texts["Download Path:"])
         self.label_hf_endpoint.config(text=texts["HF Endpoint:"])
@@ -942,7 +942,7 @@ class ConfigGUI(tk.Tk):
         self.depth_strength_cb.set(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
         self.display_mode_cb.set(cfg.get("Display Mode", DEFAULTS["Display Mode"]))
         self.antialiasing_cb.set(str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"])))
-        self.edge_dilation_cb.set(str(cfg.get("Edge Dilation", DEFAULTS["Edge Dilation"])))
+        self.foreground_scale_cb.set(str(cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"])))
         self.fp16_var.set(cfg.get("FP16", DEFAULTS["FP16"]))
         self.download_var.set(cfg.get("Download Path", DEFAULTS["Download Path"]))
         self.hf_endpoint_var.set(cfg.get("HF Endpoint", DEFAULTS["HF Endpoint"]))
@@ -1061,7 +1061,7 @@ class ConfigGUI(tk.Tk):
             "Depth Model": self.depth_model_var.get(),
             "Depth Strength": float(self.depth_strength_cb.get()),
             "Anti-aliasing": int(self.antialiasing_cb.get()),
-            "Edge Dilation": int(self.edge_dilation_cb.get()),
+            "Foreground Scale": float(self.foreground_scale_cb.get()),
             "Depth Resolution": int(self.depth_res_cb.get()),
             "FP16": self.fp16_var.get(),
             "Download Path": self.download_var.get(),

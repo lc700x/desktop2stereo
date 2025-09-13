@@ -17,3 +17,4 @@ settings.yaml
 test*
 datasets
 *.png
+*.jpg
