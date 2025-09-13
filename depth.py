@@ -253,10 +253,8 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False,
     h, w = image_rgb.shape[:2]
     depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0,0]
     
-    # Robust normalize
+    # Robust normalize and Post dept processing
     depth = apply_stretch(depth, 5, 95)
-
-    # Post dept processing
     depth = apply_sigmoid(depth, k=4, midpoint=0.618)
     depth = apply_piecewise(depth, split=0.618, near_gamma=1.2, far_gamma=0.6)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
