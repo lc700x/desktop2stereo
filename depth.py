@@ -236,26 +236,34 @@ def apply_piecewise(
     out = torch.where(depth >= split, near_val, far_val)
     return out
 
-def predict_depth(image_rgb: np.ndarray, return_tuple=False,
-                  use_temporal_smooth: bool = True):
+def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth: bool = True):
     """
     Returns depth in [0,1], 1=near, 0=far. Optionally returns (depth, rgb_c).
     """
-    tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)
-    rgb_c = tensor.permute(2,0,1).contiguous()  # [C,H,W]
-    tensor = rgb_c.unsqueeze(0) / 255.0
-    tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
-    tensor = ((tensor - MEAN) / STD).contiguous()
-
-    with lock:
-        with torch.no_grad():
-            tensor = tensor.to(dtype=MODEL_DTYPE)
-            depth = model(pixel_values=tensor).predicted_depth
-
     h, w = image_rgb.shape[:2]
+    if return_tuple:
+        tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)
+        rgb_c = tensor.permute(2,0,1).contiguous()  # [C,H,W]
+        tensor = rgb_c.unsqueeze(0) / 255.0
+        tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
+    else:
+        # Resize input on CPU to model resolution for efficiency (avoids large GPU transfers and interpolate)
+        target_size = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
+        if (h, w) != target_size:
+            interpolation = cv2.INTER_AREA if max(h, w) > DEPTH_RESOLUTION else cv2.INTER_LINEAR
+            input_rgb = cv2.resize(image_rgb, target_size, interpolation=interpolation)
+        
+        tensor = torch.from_numpy(input_rgb).permute(2,0,1).contiguous().unsqueeze(0).to(DEVICE, dtype=DTYPE) / 255.0
+    tensor = ((tensor - MEAN) / STD).contiguous()
+    
+    with torch.no_grad():  # Slightly faster than no_grad
+        tensor = tensor.to(dtype=MODEL_DTYPE)
+        depth = model(pixel_values=tensor).predicted_depth
+
+    # Interpolate output to original size
     depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0,0]
     
-    # Robust normalize and Post dept processing
+    # Robust normalize and Post depth processing
     depth = apply_stretch(depth, 5, 95)
     depth = apply_sigmoid(depth, k=4, midpoint=0.618)
     depth = apply_piecewise(depth, split=0.618, near_gamma=1.2, far_gamma=0.6)
@@ -263,12 +271,10 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False,
     depth = normalize_tensor(depth)
     # Mild AA to reduce jaggies
     depth = anti_alias(depth, strength=AA_STRENTH)
-    
 
     # Optional temporal stabilization (EMA)
     if use_temporal_smooth:
         depth = depth_stabilizer(depth)
-
     if return_tuple:
         return depth, rgb_c
     else:
@@ -277,7 +283,8 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False,
 # generate left and right eye view    
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS"):
     C, H, W = rgb_c.shape
-    device = rgb_c.device
+    device = depth.device
+    rgb_c = rgb_c.to(device, dtype=DTYPE)
     depth_strength = 0.05
 
     # Precompute pixel coordinates (cache this tensor outside if called repeatedly!)
