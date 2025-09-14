@@ -5,7 +5,8 @@ import time
 from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY
 from capture import DesktopGrabber
 from depth import process, predict_depth
-STABLE = True 
+STABLE = True # keep stable dml performance
+
 # Use precise frame interval
 TIME_SLEEP = 1.0 / FPS
 
@@ -98,8 +99,9 @@ def main(mode="Viewer"):
 
         else:
             from depth import make_sbs, DEVICE_INFO
+            BOOST = not (STABLE and "DirectML" in DEVICE_INFO)
             from streamer import MJPEGStreamer
-            if STABLE:
+            if BOOST:
                 def make_output(rgb, depth):
                     return make_sbs(
                         rgb, depth,
@@ -134,7 +136,7 @@ def main(mode="Viewer"):
                     
 
             threading.Thread(target=depth_loop, daemon=True).start()
-            if not STABLE:
+            if not BOOST:
                 threading.Thread(target=sbs_loop, daemon=True).start()
             
             streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY, show_fps=SHOW_FPS)
@@ -143,7 +145,7 @@ def main(mode="Viewer"):
             
             while True:
                 try:
-                    if STABLE: # Fix for unstable dml runtime error
+                    if BOOST: # Fix for unstable dml runtime error
                         sbs = depth_q.get(timeout=TIME_SLEEP)
                     else:
                         sbs = sbs_q.get(timeout=TIME_SLEEP)
