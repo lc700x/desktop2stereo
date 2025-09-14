@@ -1,3 +1,0 @@
-﻿torch==2.4.1
-torch-directml==0.2.5.dev240914
-torchvision==0.19.1
