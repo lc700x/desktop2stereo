@@ -93,6 +93,16 @@ class StereoWindow:
         self.current_font_size = self.base_font_size
         self.text_padding = 10
         self.text_spacing = 5
+
+        # Overlay cache & throttle
+        self.overlay_update_interval = 0.25  # seconds, throttle overlay regeneration
+        self._overlay_cache = {
+            'image': None,         # numpy RGBA image
+            'fps_text': None,
+            'depth_text': None,
+            'last_update': 0.0,
+            'pos': (self.text_padding, self.text_padding)
+        }
         
         # Initialize GLFW
         if not glfw.init():
@@ -150,19 +160,19 @@ class StereoWindow:
         
         try:
             self.font = ImageFont.truetype("arial.ttf", self.current_font_size)
-        except:
+        except Exception:
             try:
-                # Try to load a default font with the calculated size
+                # Try default font (Pillow default)
                 self.font = ImageFont.load_default()
-                # Scale default font if possible
-                if hasattr(self.font, 'size'):
-                    self.font.size = self.current_font_size
-            except:
+            except Exception:
                 self.font = None
         
         # Update padding and spacing based on font size
         self.text_padding = max(5, int(self.current_font_size * 0.4))
         self.text_spacing = max(2, int(self.current_font_size * 0.2))
+        
+        # Update overlay cache position in case padding changed
+        self._overlay_cache['pos'] = (self.text_padding, self.text_padding)
 
     def _create_quad_vao(self):
         """Optimized quad creation with static data"""
@@ -177,54 +187,145 @@ class StereoWindow:
             self.prog, [(vbo, '2f 2f', 'in_position', 'in_uv')]
         )
 
+    def _generate_overlay_image(self, fps_text, depth_text):
+        """Rasterize the small overlay to RGBA numpy array (transparent background)."""
+        if self.font is None:
+            return None
+
+        # Compose lines
+        lines = []
+        if self.show_fps and fps_text:
+            lines.append(fps_text)
+        if self.show_depth_ratio and depth_text:
+            lines.append(depth_text)
+        if not lines:
+            return None
+
+        # Estimate text size using PIL
+        # small margin for padding/spacing
+        padding = self.text_padding
+        spacing = self.text_spacing
+
+        # measure bounding boxes
+        dummy_img = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(dummy_img)
+        widths = []
+        heights = []
+        bboxes = []
+        for line in lines:
+            try:
+                # textbbox if available provides better metrics
+                bbox = draw.textbbox((0, 0), line, font=self.font)
+                w = bbox[2] - bbox[0]
+                h = bbox[3] - bbox[1]
+            except Exception:
+                w, h = draw.textsize(line, font=self.font)
+            widths.append(w)
+            heights.append(h)
+            bboxes.append((w, h))
+        overlay_w = max(widths) + padding * 2
+        overlay_h = sum(heights) + spacing * (len(lines) - 1) + padding * 2
+
+        # Create overlay image and draw text
+        overlay_img = Image.new('RGBA', (overlay_w, overlay_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay_img)
+        x = padding
+        y = padding
+        for i, line in enumerate(lines):
+            color = (0, 255, 0, 255) if i == 0 and self.show_fps else (0, 255, 255, 255)
+            draw.text((x, y), line, font=self.font, fill=color)
+            y += heights[i] + spacing
+
+        overlay_arr = np.array(overlay_img, dtype=np.uint8)  # H x W x 4
+        return overlay_arr
+
     def _add_overlay(self, rgb_frame):
-        """Add FPS and depth ratio overlay to the frame"""
+        """Add FPS and depth ratio overlay to the frame with minimal allocations.
+           This function will only regenerate the small overlay image when necessary
+           (text changed or throttle interval elapsed). The overlay is alpha-blended
+           into the existing numpy frame in-place where possible.
+        """
+        # If nothing to show or no font available, do nothing fast
         if not (self.show_fps or self.show_depth_ratio) or self.font is None:
             return rgb_frame
-        self.frame_size = rgb_frame.shape[:2]
-        # Convert numpy array to PIL Image
-        img = Image.fromarray(rgb_frame)
-        draw = ImageDraw.Draw(img)
-        
-        # Calculate text positions based on window size
-        text_x = self.text_padding
-        text_y = self.text_padding
-        
-        # Update FPS counter if enabled
+
+        # Ensure rgb_frame is H x W x 3 uint8
+        if rgb_frame.dtype != np.uint8:
+            rgb_frame = (rgb_frame * 255).astype(np.uint8)
+
+        h, w, _ = rgb_frame.shape
+        self.frame_size = (w, h)
+
+        # Update FPS counters but do not regenerate overlay every frame
+        current_time = time.perf_counter()
         if self.show_fps:
             self.frame_count += 1
             self.total_frames += 1
-            current_time = time.perf_counter()
-            
-            # Calculate FPS over 1 second window
+            # update measured FPS every 1 second (keeps value stable)
             if current_time - self.last_fps_time >= 1.0:
                 self.actual_fps = self.frame_count / (current_time - self.last_fps_time)
                 self.frame_count = 0
                 self.last_fps_time = current_time
-            
-            # Draw FPS text
-            fps_text = f"FPS: {self.actual_fps:.1f}"
-            draw.text((text_x, text_y), fps_text, font=self.font, fill=(0, 255, 0))
-            text_y += self.current_font_size + self.text_spacing
-        
-        # Check if we should show depth ratio
-        current_time = time.perf_counter()
+
+        # Depth ratio visibility check
         if current_time - self.last_depth_change_time < self.depth_display_duration:
             self.show_depth_ratio = True
         else:
             self.show_depth_ratio = False
-            
-        # Draw depth ratio if enabled
-        if self.show_depth_ratio:
-            depth_text = f"Depth: {self.depth_ratio:.1f}"
-            draw.text((text_x, text_y), depth_text, font=self.font, fill=(0, 255, 255))
-        
-        # Convert back to numpy array
-        
-        # # Update window title with FPS and depth ratio
-        # title = f"Stereo Viewer | FPS: {self.actual_fps:.1f} | Depth: {self.depth_ratio:.1f}"
-        # glfw.set_window_title(self.window, title)
-        return np.array(img)
+
+        # Compose the strings to display
+        fps_text = f"FPS: {self.actual_fps:.1f}" if self.show_fps else ""
+        depth_text = f"Depth: {self.depth_ratio:.1f}" if self.show_depth_ratio else ""
+
+        # Decide whether to regenerate overlay
+        cache = self._overlay_cache
+        needs_regen = False
+        if cache['image'] is None:
+            needs_regen = True
+        elif fps_text != cache.get('fps_text') or depth_text != cache.get('depth_text'):
+            needs_regen = True
+        elif (current_time - cache.get('last_update', 0.0)) >= self.overlay_update_interval:
+            # periodic regen in case font metrics or size changed
+            needs_regen = True
+
+        if needs_regen:
+            overlay_arr = self._generate_overlay_image(fps_text, depth_text)
+            cache['image'] = overlay_arr
+            cache['fps_text'] = fps_text
+            cache['depth_text'] = depth_text
+            cache['last_update'] = current_time
+
+        overlay_arr = cache['image']
+        if overlay_arr is None:
+            return rgb_frame
+
+        ov_h, ov_w = overlay_arr.shape[:2]
+        pos_x, pos_y = cache.get('pos', (self.text_padding, self.text_padding))
+
+        # Clip overlay to frame boundaries
+        if pos_x >= w or pos_y >= h:
+            return rgb_frame
+        end_x = min(w, pos_x + ov_w)
+        end_y = min(h, pos_y + ov_h)
+        ov_w_clipped = end_x - pos_x
+        ov_h_clipped = end_y - pos_y
+        if ov_w_clipped <= 0 or ov_h_clipped <= 0:
+            return rgb_frame
+
+        # Slice overlay and frame
+        overlay_slice = overlay_arr[0:ov_h_clipped, 0:ov_w_clipped]
+        frame_region = rgb_frame[pos_y:end_y, pos_x:end_x]
+
+        # Alpha blending: result = overlay.rgb * alpha + frame * (1 - alpha)
+        alpha = overlay_slice[..., 3:4].astype(np.float32) / 255.0  # H x W x 1
+        overlay_rgb = overlay_slice[..., :3].astype(np.float32)
+        frame_rgb = frame_region.astype(np.float32)
+
+        blended = (overlay_rgb * alpha) + (frame_rgb * (1.0 - alpha))
+        # write back blended region into original frame (as uint8)
+        rgb_frame[pos_y:end_y, pos_x:end_x] = np.clip(blended, 0, 255).astype(np.uint8)
+
+        return rgb_frame
 
     def position_on_monitor(self, monitor_index=0):
         """Optimized monitor positioning"""
@@ -330,6 +431,8 @@ class StereoWindow:
                 self.display_mode = self._modes[(idx + 1) % len(self._modes)]
             elif key == glfw.KEY_F:  # Add FPS toggle with F key
                 self.show_fps = not self.show_fps
+                # Force overlay regen when toggling show_fps
+                self._overlay_cache['last_update'] = 0.0
 
     def update_frame(self, rgb, depth):
         """Optimized texture updates with minimal allocations"""
@@ -338,16 +441,22 @@ class StereoWindow:
             depth = depth.detach().cpu().numpy()
         depth = depth.astype('float32', copy=False)
         
-        # Add overlay to the frame
+        # Add overlay to the frame (modified in-place)
         rgb_with_overlay = self._add_overlay(rgb)
         
         h, w, _ = rgb_with_overlay.shape
         if self._texture_size != (w, h):
             # Release old textures if they exist
             if self.color_tex:
-                self.color_tex.release()
+                try:
+                    self.color_tex.release()
+                except Exception:
+                    pass
             if self.depth_tex:
-                self.depth_tex.release()
+                try:
+                    self.depth_tex.release()
+                except Exception:
+                    pass
                 
             # Create new textures
             self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
@@ -360,7 +469,13 @@ class StereoWindow:
             self._texture_size = (w, h)
 
         # Upload texture data with minimal copies
-        self.color_tex.write(rgb_with_overlay.astype('uint8', copy=False).tobytes())
+        # ensure rgb data is uint8 before writing
+        if rgb_with_overlay.dtype != np.uint8:
+            rgb_u8 = np.clip(rgb_with_overlay * 255.0, 0, 255).astype('uint8')
+        else:
+            rgb_u8 = rgb_with_overlay
+
+        self.color_tex.write(rgb_u8.tobytes())
         self.depth_tex.write((self.depth_ratio * depth).astype('float32', copy=False).tobytes())
 
     def _compute_render_size(self, max_w, max_h, src_w, src_h):
