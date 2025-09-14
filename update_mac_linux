@@ -1,0 +1,24 @@
+#!/bin/bash
+cd "$(dirname "$0")"
+# Set variables
+REPO_OWNER="lc700x"
+REPO_NAME="desktop2stereo"
+BRANCH="update"
+ZIP_FILE="${REPO_NAME}-${BRANCH}.zip"
+DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.zip"
+
+# Download the ZIP archive
+echo "Downloading branch '${BRANCH}'..."
+curl -L -o "$ZIP_FILE" "$DOWNLOAD_URL"
+
+# Extract to temp folder
+echo "Extracting files..."
+unzip -q "$ZIP_FILE" -d temp_extract
+
+# Move contents from nested folder to current directory
+mv temp_extract/${REPO_NAME}-${BRANCH}/* ./
+
+# Clean up
+rm -rf temp_extract "$ZIP_FILE"
+
+echo "Branch '${BRANCH}' downloaded and extracted to current folder."
