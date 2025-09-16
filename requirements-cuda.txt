@@ -1,4 +1,5 @@
-﻿--index-url https://mirrors.aliyun.com/pytorch-wheels/cu128/
+﻿-f https://mirrors.aliyun.com/pytorch-wheels/cu128/
 torch==2.7.0
 torchvision==0.22.0
+
 # torchaudio==2.7.0
