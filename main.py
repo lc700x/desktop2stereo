@@ -2,10 +2,10 @@ import threading
 import queue
 import glfw
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, STABLE
 from capture import DesktopGrabber
 from depth import process, predict_depth
-STABLE = True # keep stable dml performance
+
 
 # Use precise frame interval
 TIME_SLEEP = 1.0 / FPS
@@ -160,6 +160,8 @@ def main(mode="Viewer"):
     finally:
         if streamer:
             streamer.stop()
+        if window:
+            glfw.terminate()
         #     print(f"[Main] {mode} Stopped")
         # total_time = time.perf_counter() - start_time
         # avg_fps = frame_count / total_time if total_time > 0 else 0

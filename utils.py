@@ -92,3 +92,7 @@ if OS_NAME != "Darwin":
     AA_STRENTH *= 40 # 0-100
 else:
     AA_STRENTH *= 4
+
+# Experimental Settings
+STABLE = True # keep stable dml performance
+COMPILE = True # compile model with torch.compile

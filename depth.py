@@ -6,7 +6,7 @@ from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, COMPILE
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -44,11 +44,13 @@ model = AutoModelForDepthEstimation.from_pretrained(
     weights_only=True
 ).to(DEVICE).eval()
 
+# Torch 2.0 compile (optional, may help on some platforms)
+if 'DirectML' not in DEVICE_INFO and COMPILE == True:
+    model = torch.compile(model)
+
+
 if FP16:
     model.half()
-
-if 'CUDA' in DEVICE_INFO:
-    model = torch.compile(model)
 
 MODEL_DTYPE = next(model.parameters()).dtype
 MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
