@@ -1,5 +1,5 @@
-torch==2.7.0
-torchvision==0.22.0
+torch==2.8.0
+torchvision==0.23.0
 pyobjc-core==11.1
 pyobjc-framework-Quartz==11.1
-# torchaudio==2.7.0
+# torchaudio==2.8.0

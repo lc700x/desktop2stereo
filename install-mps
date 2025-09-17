@@ -10,7 +10,7 @@ PYTHON_EXE="python3"
 # Check if Python is available
 if ! command -v $PYTHON_EXE &> /dev/null
 then
-    echo "Python is not found in PATH. Please install Python 3.10 first."
+    echo "Python is not found in PATH. Please install Python 3.11 first."
     read -p "Press enter to exit..."
     exit 1
 fi
@@ -37,7 +37,7 @@ fi
 
 # Update pip
 echo "- Updating the pip package"
-python -m pip install --upgrade pip --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python3 -m pip install --upgrade pip --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if [ $? -ne 0 ]; then
     echo "Failed to update pip"
     read -p "Press enter to exit..."
@@ -47,8 +47,8 @@ fi
 # Install requirements
 echo
 echo "- Installing the requirements"
-python -m pip install -r ./requirements-mps.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python -m pip install -r ./requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python3 -m pip install -r ./requirements-mps.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python3 -m pip install -r ./requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if [ $? -ne 0 ]; then
     echo "Failed to install requirements"
     read -p "Press enter to exit..."

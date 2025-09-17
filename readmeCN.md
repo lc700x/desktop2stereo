@@ -23,7 +23,7 @@
     **Intel GPU**: 从[Download Intel Drivers and Software](https://www.intel.com/content/www/us/en/download-center/home.html/)下载最新GPU驱动。  
     **Qualcomm GPU**: 从[Qualcomm® Adreno™ Windows Graphics Drivers for Snapdragon® X Platform](https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver)下载最新GPU驱动。  
     **其他DirectML设备**: 请根据硬件型号安装最新驱动。  
-2. 安装**Python 3.10**  
+2. 安装**Python 3.11**  
     从[Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe)下载并安装。  
 3. 下载Desktop2Stereo应用  
     从[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest)下载并解压到本地磁盘。  
@@ -33,7 +33,7 @@
 5. 运行**Stereo2Desktop GUI**应用程序  
     双击`run.bat`。  
 ### MacOS  
-1. 安装**Python 3.10**  
+1. 安装**Python 3.11**  
     从[Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-macos11.pkg)下载并安装。  
 2. 下载Desktop2Stereo应用  
     从[Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest)下载并解压到本地磁盘。  
@@ -45,7 +45,7 @@
 1. 安装最新GPU驱动  
     **AMD GPU**: 从[AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html)下载最新GPU驱动和ROCm。  
     **NVIDIA GPU**: 从[NVIDIA GeForce Drivers](https://www.nvidia.com/en-us/geforce/drivers/)下载最新GPU驱动。  
-2. 安装**Python 3.10**  
+2. 安装**Python 3.11**  
     ```bash
     # 以Ubuntu为例
     sudo add-apt-repository ppa:savoury1/python

@@ -341,7 +341,7 @@ Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 1.0
-Depth Resolution: 336
+Depth Resolution: 196
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com

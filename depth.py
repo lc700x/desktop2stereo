@@ -44,8 +44,8 @@ model = AutoModelForDepthEstimation.from_pretrained(
     weights_only=True
 ).to(DEVICE).eval()
 
-
-model = torch.compile(model)  # Torch 2.0+ compile for speed
+if 'CUDA' in DEVICE_INFO:
+    model = torch.compile(model)  # Torch 2.0+ compile for speed
 if FP16:
     model.half()
 

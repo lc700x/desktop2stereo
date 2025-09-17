@@ -12,7 +12,7 @@ views
 models
 *.pdf
 profile.svg
-Python310
+Python3*
 settings.yaml
 test*
 datasets

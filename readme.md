@@ -29,7 +29,7 @@ Download: [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96) (Access code: `1
 **AMD/Intel/Qualcomm GPU and other DirectML devies**: Download and unzip the `Desktop2Stereo_v2.3.3_AMD_etc_Windows.zip` to local disk.  
 **NVIDIA GPU**: Download and unzip `Desktop2Stereo_v2.3.3_NVIDIA_Windows.zip` to local disk.  
 - Method 2: Manual Deployment  
-  1. Install **Python 3.10**  
+  1. Install **Python 3.11**  
   Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) and install.  
   2. Download Desktop2Stereo app  
   Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.  
@@ -37,7 +37,7 @@ Download: [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96) (Access code: `1
   **AMD/Intel/Qualcomm GPU and other DirectML devies**: Doulbe click `install-dml.bat`.  
   **NVIDIA GPU**: Doulbe click `install-cuda.bat`.  
 ### MacOS 
-1. Install **Python 3.10**  
+1. Install **Python 3.11**  
 Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-macos11.pkg) and install.  
 2. Download Desktop2Stereo app  
 Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.  
@@ -47,7 +47,7 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
 1. Install latest GPU driver  
 **AMD GPU**: Download latest GPU driver and ROCm from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). 
 **NVIDIA GPU**: Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.nvidia.com/en-us/geforce/drivers/).
-1. Install **Python 3.10**  
+1. Install **Python 3.11**  
     ```bash
     # Example: Ubuntu
     sudo add-apt-repository ppa:savoury1/python
