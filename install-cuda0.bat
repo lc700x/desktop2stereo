@@ -36,7 +36,7 @@ if %errorlevel% neq 0 (
 
 @REM Update pip
 echo - Updating the pip package
-python -m pip install --upgrade pip --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python -m pip install --upgrade pip --no-cache-dir
 if %errorlevel% neq 0 (
     echo Failed to update pip
     pause
@@ -46,10 +46,10 @@ if %errorlevel% neq 0 (
 @REM Install requirements
 echo.
 echo - Installing the requirements
-python -m pip install -r requirements-cuda.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python -m pip install "triton-windows<3.5" --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python -m pip install wincam==1.0.14 --no-cache-dir --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+python -m pip install -r requirements-cuda0.txt --no-cache-dir
+python -m pip install "triton-windows<3.5" --no-cache-dir
+python -m pip install -r requirements.txt --no-cache-dir
+python -m pip install wincam==1.0.14 --no-cache-dir
 
 if %errorlevel% neq 0 (
     echo Failed to install requirements

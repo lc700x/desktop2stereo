@@ -39,15 +39,16 @@ print(f"Model: {MODEL_ID}")
 # Load depth model
 model = AutoModelForDepthEstimation.from_pretrained(
     MODEL_ID,
-    torch_dtype=torch.float16 if FP16 else torch.float32,
+    torch_dtype=DTYPE,
     cache_dir=CACHE_PATH,
     weights_only=True
 ).to(DEVICE).eval()
 
-if 'CUDA' in DEVICE_INFO:
-    model = torch.compile(model)  # Torch 2.0+ compile for speed
 if FP16:
     model.half()
+
+if 'CUDA' in DEVICE_INFO:
+    model = torch.compile(model)
 
 MODEL_DTYPE = next(model.parameters()).dtype
 MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
