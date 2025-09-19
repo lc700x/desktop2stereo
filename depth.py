@@ -19,9 +19,8 @@ ONNX_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.o
 TRT_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
 USE_ONNX = False  # Set to True if you want to use ONNX
 USE_TRT = False  # Set to True if you want to use TensorRT
-USE_ONNX = True if USE_TRT == True else USE_ONNX # Set to True if you want to use TensorRT
-
-
+if USE_TRT:
+    USE_ONNX = True
 
 # Initialize DirectML Device
 def get_device(index=0):
@@ -103,7 +102,9 @@ if USE_ONNX and os.path.exists(ONNX_PATH):
     if 'DirectML' in DEVICE_INFO:
         providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
     elif torch.cuda.is_available():
-        providers = ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
+        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        if USE_TRT and os.path.exists(TRT_PATH):
+            providers = [('TensorrtExecutionProvider', {'trt_engine_cache_enable': True, 'trt_engine_cache_path': TRT_PATH}), 'CUDAExecutionProvider', 'CPUExecutionProvider']
     else:
         providers = ['CPUExecutionProvider']
     
@@ -145,19 +146,19 @@ MODEL_DTYPE = next(model.parameters()).dtype if hasattr(model, 'parameters') els
 MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
 STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
 
-# Initialize with dummy input for warmup
-def warmup_model(model, steps: int = 3):
-    with torch.no_grad():
-        for i in range(steps):
-            dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
-                                device=DEVICE, dtype=MODEL_DTYPE)
-            if isinstance(model, ONNXModelWrapper):
-                model(dummy.cpu().numpy())
-            else:
-                model(pixel_values=dummy)
-    print(f"Warmup complete with {steps} iterations.")
+## Initialize with dummy input for warmup
+# def warmup_model(model, steps: int = 3):
+#     with torch.no_grad():
+#         for i in range(steps):
+#             dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
+#                                 device=DEVICE, dtype=MODEL_DTYPE)
+#             if isinstance(model, ONNXModelWrapper):
+#                 model(dummy.cpu().numpy())
+#             else:
+#                 model(pixel_values=dummy)
+#     print(f"Warmup complete with {steps} iterations.")
 
-warmup_model(model, steps=5)
+# warmup_model(model, steps=5)
 
 lock = Lock()
 

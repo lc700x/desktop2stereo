@@ -57,7 +57,7 @@ def main(mode="Viewer"):
     total_frames = 0
     start_time = time.perf_counter()
 
-    streamer = None
+    streamer, window = None, None
 
     try:
         if mode == "Viewer":
