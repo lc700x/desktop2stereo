@@ -49,6 +49,8 @@ echo - Installing the requirements
 python -m pip install -r requirements-cuda0.txt --no-cache-dir
 python -m pip install "triton-windows<3.5" --no-cache-dir
 python -m pip install -r requirements.txt --no-cache-dir
+python -m pip install onnxruntime-gpu==1.22.0 --no-cache-dir
+python -m pip install onnx==1.19.0 --no-cache-dir
 python -m pip install wincam==1.0.14 --no-cache-dir
 
 if %errorlevel% neq 0 (

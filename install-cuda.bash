@@ -48,8 +48,10 @@ fi
 echo
 echo "- Installing the requirements"
 python -m pip install -r requirements-cuda.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 python3 -m pip install "triton<3.5" --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python -m pip install onnxruntime-gpu==1.22.0 --no-cache-dir --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+python -m pip install onnx==1.19.0 --no-cache-dir --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if [ $? -ne 0 ]; then
     echo "Failed to install requirements"
     read -p "Press enter to exit..."

@@ -6,10 +6,22 @@ from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
+import os
 from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, COMPILE
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
+# Folder to store compiled model / cache 
+MODEL_FOLDER = os.path.join(CACHE_PATH, "models--"+MODEL_ID.replace("/", "--"))
+# Load depth model - either original or ONNX
+DTYPE_INFO = "fp16" if FP16 else "fp32"
+ONNX_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.onnx")
+TRT_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
+USE_ONNX = True  # Set to True if you want to use ONNX
+USE_TRT = False  # Set to True if you want to use TensorRT
+USE_ONNX = True if USE_TRT == True else USE_ONNX # Set to True if you want to use TensorRT
+
+
 
 # Initialize DirectML Device
 def get_device(index=0):
@@ -36,28 +48,116 @@ if torch.cuda.is_available():
 print(f"{DEVICE_INFO}")
 print(f"Model: {MODEL_ID}")
 
-# Load depth model
-model = AutoModelForDepthEstimation.from_pretrained(
-    MODEL_ID,
-    torch_dtype=DTYPE,
-    cache_dir=CACHE_PATH,
-    weights_only=True
-).to(DEVICE).eval()
+# ONNX Model Wrapper
+class ONNXModelWrapper:
+    def __init__(self, session):
+        self.session = session
+        
+    def __call__(self, pixel_values):
+        # Convert input to numpy if needed
+        if isinstance(pixel_values, torch.Tensor):
+            pixel_values = pixel_values.cpu().numpy()
+        
+        # Run inference
+        outputs = self.session.run(None, {'pixel_values': pixel_values})
+        return type('', (), {'predicted_depth': torch.from_numpy(outputs[0]).to(DEVICE)})
 
-# Torch 2.0 compile (optional, may help on some platforms)
-if 'DirectML' not in DEVICE_INFO and COMPILE == True:
-    model = torch.compile(model)
+# Export to ONNX
+def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=DTYPE):
+    """
+    Export the depth estimation model to ONNX format with dynamic axes for flexibility.
+    """
+    # Create dummy input with correct shape and type
+    dummy_input = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=device, dtype=dtype)
+    
+    # Define input/output names and dynamic axes
+    input_names = ["pixel_values"]
+    output_names = ["predicted_depth"]
+    dynamic_axes = {
+        'pixel_values': {0: 'batch_size', 2: 'height', 3: 'width'},
+        'predicted_depth': {0: 'batch_size', 1: 'height', 2: 'width'}
+    }
+    
+    # Export with opset 17
+    torch.onnx.export(
+        model,
+        dummy_input,
+        output_path,
+        input_names=input_names,
+        output_names=output_names,
+        dynamic_axes=dynamic_axes,
+        opset_version=17,
+        do_constant_folding=True,
+        export_params=True,
+        verbose=False
+    )
+    
+    print(f"Model successfully exported to {output_path}")
 
+if USE_ONNX and os.path.exists(ONNX_PATH):
+    # Load ONNX model
+    import onnxruntime as ort
+    
+    # Set provider based on device
+    providers = []
+    if 'DirectML' in DEVICE_INFO:
+        providers = ['DmlExecutionProvider']
+    elif torch.cuda.is_available():
+        providers = ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
+    else:
+        providers = ['CPUExecutionProvider']
+    
+    # Create ONNX Runtime session
+    sess_options = ort.SessionOptions()
+    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    
+    ort_session = ort.InferenceSession(
+        ONNX_PATH,
+        sess_options=sess_options,
+        providers=providers
+    )
+    
+    model = ONNXModelWrapper(ort_session)
+    print(f"Loaded ONNX model: {ONNX_PATH}")
+else:
+    # Load original PyTorch model
+    model = AutoModelForDepthEstimation.from_pretrained(
+        MODEL_ID,
+        torch_dtype=DTYPE,
+        cache_dir=CACHE_PATH,
+        weights_only=True
+    ).to(DEVICE).eval()
 
-if FP16:
-    model.half()
+    model.half() if FP16 else model.float()
+    
+    # Export to ONNX if enabled
+    if USE_ONNX:
+        export_to_onnx(model, ONNX_PATH, DEVICE, DTYPE)
+    elif COMPILE and torch.cuda.is_available():
+        try:
+            model = torch.compile(model)
+            print("Compiled model with Triton Inductor")
+        except Exception as e:
+            print(f"Model compilation failed: {e}")
 
-MODEL_DTYPE = next(model.parameters()).dtype
+MODEL_DTYPE = next(model.parameters()).dtype if hasattr(model, 'parameters') else DTYPE
 MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
 STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
-with torch.no_grad():
-    dummy = torch.zeros(1,3,DEPTH_RESOLUTION,DEPTH_RESOLUTION, device=DEVICE, dtype=MODEL_DTYPE)
-    model(pixel_values=dummy)
+
+# Initialize with dummy input for warmup
+def warmup_model(model, steps: int = 3):
+    with torch.no_grad():
+        for i in range(steps):
+            dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
+                                device=DEVICE, dtype=MODEL_DTYPE)
+            if isinstance(model, ONNXModelWrapper):
+                model(dummy.cpu().numpy())
+            else:
+                model(pixel_values=dummy)
+    print(f"Warmup complete with {steps} iterations.")
+
+warmup_model(model, steps=5)
 
 lock = Lock()
 
@@ -121,26 +221,13 @@ def apply_sigmoid(depth: torch.Tensor, k: float = 10.0, midpoint: float = 0.5) -
 def apply_foreground_scale(depth: torch.Tensor, scale: float) -> torch.Tensor:
     """
     Apply foreground/background scaling to a depth map.
-
-    Args:
-        depth (torch.Tensor): depth map of shape (H, W, 1), values normalized in [0, 1].
-                              0 = near (foreground), 1 = far (background).
-        scale (float): scaling factor
-                       > 0: foreground closer, background further
-                       < 0: foreground flatter, background closer
-                       = 0: no change
-
-    Returns:
-        torch.Tensor: scaled depth map of same shape as input
     """
     if not torch.is_floating_point(depth):
         depth = depth.float()
 
     if scale > 0:
-        # Exaggerate separation: foreground closer, background further
         return torch.pow(depth, 1.0 + scale)
     elif scale < 0:
-        # Compress foreground, pull background closer
         return 1.0 - torch.pow(1.0 - depth, 1.0 + abs(scale))
     else:
         return depth
@@ -148,31 +235,21 @@ def apply_foreground_scale(depth: torch.Tensor, scale: float) -> torch.Tensor:
 def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
     """
     Apply anti-aliasing to reduce jagged edges in depth maps.
-    
-    Args:
-        depth (torch.Tensor): Normalized depth map tensor [H,W] or [B,1,H,W] with values in [0,1].
-        strength (float): Blur strength; higher = smoother edges. Recommended range [0.5, 2.0].
-    
-    Returns:
-        torch.Tensor: Smoothed depth map with same shape.
     """
     if depth.dim() == 2:
         depth = depth.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
     elif depth.dim() == 3:
         depth = depth.unsqueeze(1)  # [B,1,H,W]
 
-    # Kernel size scales with strength
     k = int(3 * strength) | 1  # force odd number
     if k < 3:
         return depth.squeeze()
 
-    # Gaussian blur kernel
     sigma = 0.5 * strength
     coords = torch.arange(k, device=depth.device, dtype=depth.dtype) - k // 2
     gauss = torch.exp(-(coords**2) / (2 * sigma**2))
     gauss /= gauss.sum()
 
-    # Separable convolution (X then Y)
     depth = F.conv2d(depth, gauss.view(1,1,1,-1), padding=(0, k//2), groups=1)
     depth = F.conv2d(depth, gauss.view(1,1,-1,1), padding=(k//2, 0), groups=1)
 
@@ -212,7 +289,7 @@ class DepthStabilizer:
             self.prev = out.detach()
             return out
 
-depth_stabilizer = DepthStabilizer(alpha=0.9)  # increase alpha for more stability
+depth_stabilizer = DepthStabilizer(alpha=0.9)
 
 # Piecewise gamma remap
 def apply_piecewise(
@@ -224,20 +301,15 @@ def apply_piecewise(
     """
     Efficient piecewise gamma remap for depth maps.
     Assumes 1=near, 0=far.
-    near_gamma -> [split, 1]
-    far_gamma  -> [0, split]
     """
     depth = depth.clamp(0.0, 1.0)
 
-    # Near branch
     near_val = (((depth - split).clamp(min=0) / (1 - split + 1e-6))
                 .pow(near_gamma) * (1 - split)) + split
 
-    # Far branch
     far_val = (((depth).clamp(max=split) / (split + 1e-6))
                .pow(far_gamma) * split)
 
-    # Select branch without indexing
     out = torch.where(depth >= split, near_val, far_val)
     return out
 
@@ -252,95 +324,85 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         tensor = rgb_c.unsqueeze(0) / 255.0
         tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
     else:
-        # Resize input on CPU to model resolution for efficiency (avoids large GPU transfers and interpolate)
         target_size = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
         if (h, w) != target_size:
             interpolation = cv2.INTER_AREA if max(h, w) > DEPTH_RESOLUTION else cv2.INTER_LINEAR
             input_rgb = cv2.resize(image_rgb, target_size, interpolation=interpolation)
         
         tensor = torch.from_numpy(input_rgb).permute(2,0,1).contiguous().unsqueeze(0).to(DEVICE, dtype=DTYPE) / 255.0
+    
     tensor = ((tensor - MEAN) / STD).contiguous()
     
-    with torch.no_grad():  # Slightly faster than no_grad
+    with torch.no_grad():
         tensor = tensor.to(dtype=MODEL_DTYPE)
-        depth = model(pixel_values=tensor).predicted_depth
-
-    # Interpolate output to original size
-    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0,0]
+        if isinstance(model, ONNXModelWrapper):
+            depth = model(tensor.cpu().numpy()).predicted_depth
+        else:
+            depth = model(pixel_values=tensor).predicted_depth
     
-    # Robust normalize and Post depth processing
+    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0,0]
     depth = apply_stretch(depth, 5, 95)
     depth = apply_sigmoid(depth, k=4, midpoint=0.618)
     depth = apply_piecewise(depth, split=0.618, near_gamma=1.2, far_gamma=0.6)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
     depth = normalize_tensor(depth)
-    # Mild AA to reduce jaggies
     depth = anti_alias(depth, strength=AA_STRENTH)
 
-    # Optional temporal stabilization (EMA)
     if use_temporal_smooth:
         depth = depth_stabilizer(depth)
+        
     if return_tuple:
         return depth, rgb_c
     else:
         return depth
     
-# generate left and right eye view    
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS"):
     C, H, W = rgb_c.shape
     device = depth.device
     rgb_c = rgb_c.to(device, dtype=DTYPE)
     depth_strength = 0.05
 
-    # Precompute pixel coordinates (cache this tensor outside if called repeatedly!)
-    xs = torch.arange(W, dtype=torch.float32, device=device).view(1, -1)  # shape [1,W]
-
-    # Depth inversion & shifts (keep as float for sub-pixel accuracy)
+    xs = torch.arange(W, dtype=DTYPE, device=device).view(1, -1)
     inv = 1.0 - depth * depth_ratio
     max_px = ipd_uv * W
-    shifts_half = inv * max_px * depth_strength  # [H,W], float
+    shifts_half = inv * max_px * depth_strength
 
-    # Build shifted indices with broadcasting
     idx_left = xs + shifts_half
     idx_right = xs - shifts_half
 
     def sample_bilinear(img, idx):
-        # Clamp indices to image bounds for replicate padding
         idx_clamped = idx.clamp(0, W - 1)
         floor_idx = torch.floor(idx_clamped).long()
         ceil_idx = (floor_idx + 1).clamp(0, W - 1)
         frac = idx_clamped - floor_idx.float()
 
-        # Gather values (expand indices to [C, H, W])
         floor_val = torch.gather(img, dim=2, index=floor_idx.unsqueeze(0).expand(C, H, W))
         ceil_val = torch.gather(img, dim=2, index=ceil_idx.unsqueeze(0).expand(C, H, W))
 
-        # Bilinear interpolation
         return floor_val * (1 - frac).unsqueeze(0).expand(C, -1, -1) + ceil_val * frac.unsqueeze(0).expand(C, -1, -1)
 
-    # Aspect ratio padding (do once, avoid recomputation)
     def pad_to_aspect(img, target_ratio=(16, 9)):
         _, h, w = img.shape
         t_w, t_h = target_ratio
         r_img, r_t = w / h, t_w / t_h
         if abs(r_img - r_t) < 1e-3:
             return img
-        if r_img > r_t:  # too wide
+        if r_img > r_t:
             new_h = int(round(w / r_t))
             pad_top = (new_h - h) // 2
             return F.pad(img, (0, 0, pad_top, new_h - h - pad_top))
-        else:  # too tall
+        else:
             new_w = int(round(h * r_t))
             pad_left = (new_w - w) // 2
             return F.pad(img, (pad_left, new_w - w - pad_left, 0, 0))
-    # Generate views with bilinear resampling
+
     gen_left = sample_bilinear(rgb_c, idx_left)
     gen_right = sample_bilinear(rgb_c, idx_right)
     left, right = pad_to_aspect(gen_left), pad_to_aspect(gen_right)
 
     if display_mode == "TAB":
         out = torch.cat([left, right], dim=1)
-    else:  # SBS
+    else:
         out = torch.cat([left, right], dim=2)
     if display_mode != "Full-SBS":
         out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
