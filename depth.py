@@ -17,7 +17,7 @@ MODEL_FOLDER = os.path.join(CACHE_PATH, "models--"+MODEL_ID.replace("/", "--"))
 DTYPE_INFO = "fp16" if FP16 else "fp32"
 ONNX_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.onnx")
 TRT_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
-USE_ONNX = True  # Set to True if you want to use ONNX
+USE_ONNX = False  # Set to True if you want to use ONNX
 USE_TRT = False  # Set to True if you want to use TensorRT
 USE_ONNX = True if USE_TRT == True else USE_ONNX # Set to True if you want to use TensorRT
 
@@ -101,7 +101,7 @@ if USE_ONNX and os.path.exists(ONNX_PATH):
     # Set provider based on device
     providers = []
     if 'DirectML' in DEVICE_INFO:
-        providers = ['DmlExecutionProvider']
+        providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
     elif torch.cuda.is_available():
         providers = ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
     else:

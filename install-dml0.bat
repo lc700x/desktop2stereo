@@ -47,6 +47,8 @@ if %errorlevel% neq 0 (
 echo.
 echo - Installing the requirements
 python -m pip install -r requirements-dml.txt --no-cache-dir
+python -m pip install onnxruntime-directml==1.22.0 --no-cache-dir
+python -m pip install onnx==1.19.0 --no-cache-dir
 python -m pip install -r requirements.txt --no-cache-dir
 python -m pip install wincam==1.0.14 --no-cache-dir
 if %errorlevel% neq 0 (

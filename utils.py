@@ -94,5 +94,5 @@ else:
     AA_STRENTH *= 4
 
 # Experimental Settings
-STABLE = True # keep stable dml performance
+STABLE = False # keep stable dml performance
 COMPILE = True # compile model with torch.compile

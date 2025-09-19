@@ -48,6 +48,8 @@ echo.
 echo - Installing the requirements
 python -m pip install -r requirements-dml.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+python -m pip install onnxruntime-directml==1.22.0 --no-cache-dir --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+python -m pip install onnx==1.19.0 --no-cache-dir --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 python -m pip install wincam==1.0.14 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (
     echo Failed to install requirements
