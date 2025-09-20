@@ -36,7 +36,7 @@ if %errorlevel% neq 0 (
 
 @REM Update pip
 echo - Updating the pip package
-python -m pip install --upgrade pip --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install --upgrade pip --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (
     echo Failed to update pip
     pause
@@ -46,12 +46,12 @@ if %errorlevel% neq 0 (
 @REM Install requirements
 echo.
 echo - Installing the requirements
-python -m pip install -r requirements-cuda.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python3 -m pip install "triton<3.5" --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python -m pip install onnxruntime-gpu==1.22.0 --no-cache-dir --trusted-host  http://mirrors.aliyun.com/pypi/simple/
-python -m pip install onnx==1.19.0 --no-cache-dir --trusted-host  http://mirrors.aliyun.com/pypi/simple/
-python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python -m pip install wincam==1.0.14 --no-cache-dir --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install -r requirements-cuda.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install "triton-windows<3.5" --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install tensorrt-cu12==10.13.3.9 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install onnx==1.19.0 --no-cache-dir --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 
 if %errorlevel% neq 0 (
     echo Failed to install requirements

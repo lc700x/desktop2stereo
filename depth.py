@@ -6,8 +6,9 @@ from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, COMPILE, USE_TENSORRT
 import os
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, COMPILE
+from typing import Optional, Union, List, Tuple
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -17,10 +18,6 @@ MODEL_FOLDER = os.path.join(CACHE_PATH, "models--"+MODEL_ID.replace("/", "--"))
 DTYPE_INFO = "fp16" if FP16 else "fp32"
 ONNX_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.onnx")
 TRT_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
-USE_ONNX = False  # Set to True if you want to use ONNX
-USE_TRT = False  # Set to True if you want to use TensorRT
-if USE_TRT:
-    USE_ONNX = True
 
 # Initialize DirectML Device
 def get_device(index=0):
@@ -47,29 +44,67 @@ if torch.cuda.is_available():
 print(f"{DEVICE_INFO}")
 print(f"Model: {MODEL_ID}")
 
-# ONNX Model Wrapper
-class ONNXModelWrapper:
-    def __init__(self, session):
-        self.session = session
+# TensorRT Optimization
+def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
+    """
+    Convert ONNX model to TensorRT engine using TensorRT's Python API only.
+    """
+    try:
+        if os.path.exists(trt_path) and REBUILD_TRT == False:
+            print(f"Loaded existing TensorRT engine: {trt_path}")
+            return trt_path
         
-    def __call__(self, pixel_values):
-        # Convert input to numpy if needed
-        if isinstance(pixel_values, torch.Tensor):
-            pixel_values = pixel_values.cpu().numpy()
+        import tensorrt as trt
         
-        # Run inference
-        outputs = self.session.run(None, {'pixel_values': pixel_values})
-        return type('', (), {'predicted_depth': torch.from_numpy(outputs[0]).to(DEVICE)})
+        # Initialize logger and builder
+        logger = trt.Logger(trt.Logger.INFO)
+        builder = trt.Builder(logger)
+        network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+        parser = trt.OnnxParser(network, logger)
+        
+        # Load ONNX model
+        with open(onnx_path, "rb") as f:
+            if not parser.parse(f.read()):
+                for error in range(parser.num_errors):
+                    print(parser.get_error(error))
+                raise RuntimeError("ONNX parsing failed")
+        
+        # Build configuration
+        config = builder.create_builder_config()
+        if FP16:
+            config.set_flag(trt.BuilderFlag.FP16)
+        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1GB
+        
+        # Set dynamic shapes profile
+        profile = builder.create_optimization_profile()
+        input_name = network.get_input(0).name
+        input_shape = network.get_input(0).shape
+        min_shape = (1, 3, DEPTH_RESOLUTION//2, DEPTH_RESOLUTION//2)
+        opt_shape = (1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION)
+        max_shape = (1, 3, DEPTH_RESOLUTION*2, DEPTH_RESOLUTION*2)
+        
+        profile.set_shape(input_name, min_shape, opt_shape, max_shape)
+        config.add_optimization_profile(profile)
+        
+        # Build engine
+        serialized_engine = builder.build_serialized_network(network, config)
+        with open(trt_path, "wb") as f:
+            f.write(serialized_engine)
+        
+        print(f"TensorRT engine saved to {trt_path}")
+        return trt_path
+        
+    except ImportError:
+        print("TensorRT not available, skipping optimization")
+        return onnx_path
 
 # Export to ONNX
 def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=DTYPE):
     """
-    Export the depth estimation model to ONNX format with dynamic axes for flexibility.
+    Export the depth estimation model to ONNX format with dynamic axes.
     """
-    # Create dummy input with correct shape and type
     dummy_input = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=device, dtype=dtype)
     
-    # Define input/output names and dynamic axes
     input_names = ["pixel_values"]
     output_names = ["predicted_depth"]
     dynamic_axes = {
@@ -77,7 +112,6 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
         'predicted_depth': {0: 'batch_size', 1: 'height', 2: 'width'}
     }
     
-    # Export with opset 17
     torch.onnx.export(
         model,
         dummy_input,
@@ -93,72 +127,175 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
     
     print(f"Model successfully exported to {output_path}")
 
-if USE_ONNX and os.path.exists(ONNX_PATH):
-    # Load ONNX model
-    import onnxruntime as ort
-    
-    # Set provider based on device
-    providers = []
-    if 'DirectML' in DEVICE_INFO:
-        providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
-    elif torch.cuda.is_available():
-        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-        if USE_TRT and os.path.exists(TRT_PATH):
-            providers = [('TensorrtExecutionProvider', {'trt_engine_cache_enable': True, 'trt_engine_cache_path': TRT_PATH}), 'CUDAExecutionProvider', 'CPUExecutionProvider']
-    else:
-        providers = ['CPUExecutionProvider']
-    
-    # Create ONNX Runtime session
-    sess_options = ort.SessionOptions()
-    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-    
-    ort_session = ort.InferenceSession(
-        ONNX_PATH,
-        sess_options=sess_options,
-        providers=providers
-    )
-    
-    model = ONNXModelWrapper(ort_session)
-    print(f"Loaded ONNX model: {ONNX_PATH}")
-else:
-    # Load original PyTorch model
-    model = AutoModelForDepthEstimation.from_pretrained(
-        MODEL_ID,
-        torch_dtype=DTYPE,
-        cache_dir=CACHE_PATH,
-        weights_only=True
-    ).to(DEVICE).eval()
-
-    model.half() if FP16 else model.float()
-    
-    # Export to ONNX if enabled
-    if USE_ONNX:
-        export_to_onnx(model, ONNX_PATH, DEVICE, DTYPE)
-    elif COMPILE and torch.cuda.is_available():
+# TensorRT Engine Wrapper Class (Without PyCUDA)
+class TensorRTEngine:
+    def __init__(self, engine_path, device, dtype):
+        """
+        Initialize TensorRT engine using binding names instead of deprecated methods.
+        """
+        self.device = device
+        self.dtype = dtype
+        
         try:
-            model = torch.compile(model)
-            print("Compiled model with Triton Inductor")
-        except Exception as e:
-            print(f"Model compilation failed: {e}")
+            import tensorrt as trt
+            
+            # Load TensorRT engine
+            with open(engine_path, "rb") as f:
+                engine_data = f.read()
+            
+            logger = trt.Logger(trt.Logger.WARNING)
+            runtime = trt.Runtime(logger)
+            self.engine = runtime.deserialize_cuda_engine(engine_data)
+            self.context = self.engine.create_execution_context()
+            
+            # Get binding information using names instead of deprecated methods
+            self.input_binding_indices = []
+            self.output_binding_indices = []
+            
+            for binding in range(self.engine.num_io_tensors):
+                name = self.engine.get_tensor_name(binding)
+                
+                # Use name pattern matching to identify inputs/outputs
+                if "input" in name.lower() or "pixel_values" in name.lower():
+                    self.input_binding_indices.append(binding)
+                else:
+                    self.output_binding_indices.append(binding)
+            
+            # Pre-allocate output tensors
+            self.output_shapes = {}
+            for binding in self.output_binding_indices:
+                name = self.engine.get_tensor_name(binding)
+                self.output_shapes[name] = self.engine.get_tensor_shape(name)
+            
+        except ImportError:
+            raise ImportError("TensorRT not available")
 
-MODEL_DTYPE = next(model.parameters()).dtype if hasattr(model, 'parameters') else DTYPE
+    def __call__(self, tensor):
+        """Execute inference with TensorRT using native API."""
+        # Set input binding dimensions
+        input_shape = tuple(tensor.shape)
+        name = self.engine.get_tensor_name(0)
+        self.context.set_input_shape(name, input_shape)
+        
+        # Prepare output tensors
+        outputs = {}
+        bindings = [None] * self.engine.num_io_tensors
+
+        # Set input binding
+        bindings[0] = tensor.data_ptr()
+        
+        # Allocate output tensors
+        for i, binding in enumerate(self.output_binding_indices, 1):
+            name = self.engine.get_tensor_name(binding)
+            dims = self.context.get_tensor_shape(name)
+            shape_tuple = tuple(dims)  # Convert Dims to tuple
+            output = torch.empty(shape_tuple, device=self.device, dtype=self.dtype)
+            outputs[name] = output
+            bindings[binding] = output.data_ptr()
+        
+        # Execute inference
+        self.context.execute_v2(bindings=bindings)
+        
+        # Return the main output (predicted_depth)
+        return outputs['predicted_depth']
+
+# Model Wrapper Class
+class DepthModelWrapper:
+    def __init__(self, model_path, device, device_info, dtype, 
+                 onnx_path=ONNX_PATH, trt_path=TRT_PATH):
+        """
+        Wrapper class that handles both PyTorch and TensorRT backends.
+        """
+        self.device = device
+        self.device_info = device_info
+        self.dtype = dtype
+        self.model_path = model_path
+        self.onnx_path = onnx_path
+        self.trt_path = trt_path
+        
+        # Determine backend based on device
+        self.is_cuda = "CUDA" in device_info
+        
+        if self.is_cuda and USE_TENSORRT:
+            # Use TensorRT backend for CUDA
+            import warnings
+            warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
+            self.backend = "tensorrt"
+            self.model = self._load_tensorrt_engine()
+            
+        else:
+            # Use PyTorch backend for DirectML/MPS/CPU
+            self.backend = "pytorch"
+            self.model = self._load_pytorch_model()
+        
+        print(f"Using backend: {self.backend}")
+    
+    def _load_pytorch_model(self):
+        """Load the original PyTorch model."""
+        model = AutoModelForDepthEstimation.from_pretrained(
+            self.model_path,
+            torch_dtype=self.dtype,
+            cache_dir=CACHE_PATH,
+            weights_only=True
+        ).to(self.device).eval()
+        
+        if FP16:
+            model.half()
+        
+        if 'DirectML' not in self.device_info and COMPILE:
+            model = torch.compile(model)
+            print("Compiled with torch.compile")
+        
+        return model
+    
+    def _load_tensorrt_engine(self):
+        """Load or create TensorRT engine."""
+        # First, load PyTorch model to export ONNX
+        pytorch_model = AutoModelForDepthEstimation.from_pretrained(
+            self.model_path,
+            torch_dtype=self.dtype,
+            cache_dir=CACHE_PATH,
+            weights_only=True
+        ).to(self.device).eval()
+        
+        if FP16:
+            pytorch_model.half()
+        
+        # Export to ONNX if not exists
+        if not os.path.exists(self.onnx_path):
+            export_to_onnx(pytorch_model, self.onnx_path, self.device, self.dtype)
+        
+        # Build or load TensorRT engine
+        trt_engine_path = optimize_with_tensorrt(self.onnx_path, self.trt_path)
+        return TensorRTEngine(trt_engine_path, self.device, self.dtype)
+    
+    def __call__(self, tensor):
+        """Run inference using the active backend."""
+        with torch.no_grad():
+            if self.backend == "pytorch":
+                return self.model(pixel_values=tensor).predicted_depth
+            else:
+                return self.model(tensor)
+
+# Initialize model wrapper
+model_wrapper = DepthModelWrapper(
+    model_path=MODEL_ID,
+    device=DEVICE,
+    device_info=DEVICE_INFO,
+    dtype=DTYPE
+)
+
+MODEL_DTYPE = next(model_wrapper.model.parameters()).dtype if hasattr(model_wrapper.model, 'parameters') else DTYPE
 MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
 STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
 
-## Initialize with dummy input for warmup
-# def warmup_model(model, steps: int = 3):
-#     with torch.no_grad():
-#         for i in range(steps):
-#             dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
-#                                 device=DEVICE, dtype=MODEL_DTYPE)
-#             if isinstance(model, ONNXModelWrapper):
-#                 model(dummy.cpu().numpy())
-#             else:
-#                 model(pixel_values=dummy)
-#     print(f"Warmup complete with {steps} iterations.")
-
-# warmup_model(model, steps=5)
+# Test with dummy input to initialize
+with torch.no_grad():
+    dummy = torch.zeros(1,3,DEPTH_RESOLUTION,DEPTH_RESOLUTION, device=DEVICE, dtype=MODEL_DTYPE)
+    if model_wrapper.backend == "pytorch":
+        model_wrapper.model(pixel_values=dummy)
+    else:
+        model_wrapper.model(dummy)
 
 lock = Lock()
 
@@ -222,13 +359,26 @@ def apply_sigmoid(depth: torch.Tensor, k: float = 10.0, midpoint: float = 0.5) -
 def apply_foreground_scale(depth: torch.Tensor, scale: float) -> torch.Tensor:
     """
     Apply foreground/background scaling to a depth map.
+
+    Args:
+        depth (torch.Tensor): depth map of shape (H, W, 1), values normalized in [0, 1].
+                              0 = near (foreground), 1 = far (background).
+        scale (float): scaling factor
+                       > 0: foreground closer, background further
+                       < 0: foreground flatter, background closer
+                       = 0: no change
+
+    Returns:
+        torch.Tensor: scaled depth map of same shape as input
     """
     if not torch.is_floating_point(depth):
         depth = depth.float()
 
     if scale > 0:
+        # Exaggerate separation: foreground closer, background further
         return torch.pow(depth, 1.0 + scale)
     elif scale < 0:
+        # Compress foreground, pull background closer
         return 1.0 - torch.pow(1.0 - depth, 1.0 + abs(scale))
     else:
         return depth
@@ -236,21 +386,31 @@ def apply_foreground_scale(depth: torch.Tensor, scale: float) -> torch.Tensor:
 def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
     """
     Apply anti-aliasing to reduce jagged edges in depth maps.
+    
+    Args:
+        depth (torch.Tensor): Normalized depth map tensor [H,W] or [B,1,H,W] with values in [0,1].
+        strength (float): Blur strength; higher = smoother edges. Recommended range [0.5, 2.0].
+    
+    Returns:
+        torch.Tensor: Smoothed depth map with same shape.
     """
     if depth.dim() == 2:
         depth = depth.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
     elif depth.dim() == 3:
         depth = depth.unsqueeze(1)  # [B,1,H,W]
 
+    # Kernel size scales with strength
     k = int(3 * strength) | 1  # force odd number
     if k < 3:
         return depth.squeeze()
 
+    # Gaussian blur kernel
     sigma = 0.5 * strength
     coords = torch.arange(k, device=depth.device, dtype=depth.dtype) - k // 2
     gauss = torch.exp(-(coords**2) / (2 * sigma**2))
     gauss /= gauss.sum()
 
+    # Separable convolution (X then Y)
     depth = F.conv2d(depth, gauss.view(1,1,1,-1), padding=(0, k//2), groups=1)
     depth = F.conv2d(depth, gauss.view(1,1,-1,1), padding=(k//2, 0), groups=1)
 
@@ -290,7 +450,8 @@ class DepthStabilizer:
             self.prev = out.detach()
             return out
 
-depth_stabilizer = DepthStabilizer(alpha=0.9)
+    
+depth_stabilizer = DepthStabilizer(alpha=0.9)  # increase alpha for more stability
 
 # Piecewise gamma remap
 def apply_piecewise(
@@ -302,18 +463,24 @@ def apply_piecewise(
     """
     Efficient piecewise gamma remap for depth maps.
     Assumes 1=near, 0=far.
+    near_gamma -> [split, 1]
+    far_gamma  -> [0, split]
     """
     depth = depth.clamp(0.0, 1.0)
 
+    # Near branch
     near_val = (((depth - split).clamp(min=0) / (1 - split + 1e-6))
                 .pow(near_gamma) * (1 - split)) + split
 
+    # Far branch
     far_val = (((depth).clamp(max=split) / (split + 1e-6))
                .pow(far_gamma) * split)
 
+    # Select branch without indexing
     out = torch.where(depth >= split, near_val, far_val)
     return out
 
+# Modified predict_depth function with improved TRT integration
 def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth: bool = True):
     """
     Returns depth in [0,1], 1=near, 0=far. Optionally returns (depth, rgb_c).
@@ -325,6 +492,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         tensor = rgb_c.unsqueeze(0) / 255.0
         tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
     else:
+        # Resize input on CPU to model resolution for efficiency
         target_size = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
         if (h, w) != target_size:
             interpolation = cv2.INTER_AREA if max(h, w) > DEPTH_RESOLUTION else cv2.INTER_LINEAR
@@ -336,74 +504,85 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     
     with torch.no_grad():
         tensor = tensor.to(dtype=MODEL_DTYPE)
-        if isinstance(model, ONNXModelWrapper):
-            depth = model(tensor.cpu().numpy()).predicted_depth
-        else:
-            depth = model(pixel_values=tensor).predicted_depth
+        # Use model wrapper instead of direct model call
+        depth = model_wrapper(tensor)
     
+    # Interpolate output to original size
     depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0,0]
+    
+    # Robust normalize and Post depth processing
     depth = apply_stretch(depth, 5, 95)
     depth = apply_sigmoid(depth, k=4, midpoint=0.618)
     depth = apply_piecewise(depth, split=0.618, near_gamma=1.2, far_gamma=0.6)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
     depth = normalize_tensor(depth)
+    # Mild AA to reduce jaggies
     depth = anti_alias(depth, strength=AA_STRENTH)
 
+    # Optional temporal stabilization (EMA)
     if use_temporal_smooth:
         depth = depth_stabilizer(depth)
-        
+    
     if return_tuple:
         return depth, rgb_c
     else:
-        return depth
-    
+        return depth   
+# generate left and right eye view    
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS"):
     C, H, W = rgb_c.shape
     device = depth.device
     rgb_c = rgb_c.to(device, dtype=DTYPE)
     depth_strength = 0.05
 
-    xs = torch.arange(W, dtype=DTYPE, device=device).view(1, -1)
+    # Precompute pixel coordinates (cache this tensor outside if called repeatedly!)
+    xs = torch.arange(W, dtype=torch.float32, device=device).view(1, -1)  # shape [1,W]
+
+    # Depth inversion & shifts (keep as float for sub-pixel accuracy)
     inv = 1.0 - depth * depth_ratio
     max_px = ipd_uv * W
-    shifts_half = inv * max_px * depth_strength
+    shifts_half = inv * max_px * depth_strength  # [H,W], float
 
+    # Build shifted indices with broadcasting
     idx_left = xs + shifts_half
     idx_right = xs - shifts_half
 
     def sample_bilinear(img, idx):
+        # Clamp indices to image bounds for replicate padding
         idx_clamped = idx.clamp(0, W - 1)
         floor_idx = torch.floor(idx_clamped).long()
         ceil_idx = (floor_idx + 1).clamp(0, W - 1)
         frac = idx_clamped - floor_idx.float()
 
+        # Gather values (expand indices to [C, H, W])
         floor_val = torch.gather(img, dim=2, index=floor_idx.unsqueeze(0).expand(C, H, W))
         ceil_val = torch.gather(img, dim=2, index=ceil_idx.unsqueeze(0).expand(C, H, W))
 
+        # Bilinear interpolation
         return floor_val * (1 - frac).unsqueeze(0).expand(C, -1, -1) + ceil_val * frac.unsqueeze(0).expand(C, -1, -1)
 
+    # Aspect ratio padding (do once, avoid recomputation)
     def pad_to_aspect(img, target_ratio=(16, 9)):
         _, h, w = img.shape
         t_w, t_h = target_ratio
         r_img, r_t = w / h, t_w / t_h
         if abs(r_img - r_t) < 1e-3:
             return img
-        if r_img > r_t:
+        if r_img > r_t:  # too wide
             new_h = int(round(w / r_t))
             pad_top = (new_h - h) // 2
             return F.pad(img, (0, 0, pad_top, new_h - h - pad_top))
-        else:
+        else:  # too tall
             new_w = int(round(h * r_t))
             pad_left = (new_w - w) // 2
             return F.pad(img, (pad_left, new_w - w - pad_left, 0, 0))
-
+    # Generate views with bilinear resampling
     gen_left = sample_bilinear(rgb_c, idx_left)
     gen_right = sample_bilinear(rgb_c, idx_right)
     left, right = pad_to_aspect(gen_left), pad_to_aspect(gen_right)
 
     if display_mode == "TAB":
         out = torch.cat([left, right], dim=1)
-    else:
+    else:  # SBS
         out = torch.cat([left, right], dim=2)
     if display_mode != "Full-SBS":
         out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
