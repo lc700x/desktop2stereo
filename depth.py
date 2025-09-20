@@ -6,7 +6,7 @@ from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, COMPILE, USE_TENSORRT
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, COMPILE, USE_TENSORRT, REBUILD_TRT
 import os
 from typing import Optional, Union, List, Tuple
 
