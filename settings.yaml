@@ -337,12 +337,12 @@ Model List:
   apple/DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: depth-anything/Depth-Anything-V2-Small-hf
+Depth Model: lc700x/dpt-hybrid-midas-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 1.0
-Depth Resolution: 336
-FP16: true
+Depth Resolution: 384
+FP16: false
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0

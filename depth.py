@@ -220,15 +220,15 @@ class DepthModelWrapper:
             # Use TensorRT backend for CUDA
             import warnings
             warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
-            self.backend = "tensorrt"
+            self.backend = "TensorRT"
             self.model = self._load_tensorrt_engine()
             
         else:
             # Use PyTorch backend for DirectML/MPS/CPU
-            self.backend = "pytorch"
+            self.backend = "PyTorch"
             self.model = self._load_pytorch_model()
         
-        print(f"Using backend: {self.backend}")
+        print(f"[Main] Using backend: {self.backend}")
     
     def _load_pytorch_model(self):
         """Load the original PyTorch model."""
@@ -244,7 +244,7 @@ class DepthModelWrapper:
         
         if 'DirectML' not in self.device_info and COMPILE:
             model = torch.compile(model)
-            print("Compiled with torch.compile")
+            print("torch.compile finished with Triton.")
         
         return model
     
@@ -272,30 +272,33 @@ class DepthModelWrapper:
     def __call__(self, tensor):
         """Run inference using the active backend."""
         with torch.no_grad():
-            if self.backend == "pytorch":
+            if self.backend == "PyTorch":
                 return self.model(pixel_values=tensor).predicted_depth
             else:
                 return self.model(tensor)
 
 # Initialize model wrapper
-model_wrapper = DepthModelWrapper(
+model_wraper = DepthModelWrapper(
     model_path=MODEL_ID,
     device=DEVICE,
     device_info=DEVICE_INFO,
     dtype=DTYPE
 )
 
-MODEL_DTYPE = next(model_wrapper.model.parameters()).dtype if hasattr(model_wrapper.model, 'parameters') else DTYPE
+MODEL_DTYPE = next(model_wraper.model.parameters()).dtype if hasattr(model_wraper.model, 'parameters') else DTYPE
 MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
 STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
 
-# Test with dummy input to initialize
-with torch.no_grad():
-    dummy = torch.zeros(1,3,DEPTH_RESOLUTION,DEPTH_RESOLUTION, device=DEVICE, dtype=MODEL_DTYPE)
-    if model_wrapper.backend == "pytorch":
-        model_wrapper.model(pixel_values=dummy)
-    else:
-        model_wrapper.model(dummy)
+# Initialize with dummy input for warmup
+def warmup_model(model_wraper, steps: int = 3):
+    with torch.no_grad():
+        for i in range(steps):
+            dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
+                                device=DEVICE, dtype=MODEL_DTYPE)
+            model_wraper(dummy)
+    # print(f"Warmup complete with {steps} iterations.")
+
+warmup_model(model_wraper, steps=3)
 
 lock = Lock()
 
@@ -417,12 +420,16 @@ def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
     return depth.squeeze()
 
 def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
+    if isinstance(img_rgb, cv2.UMat): 
+        img_rgb = img_rgb.get()
     if height < img_rgb.shape[0]:
         width = int(img_rgb.shape[1]/img_rgb.shape[0]*height)
         img_rgb = cv2.resize(img_rgb,(width,height), interpolation=cv2.INTER_AREA)
     return torch.from_numpy(img_rgb).to(DEVICE, dtype=DTYPE)
 
 def process(img_rgb: np.ndarray, height) -> np.ndarray:
+    if isinstance(img_rgb, cv2.UMat): 
+        img_rgb = img_rgb.get()
     if height < img_rgb.shape[0]:
         width = int(img_rgb.shape[1]/img_rgb.shape[0]*height)
         img_rgb = cv2.resize(img_rgb,(width,height), interpolation=cv2.INTER_AREA)
@@ -505,7 +512,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     with torch.no_grad():
         tensor = tensor.to(dtype=MODEL_DTYPE)
         # Use model wrapper instead of direct model call
-        depth = model_wrapper(tensor)
+        depth = model_wraper(tensor)
     
     # Interpolate output to original size
     depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0,0]
