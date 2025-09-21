@@ -163,14 +163,14 @@ def process(img_rgb: np.ndarray, height) -> np.ndarray:
 def predict_depth(image_rgb: np.ndarray):
     tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
     tensor = tensor.permute(2,0,1).float().unsqueeze(0)/255
-    tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
+    tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=True)
     tensor = ((tensor-MEAN)/STD).contiguous()
     with lock:
         with torch.no_grad():
             tensor = tensor.to(dtype=MODEL_DTYPE)
             depth = model(pixel_values=tensor).predicted_depth
     h,w = image_rgb.shape[:2]
-    depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
+    depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=True)[0,0]
     # Normalize depth with adaptive range
     depth_range = depth.max() - depth.min()
     depth = (depth - depth.min()) / (depth_range + 1e-6)
@@ -186,14 +186,14 @@ def predict_depth_tensor(image_rgb: np.ndarray) -> tuple:
     tensor = torch.from_numpy(image_rgb).to(DEVICE,dtype=DTYPE)
     rgb_c = tensor.permute(2,0,1).contiguous()
     tensor = rgb_c.unsqueeze(0)/255
-    tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=False)
+    tensor = F.interpolate(tensor,(DEPTH_RESOLUTION,DEPTH_RESOLUTION),mode='bilinear',align_corners=True)
     tensor = ((tensor-MEAN)/STD).contiguous()
     with lock:
         with torch.no_grad():
             tensor = tensor.to(dtype=MODEL_DTYPE)
             depth = model(pixel_values=tensor).predicted_depth
     h,w = image_rgb.shape[:2]
-    depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=False)[0,0]
+    depth = F.interpolate(depth.unsqueeze(1),size=(h,w),mode='bilinear',align_corners=True)[0,0]
     # Normalize depth with adaptive range
     depth_range = depth.max() - depth.min()
     depth = (depth - depth.min()) / (depth_range + 1e-6)

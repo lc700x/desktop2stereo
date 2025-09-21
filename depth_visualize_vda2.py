@@ -15,7 +15,7 @@ FP16 = False
 DTYPE = torch.float16 if FP16 else torch.float32
 CACHE_PATH = "models"
 DEVICE_ID = 0
-MODEL_ID = "depth-anything/Metric-Video-Depth-Anything-Small"
+MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
 DEPTH_RESOLUTION = 336
 
 def get_device(index=0):

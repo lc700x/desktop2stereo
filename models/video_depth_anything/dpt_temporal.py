@@ -104,7 +104,7 @@ class DPTHeadTemporal(DPTHead):
             )
             ori_type = out.dtype
             with torch.autocast(device_type="cuda", enabled=False):
-                out = self.scratch.output_conv2(out.float())
+                out = self.scratch.output_conv2(out)
 
             output = out.to(ori_type) 
         else:
@@ -118,7 +118,7 @@ class DPTHeadTemporal(DPTHead):
                 )
                 ori_type = out.dtype
                 with torch.autocast(device_type="cuda", enabled=False):
-                    out = self.scratch.output_conv2(out.float())
+                    out = self.scratch.output_conv2(out)
                 ret.append(out.to(ori_type))
             output = torch.cat(ret, dim=0)
         

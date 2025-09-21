@@ -104,7 +104,7 @@ class VideoDepthAnything(nn.Module):
 
             # Inference the first frame
             cur_list = [torch.from_numpy(self.transform({'image': frame.astype(np.float32) / 255.0})['image']).unsqueeze(0).unsqueeze(0)]
-            cur_input = torch.cat(cur_list, dim=1).to(device)
+            cur_input = torch.cat(cur_list, dim=1).to(device, dtype=dtype)
 
             with torch.no_grad():
             # with torch.autocast(device_type=device, enabled=(not fp32)):
@@ -112,7 +112,7 @@ class VideoDepthAnything(nn.Module):
                 x_shape = cur_input.shape
                 depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
 
-            depth = depth.to(cur_input.dtype)
+            # depth = depth.to(cur_input.dtype)
             depth = F.interpolate(depth.flatten(0,1).unsqueeze(1), size=(frame_height, frame_width), mode='bilinear', align_corners=True)
 
             # Copy multiple cache to simulate the windows
@@ -126,7 +126,8 @@ class VideoDepthAnything(nn.Module):
             assert frame_width == self.frame_width
 
             # infer feature
-            cur_input = torch.from_numpy(self.transform({'image': frame.astype(np.float32) / 255.0})['image']).unsqueeze(0).unsqueeze(0).to(device)
+            cur_input = torch.from_numpy(self.transform({'image': frame.astype(np.float32) / 255.0})['image']).unsqueeze(0).unsqueeze(0).to(device, dtype=dtype)
+
             with torch.no_grad():
             # with torch.autocast(device_type=device, enabled=(not fp32)):
                 cur_feature = self.forward_features(cur_input)
@@ -145,8 +146,61 @@ class VideoDepthAnything(nn.Module):
             # with torch.autocast(device_type=device, enabled=(not fp32)):
                 depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
 
-            depth = depth.to(cur_input.dtype)
+            # depth = depth.to(cur_input.dtype)
             depth = F.interpolate(depth.flatten(0,1).unsqueeze(1), size=(frame_height, frame_width), mode='bilinear', align_corners=True)
+            depth_list = [depth[i][0] for i in range(depth.shape[0])]
+
+            new_depth = depth_list[-1]
+
+            self.frame_cache_list.append(new_cache)
+
+        # adjust the sliding window
+        self.frame_id_list.append(self.id)
+        if self.id + INFER_LEN > self.gap + 1:
+            del self.frame_id_list[1]
+            del self.frame_cache_list[1]
+
+        return new_depth
+    
+    def predict_depth(self, frame_tensor, size):
+        self.id += 1
+        cur_input = frame_tensor.unsqueeze(0)
+        print(cur_input.shape)
+
+        if self.transform is None:  # first frame
+            # Inference the first frame
+            cur_list = [cur_input]
+
+            with torch.no_grad():
+            # with torch.autocast(device_type=device, enabled=(not fp32)):
+                cur_feature = self.forward_features(cur_input)
+                x_shape = cur_input.shape
+                depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
+            depth = F.interpolate(depth.flatten(0,1).unsqueeze(1), size=size, mode='bilinear', align_corners=True)
+            # Copy multiple cache to simulate the windows
+            self.frame_cache_list = [cached_hidden_state_list] * INFER_LEN
+            self.frame_id_list.extend([0] * (INFER_LEN - 1))
+
+            new_depth = depth[0][0]
+        else:
+            with torch.no_grad():
+            # with torch.autocast(device_type=device, enabled=(not fp32)):
+                cur_feature = self.forward_features(cur_input)
+                x_shape = cur_input.shape
+
+            cur_list = self.frame_cache_list[0:2] + self.frame_cache_list[-INFER_LEN+3:]
+            '''
+            cur_id = self.frame_id_list[0:2] + self.frame_id_list[-INFER_LEN+3:]
+            print(f"cur_id: {cur_id}")
+            '''
+            assert len(cur_list) == INFER_LEN - 1
+            cur_cache = [torch.cat([h[i] for h in cur_list], dim=1) for i in range(len(cur_list[0]))]
+
+            # infer depth
+            with torch.no_grad():
+            # with torch.autocast(device_type=device, enabled=(not fp32)):
+                depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
+            depth = F.interpolate(depth.flatten(0,1).unsqueeze(1), size=size, mode='bilinear', align_corners=True)
             depth_list = [depth[i][0] for i in range(depth.shape[0])]
 
             new_depth = depth_list[-1]

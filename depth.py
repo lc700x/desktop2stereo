@@ -497,7 +497,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)
         rgb_c = tensor.permute(2,0,1).contiguous()  # [C,H,W]
         tensor = rgb_c.unsqueeze(0) / 255.0
-        tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
+        tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=True)
     else:
         # Resize input on CPU to model resolution for efficiency
         target_size = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
@@ -515,7 +515,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         depth = model_wraper(tensor)
     
     # Interpolate output to original size
-    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0,0]
+    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=True)[0,0]
     
     # Robust normalize and Post depth processing
     depth = apply_stretch(depth, 5, 95)

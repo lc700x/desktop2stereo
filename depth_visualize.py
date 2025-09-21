@@ -1,5 +1,5 @@
 # depth.py
-import torch
+import torch, cv2
 torch.set_num_threads(1)
 import torch.nn.functional as F
 from torchvision.transforms.functional import adjust_contrast
@@ -15,8 +15,9 @@ FP16 = True
 DTYPE = torch.float16 if FP16 else torch.float32
 CACHE_PATH = "models"
 DEVICE_ID = 0
-MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
 DEPTH_RESOLUTION = 336
+FOREGROUND_SCALE = 1
 
 def get_device(index=0):
     try:
@@ -37,16 +38,53 @@ if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
 
 print(f"{DEVICE_INFO}")
-print(f"Model: {MODEL_ID}")
+# print(f"Model: {MODEL_ID}")
 
-# Load depth model
-model = AutoModelForDepthEstimation.from_pretrained(
-    MODEL_ID,
-    torch_dtype=torch.float16 if FP16 else torch.float32,
-    cache_dir=CACHE_PATH,
-    weights_only=True
-).to(DEVICE).eval()
+def get_video_depth_anything_model(model_id=MODEL_ID):
+    """ Load Video Depth Anything model from HuggingFace hub. """
+    from huggingface_hub import hf_hub_download
+    from models.video_depth_anything.vda2_s import VideoDepthAnything
+    # Preparation for video depth anything models
+    encoder_dict = {'depth-anything/Video-Depth-Anything-Small': 'vits',
+                    'depth-anything/Video-Depth-Anything-Base': 'vitb',
+                    'depth-anything/Video-Depth-Anything-Large': 'vitl',
+                    'depth-anything/Metric-Video-Depth-Anything-Small': 'vits',
+                    'depth-anything/Metric-Video-Depth-Anything-Base': 'vitb',
+                    'depth-anything/Metric-Video-Depth-Anything-Large': 'vitl'}
 
+    encoder = encoder_dict.get(model_id, 'vits')
+
+    if 'depth-anything/Video-Depth-Anything' in model_id:
+        checkpoint_name = f'video_depth_anything_{encoder}.pth'
+    elif 'depth-anything/Metric-Video-Depth-Anything' in model_id:
+        checkpoint_name = f'metric_video_depth_anything_{encoder}.pth'
+
+    model_configs = {
+        'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+        'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
+        'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
+    }
+    checkpoint_path = hf_hub_download(repo_id=model_id, filename=checkpoint_name, cache_dir=CACHE_PATH)
+
+    model = VideoDepthAnything(**model_configs[encoder])
+    model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True), strict=True)
+    return model
+
+# Load model
+if 'Video-Depth-Anything' in MODEL_ID:
+    model = get_video_depth_anything_model(MODEL_ID)
+
+else:
+    # Load depth model
+    model = AutoModelForDepthEstimation.from_pretrained(
+        MODEL_ID,
+        torch_dtype=torch.float16 if FP16 else torch.float32,
+        cache_dir=CACHE_PATH,
+        weights_only=True
+    ).to(DEVICE).eval()
+
+
+model = model.to(DEVICE, dtype=DTYPE).eval()
 if FP16:
     model.half()
 
@@ -55,9 +93,9 @@ MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
 STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
 
 
-with torch.no_grad():
-    dummy = torch.zeros(1,3,DEPTH_RESOLUTION,DEPTH_RESOLUTION, device=DEVICE, dtype=MODEL_DTYPE)
-    model(pixel_values=dummy)
+# with torch.no_grad():
+#     dummy = torch.zeros(1,3,DEPTH_RESOLUTION,DEPTH_RESOLUTION, device=DEVICE, dtype=MODEL_DTYPE)
+#     model(pixel_values=dummy)
 
 lock = Lock()
 
@@ -307,37 +345,48 @@ def add_contrast(tensor, contrast_factor):
     tensor = adjust_contrast(tensor, contrast_factor)
     return tensor.squeeze(0)
 
-def predict_depth(image_rgb: np.ndarray, return_tuple=False,
-                  use_temporal_smooth: bool = True):
+def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth: bool = True):
     """
     Returns depth in [0,1], 1=near, 0=far. Optionally returns (depth, rgb_c).
     """
-    tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)
-    rgb_c = tensor.permute(2,0,1).contiguous()  # [C,H,W]
-    tensor = rgb_c.unsqueeze(0) / 255.0
-    tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=False)
-    tensor = ((tensor - MEAN) / STD).contiguous()
-
-    with lock:
-        with torch.no_grad():
-            tensor = tensor.to(dtype=MODEL_DTYPE)
-            depth = model(pixel_values=tensor).predicted_depth
-
     h, w = image_rgb.shape[:2]
-    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False)[0,0]
-
-    # depth = normalize_tensor(depth)
-    # depth = depth.clamp(0.2, 0.9)
-    # depth = normalize_tensor(depth)
+    if return_tuple:
+        tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)
+        rgb_c = tensor.permute(2,0,1).contiguous()  # [C,H,W]
+        tensor = rgb_c.unsqueeze(0) / 255.0
+        tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=True)
+    else:
+        # Resize input on CPU to model resolution for efficiency
+        target_size = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
+        if (h, w) != target_size:
+            interpolation = cv2.INTER_AREA if max(h, w) > DEPTH_RESOLUTION else cv2.INTER_LINEAR
+            input_rgb = cv2.resize(image_rgb, target_size, interpolation=interpolation)
+        
+        tensor = torch.from_numpy(input_rgb).permute(2,0,1).contiguous().unsqueeze(0).to(DEVICE, dtype=DTYPE) / 255.0
     
-    # Robust normalize
+    tensor = ((tensor - MEAN) / STD).contiguous()
+    
+    with torch.no_grad():
+        tensor = tensor.to(dtype=MODEL_DTYPE)
+        # Use model wrapper instead of direct model call
+        if 'Video-Depth-Anything' in MODEL_ID:
+            depth = model.predict_depth(tensor, size= (h,w))
+        else:
+            depth = model(tensor).predicted_depth
+            # Interpolate output to original size
+            depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=True)[0,0]
+    
+    # Robust normalize and Post depth processing
     depth = apply_stretch(depth, 5, 95)
-    # Post dept processing
-    # depth = add_contrast(depth, 1.1)
-    # depth = apply_gamma(depth, 1.2)
+    
+    # invert for metric models
+    if 'Metric' in MODEL_ID:
+        depth = 1.0 - depth
+        
+    # post processing
     depth = apply_sigmoid(depth, k=4, midpoint=0.618)
     depth = apply_piecewise(depth, split=0.618, near_gamma=1.2, far_gamma=0.6)
-    depth = apply_foreground_scale(depth, scale=2)
+    depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
     depth = normalize_tensor(depth)
     # Mild AA to reduce jaggies
     depth = anti_alias(depth, strength=AA_STRENTH)
@@ -345,19 +394,20 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False,
     # Optional temporal stabilization (EMA)
     if use_temporal_smooth:
         depth = depth_stabilizer(depth)
-
+    
     if return_tuple:
         return depth, rgb_c
     else:
-        return depth
+        return depth   
 
-depth = predict_depth(image_rgb)
+if __name__ == "__main__":
+    depth = predict_depth(image_rgb)
 
-import matplotlib.pyplot as plt
-plt.imshow(depth.cpu().numpy(), cmap='inferno')
-plt.colorbar()
-plt.show()
-plt.close()
-plt.imshow(depth.cpu().numpy(), cmap='inferno')
-plt.colorbar()
-plt.savefig("test.png", dpi=300)
+    import matplotlib.pyplot as plt
+    plt.imshow(depth.cpu().numpy(), cmap='inferno')
+    plt.colorbar()
+    plt.show()
+    plt.close()
+    plt.imshow(depth.cpu().numpy(), cmap='inferno')
+    plt.colorbar()
+    plt.savefig("test.png", dpi=300)
