@@ -110,7 +110,7 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         # Set dynamic shapes profile
         profile = builder.create_optimization_profile()
         input_name = network.get_input(0).name
-        input_shape = network.get_input(0).shape
+        # input_shape = network.get_input(0).shape
         min_shape = (1, 3, DEPTH_RESOLUTION//2, DEPTH_RESOLUTION//2)
         opt_shape = (1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION)
         max_shape = (1, 3, DEPTH_RESOLUTION*2, DEPTH_RESOLUTION*2)
@@ -143,7 +143,7 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
         'pixel_values': {0: 'batch_size', 2: 'height', 3: 'width'},
         'predicted_depth': {0: 'batch_size', 1: 'height', 2: 'width'}
     }
-    
+
     torch.onnx.export(
         model,
         dummy_input,
@@ -156,6 +156,16 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
         export_params=True,
         verbose=False
     )
+    from onnxsim import simplify
+    import onnx
+    export_model = onnx.load(output_path)
+    simplified_model, check = simplify(export_model)
+    onnx.save(simplified_model, output_path)
+
+    if not check:
+        print("Simplified ONNX model could not be validated.")
+    else:
+        print("ONNX model simplified successfully.")
     
     print(f"Model successfully exported to {output_path}")
 
@@ -281,7 +291,7 @@ class DepthModelWrapper:
         if FP16:
             model.half()
         
-        if 'DirectML' not in self.device_info and COMPILE:
+        if 'DirectML' not in self.device_info and COMPILE and not USE_TENSORRT:
             model = torch.compile(model)
             print("torch.compile finished with Triton.")
         
@@ -290,12 +300,7 @@ class DepthModelWrapper:
     def _load_tensorrt_engine(self):
         """Load or create TensorRT engine."""
         # First, load PyTorch model to export ONNX
-        pytorch_model = AutoModelForDepthEstimation.from_pretrained(
-            self.model_path,
-            torch_dtype=self.dtype,
-            cache_dir=CACHE_PATH,
-            weights_only=True
-        ).to(self.device).eval()
+        pytorch_model = self._load_pytorch_model()
         
         if FP16:
             pytorch_model.half()
@@ -312,12 +317,10 @@ class DepthModelWrapper:
         """Run inference using the active backend."""
         with torch.no_grad():
             if self.backend == "PyTorch":
-                if 'Video-Depth-Anything' in MODEL_ID:
-                    return self.model.predict_depth(tensor, self.size)
+                if "Video-Depth-Anything" in MODEL_ID:
+                    return self.model(pixel_values=tensor)
                 return self.model(pixel_values=tensor).predicted_depth
             else:
-                if 'Video-Depth-Anything' in MODEL_ID:
-                    return self.model(tensor, self.size)
                 return self.model(tensor)
 
 # Initialize model wrapper
@@ -325,8 +328,7 @@ model_wraper = DepthModelWrapper(
     model_path=MODEL_ID,
     device=DEVICE,
     device_info=DEVICE_INFO,
-    dtype=DTYPE,
-    size=(DEPTH_RESOLUTION,DEPTH_RESOLUTION)
+    dtype=DTYPE
 )
 
 MODEL_DTYPE = next(model_wraper.model.parameters()).dtype if hasattr(model_wraper.model, 'parameters') else DTYPE
@@ -571,13 +573,13 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         
     # Use model wrapper instead of direct model call
     if 'Video-Depth-Anything' in MODEL_ID:
-        model_wraper.size = (h,w)
         depth = model_wraper(tensor)
     else:
         with torch.no_grad():
             depth = model_wraper(tensor)
-            # Interpolate output to original size
-        depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=True)[0,0]
+    
+    # Interpolate output to original size
+    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=True)
     
     # Robust normalize and Post depth processing
     depth = apply_stretch(depth, 5, 95)

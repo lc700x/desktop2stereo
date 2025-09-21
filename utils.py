@@ -96,7 +96,7 @@ else:
 
 # Experimental Settings
 STABLE = False # keep stable dml performance
-COMPILE = True # compile model with torch.compile
-USE_TENSORRT = False
-REBUILD_TRT = False # Rebuild TensorRT engine even if it exists
+COMPILE = False # compile model with torch.compile
+USE_TENSORRT = True # Rebuild TensorRT engine even if it exists
+REBUILD_TRT = True # Rebuild TensorRT engine even if it exists
 # USE_TENSORRT = settings["Use TensorRT"] # Use TensorRT if available
