@@ -48,6 +48,7 @@ echo.
 echo - Installing the requirements
 %PYTHON_EXE% -m pip install -r requirements-cuda0.txt --no-cache-dir
 %PYTHON_EXE% -m pip install "triton-windows<3.5" --no-cache-dir
+%PYTHON_EXE% -m pip install "xformers<0.0.33" --no-cache-dir
 %PYTHON_EXE% -m pip install tensorrt-cu12==10.13.3.9 --no-cache-dir
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir
 %PYTHON_EXE% -m pip install onnx==1.19.0 --no-cache-dir

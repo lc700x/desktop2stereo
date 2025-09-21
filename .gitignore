@@ -9,7 +9,8 @@ cache
 views
 .DS*
 *.zip
-models
+models/models--*
+models/.*
 *.pdf
 profile.svg
 Python3*

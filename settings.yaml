@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 1
+Monitor Index: 2
 Window Title: ''
 FPS: 60
 Show FPS: true
@@ -7,6 +7,60 @@ Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
+  depth-anything/Video-Depth-Anything-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Video-Depth-Anything-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Video-Depth-Anything-Small:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Metric-Video-Depth-Anything-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Metric-Video-Depth-Anything-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Metric-Video-Depth-Anything-Small:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
   depth-anything/Depth-Anything-V2-Large-hf:
     resolutions:
     - 196
@@ -337,11 +391,11 @@ Model List:
   apple/DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: lc700x/dpt-hybrid-midas-hf
+Depth Model: xingyang1/Distill-Any-Depth-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 1.0
-Depth Resolution: 384
+Depth Resolution: 336
 FP16: false
 Download Path: models
 HF Endpoint: https://hf-mirror.com
