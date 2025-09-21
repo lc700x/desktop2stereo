@@ -301,7 +301,7 @@ class ConfigGUI(tk.Tk):
         self.optimizer_options = {
             "CUDA": ["TensorRT", "Torch.compile", "None"],
             "DirectML": ["Unlock Thread (Streamer)", "None"],
-            "MPS": ["Torch.compile", "None"],
+            # "MPS": ["Torch.compile", "None"],
             "Other": ["None"]
         }
 
@@ -594,8 +594,8 @@ class ConfigGUI(tk.Tk):
             device_type = "CUDA"
         elif "DirectML" in device_label:
             device_type = "DirectML"
-        elif "MPS" in device_label:
-            device_type = "MPS"
+        # elif "MPS" in device_label:
+        #     device_type = "MPS"
         else:
             device_type = "Other"
         
