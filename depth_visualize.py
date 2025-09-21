@@ -15,7 +15,7 @@ FP16 = True
 DTYPE = torch.float16 if FP16 else torch.float32
 CACHE_PATH = "models"
 DEVICE_ID = 0
-MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
+MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
 DEPTH_RESOLUTION = 336
 FOREGROUND_SCALE = 1
 
@@ -68,7 +68,7 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 
     model = VideoDepthAnything(**model_configs[encoder])
     model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True), strict=True)
-    return model
+    return model.to(DEVICE).eval()
 
 # Load model
 if 'Video-Depth-Anything' in MODEL_ID:

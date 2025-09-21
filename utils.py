@@ -48,6 +48,7 @@ if  OS_NAME == "Darwin":
 )
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
 if settings["HF Endpoint"]:
     os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
@@ -96,6 +97,6 @@ else:
 # Experimental Settings
 STABLE = False # keep stable dml performance
 COMPILE = True # compile model with torch.compile
-USE_TENSORRT = True
+USE_TENSORRT = False
 REBUILD_TRT = False # Rebuild TensorRT engine even if it exists
 # USE_TENSORRT = settings["Use TensorRT"] # Use TensorRT if available

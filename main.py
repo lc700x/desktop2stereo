@@ -155,6 +155,7 @@ def main(mode="Viewer"):
 
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
+
     except Exception as e:
         print(e)
     finally:

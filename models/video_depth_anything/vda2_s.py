@@ -148,9 +148,7 @@ class VideoDepthAnything(nn.Module):
 
             # depth = depth.to(cur_input.dtype)
             depth = F.interpolate(depth.flatten(0,1).unsqueeze(1), size=(frame_height, frame_width), mode='bilinear', align_corners=True)
-            depth_list = [depth[i][0] for i in range(depth.shape[0])]
-
-            new_depth = depth_list[-1]
+            new_depth = depth[-1, 0]
 
             self.frame_cache_list.append(new_cache)
 
@@ -162,12 +160,23 @@ class VideoDepthAnything(nn.Module):
 
         return new_depth
     
-    def predict_depth(self, frame_tensor, size):
+    def update_cache(self, new_cache):
+        for i in range(len(self.hidden_cache)):
+            # Drop oldest slice, append new one
+            old = self.hidden_cache[i]  # shape: (B, C*(INFER_LEN-1), H, W)
+            new = new_cache[i]          # shape: (B, C, H, W)
+
+            # Shift left: [C, …, C*(N-2)] <- [C, …, C*(N-1)]
+            old[:, :-new.shape[1]] = old[:, new.shape[1]:].clone()
+
+            # Insert newest at the end
+            old[:, -new.shape[1]:] = new
+    
+    def predict_depth(self, frame_tensor, size, video_cache=False):
         self.id += 1
         cur_input = frame_tensor.unsqueeze(0)
-        print(cur_input.shape)
 
-        if self.transform is None:  # first frame
+        if not self.transform:  # first frame
             # Inference the first frame
             cur_list = [cur_input]
 
@@ -176,41 +185,40 @@ class VideoDepthAnything(nn.Module):
                 cur_feature = self.forward_features(cur_input)
                 x_shape = cur_input.shape
                 depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
-            depth = F.interpolate(depth.flatten(0,1).unsqueeze(1), size=size, mode='bilinear', align_corners=True)
-            # Copy multiple cache to simulate the windows
-            self.frame_cache_list = [cached_hidden_state_list] * INFER_LEN
-            self.frame_id_list.extend([0] * (INFER_LEN - 1))
+            depth = F.interpolate(depth, size=size, mode='bilinear', align_corners=True)
+            
+            # Build pre-concatenated cache
+            self.hidden_cache = [
+                torch.cat([cached_hidden_state_list[i]] * (INFER_LEN  - 1), dim=1).contiguous()
+                for i in range(len(cached_hidden_state_list))
+            ]
+
+            self.frame_id_list.extend([0] * (INFER_LEN  - 1))
 
             new_depth = depth[0][0]
+            self.transform = True
         else:
             with torch.no_grad():
             # with torch.autocast(device_type=device, enabled=(not fp32)):
                 cur_feature = self.forward_features(cur_input)
                 x_shape = cur_input.shape
-
-            cur_list = self.frame_cache_list[0:2] + self.frame_cache_list[-INFER_LEN+3:]
             '''
             cur_id = self.frame_id_list[0:2] + self.frame_id_list[-INFER_LEN+3:]
             print(f"cur_id: {cur_id}")
             '''
-            assert len(cur_list) == INFER_LEN - 1
-            cur_cache = [torch.cat([h[i] for h in cur_list], dim=1) for i in range(len(cur_list[0]))]
+            cur_cache = self.hidden_cache
 
             # infer depth
             with torch.no_grad():
             # with torch.autocast(device_type=device, enabled=(not fp32)):
                 depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
-            depth = F.interpolate(depth.flatten(0,1).unsqueeze(1), size=size, mode='bilinear', align_corners=True)
-            depth_list = [depth[i][0] for i in range(depth.shape[0])]
+            depth = F.interpolate(depth, size=size, mode='bilinear', align_corners=True)
+            new_depth = depth[-1, 0]
 
-            new_depth = depth_list[-1]
-
-            self.frame_cache_list.append(new_cache)
-
-        # adjust the sliding window
-        self.frame_id_list.append(self.id)
-        if self.id + INFER_LEN > self.gap + 1:
-            del self.frame_id_list[1]
-            del self.frame_cache_list[1]
+            self.update_cache(new_cache)
+            # Sliding window housekeeping
+            self.frame_id_list.append(self.id)
+            if self.id + INFER_LEN  > self.gap + 1:
+                del self.frame_id_list[1]
 
         return new_depth

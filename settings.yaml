@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 2
+Monitor Index: 1
 Window Title: ''
 FPS: 60
 Show FPS: true
@@ -7,60 +7,6 @@ Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
-  depth-anything/Video-Depth-Anything-Large:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/Video-Depth-Anything-Base:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/Video-Depth-Anything-Small:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/Metric-Video-Depth-Anything-Large:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/Metric-Video-Depth-Anything-Base:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/Metric-Video-Depth-Anything-Small:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
   depth-anything/Depth-Anything-V2-Large-hf:
     resolutions:
     - 196
@@ -80,6 +26,33 @@ Model List:
     - 448
     - 518
   depth-anything/Depth-Anything-V2-Small-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Video-Depth-Anything-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Video-Depth-Anything-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Video-Depth-Anything-Small:
     resolutions:
     - 196
     - 238
@@ -134,6 +107,33 @@ Model List:
     - 448
     - 518
   depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Metric-Video-Depth-Anything-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Metric-Video-Depth-Anything-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Metric-Video-Depth-Anything-Small:
     resolutions:
     - 196
     - 238
@@ -391,16 +391,16 @@ Model List:
   apple/DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: xingyang1/Distill-Any-Depth-Small-hf
+Depth Model: depth-anything/Video-Depth-Anything-Small
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 1.0
 Depth Resolution: 336
-FP16: false
+FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: EN
-Run Mode: Viewer
+Run Mode: Streamer
 Streamer Port: 1122
 Stream Quality: 90
