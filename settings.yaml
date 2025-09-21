@@ -34,6 +34,33 @@ Model List:
     - 392
     - 448
     - 518
+  depth-anything/Video-Depth-Anything-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Video-Depth-Anything-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Video-Depth-Anything-Small:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
   depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf:
     resolutions:
     - 196
@@ -80,6 +107,33 @@ Model List:
     - 448
     - 518
   depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Metric-Video-Depth-Anything-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Metric-Video-Depth-Anything-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Metric-Video-Depth-Anything-Small:
     resolutions:
     - 196
     - 238
@@ -350,3 +404,5 @@ Language: EN
 Run Mode: Viewer
 Streamer Port: 1122
 Stream Quality: 90
+Inference Optimizer: None
+Recompile TensorRT: false

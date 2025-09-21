@@ -1,7 +1,7 @@
 ﻿# --index-url https://download.pytorch.org/whl/cu128
-﻿-f https://mirrors.aliyun.com/pytorch-wheels/cu128/
-torch==2.7.0
-torchvision==0.22.0
+-f https://mirrors.aliyun.com/pytorch-wheels/cu128/
+torch==2.8.0
+torchvision==0.23.0
 
-# torchaudio==2.7.0
+# torchaudio==2.8.0
 

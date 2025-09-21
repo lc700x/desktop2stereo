@@ -89,7 +89,7 @@ class StereoWindow:
         
         # Font and text sizing
         self.font = None
-        self.base_font_size = 40  # Base size for 1280x720 window
+        self.base_font_size = 60  # Base size for 1280x720 window
         self.current_font_size = self.base_font_size
         self.text_padding = 10
         self.text_spacing = 5
