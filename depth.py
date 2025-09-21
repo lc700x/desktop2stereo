@@ -6,8 +6,10 @@ from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, COMPILE, USE_TENSORRT, REBUILD_TRT
-import os
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT
+import os, warnings
+
+
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -41,7 +43,7 @@ DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
 
-print(f"{DEVICE_INFO}")
+print(DEVICE_INFO)
 print(f"Model: {MODEL_ID}")
 
 # Load Video Depth Anything Model
@@ -80,16 +82,17 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
     """
     Convert ONNX model to TensorRT engine using TensorRT's Python API only.
+    Returns None if compilation fails.
     """
     try:
-        if os.path.exists(trt_path) and REBUILD_TRT == False:
+        if os.path.exists(trt_path) and RECOMPILE_TRT == False:
             print(f"Loaded existing TensorRT engine: {trt_path}")
             return trt_path
         
         import tensorrt as trt
         
         # Initialize logger and builder
-        logger = trt.Logger(trt.Logger.INFO)
+        logger = trt.Logger(trt.Logger.ERROR)
         builder = trt.Builder(logger)
         network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
         parser = trt.OnnxParser(network, logger)
@@ -98,8 +101,8 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         with open(onnx_path, "rb") as f:
             if not parser.parse(f.read()):
                 for error in range(parser.num_errors):
-                    print(parser.get_error(error))
-                raise RuntimeError("ONNX parsing failed")
+                    print("[Error]", parser.get_error(error))
+                return None
         
         # Build configuration
         config = builder.create_builder_config()
@@ -120,16 +123,19 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         
         # Build engine
         serialized_engine = builder.build_serialized_network(network, config)
+        if serialized_engine is None:
+            print("[Error] TensorRT engine build failed")
+            return None
+            
         with open(trt_path, "wb") as f:
             f.write(serialized_engine)
         
-        print(f"TensorRT engine saved to {trt_path}")
+        print(f"[Main] TensorRT engine saved to {trt_path}")
         return trt_path
         
-    except ImportError:
-        print("TensorRT not available, skipping optimization")
-        return onnx_path
-
+    except Exception as e:
+        print(f"[Error] TensorRT optimization failed: {str(e)}")
+        return None
 # Export to ONNX
 def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=DTYPE):
     """
@@ -156,18 +162,8 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
         export_params=True,
         verbose=False
     )
-    from onnxsim import simplify
-    import onnx
-    export_model = onnx.load(output_path)
-    simplified_model, check = simplify(export_model)
-    onnx.save(simplified_model, output_path)
-
-    if not check:
-        print("Simplified ONNX model could not be validated.")
-    else:
-        print("ONNX model simplified successfully.")
     
-    print(f"Model successfully exported to {output_path}")
+    print(f"ONNX model generated, TensorRT engine compling may take a while...")
 
 # TensorRT Engine Wrapper Class (Without PyCUDA)
 class TensorRTEngine:
@@ -185,7 +181,7 @@ class TensorRTEngine:
             with open(engine_path, "rb") as f:
                 engine_data = f.read()
             
-            logger = trt.Logger(trt.Logger.WARNING)
+            logger = trt.Logger(trt.Logger.ERROR)
             runtime = trt.Runtime(logger)
             self.engine = runtime.deserialize_cuda_engine(engine_data)
             self.context = self.engine.create_execution_context()
@@ -255,23 +251,35 @@ class DepthModelWrapper:
         self.onnx_path = onnx_path
         self.trt_path = trt_path
         self.size = size
+        self.use_torch_compile = USE_TORCH_COMPILE
         
         # Determine backend based on device
         self.is_cuda = "CUDA" in device_info
         
         if self.is_cuda and USE_TENSORRT:
             # Use TensorRT backend for CUDA
-            import warnings
             warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
-            self.backend = "TensorRT"
-            self.model = self._load_tensorrt_engine()
-            
+            try:
+                # First try TensorRT
+                self.backend = "TensorRT"
+                self.model = self._load_tensorrt_engine()
+                if self.model is None:
+                    # Fall back to PyTorch if TensorRT fails
+                    print("[Error] TensorRT failed, falling back to PyTorch")
+                    self.backend = "PyTorch"
+                    self.use_torch_compile = True  # Enable torch.compile for fallback
+                    self.model = self._load_pytorch_model()
+            except Exception as e:
+                print(f"[Error] TensorRT initialization failed: {str(e)}, falling back to PyTorch")
+                self.backend = "PyTorch"
+                self.use_torch_compile = True  # Enable torch.compile for fallback
+                self.model = self._load_pytorch_model()
         else:
             # Use PyTorch backend for DirectML/MPS/CPU
             self.backend = "PyTorch"
             self.model = self._load_pytorch_model()
         
-        print(f"[Main] Using backend: {self.backend}")
+        print(f"Using backend: {self.backend}")
     
     def _load_pytorch_model(self):
         """Load the original PyTorch model."""
@@ -291,9 +299,14 @@ class DepthModelWrapper:
         if FP16:
             model.half()
         
-        if 'DirectML' not in self.device_info and COMPILE and not USE_TENSORRT:
+        if 'DirectML' not in self.device_info and self.use_torch_compile and not USE_TENSORRT:
+            warnings.filterwarnings(
+                "ignore",
+                category=UserWarning,
+                module=r"torch\._inductor\.lowering"
+            )
             model = torch.compile(model)
-            print("torch.compile finished with Triton.")
+            print("Processing torch.compile with Triton, it may take a while...")
         
         return model
     
@@ -311,7 +324,13 @@ class DepthModelWrapper:
         
         # Build or load TensorRT engine
         trt_engine_path = optimize_with_tensorrt(self.onnx_path, self.trt_path)
-        return TensorRTEngine(trt_engine_path, self.device, self.dtype)
+        if trt_engine_path is None:
+            return None
+        try:
+            return TensorRTEngine(trt_engine_path, self.device, self.dtype)
+        except Exception as e:
+            print(f"[Error] TensorRT engine loading failed: {str(e)}")
+            return None
     
     def __call__(self, tensor):
         """Run inference using the active backend."""

@@ -1,6 +1,9 @@
 import yaml
 import os, platform, socket
 
+# App Version
+VERSION = "2.3.4"
+
 def read_yaml(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -60,9 +63,6 @@ if OS_NAME == "Windows":
     except:
         ctypes.windll.user32.SetProcessDPIAware()
 
-# App Version
-VERSION = "2.3.3"
-
 # Streamer Settings
 DEFAULT_PORT = 1122
 STREAM_QUALITY = settings["Stream Quality"]
@@ -95,8 +95,25 @@ else:
     AA_STRENTH *= 4
 
 # Experimental Settings
-STABLE = False # keep stable dml performance
-COMPILE = False # compile model with torch.compile
-USE_TENSORRT = True # Rebuild TensorRT engine even if it exists
-REBUILD_TRT = True # Rebuild TensorRT engine even if it exists
-# USE_TENSORRT = settings["Use TensorRT"] # Use TensorRT if available
+INFERENCE_OPTIMIZER = settings["Inference Optimizer"]
+DML_STREAM_STABLE = False # keep stable dml performance
+USE_TORCH_COMPILE = False # compile model with torch.compile
+
+# TensorRT and Torch.compile settings
+USE_TENSORRT = False
+RECOMPILE_TRT = False
+USE_TORCH_COMPILE = False
+DML_STREAM_STABLE = True if settings["Device"] == "DirectML" else False
+
+if INFERENCE_OPTIMIZER == "Unlock Thread (Streamer)":
+    DML_STREAM_STABLE = False
+elif INFERENCE_OPTIMIZER == "Torch.compile":
+    USE_TORCH_COMPILE = True
+elif INFERENCE_OPTIMIZER == "TensorRT":
+    USE_TENSORRT = True # Rebuild TensorRT engine even if it exists
+    RECOMPILE_TRT = settings["Recompile TensorRT"]
+else:
+    USE_TENSORRT = False
+    RECOMPILE_TRT = False
+    USE_TORCH_COMPILE = False
+    DML_STREAM_STABLE = True if settings["Device"] == "DirectML" else False

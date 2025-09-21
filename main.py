@@ -2,7 +2,7 @@ import threading
 import queue
 import glfw
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, STABLE
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, DML_STREAM_STABLE
 from capture import DesktopGrabber
 from depth import process, predict_depth
 
@@ -99,7 +99,7 @@ def main(mode="Viewer"):
 
         else:
             from depth import make_sbs, DEVICE_INFO
-            BOOST = not (STABLE and "DirectML" in DEVICE_INFO)
+            BOOST = not (DML_STREAM_STABLE and "DirectML" in DEVICE_INFO)
             from streamer import MJPEGStreamer
             if BOOST:
                 def make_output(rgb, depth):

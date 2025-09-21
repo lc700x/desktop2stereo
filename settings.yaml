@@ -391,7 +391,7 @@ Model List:
   apple/DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: depth-anything/Video-Depth-Anything-Small
+Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 1.0
@@ -404,3 +404,5 @@ Language: EN
 Run Mode: Viewer
 Streamer Port: 1122
 Stream Quality: 90
+Inference Optimizer: None
+Recompile TensorRT: false
