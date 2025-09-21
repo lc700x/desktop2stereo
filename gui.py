@@ -145,6 +145,8 @@ DEFAULTS = {
     "IPD": 0.064,
     "Display Mode": "Half-SBS",
     "FP16": True,
+    "Inference Optimizer": "None",
+    "Recompile TensorRT": False,
     "Download Path": "models",
     "HF Endpoint": "https://hf-mirror.com",
     "Device": 0,
@@ -171,6 +173,8 @@ UI_TEXTS = {
         "Anti-aliasing:": "Anti-aliasing:",
         "Foreground Scale:": "Foreground Scale:",
         "FP16": "FP16",
+        "Inference Optimizer:": "Inference Optimizer:",
+        "Recompile TensorRT:": "Recompile TensorRT",
         "Download Path:": "Download Path:",
         "Browse...": "Browse...",
         "Stop": "Stop",
@@ -231,6 +235,8 @@ UI_TEXTS = {
         "Anti-aliasing:": "抗锯齿:",
         "Foreground Scale:": "前景缩放:",
         "FP16": "半精度浮点 (F16)",
+        "Inference Optimizer:": "推理优化器:",
+        "Recompile TensorRT:": "重新编译TensorRT",
         "Download Path:": "下载路径:",
         "Browse...": "浏览...",
         "Stop": "停止",
@@ -284,12 +290,20 @@ class ConfigGUI(tk.Tk):
         self.pad = {"padx": 8, "pady": 6}
         self.title(f"Desktop2Stereo v{VERSION}")
         self.minsize(800, 420)  # Increased height for new controls
-        self.resizable(False, False)
+        self.resizable(True, False)
         self.language = "EN"
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
         self.selected_window_name = ""
         self._window_objects = []  # Store window objects for reference
         self.cfg = {}  # Store the loaded configuration
+        
+        # Add optimizer options based on device type
+        self.optimizer_options = {
+            "CUDA": ["TensorRT", "Torch.compile", "None"],
+            "DirectML": ["Unlock Thread (Streamer)", "None"],
+            # "MPS": ["Torch.compile", "None"],
+            "Other": ["None"]
+        }
 
         try:
             icon_img = Image.open("icon.ico")
@@ -329,6 +343,7 @@ class ConfigGUI(tk.Tk):
         self.language_var.set(self.language)
         self.protocol("WM_DELETE_WINDOW", self.on_close) # Bind to Close of GUI to turn off all threads
         self.process = None  # Keep track of the spawned process
+        self.inference_optimizer_var.trace_add("write", self.on_optimizer_change)
 
     def on_close(self):
         """Handle GUI window closing: stop process & cleanup."""
@@ -501,12 +516,26 @@ class ConfigGUI(tk.Tk):
         self.depth_model_cb.grid(row=10, column=1, columnspan=2, sticky="ew", **self.pad)
         self.depth_model_cb.bind("<<ComboboxSelected>>", self.on_depth_model_change)
 
+                
+        # Add Inference Optimizer dropdown after Device selection
+        self.label_inference_optimizer = ttk.Label(self.content_frame, text="Inference Optimizer:")
+        self.label_inference_optimizer.grid(row=11, column=0, sticky="w", **self.pad)
+        
+        self.inference_optimizer_var = tk.StringVar()
+        self.inference_optimizer_cb = ttk.Combobox(self.content_frame, textvariable=self.inference_optimizer_var, state="readonly")
+        self.inference_optimizer_cb.grid(row=11, column=1, columnspan=2, sticky="ew", **self.pad)
+        
+        self.recompile_trt_var = tk.BooleanVar()
+        self.recompile_trt_cb = ttk.Checkbutton(self.content_frame, text="Recompile TensorRT", variable=self.recompile_trt_var)
+        self.recompile_trt_cb.grid(row=11, column=3, sticky="w", **self.pad)
+        
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
-        self.label_hf_endpoint.grid(row=11, column=0, sticky="w", **self.pad)
+        self.label_hf_endpoint.grid(row=12, column=0, sticky="w", **self.pad)
         self.hf_endpoint_var = tk.StringVar()
-        self.hf_endpoint_entry = ttk.Entry(self.content_frame, textvariable=self.hf_endpoint_var)
-        self.hf_endpoint_entry.grid(row=11, column=1, sticky="ew", **self.pad)
+        self.hf_endpoint_cb = ttk.Combobox(self.content_frame, textvariable=self.hf_endpoint_var, state="normal")
+        self.hf_endpoint_cb["values"] = ["https://huggingface.co", "https://hf-mirror.com"]
+        self.hf_endpoint_cb.grid(row=12, column=1, sticky="ew", **self.pad)
         
         # Streamer Host and Port (only visible when run mode is streamer)
         self.label_streamer_host = ttk.Label(self.content_frame, text="Streamer URL:")
@@ -534,10 +563,10 @@ class ConfigGUI(tk.Tk):
         self.btn_reset.grid(row=10, column=3, sticky="ew", **self.pad)
         
         self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
-        self.btn_stop.grid(row=11, column=2, sticky="ew", **self.pad)
+        self.btn_stop.grid(row=12, column=2, sticky="ew", **self.pad)
         
         self.btn_run = ttk.Button(self.content_frame, text="Run", command=self.save_settings)
-        self.btn_run.grid(row=11, column=3, sticky="ew", **self.pad)
+        self.btn_run.grid(row=12, column=3, sticky="ew", **self.pad)
         
         # Column weights inside content frame
         for col in range(4):
@@ -546,7 +575,54 @@ class ConfigGUI(tk.Tk):
         # Status bar at bottom
         self.status_label = tk.Label(self, text="", anchor="w", relief="sunken", padx=20, pady=4)
         self.status_label.grid(row=1, column=0, sticky="we")  # no padding
-
+        # Bind device change event
+        self.device_var.trace_add("write", self.on_device_change)
+    
+    def on_optimizer_change(self, *args):
+        """Show/hide TensorRT recompile option based on optimizer selection"""
+        if self.inference_optimizer_var.get() == "TensorRT":
+            self.recompile_trt_cb.grid()
+        else:
+            self.recompile_trt_cb.grid_remove()
+            
+    def on_device_change(self, *args):
+        """Update Inference Optimizer options based on selected device"""
+        device_label = self.device_var.get()
+        
+        # Determine device type from label
+        if "CUDA" in device_label:
+            device_type = "CUDA"
+        elif "DirectML" in device_label:
+            device_type = "DirectML"
+        # elif "MPS" in device_label:
+        #     device_type = "MPS"
+        else:
+            device_type = "Other"
+        
+        # Update optimizer options
+        self.inference_optimizer_cb["values"] = self.optimizer_options[device_type]
+        
+        # Set default value if not already set
+        if not self.inference_optimizer_var.get():
+            self.inference_optimizer_var.set("None")
+            
+        # Show/hide based on device type (always show, but could be hidden if needed)
+        # Show/hide based on device type
+        if device_type == "Other":
+            self.label_inference_optimizer.grid_remove()
+            self.inference_optimizer_cb.grid_remove()
+            self.recompile_trt_cb.grid_remove()
+        else:
+            self.label_inference_optimizer.grid()
+            self.inference_optimizer_cb.grid()
+            
+            # Show/hide TensorRT recompile option based on current optimizer selection
+            if self.inference_optimizer_var.get() == "TensorRT":
+                self.recompile_trt_cb.grid()
+            else:
+                self.recompile_trt_cb.grid_remove()
+                
+    
     def refresh_window_list(self):
         """Refresh the list of available windows"""
         try:
@@ -719,7 +795,9 @@ class ConfigGUI(tk.Tk):
         self.label_run_mode.config(text=texts.get("Run Mode:", "Run Mode:"))
         localized_run_vals = [texts.get("Viewer", "Viewer"), texts.get("Streamer", "Streamer")]
         self.run_mode_cb["values"] = localized_run_vals
-        
+        # Add Inference Optimizer text update
+        self.label_inference_optimizer.config(text=texts.get("Inference Optimizer:", "Inference Optimizer:"))
+        self.recompile_trt_cb.config(text=texts.get("Recompile TensorRT:", "Recompile TensorRT"))
 
         # Select the appropriate label
         if self.run_mode_key == "Viewer":
@@ -945,7 +1023,11 @@ class ConfigGUI(tk.Tk):
         self.foreground_scale_cb.set(str(cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"])))
         self.fp16_var.set(cfg.get("FP16", DEFAULTS["FP16"]))
         self.download_var.set(cfg.get("Download Path", DEFAULTS["Download Path"]))
-        self.hf_endpoint_var.set(cfg.get("HF Endpoint", DEFAULTS["HF Endpoint"]))
+        hf_endpoint = cfg.get("HF Endpoint", DEFAULTS["HF Endpoint"])
+        self.hf_endpoint_var.set(hf_endpoint)
+        # If the endpoint is not in the predefined list, add it
+        if hf_endpoint not in self.hf_endpoint_cb["values"]:
+            self.hf_endpoint_cb["values"] = list(self.hf_endpoint_cb["values"]) + [hf_endpoint]
         if keep_optional:  # no update for language
             self.language_var.set(cfg.get("Language", DEFAULTS["Language"]))
 
@@ -964,6 +1046,32 @@ class ConfigGUI(tk.Tk):
         self.update_language_texts()
         self.on_run_mode_change()
         self.on_capture_mode_change()
+        
+         # Apply Inference Optimizer setting with validation
+        saved_optimizer = cfg.get("Inference Optimizer", DEFAULTS["Inference Optimizer"])
+        
+        # Validate that the saved optimizer is compatible with the current device
+        device_label = self.device_var.get()
+        if "CUDA" in device_label:
+            device_type = "CUDA"
+        elif "DirectML" in device_label:
+            device_type = "DirectML"
+        else:
+            device_type = "Other"
+        
+        # Check if saved optimizer is valid for current device
+        valid_optimizers = self.optimizer_options[device_type]
+        if saved_optimizer not in valid_optimizers:
+            # Reset to default if incompatible
+            saved_optimizer = "None"
+        
+        self.inference_optimizer_var.set(saved_optimizer)
+        
+        # Trigger device change to update optimizer options
+        self.recompile_trt_var.set(cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"]))
+        
+        # Trigger device change to update optimizer options
+        self.on_device_change()
 
     def update_depth_resolution_options(self, model_name):
         """Update depth resolution options based on selected model"""
@@ -1071,6 +1179,8 @@ class ConfigGUI(tk.Tk):
             "Run Mode": self.run_mode_key,
             "Streamer Port": int(self.streamer_port_var.get()),
             "Stream Quality": int(self.stream_quality_cb.get()),
+            "Inference Optimizer": self.inference_optimizer_var.get(),
+            "Recompile TensorRT": self.recompile_trt_var.get(),
         }
         success = self.save_yaml("settings.yaml", cfg)
         if success:
