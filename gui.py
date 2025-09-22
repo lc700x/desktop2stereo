@@ -145,7 +145,10 @@ DEFAULTS = {
     "IPD": 0.064,
     "Display Mode": "Half-SBS",
     "FP16": True,
-    "Inference Optimizer": "None",
+    "torch.compile": False,
+    "TensorRT": False,
+    "Recompile TensorRT": False,
+    "Unlock Thread (Streamer)": False,
     "Recompile TensorRT": False,
     "Download Path": "models",
     "HF Endpoint": "https://hf-mirror.com",
@@ -296,15 +299,6 @@ class ConfigGUI(tk.Tk):
         self.selected_window_name = ""
         self._window_objects = []  # Store window objects for reference
         self.cfg = {}  # Store the loaded configuration
-        
-        # Add optimizer options based on device type
-        self.optimizer_options = {
-            "CUDA": ["TensorRT", "Torch.compile", "None"],
-            "DirectML": ["Unlock Thread (Streamer)", "None"],
-            # "MPS": ["Torch.compile", "None"],
-            "Other": ["None"]
-        }
-
         try:
             icon_img = Image.open("icon.ico")
             if OS_NAME == "Windows":
@@ -343,7 +337,6 @@ class ConfigGUI(tk.Tk):
         self.language_var.set(self.language)
         self.protocol("WM_DELETE_WINDOW", self.on_close) # Bind to Close of GUI to turn off all threads
         self.process = None  # Keep track of the spawned process
-        self.inference_optimizer_var.trace_add("write", self.on_optimizer_change)
 
     def on_close(self):
         """Handle GUI window closing: stop process & cleanup."""
@@ -518,13 +511,26 @@ class ConfigGUI(tk.Tk):
 
                 
         # Add Inference Optimizer dropdown after Device selection
+        self.use_torch_compile = tk.BooleanVar()
+        self.use_tensorrt = tk.BooleanVar()
+        self.unlock_streamer_thread = tk.BooleanVar()
         self.label_inference_optimizer = ttk.Label(self.content_frame, text="Inference Optimizer:")
         self.label_inference_optimizer.grid(row=11, column=0, sticky="w", **self.pad)
+
+        # Torch Compile
+        self.check_torch_compile = ttk.Checkbutton(self.content_frame, text="torch.compile", variable=self.use_torch_compile)
+        self.check_torch_compile.grid(row=11, column=1, sticky="w", **self.pad)
+
+        # TensorRT
+        self.check_tensorrt = ttk.Checkbutton(self.content_frame, text="TensorRT", variable=self.use_tensorrt)
+        self.check_tensorrt.grid(row=11, column=2, sticky="w", **self.pad)
+
+        # Unlock Thread (Streamer)
+        self.check_unlock_streamer_thread = ttk.Checkbutton(self.content_frame, text="Unlock Thread (Streamer)", variable=self.unlock_streamer_thread)
+        self.check_unlock_streamer_thread.grid(row=11, column=1, sticky="w", **self.pad)
+        self.use_tensorrt.trace_add("write", self.update_recompile_trt_visibility)
         
-        self.inference_optimizer_var = tk.StringVar()
-        self.inference_optimizer_cb = ttk.Combobox(self.content_frame, textvariable=self.inference_optimizer_var, state="readonly")
-        self.inference_optimizer_cb.grid(row=11, column=1, columnspan=2, sticky="ew", **self.pad)
-        
+        # Recompile TensorRT (only visible when TensorRT is selected)
         self.recompile_trt_var = tk.BooleanVar()
         self.recompile_trt_cb = ttk.Checkbutton(self.content_frame, text="Recompile TensorRT", variable=self.recompile_trt_var)
         self.recompile_trt_cb.grid(row=11, column=3, sticky="w", **self.pad)
@@ -578,49 +584,44 @@ class ConfigGUI(tk.Tk):
         # Bind device change event
         self.device_var.trace_add("write", self.on_device_change)
     
-    def on_optimizer_change(self, *args):
+    def update_recompile_trt_visibility(self, *args):
         """Show/hide TensorRT recompile option based on optimizer selection"""
-        if self.inference_optimizer_var.get() == "TensorRT":
+        if self.use_tensorrt.get():
             self.recompile_trt_cb.grid()
         else:
             self.recompile_trt_cb.grid_remove()
             
     def on_device_change(self, *args):
-        """Update Inference Optimizer options based on selected device"""
+        """Update UI visibility based on the selected device (e.g., show Streamer Boost only for DirectML)."""
         device_label = self.device_var.get()
-        
-        # Determine device type from label
+
+        # Determine device type
         if "CUDA" in device_label:
             device_type = "CUDA"
         elif "DirectML" in device_label:
             device_type = "DirectML"
-        # elif "MPS" in device_label:
-        #     device_type = "MPS"
         else:
             device_type = "Other"
-        
-        # Update optimizer options
-        self.inference_optimizer_cb["values"] = self.optimizer_options[device_type]
-        
-        # Set default value if not already set
-        if not self.inference_optimizer_var.get():
-            self.inference_optimizer_var.set("None")
-            
-        # Show/hide based on device type (always show, but could be hidden if needed)
-        # Show/hide based on device type
-        if device_type == "Other":
-            self.label_inference_optimizer.grid_remove()
-            self.inference_optimizer_cb.grid_remove()
-            self.recompile_trt_cb.grid_remove()
+
+        # Show / Hide "Streamer Boost (DirectML)" only for DirectML devices
+        if device_type == "DirectML":
+            self.check_unlock_streamer_thread.grid()  # Show Streamer Boost checkbox
+            self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
+            self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
         else:
-            self.label_inference_optimizer.grid()
-            self.inference_optimizer_cb.grid()
-            
-            # Show/hide TensorRT recompile option based on current optimizer selection
-            if self.inference_optimizer_var.get() == "TensorRT":
-                self.recompile_trt_cb.grid()
+            self.check_unlock_streamer_thread.grid_remove()  # Hide it for non-DirectML
+            self.check_torch_compile.grid()  # Show torch.compile for non-DirectML
+            self.check_tensorrt.grid()  # Show TensorRT for non-DirectML
+
+        # Control visibility of "Recompile TensorRT" based on whether TensorRT is selected
+        def update_recompile_trt_visibility(*_):
+            if self.use_tensorrt.get():  # If TensorRT is checked
+                self.recompile_trt_cb.grid()  # Show "Recompile TensorRT" checkbox
             else:
-                self.recompile_trt_cb.grid_remove()
+                self.recompile_trt_cb.grid_remove()  # Hide it
+
+        # Trace changes on the TensorRT checkbox to update visibility of "Recompile TensorRT"
+        self.use_tensorrt.trace_add("write", update_recompile_trt_visibility)
                 
     
     def refresh_window_list(self):
@@ -1047,8 +1048,10 @@ class ConfigGUI(tk.Tk):
         self.on_run_mode_change()
         self.on_capture_mode_change()
         
-         # Apply Inference Optimizer setting with validation
-        saved_optimizer = cfg.get("Inference Optimizer", DEFAULTS["Inference Optimizer"])
+        # Apply Inference Optimizer setting with validation
+        cfg["torch.compile"] = self.use_torch_compile.get()
+        cfg["TensorRT"] = self.use_tensorrt.get()
+        cfg["Unlock Thread (Streamer)"] = self.unlock_streamer_thread.get()
         
         # Validate that the saved optimizer is compatible with the current device
         device_label = self.device_var.get()
@@ -1060,12 +1063,9 @@ class ConfigGUI(tk.Tk):
             device_type = "Other"
         
         # Check if saved optimizer is valid for current device
-        valid_optimizers = self.optimizer_options[device_type]
-        if saved_optimizer not in valid_optimizers:
-            # Reset to default if incompatible
-            saved_optimizer = "None"
-        
-        self.inference_optimizer_var.set(saved_optimizer)
+        self.use_torch_compile.set(cfg.get("torch.compile", False))
+        self.use_tensorrt.set(cfg.get("TensorRT", False))
+        self.unlock_streamer_thread.set(cfg.get("Unlock Thread (Streamer)", False))
         
         # Trigger device change to update optimizer options
         self.recompile_trt_var.set(cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"]))
@@ -1179,8 +1179,10 @@ class ConfigGUI(tk.Tk):
             "Run Mode": self.run_mode_key,
             "Streamer Port": int(self.streamer_port_var.get()),
             "Stream Quality": int(self.stream_quality_cb.get()),
-            "Inference Optimizer": self.inference_optimizer_var.get(),
+            "torch.compile": self.use_torch_compile.get(),
+            "TensorRT": self.use_tensorrt.get(),
             "Recompile TensorRT": self.recompile_trt_var.get(),
+            "Unlock Thread (Streamer)": self.unlock_streamer_thread.get(),
         }
         success = self.save_yaml("settings.yaml", cfg)
         if success:

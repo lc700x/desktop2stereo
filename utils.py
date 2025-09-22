@@ -95,25 +95,7 @@ else:
     AA_STRENTH *= 4
 
 # Experimental Settings
-INFERENCE_OPTIMIZER = settings["Inference Optimizer"]
-DML_STREAM_STABLE = False # keep stable dml performance
-USE_TORCH_COMPILE = False # compile model with torch.compile
-
-# TensorRT and Torch.compile settings
-USE_TENSORRT = False
-RECOMPILE_TRT = False
-USE_TORCH_COMPILE = False
-DML_STREAM_STABLE = True if settings["Device"] == "DirectML" else False
-
-if INFERENCE_OPTIMIZER == "Unlock Thread (Streamer)":
-    DML_STREAM_STABLE = False
-elif INFERENCE_OPTIMIZER == "Torch.compile":
-    USE_TORCH_COMPILE = True
-elif INFERENCE_OPTIMIZER == "TensorRT":
-    USE_TENSORRT = True # Rebuild TensorRT engine even if it exists
-    RECOMPILE_TRT = settings["Recompile TensorRT"]
-else:
-    USE_TENSORRT = False
-    RECOMPILE_TRT = False
-    USE_TORCH_COMPILE = False
-    DML_STREAM_STABLE = True if settings["Device"] == "DirectML" else False
+DML_STREAM_STABLE = settings["Unlock Thread (Streamer)"] # Unlock thread for DirectML streamer
+USE_TORCH_COMPILE = settings["torch.compile"] # compile model with torch.compile
+USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
+RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
