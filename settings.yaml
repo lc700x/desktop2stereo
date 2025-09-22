@@ -404,5 +404,7 @@ Language: EN
 Run Mode: Viewer
 Streamer Port: 1122
 Stream Quality: 90
-Inference Optimizer: None
+torch.compile: false
+TensorRT: false
 Recompile TensorRT: false
+Unlock Thread (Streamer): false
