@@ -608,6 +608,7 @@ class ConfigGUI(tk.Tk):
             self.check_unlock_streamer_thread.grid()  # Show Streamer Boost checkbox
             self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
             self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
+            self.recompile_trt_cb.grid_remove()  # Hide "Recompile TensorRT" for DirectML
         else:
             self.check_unlock_streamer_thread.grid_remove()  # Hide it for non-DirectML
             self.check_torch_compile.grid()  # Show torch.compile for non-DirectML
@@ -1047,21 +1048,7 @@ class ConfigGUI(tk.Tk):
         self.update_language_texts()
         self.on_run_mode_change()
         self.on_capture_mode_change()
-        
-        # Apply Inference Optimizer setting with validation
-        cfg["torch.compile"] = self.use_torch_compile.get()
-        cfg["TensorRT"] = self.use_tensorrt.get()
-        cfg["Unlock Thread (Streamer)"] = self.unlock_streamer_thread.get()
-        
-        # Validate that the saved optimizer is compatible with the current device
-        device_label = self.device_var.get()
-        if "CUDA" in device_label:
-            device_type = "CUDA"
-        elif "DirectML" in device_label:
-            device_type = "DirectML"
-        else:
-            device_type = "Other"
-        
+    
         # Check if saved optimizer is valid for current device
         self.use_torch_compile.set(cfg.get("torch.compile", False))
         self.use_tensorrt.set(cfg.get("TensorRT", False))
@@ -1075,8 +1062,6 @@ class ConfigGUI(tk.Tk):
 
     def update_depth_resolution_options(self, model_name):
         """Update depth resolution options based on selected model"""
-        model_list = self.cfg.get("Model List", DEFAULTS["Model List"])
-        
         # Get resolutions for this model
         resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [336])  # Default to 384 if not found
         
