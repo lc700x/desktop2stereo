@@ -401,8 +401,10 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: EN
-Run Mode: Viewer
+Run Mode: Streamer
 Streamer Port: 1122
 Stream Quality: 90
-Inference Optimizer: None
+torch.compile: false
+TensorRT: false
 Recompile TensorRT: false
+Unlock Thread (Streamer): false

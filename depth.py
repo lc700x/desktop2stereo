@@ -9,7 +9,12 @@ import cv2
 from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT
 import os, warnings
 
-
+if USE_TORCH_COMPILE and torch.cuda.is_available():
+    warnings.filterwarnings(
+        "ignore",
+        category=UserWarning,
+        module=r"torch\._inductor\.lowering"
+    )
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -37,11 +42,198 @@ def get_device(index=0):
             return torch.device("cpu"), "Using CPU device"
     except:
         return torch.device("cpu"), "Using CPU device"
+    
+# Post-processing functions
+def apply_stretch(x: torch.Tensor, low: float = 2.0, high: float = 98.0) -> torch.Tensor:
+    """
+    Percentile-based clipping + normalization.
+    Fully DirectML compatible (no torch.clamp).
+    """
+    if x.numel() < 2:
+        return x
+
+    # Downsample to reduce cost
+    x_sampled = x[::8, ::8] if x.dim() == 2 else x.flatten()[::8]
+    flat = x_sampled.flatten()
+
+    if flat.numel() < 2:
+        return x
+
+    # Sort values
+    vals, _ = torch.sort(flat)
+
+    # Compute percentile indices
+    k_low = int((low / 100.0) * (vals.numel() - 1))
+    k_high = int((high / 100.0) * (vals.numel() - 1))
+    k_low = max(0, min(k_low, vals.numel() - 1))
+    k_high = max(0, min(k_high, vals.numel() - 1))
+
+    lo = vals[k_low]
+    hi = vals[k_high]
+
+    # Avoid divide-by-zero
+    scale = hi - lo
+    if scale <= 0:
+        return torch.zeros_like(x)
+
+    # Manual clamp: DirectML supports min/max
+    x = torch.maximum(x, lo)
+    x = torch.minimum(x, hi)
+
+    return (x - lo) / (scale + 1e-6)
+
+def apply_gamma(depth: torch.Tensor, gamma: float = 0.8) -> torch.Tensor:
+    """
+    Apply gamma correction to exaggerate depth differences.
+    Here 1=near, 0=far.
+    gamma < 1 -> expand far (background)
+    gamma > 1 -> expand near (foreground)
+    """
+    depth = torch.clamp(depth, 0.0, 1.0)
+    return depth.pow(gamma)
+
+def apply_sigmoid(depth: torch.Tensor, k: float = 10.0, midpoint: float = 0.5) -> torch.Tensor:
+    """
+    Apply sigmoid mapping to emphasize mid-range depth.
+    Larger k makes it steeper.
+    1=near, 0=far convention.
+    """
+    depth = torch.clamp(depth, 0.0, 1.0)
+    return 1.0 / (1.0 + torch.exp(-k * (depth - midpoint)))
+
+def apply_foreground_scale(depth: torch.Tensor, scale: float) -> torch.Tensor:
+    """
+    Apply foreground/background scaling to a depth map.
+
+    Args:
+        depth (torch.Tensor): depth map of shape (H, W, 1), values normalized in [0, 1].
+                              0 = near (foreground), 1 = far (background).
+        scale (float): scaling factor
+                       > 0: foreground closer, background further
+                       < 0: foreground flatter, background closer
+                       = 0: no change
+
+    Returns:
+        torch.Tensor: scaled depth map of same shape as input
+    """
+    if not torch.is_floating_point(depth):
+        depth = depth.float()
+
+    if scale > 0:
+        # Exaggerate separation: foreground closer, background further
+        return torch.pow(depth, 1.0 + scale)
+    elif scale < 0:
+        # Compress foreground, pull background closer
+        return 1.0 - torch.pow(1.0 - depth, 1.0 + abs(scale))
+    else:
+        return depth
+    
+def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
+    """
+    Apply anti-aliasing to reduce jagged edges in depth maps.
+    
+    Args:
+        depth (torch.Tensor): Normalized depth map tensor [H,W] or [B,1,H,W] with values in [0,1].
+        strength (float): Blur strength; higher = smoother edges. Recommended range [0.5, 2.0].
+    
+    Returns:
+        torch.Tensor: Smoothed depth map with same shape.
+    """
+    if depth.dim() == 2:
+        depth = depth.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
+    elif depth.dim() == 3:
+        depth = depth.unsqueeze(1)  # [B,1,H,W]
+
+    # Kernel size scales with strength
+    k = int(3 * strength) | 1  # force odd number
+    if k < 3:
+        return depth.squeeze()
+
+    # Gaussian blur kernel
+    sigma = 0.5 * strength
+    coords = torch.arange(k, device=depth.device, dtype=depth.dtype) - k // 2
+    gauss = torch.exp(-(coords**2) / (2 * sigma**2))
+    gauss /= gauss.sum()
+
+    # Separable convolution (X then Y)
+    depth = F.conv2d(depth, gauss.view(1,1,1,-1), padding=(0, k//2), groups=1)
+    depth = F.conv2d(depth, gauss.view(1,1,-1,1), padding=(k//2, 0), groups=1)
+
+    return depth.squeeze()
+
+def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
+    """
+    Convert BGR/UMat numpy image to normalized GPU tensor in model dtype.
+    Keeps transfers efficient and uses non_blocking for pinned tensors where possible.
+    """
+    if isinstance(img_rgb, cv2.UMat):
+        img_rgb = img_rgb.get()
+
+    h0, w0 = img_rgb.shape[:2]
+    if height < h0:
+        width = int(img_rgb.shape[1] / h0 * height)
+        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
+
+    # Ensure contiguous numpy array (uint8)
+    np_img = np.ascontiguousarray(img_rgb)
+    # convert to torch tensor on CPU (uint8) then float on device to avoid double copy
+    t_cpu = torch.from_numpy(np_img)  # shape H,W,C dtype=uint8
+    # move to device and convert in one step
+    t = t_cpu.permute(2, 0, 1).contiguous().unsqueeze(0).to(device=DEVICE, dtype=MODEL_DTYPE, non_blocking=True)
+    t = t / 255.0
+    return t
+
+def process(img_rgb: np.ndarray, height) -> np.ndarray:
+    """
+    Resize BGR/UMat numpy image to target height, keeping aspect ratio.
+    """
+    if isinstance(img_rgb, cv2.UMat):
+        img_rgb = img_rgb.get()
+    h0 = img_rgb.shape[0]
+    if height < h0:
+        width = int(img_rgb.shape[1] / h0 * height)
+        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
+    return img_rgb
+
+def normalize_tensor(tensor):
+    """ Normalize tensor to [0,1] """
+    return (tensor - tensor.min())/(tensor.max() - tensor.min()+1e-6)
+
+def apply_piecewise(
+    depth: torch.Tensor,
+    split: float = 0.5,
+    near_gamma: float = 2.0,
+    far_gamma: float = 0.8
+    ) -> torch.Tensor:
+    """
+    Efficient piecewise gamma remap for depth maps.
+    Assumes 1=near, 0=far.
+    near_gamma -> [split, 1]
+    far_gamma  -> [0, split]
+    """
+    depth = depth.clamp(0.0, 1.0)
+
+    # Near branch
+    near_val = (((depth - split).clamp(min=0) / (1 - split + 1e-6))
+                .pow(near_gamma) * (1 - split)) + split
+
+    # Far branch
+    far_val = (((depth).clamp(max=split) / (split + 1e-6))
+               .pow(far_gamma) * split)
+
+    # Select branch without indexing
+    out = torch.where(depth >= split, near_val, far_val)
+    return out
 
 DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
 
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
+    if not FP16:
+        # Enable TF32 for matrix multiplications
+        torch.backends.cuda.matmul.allow_tf32 = True
+        # Enable TF32 for cuDNN (convolution operations)
+        torch.backends.cudnn.allow_tf32 = True
 
 print(DEVICE_INFO)
 print(f"Model: {MODEL_ID}")
@@ -76,7 +268,6 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
     model = VideoDepthAnything(**model_configs[encoder])
     model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True), strict=True)
     return model.to(DEVICE).eval()
-
 
 # TensorRT Optimization
 def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
@@ -136,6 +327,7 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
     except Exception as e:
         print(f"[Error] TensorRT optimization failed: {str(e)}")
         return None
+
 # Export to ONNX
 def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=DTYPE):
     """
@@ -299,12 +491,7 @@ class DepthModelWrapper:
         if FP16:
             model.half()
         
-        if 'DirectML' not in self.device_info and self.use_torch_compile and not USE_TENSORRT:
-            warnings.filterwarnings(
-                "ignore",
-                category=UserWarning,
-                module=r"torch\._inductor\.lowering"
-            )
+        if  "CUDA" in self.device_info and self.use_torch_compile and not USE_TENSORRT:
             model = torch.compile(model)
             print("Processing torch.compile with Triton, it may take a while...")
         
@@ -354,6 +541,15 @@ MODEL_DTYPE = next(model_wraper.model.parameters()).dtype if hasattr(model_wrape
 MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
 STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
 
+if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
+    try:
+        anti_alias = torch.compile(anti_alias, fullgraph=True)
+        apply_piecewise = torch.compile(apply_piecewise, fullgraph=True)
+        apply_sigmoid = torch.compile(apply_sigmoid, fullgraph=True)
+        apply_foreground_scale = torch.compile(apply_foreground_scale, fullgraph=True)
+    except Exception as e:
+        print(f"[Warning] torch.compile failed: {str(e)}, running without it.")
+
 # Initialize with dummy input for warmup
 def warmup_model(model_wraper, steps: int = 3):
     with torch.no_grad():
@@ -366,157 +562,6 @@ def warmup_model(model_wraper, steps: int = 3):
 warmup_model(model_wraper, steps=3)
 
 lock = Lock()
-
-def apply_stretch(x: torch.Tensor, low: float = 2.0, high: float = 98.0) -> torch.Tensor:
-    """
-    Percentile-based clipping + normalization.
-    Fully DirectML compatible (no torch.clamp).
-    """
-    if x.numel() < 2:
-        return x
-
-    # Downsample to reduce cost
-    x_sampled = x[::8, ::8] if x.dim() == 2 else x.flatten()[::8]
-    flat = x_sampled.flatten()
-
-    if flat.numel() < 2:
-        return x
-
-    # Sort values
-    vals, _ = torch.sort(flat)
-
-    # Compute percentile indices
-    k_low = int((low / 100.0) * (vals.numel() - 1))
-    k_high = int((high / 100.0) * (vals.numel() - 1))
-    k_low = max(0, min(k_low, vals.numel() - 1))
-    k_high = max(0, min(k_high, vals.numel() - 1))
-
-    lo = vals[k_low]
-    hi = vals[k_high]
-
-    # Avoid divide-by-zero
-    scale = hi - lo
-    if scale <= 0:
-        return torch.zeros_like(x)
-
-    # Manual clamp: DirectML supports min/max
-    x = torch.maximum(x, lo)
-    x = torch.minimum(x, hi)
-
-    return (x - lo) / (scale + 1e-6)
-
-def apply_gamma(depth: torch.Tensor, gamma: float = 0.8) -> torch.Tensor:
-    """
-    Apply gamma correction to exaggerate depth differences.
-    Here 1=near, 0=far.
-    gamma < 1 -> expand far (background)
-    gamma > 1 -> expand near (foreground)
-    """
-    depth = torch.clamp(depth, 0.0, 1.0)
-    return depth.pow(gamma)
-
-def apply_sigmoid(depth: torch.Tensor, k: float = 10.0, midpoint: float = 0.5) -> torch.Tensor:
-    """
-    Apply sigmoid mapping to emphasize mid-range depth.
-    Larger k makes it steeper.
-    1=near, 0=far convention.
-    """
-    depth = torch.clamp(depth, 0.0, 1.0)
-    return 1.0 / (1.0 + torch.exp(-k * (depth - midpoint)))
-
-def apply_foreground_scale(depth: torch.Tensor, scale: float) -> torch.Tensor:
-    """
-    Apply foreground/background scaling to a depth map.
-
-    Args:
-        depth (torch.Tensor): depth map of shape (H, W, 1), values normalized in [0, 1].
-                              0 = near (foreground), 1 = far (background).
-        scale (float): scaling factor
-                       > 0: foreground closer, background further
-                       < 0: foreground flatter, background closer
-                       = 0: no change
-
-    Returns:
-        torch.Tensor: scaled depth map of same shape as input
-    """
-    if not torch.is_floating_point(depth):
-        depth = depth.float()
-
-    if scale > 0:
-        # Exaggerate separation: foreground closer, background further
-        return torch.pow(depth, 1.0 + scale)
-    elif scale < 0:
-        # Compress foreground, pull background closer
-        return 1.0 - torch.pow(1.0 - depth, 1.0 + abs(scale))
-    else:
-        return depth
-    
-def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
-    """
-    Apply anti-aliasing to reduce jagged edges in depth maps.
-    
-    Args:
-        depth (torch.Tensor): Normalized depth map tensor [H,W] or [B,1,H,W] with values in [0,1].
-        strength (float): Blur strength; higher = smoother edges. Recommended range [0.5, 2.0].
-    
-    Returns:
-        torch.Tensor: Smoothed depth map with same shape.
-    """
-    if depth.dim() == 2:
-        depth = depth.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
-    elif depth.dim() == 3:
-        depth = depth.unsqueeze(1)  # [B,1,H,W]
-
-    # Kernel size scales with strength
-    k = int(3 * strength) | 1  # force odd number
-    if k < 3:
-        return depth.squeeze()
-
-    # Gaussian blur kernel
-    sigma = 0.5 * strength
-    coords = torch.arange(k, device=depth.device, dtype=depth.dtype) - k // 2
-    gauss = torch.exp(-(coords**2) / (2 * sigma**2))
-    gauss /= gauss.sum()
-
-    # Separable convolution (X then Y)
-    depth = F.conv2d(depth, gauss.view(1,1,1,-1), padding=(0, k//2), groups=1)
-    depth = F.conv2d(depth, gauss.view(1,1,-1,1), padding=(k//2, 0), groups=1)
-
-    return depth.squeeze()
-
-def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
-    """
-    Convert BGR/UMat numpy image to normalized GPU tensor in model dtype.
-    Keeps transfers efficient and uses non_blocking for pinned tensors where possible.
-    """
-    if isinstance(img_rgb, cv2.UMat):
-        img_rgb = img_rgb.get()
-
-    h0, w0 = img_rgb.shape[:2]
-    if height < h0:
-        width = int(img_rgb.shape[1] / h0 * height)
-        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
-
-    # Ensure contiguous numpy array (uint8)
-    np_img = np.ascontiguousarray(img_rgb)
-    # convert to torch tensor on CPU (uint8) then float on device to avoid double copy
-    t_cpu = torch.from_numpy(np_img)  # shape H,W,C dtype=uint8
-    # move to device and convert in one step
-    t = t_cpu.permute(2, 0, 1).contiguous().unsqueeze(0).to(device=DEVICE, dtype=MODEL_DTYPE, non_blocking=True)
-    t = t / 255.0
-    return t
-
-def process(img_rgb: np.ndarray, height) -> np.ndarray:
-    if isinstance(img_rgb, cv2.UMat):
-        img_rgb = img_rgb.get()
-    h0 = img_rgb.shape[0]
-    if height < h0:
-        width = int(img_rgb.shape[1] / h0 * height)
-        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
-    return img_rgb
-
-def normalize_tensor(tensor):
-    return (tensor - tensor.min())/(tensor.max() - tensor.min()+1e-6)
 
 # Temporal depth stabilizer (EMA)
 class DepthStabilizer:
@@ -537,35 +582,9 @@ class DepthStabilizer:
             self.prev = out.detach().clone()
             return out
 
-    
 depth_stabilizer = DepthStabilizer(alpha=0.9)  # increase alpha for more stability
-
-# Piecewise gamma remap
-def apply_piecewise(
-    depth: torch.Tensor,
-    split: float = 0.5,
-    near_gamma: float = 2.0,
-    far_gamma: float = 0.8
-    ) -> torch.Tensor:
-    """
-    Efficient piecewise gamma remap for depth maps.
-    Assumes 1=near, 0=far.
-    near_gamma -> [split, 1]
-    far_gamma  -> [0, split]
-    """
-    depth = depth.clamp(0.0, 1.0)
-
-    # Near branch
-    near_val = (((depth - split).clamp(min=0) / (1 - split + 1e-6))
-                .pow(near_gamma) * (1 - split)) + split
-
-    # Far branch
-    far_val = (((depth).clamp(max=split) / (split + 1e-6))
-               .pow(far_gamma) * split)
-
-    # Select branch without indexing
-    out = torch.where(depth >= split, near_val, far_val)
-    return out
+if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
+    depth_stabilizer.__call__ = torch.compile(depth_stabilizer.__call__, fullgraph=True)
 
 # Modified predict_depth function with improved TRT integration
 def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth: bool = True):
@@ -704,3 +723,6 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
 
     sbs = out.clamp(0, 255).to(torch.uint8).permute(1, 2, 0).contiguous().cpu().numpy()
     return sbs
+
+if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
+    make_sbs = torch.compile(make_sbs, fullgraph=False)
