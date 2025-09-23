@@ -177,7 +177,8 @@ UI_TEXTS = {
         "Foreground Scale:": "Foreground Scale:",
         "FP16": "FP16",
         "Inference Optimizer:": "Inference Optimizer:",
-        "Recompile TensorRT:": "Recompile TensorRT",
+        "Recompile TensorRT": "Recompile TensorRT",
+        "Unlock Thread (Streamer)": "Unlock Thread (Streamer)",
         "Download Path:": "Download Path:",
         "Browse...": "Browse...",
         "Stop": "Stop",
@@ -239,7 +240,8 @@ UI_TEXTS = {
         "Foreground Scale:": "前景缩放:",
         "FP16": "半精度浮点 (F16)",
         "Inference Optimizer:": "推理优化器:",
-        "Recompile TensorRT:": "重新编译TensorRT",
+        "Recompile TensorRT": "重新编译TensorRT",
+        "Unlock Thread (Streamer)": "解锁线程 (推流模式)",
         "Download Path:": "下载路径:",
         "Browse...": "浏览...",
         "Stop": "停止",
@@ -605,14 +607,22 @@ class ConfigGUI(tk.Tk):
 
         # Show / Hide "Streamer Boost (DirectML)" only for DirectML devices
         if device_type == "DirectML":
+            self.label_inference_optimizer.grid()
             self.check_unlock_streamer_thread.grid()  # Show Streamer Boost checkbox
             self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
             self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
             self.recompile_trt_cb.grid_remove()  # Hide "Recompile TensorRT" for DirectML
-        else:
+        elif device_type == "CUDA":
+            self.label_inference_optimizer.grid()
             self.check_unlock_streamer_thread.grid_remove()  # Hide it for non-DirectML
             self.check_torch_compile.grid()  # Show torch.compile for non-DirectML
             self.check_tensorrt.grid()  # Show TensorRT for non-DirectML
+        else:
+            self.label_inference_optimizer.grid_remove()  # Hide Inference Optimizer label
+            self.check_unlock_streamer_thread.grid_remove()  # Show Streamer Boost checkbox
+            self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
+            self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
+            self.recompile_trt_cb.grid_remove()  # Hide "Recompile TensorRT" for DirectML
 
         # Control visibility of "Recompile TensorRT" based on whether TensorRT is selected
         def update_recompile_trt_visibility(*_):
