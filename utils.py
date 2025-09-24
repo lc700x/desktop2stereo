@@ -1,6 +1,9 @@
 import yaml
 import os, platform, socket
 
+# App Version
+VERSION = "2.3.4"
+
 def read_yaml(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -48,6 +51,7 @@ if  OS_NAME == "Darwin":
 )
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
 if settings["HF Endpoint"]:
     os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
@@ -58,9 +62,6 @@ if OS_NAME == "Windows":
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except:
         ctypes.windll.user32.SetProcessDPIAware()
-
-# App Version
-VERSION = "2.3.3"
 
 # Streamer Settings
 DEFAULT_PORT = 1122
@@ -92,3 +93,9 @@ if OS_NAME != "Darwin":
     AA_STRENTH *= 40 # 0-100
 else:
     AA_STRENTH *= 4
+
+# Experimental Settings
+DML_STREAM_STABLE = settings["Unlock Thread (Streamer)"] # Unlock thread for DirectML streamer
+USE_TORCH_COMPILE = settings["torch.compile"] # compile model with torch.compile
+USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
+RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine

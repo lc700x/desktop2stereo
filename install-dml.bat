@@ -9,7 +9,7 @@ Set "PYTHON_EXE=python.exe"
 @REM Check if Python is available
 where %PYTHON_EXE% >nul 2>&1
 if %errorlevel% neq 0 (
-    echo Python is not found in PATH. Please install Python 3.10 first.
+    echo Python is not found in PATH. Please install Python 3.11 first.
     pause
     exit /b 1
 )
@@ -36,7 +36,7 @@ if %errorlevel% neq 0 (
 
 @REM Update pip
 echo - Updating the pip package
-python -m pip install --upgrade pip --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install --upgrade pip --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (
     echo Failed to update pip
     pause
@@ -46,9 +46,9 @@ if %errorlevel% neq 0 (
 @REM Install requirements
 echo.
 echo - Installing the requirements
-python -m pip install -r requirements-dml.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-python -m pip install wincam==1.0.14 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install -r requirements-dml.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (
     echo Failed to install requirements
     pause

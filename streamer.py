@@ -184,12 +184,13 @@ class MJPEGStreamer:
 
     # Overlay
     def _update_fps_overlay(self):
-        if not self.show_fps or self.font is None:
+        if not self.show_fps or self.font is None or self.sbs_width is None or self.sbs_height is None:
             self._cached_overlay = None
             return
-        if self._last_fps_value == self.actual_fps:
+        if self._last_fps_value == self.actual_fps and self._cached_overlay is not None:
             return
 
+        # Create overlay with current dimensions
         overlay = np.zeros((self.sbs_height, self.sbs_width, 3), dtype=np.uint8)
         img = Image.fromarray(overlay)
         draw = ImageDraw.Draw(img)
@@ -201,6 +202,12 @@ class MJPEGStreamer:
     def _blend_overlay(self, frame):
         if self._cached_overlay is None:
             return frame
+        
+        # Check if dimensions match
+        if (frame.shape[0] != self._cached_overlay.shape[0] or 
+            frame.shape[1] != self._cached_overlay.shape[1]):
+            return frame  # Skip blending if dimensions don't match
+        
         mask = self._cached_overlay.any(axis=-1)
         frame[mask] = self._cached_overlay[mask]
         return frame
@@ -228,7 +235,6 @@ class MJPEGStreamer:
             self.frame_count = 0
             self.last_fps_time = now
             print(f"[MJPEGStreamer] FPS: {self.actual_fps:.1f}")
-            self._update_fps_overlay()
 
         h, w = frame_np.shape[:2]
         if (self.sbs_width, self.sbs_height) != (w, h):
@@ -240,9 +246,15 @@ class MJPEGStreamer:
                 ).encode("utf-8")
             except Exception:
                 self.index_bytes = b"<html><body>Desktop2Stereo Streamer</body></html>"
+            # Reset cached overlay when dimensions change
+            self._cached_overlay = None
+            self._last_fps_value = None
 
         frame_to_send = frame_np.copy()
         if self.show_fps:
+            # Update overlay if FPS changed or dimensions changed
+            if self._cached_overlay is None or self._last_fps_value != self.actual_fps:
+                self._update_fps_overlay()
             frame_to_send = self._blend_overlay(frame_to_send)
 
         with self.lock:
