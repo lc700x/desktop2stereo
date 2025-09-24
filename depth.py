@@ -506,7 +506,7 @@ class DepthModelWrapper:
             pytorch_model.half()
         
         # Export to ONNX if not exists
-        if not os.path.exists(self.onnx_path):
+        if RECOMPILE_TRT or not os.path.exists(self.onnx_path):
             export_to_onnx(pytorch_model, self.onnx_path, self.device, self.dtype)
         
         # Build or load TensorRT engine
