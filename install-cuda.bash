@@ -49,7 +49,7 @@ echo
 echo "- Installing the requirements"
 $PYTHON_EXE -m pip install -r requirements-cuda.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 $PYTHON_EXE -m pip install "triton<3.4" --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-$PYTHON_EXE -m pip install tensorrt==10.13.3.9 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+$PYTHON_EXE -m pip install tensorrt_cu12==10.13.3.9 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 $PYTHON_EXE -m pip install onnx==1.19.0 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 $PYTHON_EXE -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if [ $? -ne 0 ]; then
