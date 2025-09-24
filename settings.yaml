@@ -405,6 +405,6 @@ Run Mode: Viewer
 Streamer Port: 1122
 Stream Quality: 90
 torch.compile: false
-TensorRT: true
+TensorRT: false
 Recompile TensorRT: false
 Unlock Thread (Streamer): false
