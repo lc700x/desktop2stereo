@@ -53,7 +53,7 @@ def main(mode="Viewer"):
 
     frame_count = 0
     last_time = time.perf_counter()
-
+    current_fps = None
     total_frames = 0
     start_time = time.perf_counter()
 
@@ -84,10 +84,10 @@ def main(mode="Viewer"):
                         total_frames += 1
                         current_time = time.perf_counter()
                         if current_time - last_time >= 1.0:
-                            fps = frame_count / (current_time - last_time)
+                            current_fps = frame_count / (current_time - last_time)
                             frame_count = 0
                             last_time = current_time
-                            glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {fps:.1f} | Depth: {window.depth_ratio:.1f}")
+                            glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {current_fps:.1f} | Depth: {window.depth_ratio:.1f}")
                 except queue.Empty:
                     pass
 
@@ -103,12 +103,7 @@ def main(mode="Viewer"):
             from streamer import MJPEGStreamer
             if BOOST:
                 def make_output(rgb, depth):
-                    return make_sbs(
-                        rgb, depth,
-                        ipd_uv=IPD,
-                        depth_ratio=DEPTH_STRENTH,
-                        display_mode=DISPLAY_MODE
-                    )
+                    return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, FPS=current_fps)
             else:
                 sbs_q = queue.Queue(maxsize=1)
                 def make_output(rgb, depth):
@@ -120,7 +115,7 @@ def main(mode="Viewer"):
                             rgb, depth = depth_q.get(timeout=TIME_SLEEP)
                         except queue.Empty:
                             continue
-                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE)
+                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, FPS=current_fps)
                         put_latest(sbs_q, sbs)
 
 
@@ -151,13 +146,13 @@ def main(mode="Viewer"):
                         sbs = sbs_q.get(timeout=TIME_SLEEP)
                     streamer.set_frame(sbs)
                     if SHOW_FPS:
-                                frame_count += 1
-                                current_time = time.perf_counter()
-                                if current_time - last_time >= 1.0:
-                                    current_fps = frame_count / (current_time - last_time)
-                                    frame_count = 0
-                                    last_time = current_time
-                                    print(f"FPS: {current_fps:.2f}")
+                        frame_count += 1
+                        current_time = time.perf_counter()
+                        if current_time - last_time >= 1.0:
+                            current_fps = frame_count / (current_time - last_time)
+                            frame_count = 0
+                            last_time = current_time
+                            print(f"FPS: {current_fps:.2f}")
                 except queue.Empty:
                     continue
 
