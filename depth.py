@@ -715,16 +715,24 @@ def overlay_fps(rgb: torch.Tensor, fps: float, color=(0.0, 255.0, 0.0)) -> torch
     return rgb * (1.0 - alpha) + overlay_color * alpha
 
 # generate left and right eye view for streamer 
-def make_sbs_core(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv=0.064,
-                  depth_ratio=1.0, display_mode="Half-SBS") -> torch.Tensor:
+import torch
+import torch.nn.functional as F
+
+def make_sbs_core(rgb: torch.Tensor,
+                  depth: torch.Tensor,
+                  ipd_uv=0.064,
+                  depth_ratio=1.0,
+                  display_mode="Half-SBS",
+                  device=DEVICE) -> torch.Tensor:
     """
     Core tensor operations for side-by-side stereo.
+    Keeps CUDA fast path (grid_sample) and fallback path (gather).
     Compatible with torch.compile.
     Inputs:
-        rgb: [C,H,W] float tensor
-        depth: [H,W] float tensor
+        rgb:   [C,H,W] float tensor
+        depth: [H,W]   float tensor
     Returns:
-        SBS image [C,H,W] float tensor (0-255)
+        SBS image [C,H,W] float tensor (0-255 range)
     """
     C, H, W = rgb.shape
     img = rgb.unsqueeze(0)  # [1,C,H,W]
@@ -734,14 +742,33 @@ def make_sbs_core(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv=0.064,
     depth_strength = 0.05
     shifts = inv * max_px * depth_strength
 
-    # grid_sample path (works for CUDA/CPU/MPS)
-    xs = torch.linspace(-1.0, 1.0, W, device=rgb.device, dtype=rgb.dtype).view(1,1,W).expand(1,H,W)
-    ys = torch.linspace(-1.0, 1.0, H, device=rgb.device, dtype=rgb.dtype).view(1,H,1).expand(1,H,W)
-    shift_norm = shifts * (2.0 / (W-1))
-    grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
-    grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
-    sampled_left = F.grid_sample(img, grid_left, mode="bilinear", padding_mode="border", align_corners=True)[0]
-    sampled_right = F.grid_sample(img, grid_right, mode="bilinear", padding_mode="border", align_corners=True)[0]
+    # CUDA fast path: grid_sample
+    if "CUDA" in DEVICE_INFO:
+        xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=MODEL_DTYPE).view(1, 1, W).expand(1, H, W)
+        ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=MODEL_DTYPE).view(1, H, 1).expand(1, H, W)
+        shift_norm = shifts * (2.0 / (W - 1))
+
+        grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
+        grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
+
+        sampled_left = F.grid_sample(img, grid_left, mode="bilinear",
+                                     padding_mode="border", align_corners=True)[0]
+        sampled_right = F.grid_sample(img, grid_right, mode="bilinear",
+                                      padding_mode="border", align_corners=True)[0]
+
+    # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
+    else:
+        base = torch.arange(W, device=device).view(1, -1).expand(H, -1).float()
+        coords_left = (base + shifts).clamp(0, W - 1).long()   # [H,W]
+        coords_right = (base - shifts).clamp(0, W - 1).long()  # [H,W]
+
+        # Left eye
+        gather_idx_left = coords_left.unsqueeze(0).expand(C, H, W).unsqueeze(0)  # [1,C,H,W]
+        sampled_left = torch.gather(img.expand(1, C, H, W), 3, gather_idx_left)[0]  # [C,H,W]
+
+        # Right eye
+        gather_idx_right = coords_right.unsqueeze(0).expand(C, H, W).unsqueeze(0)
+        sampled_right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
 
     # Aspect pad helper
     def pad_to_aspect_tensor(tensor, target_ratio=(16, 9)):
@@ -759,9 +786,14 @@ def make_sbs_core(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv=0.064,
             pad_left = (new_w - w) // 2
             return F.pad(tensor, (pad_left, new_w - w - pad_left, 0, 0))
 
+    # Aspect pad & arrange SBS/TAB
     left = pad_to_aspect_tensor(sampled_left)
     right = pad_to_aspect_tensor(sampled_right)
-    out = torch.cat([left, right], dim=2 if display_mode != "TAB" else 1)
+
+    if display_mode == "TAB":
+        out = torch.cat([left, right], dim=1)
+    else:
+        out = torch.cat([left, right], dim=2)
 
     if display_mode != "Full-SBS":
         out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
