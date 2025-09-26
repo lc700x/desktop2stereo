@@ -73,7 +73,7 @@ def main(mode="Viewer"):
                     put_latest(depth_q, (frame_rgb, depth))
 
             threading.Thread(target=depth_loop, daemon=True).start()
-            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, show_fps=True)
+            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS)
             print(f"[Main] Viewer Started")
             while not glfw.window_should_close(window.window):
                 try:
