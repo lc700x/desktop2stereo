@@ -5,58 +5,40 @@ import cv2
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
 from utils import get_local_ip
-from PIL import Image, ImageDraw, ImageFont
 
+# Path to favicon file
 ICON_PATH = "icon2.ico"
 
+# Custom WSGI server class that supports threading
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     allow_reuse_address = True
     block_on_close = False
 
-
 class MJPEGStreamer:
-    def __init__(self, host="0.0.0.0", port=1303, fps=60, quality=90, show_fps=True):
+    def __init__(self, host="0.0.0.0", port=1303, fps=60, quality=90):
+        """
+        Initialize the MJPEG streamer with configuration parameters.
+        """
+        # MJPEG stream boundary marker
         self.boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
         self.quality = int(quality)
         self.fps = fps
         self.delay = 1.0 / fps
-        self.target_fps = fps
-        self.show_fps = show_fps
 
-        # Font setup
-        self.base_font_size = 40
-        self.font = None
-        self._init_fonts()
-        self.text_padding = 10
-        self.text_spacing = 5
-
-        # Frame handling
-        self.raw_frame = None
-        self.encoded_frame = None
+        self.raw_frame = None       # latest frame (numpy RGB)
+        self.encoded_frame = None   # latest JPEG
         self.lock = threading.Lock()
 
-        # Synchronization
         self.shutdown = threading.Event()
         self.new_raw_event = threading.Event()
         self.new_encoded_event = threading.Event()
 
-        # FPS tracking
-        self.frame_count = 0
-        self.last_fps_time = time.perf_counter()
-        self.actual_fps = 0
-
-        # Cached overlay
-        self._cached_overlay = None
-        self._last_fps_value = None
-
-        # Resolution tracking
+        # Stream dimensions
         self.sbs_width = None
         self.sbs_height = None
         self.index_bytes = None
 
-        # Pre-allocated JPEG buffer (OpenCV reuses internally anyway)
-        self.jpeg_buf = None
-
+        # HTML template with auto reconnect and fullscreen
         self.template = """<!DOCTYPE html>
 <html>
     <head>
@@ -72,13 +54,13 @@ class MJPEGStreamer:
 
             window.onload = () => {{
                 const video = document.getElementById("player-canvas");
-                video.playsInline = true;
-                video.setAttribute('webkit-playsinline', '');
-                video.setAttribute('playsinline', '');
                 let canvas = document.createElement("canvas");
                 let ctx = canvas.getContext("2d");
                 let canvasStream = null;
 
+                // Create an <img> that will receive the MJPEG stream. For MJPEG the
+                // image's onload handler fires for each frame, which lets us detect
+                // size changes and redraw without a full page refresh.
                 const img = new Image();
                 img.crossOrigin = "anonymous";
                 img.src = STREAM_URI;
@@ -86,19 +68,25 @@ class MJPEGStreamer:
                 function ensureCanvasSize(w, h) {{
                     if (!w || !h) return;
                     if (canvas.width !== w || canvas.height !== h) {{
+                        // Update canvas size to match incoming MJPEG frame size
                         canvas.width = w;
                         canvas.height = h;
+
+                        // Stop old tracks if present and re-create capture stream so
+                        // the <video> element gets the new resolution automatically.
                         if (canvasStream) {{
                             try {{ canvasStream.getTracks().forEach(t => t.stop()); }} catch(e) {{}}
                         }}
                         try {{
                             canvasStream = canvas.captureStream(FPS || 30);
                             video.srcObject = canvasStream;
-                        }} catch(e) {{}}
+                        }} catch(e) {{ /* captureStream may not be available in some browsers */ }}
                     }}
                 }}
 
                 let last_timestamp = 0;
+                // Draw each time the <img> fires onload (MJPEG frames), and also use
+                // requestAnimationFrame to throttle to FPS.
                 img.onload = () => {{
                     const w = img.naturalWidth || img.width || canvas.width;
                     const h = img.naturalHeight || img.height || canvas.height;
@@ -111,9 +99,12 @@ class MJPEGStreamer:
                         }}
                         requestAnimationFrame(render);
                     }}
+
+                    // Start (or continue) the render loop
                     requestAnimationFrame(render);
                 }};
 
+                // insert canvas into the page visually hidden (video shows the captured stream)
                 canvas.style.display = 'none';
                 document.body.appendChild(canvas);
             }};
@@ -133,6 +124,7 @@ class MJPEGStreamer:
 </html>
 """
 
+        # WSGI application handler
         def app(environ, start_response):
             path = environ.get("PATH_INFO", "/")
 
@@ -140,13 +132,11 @@ class MJPEGStreamer:
                 if self.index_bytes is None:
                     start_response("503 Service Unavailable", [("Content-Type", "text/plain")])
                     return [b"Stream not ready yet"]
-                start_response("200 OK", [("Content-Type", "text/html; charset=utf-8"),
-                                          ("Cache-Control", "no-cache, no-store, must-revalidate")])
+                start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
                 return [self.index_bytes]
 
             if path == "/stream.mjpg":
-                start_response("200 OK", [("Content-Type", "multipart/x-mixed-replace; boundary=frame"),
-                                          ("Cache-Control", "no-cache, no-store, must-revalidate")])
+                start_response("200 OK", [("Content-Type", "multipart/x-mixed-replace; boundary=frame")])
                 return self._generate()
 
             if path == "/favicon.ico" and os.path.exists(ICON_PATH):
@@ -158,63 +148,13 @@ class MJPEGStreamer:
             start_response("404 Not Found", [("Content-Type", "text/plain")])
             return [b"Not Found"]
 
+        # Create WSGI server instance
         self.server = make_server(host, port, app, ThreadingWSGIServer)
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.encoder_thread = threading.Thread(target=self._encoder_loop, daemon=True)
 
-    # Fonts
-    def _init_fonts(self):
-        self.fonts = {}
-        for size in range(20, 80, 10):
-            try:
-                self.fonts[size] = ImageFont.truetype("arial.ttf", size)
-            except:
-                self.fonts[size] = ImageFont.load_default()
-
-    def _update_font(self, frame_size):
-        if not frame_size or frame_size[0] == 0:
-            return
-        h = frame_size[0]
-        scale = h / 1080
-        size = int(self.base_font_size * scale)
-        closest = min(self.fonts.keys(), key=lambda x: abs(x - size))
-        self.font = self.fonts[closest]
-        self.text_padding = max(5, int(closest * 0.4))
-        self.text_spacing = max(2, int(closest * 0.2))
-
-    # Overlay
-    def _update_fps_overlay(self):
-        if not self.show_fps or self.font is None or self.sbs_width is None or self.sbs_height is None:
-            self._cached_overlay = None
-            return
-        if self._last_fps_value == self.actual_fps and self._cached_overlay is not None:
-            return
-
-        # Create overlay with current dimensions
-        overlay = np.zeros((self.sbs_height, self.sbs_width, 3), dtype=np.uint8)
-        img = Image.fromarray(overlay)
-        draw = ImageDraw.Draw(img)
-        fps_text = f"FPS: {self.actual_fps:.1f}"
-        draw.text((self.text_padding, self.text_padding), fps_text, font=self.font, fill=(0, 255, 0))
-        self._cached_overlay = np.array(img)
-        self._last_fps_value = self.actual_fps
-
-    def _blend_overlay(self, frame):
-        if self._cached_overlay is None:
-            return frame
-        
-        # Check if dimensions match
-        if (frame.shape[0] != self._cached_overlay.shape[0] or 
-            frame.shape[1] != self._cached_overlay.shape[1]):
-            return frame  # Skip blending if dimensions don't match
-        
-        mask = self._cached_overlay.any(axis=-1)
-        frame[mask] = self._cached_overlay[mask]
-        return frame
-
-    # Public
     def start(self):
-        print(f"[MJPEGStreamer] Serving on http://{get_local_ip()}:{self.server.server_address[1]}/")
+        print(f"[MJPEGStreamer] serving on http://{get_local_ip()}:{self.server.server_address[1]}/")
         self.server_thread.start()
         self.encoder_thread.start()
 
@@ -228,57 +168,45 @@ class MJPEGStreamer:
         self.new_raw_event.set()
 
     def set_frame(self, frame_np):
-        now = time.perf_counter()
-        self.frame_count += 1
-        if now - self.last_fps_time >= 1.0:
-            self.actual_fps = self.frame_count / (now - self.last_fps_time)
-            self.frame_count = 0
-            self.last_fps_time = now
-            print(f"[MJPEGStreamer] FPS: {self.actual_fps:.1f}")
-
-        h, w = frame_np.shape[:2]
-        if (self.sbs_width, self.sbs_height) != (w, h):
-            self.sbs_width, self.sbs_height = w, h
-            self._update_font((h, w))
-            try:
-                self.index_bytes = self.template.format(
-                    fps=self.target_fps, width=w, height=h
-                ).encode("utf-8")
-            except Exception:
-                self.index_bytes = b"<html><body>Desktop2Stereo Streamer</body></html>"
-            # Reset cached overlay when dimensions change
-            self._cached_overlay = None
-            self._last_fps_value = None
-
-        frame_to_send = frame_np.copy()
-        if self.show_fps:
-            # Update overlay if FPS changed or dimensions changed
-            if self._cached_overlay is None or self._last_fps_value != self.actual_fps:
-                self._update_fps_overlay()
-            frame_to_send = self._blend_overlay(frame_to_send)
-
+        """
+        Set the current frame to be streamed. This will also update the cached HTML
+        page if the output resolution changes so newly-connecting clients see the
+        correct initial dimensions.
+        """
         with self.lock:
-            self.raw_frame = frame_to_send
-        self.new_raw_event.set()
+            h, w = frame_np.shape[:2]
+            # If the output resolution changed, update cached index page so new
+            # clients get the correct metadata. Existing clients will auto-resize
+            # in the browser (JS checks the incoming MJPEG frame size), so no
+            # manual refresh is needed.
+            if (self.sbs_width, self.sbs_height) != (w, h):
+                self.sbs_width = w
+                self.sbs_height = h
+                try:
+                    self.index_bytes = self.template.format(
+                        fps=self.fps,
+                        width=self.sbs_width,
+                        height=self.sbs_height
+                    ).encode("utf-8")
+                except Exception:
+                    # Fallback to a minimal page if formatting fails
+                    self.index_bytes = b"<html><body>Desktop2Stereo Streamer</body></html>"
 
-    # Threads
+            self.raw_frame = frame_np
+            self.new_raw_event.set()
+
     def _encoder_loop(self):
         while not self.shutdown.is_set():
-            if not self.new_raw_event.wait(timeout=0.1):
+            if not self.new_raw_event.wait(timeout=1):
                 continue
             self.new_raw_event.clear()
 
-            with self.lock:
-                raw = self.raw_frame
+            raw = self.raw_frame
             if raw is None:
                 continue
-
             try:
-                bgr = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR) if raw.ndim == 3 else raw
-                success, buf = cv2.imencode(".jpg", bgr, [
-                    cv2.IMWRITE_JPEG_QUALITY, self.quality,
-                    cv2.IMWRITE_JPEG_OPTIMIZE, 1
-                ])
+                bgr = np.ascontiguousarray(raw[..., ::-1])
+                success, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
                 if success:
                     self.encoded_frame = buf.tobytes()
                     self.new_encoded_event.set()
@@ -288,7 +216,8 @@ class MJPEGStreamer:
     def _generate(self):
         next_frame_time = time.perf_counter()
         while not self.shutdown.is_set():
-            if not self.new_encoded_event.wait(timeout=0.1):
+            # Wait for a new frame
+            if not self.new_encoded_event.wait(timeout=1):
                 continue
             self.new_encoded_event.clear()
 
@@ -296,14 +225,16 @@ class MJPEGStreamer:
             if f:
                 yield self.boundary + f + b"\r\n"
 
+            # Enforce consistent pacing
             next_frame_time += self.delay
-            now = time.perf_counter()
-            if now < next_frame_time:
-                time.sleep(next_frame_time - now)
+            sleep_time = next_frame_time - time.perf_counter()
+            if sleep_time > 0:
+                time.sleep(sleep_time)
             else:
-                next_frame_time = now + self.delay
+                # Frame processing fell behind, reset clock
+                next_frame_time = time.perf_counter()
+        yield b""
 
-    # Utility
     def encode_jpeg(self, arr: np.ndarray) -> bytes:
         if arr is None:
             return b""
