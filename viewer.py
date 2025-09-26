@@ -4,8 +4,6 @@ import moderngl
 import numpy as np
 import time
 from PIL import Image, ImageDraw, ImageFont
-import io
-import math
 
 # Get OS name and settings
 from utils import OS_NAME, crop_icon
