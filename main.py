@@ -139,7 +139,7 @@ def main(mode="Viewer"):
             if not BOOST:
                 threading.Thread(target=sbs_loop, daemon=True).start()
             
-            streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY, show_fps=SHOW_FPS)
+            streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
             streamer.start()
             print(f"[Main] Streamer Started")
             
@@ -150,6 +150,14 @@ def main(mode="Viewer"):
                     else:
                         sbs = sbs_q.get(timeout=TIME_SLEEP)
                     streamer.set_frame(sbs)
+                    if SHOW_FPS:
+                                frame_count += 1
+                                current_time = time.perf_counter()
+                                if current_time - last_time >= 1.0:
+                                    current_fps = frame_count / (current_time - last_time)
+                                    frame_count = 0
+                                    last_time = current_time
+                                    print(f"FPS: {current_fps:.2f}")
                 except queue.Empty:
                     continue
 
