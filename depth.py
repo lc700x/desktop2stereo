@@ -25,6 +25,26 @@ DTYPE_INFO = "fp16" if FP16 else "fp32"
 ONNX_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.onnx")
 TRT_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
 
+
+# Single character digits and letters for "FPS: XX.X"
+font_dict = {
+    "0": ["111","101","101","101","111"],
+    "1": ["010","110","010","010","111"],
+    "2": ["111","001","111","100","111"],
+    "3": ["111","001","111","001","111"],
+    "4": ["101","101","111","001","001"],
+    "5": ["111","100","111","001","111"],
+    "6": ["111","100","111","101","111"],
+    "7": ["111","001","010","100","100"],
+    "8": ["111","101","111","101","111"],
+    "9": ["111","101","111","001","111"],
+    "F": ["111","100","110","100","100"],
+    "P": ["110","101","110","100","100"],
+    "S": ["111","100","111","001","111"],
+    ":": ["000","010","000","010","000"],
+    ".": ["000","000","000","000","010"],  # for decimal point
+    " ": ["000","000","000","000","000"],
+}
 # Initialize DirectML Device
 def get_device(index=0):
     try:
@@ -333,7 +353,7 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
     """
     Export the depth estimation model to ONNX format with dynamic axes.
     """
-    dummy_input = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=device, dtype=dtype)
+    dummy_input = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=DEVICE, dtype=dtype)
     
     input_names = ["pixel_values"]
     output_names = ["predicted_depth"]
@@ -642,104 +662,86 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         return depth, rgb_c
     else:
         return depth   
+    
+def build_font(device="cpu", dtype=torch.float32):
+    chars = sorted(font_dict.keys())
+    font_tensor = torch.stack([
+        torch.tensor([[1.0 if c=="1" else 0.0 for c in row] for row in font_dict[ch]],
+                     dtype=dtype, device=device)
+        for ch in chars
+    ])  # [num_chars, 5, 3]
+    return chars, font_tensor  # mapping and bitmap tensor
+
+def overlay_fps(rgb: torch.Tensor, fps: float, color=(0.0, 255.0, 0.0)) -> torch.Tensor:
+    """
+    Vectorized FPS overlay in PyTorch (compilable).
+    rgb: [C,H,W] image tensor
+    fps: float value
+    color: overlay color (tuple for RGB or scalar for grayscale)
+    """
+    device, dtype = rgb.device, rgb.dtype
+    chars, font_tensor = build_font(device=device, dtype=dtype)
+
+    txt = f"FPS: {fps:.1f}"
+    idxs = torch.tensor([chars.index(ch) if ch in chars else chars.index(" ") for ch in txt],
+                        device=device)
+
+    H, W = rgb.shape[1:]
+    scale = max(1, min(8, H // 60))
+    char_h, char_w = 5 * scale, 3 * scale
+    spacing = scale
+    margin_x, margin_y = 2 * scale, 2 * scale
+
+    # Expand bitmaps for each character
+    glyphs = font_tensor[idxs]  # [len_txt, 5, 3]
+    glyphs = glyphs.repeat_interleave(scale, dim=1).repeat_interleave(scale, dim=2)  # [len_txt, h, w]
+
+    # Compute x/y offsets for each character
+    offsets_x = margin_x + torch.arange(len(txt), device=device) * (char_w + spacing)
+    offsets_y = torch.full((len(txt),), margin_y, device=device)
+
+    # Create global mask
+    mask = torch.zeros((H, W), device=device, dtype=dtype)
+    for i, glyph in enumerate(glyphs):
+        h_b, w_b = glyph.shape
+        x0, y0 = int(offsets_x[i]), int(offsets_y[i])
+        x1, y1 = min(W, x0 + w_b), min(H, y0 + h_b)
+        mask[y0:y1, x0:x1] = torch.maximum(mask[y0:y1, x0:x1], glyph[:y1-y0, :x1-x0])
+
+    # Broadcast to channels
+    alpha = mask.unsqueeze(0).expand(rgb.shape[0], -1, -1)
+    overlay_color = torch.tensor(color, device=device, dtype=dtype).view(-1,1,1).expand_as(rgb)
+
+    return rgb * (1.0 - alpha) + overlay_color * alpha
 
 # generate left and right eye view for streamer 
-def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS", FPS=None):
+def make_sbs_core(rgb: torch.Tensor, depth: torch.Tensor, ipd_uv=0.064,
+                  depth_ratio=1.0, display_mode="Half-SBS") -> torch.Tensor:
     """
-    Generate side-by-side stereo.
-    Uses grid_sample for CUDA (fast), falls back to vectorized gather (compatible) on DirectML/MPS/CPU.
-    rgb_c: [C,H,W] in same dtype as model (0-255 expected)
-    depth: [H,W] or [1,H,W] normalized in [0,1]
-    FPS: if not None, overlay FPS text onto rgb_c (torch-only rendering)
+    Core tensor operations for side-by-side stereo.
+    Compatible with torch.compile.
+    Inputs:
+        rgb: [C,H,W] float tensor
+        depth: [H,W] float tensor
+    Returns:
+        SBS image [C,H,W] float tensor (0-255)
     """
-    if depth.dim() == 3 and depth.shape[0] == 1:
-        depth = depth[0]
-    C, H, W = rgb_c.shape
-    device = depth.device
-
-    # convert to model dtype and device
-    rgb = rgb_c.to(device=device, dtype=MODEL_DTYPE)  # [C,H,W]
-
-    # --------- FPS overlay: "FPS: XX.X", bright green, top-left margin ----------
-    if FPS is not None:
-        # Single character digits and letters for "FPS: XX.X"
-        tiny_font = {
-            "0": ["111","101","101","101","111"],
-            "1": ["010","110","010","010","111"],
-            "2": ["111","001","111","100","111"],
-            "3": ["111","001","111","001","111"],
-            "4": ["101","101","111","001","001"],
-            "5": ["111","100","111","001","111"],
-            "6": ["111","100","111","101","111"],
-            "7": ["111","001","010","100","100"],
-            "8": ["111","101","111","101","111"],
-            "9": ["111","101","111","001","111"],
-            "F": ["111","100","110","100","100"],
-            "P": ["110","101","110","100","100"],
-            "S": ["111","100","111","001","111"],
-            ":": ["000","010","000","010","000"],
-            ".": ["000","000","000","000","010"],  # for decimal point
-            " ": ["000","000","000","000","000"],
-        }
-
-        def render_char(ch):
-            rows = tiny_font.get(ch, tiny_font[" "])
-            mat = torch.tensor([[1.0 if c=="1" else 0.0 for c in r] for r in rows],
-                            device=device, dtype=MODEL_DTYPE)
-            return mat  # [5,3]
-
-        # Format FPS text with 1 decimal point
-        try:
-            fps_val = float(FPS)
-            txt = f"FPS: {fps_val:.1f}"  # 1 decimal point
-        except Exception:
-            txt = f"FPS: {FPS}"
-
-        # Font scaling
-        scale = max(1, min(8, H // 60))
-        char_h, char_w = 5 * scale, 3 * scale
-        spacing = scale
-
-        # Top-left margin
-        margin_x, margin_y = scale*2, scale*2
-        text_x, text_y = margin_x, margin_y
-
-        # Build text mask
-        mask = torch.zeros((H, W), device=device, dtype=MODEL_DTYPE)
-        for i, ch in enumerate(txt):
-            ch_bitmap = render_char(ch)  # [5,3]
-            ch_bitmap_up = ch_bitmap.repeat_interleave(scale, dim=0).repeat_interleave(scale, dim=1)
-            h_b, w_b = ch_bitmap_up.shape
-            x0 = text_x + i * (char_w + spacing)
-            y0 = text_y
-            x1 = min(W, x0 + w_b)
-            y1 = min(H, y0 + h_b)
-            bx, by = x1 - x0, y1 - y0
-            if bx <= 0 or by <= 0:
-                continue
-            mask[y0:y1, x0:x1] = torch.maximum(mask[y0:y1, x0:x1], ch_bitmap_up[:by, :bx])
-
-        # Alpha map = 1.0 for text only
-        alpha3 = mask.unsqueeze(0).expand(C, -1, -1)
-
-        # Bright green overlay
-        if C >= 3:
-            overlay_color = torch.tensor([0.0, 255.0, 0.0], device=device, dtype=MODEL_DTYPE).view(C,1,1)
-        else:
-            overlay_color = torch.tensor([255.0], device=device, dtype=MODEL_DTYPE).view(C,1,1)
-
-        color_map = overlay_color.expand(C,H,W)
-
-        # Blend onto image
-        rgb = rgb * (1.0 - alpha3) + color_map * alpha3
-
-        # Common preparation
+    C, H, W = rgb.shape
     img = rgb.unsqueeze(0)  # [1,C,H,W]
 
     inv = 1.0 - depth * depth_ratio
     max_px = ipd_uv * W
     depth_strength = 0.05
-    shifts = (inv * max_px * depth_strength)
+    shifts = inv * max_px * depth_strength
+
+    # grid_sample path (works for CUDA/CPU/MPS)
+    xs = torch.linspace(-1.0, 1.0, W, device=rgb.device, dtype=rgb.dtype).view(1,1,W).expand(1,H,W)
+    ys = torch.linspace(-1.0, 1.0, H, device=rgb.device, dtype=rgb.dtype).view(1,H,1).expand(1,H,W)
+    shift_norm = shifts * (2.0 / (W-1))
+    grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
+    grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
+    sampled_left = F.grid_sample(img, grid_left, mode="bilinear", padding_mode="border", align_corners=True)[0]
+    sampled_right = F.grid_sample(img, grid_right, mode="bilinear", padding_mode="border", align_corners=True)[0]
 
     # Aspect pad helper
     def pad_to_aspect_tensor(tensor, target_ratio=(16, 9)):
@@ -757,48 +759,31 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
             pad_left = (new_w - w) // 2
             return F.pad(tensor, (pad_left, new_w - w - pad_left, 0, 0))
 
-    # CUDA fast path: grid_sample
-    if 'CUDA' in DEVICE_INFO:
-        xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=MODEL_DTYPE).view(1, 1, W).expand(1, H, W)
-        ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=MODEL_DTYPE).view(1, H, 1).expand(1, H, W)
-        shift_norm = shifts * (2.0 / (W - 1))
-
-        grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
-        grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
-
-        sampled_left = F.grid_sample(img, grid_left, mode="bilinear",
-                                     padding_mode="border", align_corners=True)[0]
-        sampled_right = F.grid_sample(img, grid_right, mode="bilinear",
-                                      padding_mode="border", align_corners=True)[0]
-
-    # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
-    else:
-        base = torch.arange(W, device=device).view(1, -1).expand(H, -1).float()
-        coords_left = (base + shifts).clamp(0, W - 1).long()   # [H,W]
-        coords_right = (base - shifts).clamp(0, W - 1).long()  # [H,W]
-
-        # Left eye
-        gather_idx_left = coords_left.unsqueeze(0).expand(C, H, W).unsqueeze(0)  # [1,C,H,W]
-        sampled_left = torch.gather(img.expand(1, C, H, W), 3, gather_idx_left)[0]  # [C,H,W]
-
-        # Right eye
-        gather_idx_right = coords_right.unsqueeze(0).expand(C, H, W).unsqueeze(0)
-        sampled_right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
-
-    # Aspect pad & arrange SBS/TAB
     left = pad_to_aspect_tensor(sampled_left)
     right = pad_to_aspect_tensor(sampled_right)
-
-    if display_mode == "TAB":
-        out = torch.cat([left, right], dim=1)
-    else:
-        out = torch.cat([left, right], dim=2)
+    out = torch.cat([left, right], dim=2 if display_mode != "TAB" else 1)
 
     if display_mode != "Full-SBS":
         out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
 
-    sbs = out.clamp(0, 255).to(torch.uint8).permute(1, 2, 0).contiguous().cpu().numpy()
-    return sbs
+    return out.clamp(0, 255)
+
+def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS", fps=None):
+    """
+    Full function: adds optional FPS overlay and converts output to numpy uint8.
+    Calls `make_sbs_core` for tensor computations (torch.compile compatible).
+    """
+    if depth.dim() == 3 and depth.shape[0] == 1:
+        depth = depth[0]
+    rgb = rgb_c.to(device=DEVICE, dtype=MODEL_DTYPE)
+
+    # Optional FPS overlay can stay in Python side (avoids torch.compile recompiles)
+    if fps is not None:
+        rgb = overlay_fps(rgb, fps)  # your existing overlay function
+
+    sbs_tensor = make_sbs_core(rgb, depth, ipd_uv, depth_ratio, display_mode)
+    return sbs_tensor.to(torch.uint8).permute(1,2,0).contiguous().cpu().numpy()
 
 if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
-    make_sbs = torch.compile(make_sbs, fullgraph=False)
+    make_sbs_core = torch.compile(make_sbs_core)
+    

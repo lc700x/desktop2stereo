@@ -103,7 +103,7 @@ def main(mode="Viewer"):
             from streamer import MJPEGStreamer
             if BOOST:
                 def make_output(rgb, depth):
-                    return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, FPS=current_fps)
+                    return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, fps=current_fps)
             else:
                 sbs_q = queue.Queue(maxsize=1)
                 def make_output(rgb, depth):
@@ -115,7 +115,7 @@ def main(mode="Viewer"):
                             rgb, depth = depth_q.get(timeout=TIME_SLEEP)
                         except queue.Empty:
                             continue
-                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, FPS=current_fps)
+                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, fps=current_fps)
                         put_latest(sbs_q, sbs)
 
 
