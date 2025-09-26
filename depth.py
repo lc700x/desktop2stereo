@@ -644,20 +644,96 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         return depth   
 
 # generate left and right eye view for streamer 
-def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS"):
+def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS", FPS=None):
     """
     Generate side-by-side stereo.
     Uses grid_sample for CUDA (fast), falls back to vectorized gather (compatible) on DirectML/MPS/CPU.
     rgb_c: [C,H,W] in same dtype as model (0-255 expected)
     depth: [H,W] or [1,H,W] normalized in [0,1]
+    FPS: if not None, overlay FPS text onto rgb_c (torch-only rendering)
     """
     if depth.dim() == 3 and depth.shape[0] == 1:
         depth = depth[0]
     C, H, W = rgb_c.shape
     device = depth.device
 
-    # Common preparation
+    # convert to model dtype and device
     rgb = rgb_c.to(device=device, dtype=MODEL_DTYPE)  # [C,H,W]
+
+    # --------- FPS overlay: "FPS: XX.X", bright green, top-left margin ----------
+    if FPS is not None:
+        # Single character digits and letters for "FPS: XX.X"
+        tiny_font = {
+            "0": ["111","101","101","101","111"],
+            "1": ["010","110","010","010","111"],
+            "2": ["111","001","111","100","111"],
+            "3": ["111","001","111","001","111"],
+            "4": ["101","101","111","001","001"],
+            "5": ["111","100","111","001","111"],
+            "6": ["111","100","111","101","111"],
+            "7": ["111","001","010","100","100"],
+            "8": ["111","101","111","101","111"],
+            "9": ["111","101","111","001","111"],
+            "F": ["111","100","110","100","100"],
+            "P": ["110","101","110","100","100"],
+            "S": ["111","100","111","001","111"],
+            ":": ["000","010","000","010","000"],
+            ".": ["000","000","000","000","010"],  # for decimal point
+            " ": ["000","000","000","000","000"],
+        }
+
+        def render_char(ch):
+            rows = tiny_font.get(ch, tiny_font[" "])
+            mat = torch.tensor([[1.0 if c=="1" else 0.0 for c in r] for r in rows],
+                            device=device, dtype=MODEL_DTYPE)
+            return mat  # [5,3]
+
+        # Format FPS text with 1 decimal point
+        try:
+            fps_val = float(FPS)
+            txt = f"FPS: {fps_val:.1f}"  # 1 decimal point
+        except Exception:
+            txt = f"FPS: {FPS}"
+
+        # Font scaling
+        scale = max(1, min(8, H // 60))
+        char_h, char_w = 5 * scale, 3 * scale
+        spacing = scale
+
+        # Top-left margin
+        margin_x, margin_y = scale*2, scale*2
+        text_x, text_y = margin_x, margin_y
+
+        # Build text mask
+        mask = torch.zeros((H, W), device=device, dtype=MODEL_DTYPE)
+        for i, ch in enumerate(txt):
+            ch_bitmap = render_char(ch)  # [5,3]
+            ch_bitmap_up = ch_bitmap.repeat_interleave(scale, dim=0).repeat_interleave(scale, dim=1)
+            h_b, w_b = ch_bitmap_up.shape
+            x0 = text_x + i * (char_w + spacing)
+            y0 = text_y
+            x1 = min(W, x0 + w_b)
+            y1 = min(H, y0 + h_b)
+            bx, by = x1 - x0, y1 - y0
+            if bx <= 0 or by <= 0:
+                continue
+            mask[y0:y1, x0:x1] = torch.maximum(mask[y0:y1, x0:x1], ch_bitmap_up[:by, :bx])
+
+        # Alpha map = 1.0 for text only
+        alpha3 = mask.unsqueeze(0).expand(C, -1, -1)
+
+        # Bright green overlay
+        if C >= 3:
+            overlay_color = torch.tensor([0.0, 255.0, 0.0], device=device, dtype=MODEL_DTYPE).view(C,1,1)
+        else:
+            overlay_color = torch.tensor([255.0], device=device, dtype=MODEL_DTYPE).view(C,1,1)
+
+        color_map = overlay_color.expand(C,H,W)
+
+        # Blend onto image
+        rgb = rgb * (1.0 - alpha3) + color_map * alpha3
+
+        # Common preparation
     img = rgb.unsqueeze(0)  # [1,C,H,W]
 
     inv = 1.0 - depth * depth_ratio
