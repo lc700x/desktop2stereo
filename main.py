@@ -159,17 +159,17 @@ def main(mode="Viewer"):
     except KeyboardInterrupt:
         print("\n[Main] Shutting down…")
 
-    except Exception as e:
-        print(e)
-    finally:
-        if streamer:
-            streamer.stop()
-        if window:
-            glfw.terminate()
-        #     print(f"[Main] {mode} Stopped")
-        # total_time = time.perf_counter() - start_time
-        # avg_fps = frame_count / total_time if total_time > 0 else 0
-        # print(f"Average FPS: {avg_fps:.2f}")
+    # except Exception as e:
+    #     print(e)
+    # finally:
+    #     if streamer:
+    #         streamer.stop()
+    #     if window:
+    #         glfw.terminate()
+    #     #     print(f"[Main] {mode} Stopped")
+    #     # total_time = time.perf_counter() - start_time
+    #     # avg_fps = frame_count / total_time if total_time > 0 else 0
+    #     # print(f"Average FPS: {avg_fps:.2f}")
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)

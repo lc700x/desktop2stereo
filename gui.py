@@ -86,7 +86,9 @@ else:
         return windows
 
 # List all available devices
+
 def get_devices():
+    is_rocm = False
     """
     Returns a list of dictionaries [{dev: torch.device, info: str}] for all available devices.
     """
@@ -105,7 +107,10 @@ def get_devices():
         import torch
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
-                devices[count] = {"name": f"CUDA {i}: {torch.cuda.get_device_name(i)}", "device": torch.device(f"cuda:{i}")}
+                name = torch.cuda.get_device_name(i)
+                if "AMD" in name:
+                    is_rocm = True
+                devices[count] = {"name": f"CUDA {i}: {name}", "device": torch.device(f"cuda:{i}")}
                 count += 1
         if torch.backends.mps.is_available():
             devices[count]= {"name": "MPS: Apple Silicon", "device": torch.device("mps")}
@@ -114,9 +119,10 @@ def get_devices():
     except ImportError:
         raise ImportError("PyTorch Not Found! Make sure you have deployed the Python environment in '.env'.")
 
-    return devices
+    return devices, is_rocm
 
-DEVICES = get_devices()
+DEVICES, IS_ROCM = get_devices()
+# print("ROCM: ", IS_ROCM)
 
 try:
     import mss
@@ -616,7 +622,11 @@ class ConfigGUI(tk.Tk):
             self.label_inference_optimizer.grid()
             self.check_unlock_streamer_thread.grid_remove()  # Hide it for non-DirectML
             self.check_torch_compile.grid()  # Show torch.compile for non-DirectML
-            self.check_tensorrt.grid()  # Show TensorRT for non-DirectML
+            self.check_tensorrt.grid()
+            if IS_ROCM:
+                self.check_tensorrt.grid_remove()  # Show TensorRT for non-DirectML
+            else:
+                self.check_tensorrt.grid()
         else:
             self.label_inference_optimizer.grid_remove()  # Hide Inference Optimizer label
             self.check_unlock_streamer_thread.grid_remove()  # Show Streamer Boost checkbox

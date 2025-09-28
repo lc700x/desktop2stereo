@@ -1,12 +1,46 @@
 # depth.py
 import torch
 torch.set_num_threads(1)
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT
+# Initialize DirectML Device
+def get_device(index=0):
+    try:
+        try:
+            import torch_directml
+            if torch_directml.is_available():
+                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
+        except ImportError:
+            pass
+        if torch.backends.mps.is_available() and index==0:
+            return torch.device("mps"), "Using Apple Silicon (MPS) device"
+        if torch.cuda.is_available():
+            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+        else:
+            return torch.device("cpu"), "Using CPU device"
+    except:
+        return torch.device("cpu"), "Using CPU device"
+    
+DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
+
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True
+    if not FP16:
+        # Enable TF32 for matrix multiplications
+        torch.backends.cuda.matmul.allow_tf32 = True
+        # Enable TF32 for cuDNN (convolution operations)
+        torch.backends.cudnn.allow_tf32 = True
+        # Enable TF32 matrix multiplication for better performance
+        torch.set_float32_matmul_precision('high')
+
+print(DEVICE_INFO)
+print(f"Model: {MODEL_ID}")
+
+
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT
 import os, warnings
 
 if USE_TORCH_COMPILE and torch.cuda.is_available():
@@ -45,24 +79,7 @@ font_dict = {
     ".": ["000","000","000","000","010"],  # for decimal point
     " ": ["000","000","000","000","000"],
 }
-# Initialize DirectML Device
-def get_device(index=0):
-    try:
-        try:
-            import torch_directml
-            if torch_directml.is_available():
-                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
-        except ImportError:
-            pass
-        if torch.backends.mps.is_available() and index==0:
-            return torch.device("mps"), "Using Apple Silicon (MPS) device"
-        if torch.cuda.is_available():
-            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
-        else:
-            return torch.device("cpu"), "Using CPU device"
-    except:
-        return torch.device("cpu"), "Using CPU device"
-    
+
 # Post-processing functions
 def apply_stretch(x: torch.Tensor, low: float = 2.0, high: float = 98.0) -> torch.Tensor:
     """
@@ -244,19 +261,6 @@ def apply_piecewise(
     # Select branch without indexing
     out = torch.where(depth >= split, near_val, far_val)
     return out
-
-DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
-
-if torch.cuda.is_available():
-    torch.backends.cudnn.benchmark = True
-    if not FP16:
-        # Enable TF32 for matrix multiplications
-        torch.backends.cuda.matmul.allow_tf32 = True
-        # Enable TF32 for cuDNN (convolution operations)
-        torch.backends.cudnn.allow_tf32 = True
-
-print(DEVICE_INFO)
-print(f"Model: {MODEL_ID}")
 
 # Load Video Depth Anything Model
 def get_video_depth_anything_model(model_id=MODEL_ID):

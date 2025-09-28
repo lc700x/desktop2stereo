@@ -1,6 +1,7 @@
 #!/bin/bash
+# sed -i 's/\r$//' *.bash #correct for linux
 cd "$(dirname "$0")"
-echo "--- Desktop2Stereo Installer (With CUDA for NVIDIA GPUs.) ---"
+echo "--- Desktop2Stereo Installer (With ROCm for AMD GPUs.) ---"
 echo "- Setting up the virtual environment"
 
 # Set paths
@@ -49,10 +50,8 @@ echo
 echo "- Installing the requirements"
 sudo apt-get install python3-tk wmctrl mesa-utils
 $PYTHON_EXE -m pip install python_xlib --no-cache-dir
-$PYTHON_EXE -m pip install -r requirements-cuda.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-$PYTHON_EXE -m pip install "triton<3.4" --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-$PYTHON_EXE -m pip install tensorrt_cu12==10.13.3.9 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-$PYTHON_EXE -m pip install onnx==1.19.0 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+# $PYTHON_EXE -m pip install -r requirements-rocm.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+$PYTHON_EXE -m pip install https://repo.radeon.com/rocm/manylinux/rocm-rel-7.0/torch-2.7.1%2Brocm7.0.0.lw.git698b58a9-cp310-cp310-linux_x86_64.whl  https://repo.radeon.com/rocm/manylinux/rocm-rel-7.0/torchvision-0.21.0%2Brocm7.0.0.git4040d51f-cp310-cp310-linux_x86_64.whl https://repo.radeon.com/rocm/manylinux/rocm-rel-7.0/pytorch_triton_rocm-3.3.1%2Brocm7.0.0.git9c7bc0a3-cp310-cp310-linux_x86_64.whl --no-cache-dir
 $PYTHON_EXE -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if [ $? -ne 0 ]; then
     echo "Failed to install requirements"
