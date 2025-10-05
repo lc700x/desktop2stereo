@@ -15,7 +15,7 @@ FP16 = True
 DTYPE = torch.float16 if FP16 else torch.float32
 CACHE_PATH = "models"
 DEVICE_ID = 0
-MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
+MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 DEPTH_RESOLUTION = 336
 FOREGROUND_SCALE = 1
 

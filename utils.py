@@ -2,7 +2,7 @@ import yaml
 import os, platform, socket
 
 # App Version
-VERSION = "2.3.4"
+VERSION = "2.3.5"
 
 def read_yaml(path):
     try:
@@ -63,6 +63,26 @@ if OS_NAME == "Windows":
     except:
         ctypes.windll.user32.SetProcessDPIAware()
 
+    import glfw
+    from ctypes import wintypes
+    
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    def hide_window_from_capture(glfw_window):
+        """Set display affinity to exclude window from screen capture (Windows only)."""
+        WDA_EXCLUDEFROMCAPTURE = 0x00000011
+        hwnd = glfw.get_win32_window(glfw_window)
+        SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
+        SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+        SetWindowDisplayAffinity.restype = wintypes.BOOL
+
+        result = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+        if result:
+            print("StereoWindow is now hidden from screen capture.")
+        else:
+            print(f"Failed to set display affinity. Error code: {ctypes.get_last_error()}")
+
+
+
 # Streamer Settings
 DEFAULT_PORT = 1122
 STREAM_QUALITY = settings["Stream Quality"]
@@ -99,3 +119,5 @@ DML_STREAM_STABLE = settings["Unlock Thread (Streamer)"] # Unlock thread for Dir
 USE_TORCH_COMPILE = settings["torch.compile"] # compile model with torch.compile
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
+
+USE_3D_MONITOR = True

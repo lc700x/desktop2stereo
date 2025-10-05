@@ -719,9 +719,6 @@ def overlay_fps(rgb: torch.Tensor, fps: float, color=(0.0, 255.0, 0.0)) -> torch
     return rgb * (1.0 - alpha) + overlay_color * alpha
 
 # generate left and right eye view for streamer 
-import torch
-import torch.nn.functional as F
-
 def make_sbs_core(rgb: torch.Tensor,
                   depth: torch.Tensor,
                   ipd_uv=0.064,
