@@ -24,13 +24,13 @@ DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
 
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
-    if not FP16:
-        # Enable TF32 for matrix multiplications
-        torch.backends.cuda.matmul.allow_tf32 = True
-        # Enable TF32 for cuDNN (convolution operations)
-        torch.backends.cudnn.allow_tf32 = True
-        # Enable TF32 matrix multiplication for better performance
-        torch.set_float32_matmul_precision('high')
+    # if not FP16:
+    # Enable TF32 for matrix multiplications
+    torch.backends.cuda.matmul.allow_tf32 = True
+    # Enable TF32 for cuDNN (convolution operations)
+    torch.backends.cudnn.allow_tf32 = True
+    # Enable TF32 matrix multiplication for better performance
+    torch.set_float32_matmul_precision('high')
 
 print(DEVICE_INFO)
 print(f"Model: {MODEL_ID}")
@@ -220,17 +220,18 @@ def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
     t = t / 255.0
     return t
 
-def process(img_rgb: np.ndarray, height) -> np.ndarray:
+def process(img_bgr: np.ndarray, height) -> np.ndarray:
     """
     Resize BGR/UMat numpy image to target height, keeping aspect ratio.
     """
-    if isinstance(img_rgb, cv2.UMat):
-        img_rgb = img_rgb.get()
-    h0 = img_rgb.shape[0]
+    if isinstance(img_bgr, cv2.UMat):
+        img_bgr = img_bgr.get()
+    h0 = img_bgr.shape[0]
     if height < h0:
-        width = int(img_rgb.shape[1] / h0 * height)
-        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
-    return img_rgb
+        width = int(img_bgr.shape[1] / h0 * height)
+        img_bgr = cv2.resize(img_bgr, (width, height), interpolation=cv2.INTER_AREA)
+    frame_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGRA2RGB)
+    return frame_rgb
 
 def normalize_tensor(tensor):
     """ Normalize tensor to [0,1] """

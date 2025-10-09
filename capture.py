@@ -212,7 +212,7 @@ if OS_NAME == "Windows":
             """
             if self.capture_mode != "Monitor":
                 self._ensure_camera_matches_window()  # Ensure camera is up to date for window capture
-            img_array, _ = self.camera.get_rgb_frame()
+            img_array, _ = self.camera.get_bgr_frame()
             return img_array, self.scaled_height
 
         def close(self):
@@ -465,24 +465,46 @@ elif OS_NAME == "Darwin":
                     cursor_y = (y - self.top) * system_scale
                     # Only overlay if cursor is within this frame
                 
-                    cursor_bgra, hotspot, alpha_f32, premultiplied = get_cursor_image_and_hotspot()
-                    scale_factor = 16 // system_scale
-                    if cursor_bgra.shape[0] > scale_factor and cursor_bgra.shape[1] > scale_factor:
-                        h, w = cursor_bgra.shape[:2]
-                        new_w, new_h = int(w / scale_factor), int(h / scale_factor)
-                        # resize BGRA; keep alpha channel scaled properly
-                        cursor_bgra = cv2.resize(cursor_bgra, (new_w, new_h), interpolation=cv2.INTER_AREA)
-                        # recompute alpha & premultiplied after resize
-                        alpha_f32 = (cursor_bgra[:, :, 3].astype(np.float32) / 255.0)
-                        premultiplied = cursor_bgra[:, :, :3].astype(np.float32) * alpha_f32[:, :, None]
+                    if 0 <= x - self.left <= self.width and 0 <= y - self.top <= self.height:
 
-                        self.cursor_bgra = cursor_bgra
+                        cursor_x = (x - self.left) * system_scale
+                        cursor_y = (y - self.top) * system_scale
+
+                        # Cache cursor image processing to avoid recomputation every frame
+                        cursor_bgra, hotspot, alpha_f32, premultiplied = get_cursor_image_and_hotspot()
+                        scale_factor = 16 // max(1, int(system_scale))
+
+                        # initialize cache storage if missing
+                        if not hasattr(self, "_cursor_cache"):
+                            self._cursor_cache = {}
+
+                        # key to uniquely identify cached result
+                        cache_key = (id(cursor_bgra), cursor_bgra.shape, scale_factor)
+
+                        if cache_key not in self._cursor_cache:
+                            # perform expensive resize & alpha computations once per cache_key
+                            h, w = cursor_bgra.shape[:2]
+                            if h > scale_factor and w > scale_factor:
+                                new_w, new_h = w // scale_factor, h // scale_factor
+                                resized_bgra = cv2.resize(cursor_bgra, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                            else:
+                                resized_bgra = cursor_bgra
+
+                            alpha_f32 = (resized_bgra[:, :, 3].astype(np.float32) / 255.0)
+                            premultiplied = resized_bgra[:, :, :3].astype(np.float32) * alpha_f32[:, :, None]
+
+                            self._cursor_cache[cache_key] = (resized_bgra, hotspot, alpha_f32, premultiplied)
+
+                        else:
+                            resized_bgra, hotspot, alpha_f32, premultiplied = self._cursor_cache[cache_key]
+
+                        # assign for compatibility with your original code
+                        self.cursor_bgra = resized_bgra
                         self.cursor_hotspot = hotspot
                         self.cursor_alpha = alpha_f32
                         self.cursor_premultiplied = premultiplied
-                        
+
                         if self.with_cursor and self.cursor_bgra is not None:
-                            # overlay in-place using optimized routine
                             frame_bgr = overlay_cursor_on_frame(
                                 frame_bgr,
                                 self.cursor_bgra,
@@ -496,8 +518,7 @@ elif OS_NAME == "Darwin":
                 self.cursor_hotspot = (0, 0)
                 self.cursor_alpha = None
                 self.cursor_premultiplied = None
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            return frame_rgb, self.scaled_height
+            return frame_bgr, self.scaled_height
 
 
 elif OS_NAME.startswith("Linux"):
@@ -651,6 +672,5 @@ elif OS_NAME.startswith("Linux"):
                 
             monitor = {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
             shot = self._mss.grab(monitor)
-            arr = np.asarray(shot)
-            frame_rgb = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
-            return frame_rgb, self.scaled_height
+            frame_bgr = np.asarray(shot)
+            return frame_bgr, self.scaled_height
