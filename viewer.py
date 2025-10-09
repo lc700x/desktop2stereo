@@ -6,7 +6,9 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, hide_window_from_capture, USE_3D_MONITOR
+from utils import OS_NAME, crop_icon, USE_3D_MONITOR
+if OS_NAME == "Windows":
+    from utils import hide_window_from_capture
 
 # Shaders as constants (unchanged)
 VERTEX_SHADER = """

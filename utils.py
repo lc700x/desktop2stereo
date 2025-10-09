@@ -41,7 +41,7 @@ settings = read_yaml("settings.yaml")
 OS_NAME = platform.system()
 
 # Ignore wanning for MPS
-if  OS_NAME == "Darwin":
+if OS_NAME == "Darwin":
     import os, warnings
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
     warnings.filterwarnings(
@@ -93,9 +93,9 @@ LOCAL_IP = get_local_ip()
 RUN_MODE = settings["Run Mode"]
 # Add for 3D monitor
 USE_3D_MONITOR = False
-if RUN_MODE == "3D Monitor":
+if RUN_MODE == "3D Monitor" and OS_NAME == "Windows":
     RUN_MODE = "Viewer"
-    USE_3D_MONITOR = True    
+    USE_3D_MONITOR = True
 
 MODEL_ID = settings["Depth Model"]
 ALL_MODELS = settings["Model List"]
