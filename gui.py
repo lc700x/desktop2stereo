@@ -210,6 +210,7 @@ UI_TEXTS = {
         "Run Mode:": "Run Mode:",
         "Viewer": "Viewer",
         "Streamer": "Streamer",
+        "3D Monitor": "3D Monitor",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
         "Copy URL": "Copy URL",
@@ -273,6 +274,7 @@ UI_TEXTS = {
         "Run Mode:": "运行模式:",
         "Viewer": "本地查看",
         "Streamer": "网络推流",
+        "3D Monitor": "3D显示器",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
         "Copy URL": "复制网址",
@@ -316,7 +318,7 @@ class ConfigGUI(tk.Tk):
         except Exception as e:
             print(f"Warning: Could not load icon.ico - {e}")
 
-        # internal run mode key: 'Viewer' or 'Streamer'
+        # internal run mode key: 'Viewer' or 'Streamer' or '3D Monitor'
         self.run_mode_key = DEFAULTS.get("Run Mode", "Viewer")
         
         # internal capture mode key: 'Monitor' or 'Window'
@@ -390,7 +392,7 @@ class ConfigGUI(tk.Tk):
         self.rowconfigure(1, weight=0)   # status bar fixed
         self.columnconfigure(0, weight=1)
         
-        # Run Mode (viewer / streamer)
+        # Run Mode (viewer / streamer / 3D Monitor)
         self.label_run_mode = ttk.Label(self.content_frame, text="Run Mode:")
         self.label_run_mode.grid(row=0, column=0, sticky="w", **self.pad)
         self.run_mode_var_label = tk.StringVar()
@@ -815,7 +817,7 @@ class ConfigGUI(tk.Tk):
         self.label_language.config(text=texts["Set Language:"])
         # Update run mode labels & combobox values
         self.label_run_mode.config(text=texts.get("Run Mode:", "Run Mode:"))
-        localized_run_vals = [texts.get("Viewer", "Viewer"), texts.get("Streamer", "Streamer")]
+        localized_run_vals = [texts.get("Viewer", "Viewer"), texts.get("Streamer", "Streamer"), texts.get("3D Monitor", "3D Monitor")]
         self.run_mode_cb["values"] = localized_run_vals
         # Add Inference Optimizer text update
         self.label_inference_optimizer.config(text=texts.get("Inference Optimizer:", "Inference Optimizer:"))
@@ -824,8 +826,10 @@ class ConfigGUI(tk.Tk):
         # Select the appropriate label
         if self.run_mode_key == "Viewer":
             self.run_mode_var_label.set(localized_run_vals[0])
-        else:
+        elif self.run_mode_key == "Streamer":
             self.run_mode_var_label.set(localized_run_vals[1])
+        else:  # 3D Monitor
+            self.run_mode_var_label.set(localized_run_vals[2])
             
         # Update capture mode combobox values
         localized_capture_vals = [texts.get("Monitor", "Monitor"), texts.get("Window", "Window")]
@@ -877,6 +881,8 @@ class ConfigGUI(tk.Tk):
         label = self.run_mode_var_label.get()
         texts = UI_TEXTS[self.language]
         streamer_label = texts.get("Streamer", "Streamer")
+        viewer_label = texts.get("Viewer", "Viewer")
+        
         if label == streamer_label:
             self.run_mode_key = "Streamer"
             if not self.streamer_port_var.get():
@@ -893,8 +899,8 @@ class ConfigGUI(tk.Tk):
             self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
             self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
         else:
-            self.run_mode_key = "Viewer"
-            # hide streamer controls
+            self.run_mode_key = "Viewer" if label == viewer_label else "3D Monitor"
+            # hide streamer controls for 3D Monitor mode
             self.label_streamer_host.grid_remove()
             self.streamer_host_entry.grid_remove()
             self.label_streamer_port.grid_remove()
@@ -903,7 +909,7 @@ class ConfigGUI(tk.Tk):
             self.stream_quality_cb.grid_remove()
             self.btn_copy_url.grid_remove()
             self.btn_open_browser.grid_remove()
-
+            
     def browse_download(self):
         path = filedialog.askdirectory(initialdir=self.download_var.get() or ".")
         if path:

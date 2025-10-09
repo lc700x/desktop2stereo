@@ -719,58 +719,111 @@ def overlay_fps(rgb: torch.Tensor, fps: float, color=(0.0, 255.0, 0.0)) -> torch
     return rgb * (1.0 - alpha) + overlay_color * alpha
 
 # generate left and right eye view for streamer 
-def make_sbs_core(rgb: torch.Tensor,
-                  depth: torch.Tensor,
-                  ipd_uv=0.064,
-                  depth_ratio=1.0,
-                  display_mode="Half-SBS",
-                  device=DEVICE) -> torch.Tensor:
+def disparity_from_depth_tensor(depth_torch, baseline_px=80.0, zero_parallax=0.6, depth_ratio=1.0):
     """
-    Core tensor operations for side-by-side stereo.
-    Keeps CUDA fast path (grid_sample) and fallback path (gather).
-    Compatible with torch.compile.
-    Inputs:
-        rgb:   [C,H,W] float tensor
-        depth: [H,W]   float tensor
+    Convert depth map (1=near, 0=far) to disparity map.
+    
+    Args:
+        depth_torch: Depth tensor [H,W] or [1,H,W] with values in [0,1] (1=near, 0=far)
+        baseline_px: Baseline in pixels (controls stereo separation strength)
+        zero_parallax: Depth value that will have zero disparity (screen plane)
+        
     Returns:
-        SBS image [C,H,W] float tensor (0-255 range)
+        disp: Disparity map [H,W] (positive values shift right, negative shift left)
+        depth_norm: Normalized depth [0=near,1=far] for visualization
+    """
+    if depth_torch.dim() == 2:
+        depth_torch = depth_torch
+    else:
+        depth_torch = depth_torch.squeeze()
+    depth_norm = 1.0 - depth_torch * depth_ratio  # depth.py uses 1=near, 0=far -> convert to 0=near,1=far
+    disp = baseline_px * (zero_parallax - depth_norm)
+    return disp
+
+def warp_with_grid_sample_torch(rgb_t, disp_t, direction='left', align_corners=True):
+    """
+    Warp using grid_sample or gather-based fallback for DirectML.
+    rgb_t: 1x3xHxW float tensor on device
+    disp_t: HxW tensor (pixels) on same device
+    """
+    _, C, H, W = rgb_t.shape
+    
+    # For DirectML devices, use gather-based method
+    if "DirectML" in DEVICE_INFO:
+        # Create base coordinate grid
+        base = torch.arange(W, device=disp_t.device).view(1, W).expand(H, W).float()
+        
+        # Calculate half disparity
+        half_disp = disp_t / 2.0
+        
+        # Determine shift direction
+        if direction == 'left':
+            coords = (base - half_disp).clamp(0, W - 1).long()
+        else:
+            coords = (base + half_disp).clamp(0, W - 1).long()
+        
+        # Create gather indices
+        gather_idx = coords.unsqueeze(0).expand(C, H, W).unsqueeze(0)  # [1,C,H,W]
+        
+        # Perform gather operation
+        warped = torch.gather(rgb_t, 3, gather_idx)
+        return warped
+    
+    # For CUDA devices, use optimized grid_sample
+    elif "CUDA" in DEVICE_INFO:
+        # Prepare coordinate grid
+        xs = torch.linspace(0, W-1, W, device=disp_t.device, dtype=disp_t.dtype).view(1, W).expand(H, W)
+        ys = torch.linspace(0, H-1, H, device=disp_t.device, dtype=disp_t.dtype).view(H, 1).expand(H, W)
+        
+        # Apply disparity shift
+        half_disp = disp_t / 2.0
+        if direction == 'left':
+            src_x = xs - half_disp
+        else:
+            src_x = xs + half_disp
+        src_y = ys
+        
+        # Normalize to [-1,1]
+        nx = (src_x / (W - 1)) * 2.0 - 1.0
+        ny = (src_y / (H - 1)) * 2.0 - 1.0
+        grid = torch.stack((nx, ny), dim=2).unsqueeze(0)  # 1xHxWx2
+        
+        # Run grid_sample
+        return F.grid_sample(rgb_t, grid, mode='bilinear', padding_mode='zeros', align_corners=align_corners)
+    
+    # Fallback for other devices (MPS/CPU)
+    else:
+        # Handle dtype conversion for non-CUDA devices
+        if rgb_t.device.type != 'cuda' and rgb_t.dtype == torch.float16:
+            rgb_fp32 = rgb_t.to(dtype=torch.float32)
+            grid_fp32 = grid.to(dtype=torch.float32)
+            sampled = F.grid_sample(rgb_fp32, grid_fp32, mode='bilinear',
+                                    padding_mode='zeros', align_corners=align_corners)
+            return sampled.to(dtype=rgb_t.dtype)
+        else:
+            return F.grid_sample(rgb_t, grid, mode='bilinear',
+                                 padding_mode='zeros', align_corners=align_corners)
+
+
+# Updated make_sbs_core function using the new disparity functions
+def make_sbs_core(rgb: torch.Tensor,
+                 depth: torch.Tensor,
+                 ipd_uv=0.064,
+                 depth_ratio=1.0,
+                 display_mode="Half-SBS") -> torch.Tensor:
+    """
+    Updated core tensor operations for side-by-side stereo using disparity_from_depth_tensor.
     """
     C, H, W = rgb.shape
     img = rgb.unsqueeze(0)  # [1,C,H,W]
-
-    inv = 1.0 - depth * depth_ratio
-    max_px = ipd_uv * W
-    depth_strength = 0.05
-    shifts = inv * max_px * depth_strength
-
-    # CUDA fast path: grid_sample
-    if "CUDA" in DEVICE_INFO:
-        xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=MODEL_DTYPE).view(1, 1, W).expand(1, H, W)
-        ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=MODEL_DTYPE).view(1, H, 1).expand(1, H, W)
-        shift_norm = shifts * (2.0 / (W - 1))
-
-        grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
-        grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
-
-        sampled_left = F.grid_sample(img, grid_left, mode="bilinear",
-                                     padding_mode="border", align_corners=True)[0]
-        sampled_right = F.grid_sample(img, grid_right, mode="bilinear",
-                                      padding_mode="border", align_corners=True)[0]
-
-    # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
-    else:
-        base = torch.arange(W, device=device).view(1, -1).expand(H, -1).float()
-        coords_left = (base + shifts).clamp(0, W - 1).long()   # [H,W]
-        coords_right = (base - shifts).clamp(0, W - 1).long()  # [H,W]
-
-        # Left eye
-        gather_idx_left = coords_left.unsqueeze(0).expand(C, H, W).unsqueeze(0)  # [1,C,H,W]
-        sampled_left = torch.gather(img.expand(1, C, H, W), 3, gather_idx_left)[0]  # [C,H,W]
-
-        # Right eye
-        gather_idx_right = coords_right.unsqueeze(0).expand(C, H, W).unsqueeze(0)
-        sampled_right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
-
+    
+    # Convert depth to disparity
+    baseline_px = ipd_uv * W * 0.2  # Convert IPD from UV to pixels
+    disp = disparity_from_depth_tensor(depth, baseline_px=baseline_px, zero_parallax=0.5, depth_ratio=depth_ratio)
+    # Warp left and right views
+    left = warp_with_grid_sample_torch(img, disp, direction='left')
+    right = warp_with_grid_sample_torch(img, disp, direction='right')
+    
     # Aspect pad helper
     def pad_to_aspect_tensor(tensor, target_ratio=(16, 9)):
         _, h, w = tensor.shape
@@ -788,8 +841,8 @@ def make_sbs_core(rgb: torch.Tensor,
             return F.pad(tensor, (pad_left, new_w - w - pad_left, 0, 0))
 
     # Aspect pad & arrange SBS/TAB
-    left = pad_to_aspect_tensor(sampled_left)
-    right = pad_to_aspect_tensor(sampled_right)
+    left = pad_to_aspect_tensor(left[0])  # Remove batch dim
+    right = pad_to_aspect_tensor(right[0])
 
     if display_mode == "TAB":
         out = torch.cat([left, right], dim=1)
@@ -818,5 +871,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
     return sbs_tensor.to(torch.uint8).permute(1,2,0).contiguous().cpu().numpy()
 
 if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
+    # Compile the new functions for CUDA
+    disparity_from_depth_tensor = torch.compile(disparity_from_depth_tensor)
+    warp_with_grid_sample_torch = torch.compile(warp_with_grid_sample_torch)
     make_sbs_core = torch.compile(make_sbs_core)
-    

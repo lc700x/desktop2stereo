@@ -60,7 +60,7 @@ if USE_3D_MONITOR:
             # Initialize with default values
             self.title = "Stereo SBS Viewer"
             self.ipd_uv = ipd
-            self.depth_strength = 0.1
+            self.depth_strength = 0.2
             self.depth_ratio = depth_ratio
             self.depth_ratio_original = depth_ratio
             self._modes = ["Full-SBS", "Half-SBS", "TAB"]
@@ -138,7 +138,7 @@ if USE_3D_MONITOR:
             
             # Set up OpenGL context
             glfw.make_context_current(self.window)
-            glfw.swap_interval(0)  # VSync off for maximum performance
+            glfw.swap_interval(1)  # VSync off for maximum performance
             self.ctx = moderngl.create_context()
             
             # Precompile shaders and create VAO
@@ -546,7 +546,7 @@ else:
             self.window_size = (1280, 720)
             self.title = "Stereo SBS Viewer"
             self.ipd_uv = ipd
-            self.depth_strength = 0.1
+            self.depth_strength = 0.2
             self._last_window_position = None
             self._last_window_size = None
             self._fullscreen = False
@@ -609,7 +609,7 @@ else:
             
             # Set up OpenGL context
             glfw.make_context_current(self.window)
-            glfw.swap_interval(0)  # VSync off for maximum performance
+            glfw.swap_interval(1)  # VSync off for maximum performance
             self.ctx = moderngl.create_context()
             
             # Precompile shaders and create VAO

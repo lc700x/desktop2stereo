@@ -91,6 +91,12 @@ LOCAL_IP = get_local_ip()
 
 # Get settings
 RUN_MODE = settings["Run Mode"]
+# Add for 3D monitor
+USE_3D_MONITOR = False
+if RUN_MODE == "3D Monitor":
+    RUN_MODE = "Viewer"
+    USE_3D_MONITOR = True    
+
 MODEL_ID = settings["Depth Model"]
 ALL_MODELS = settings["Model List"]
 CACHE_PATH = settings["Download Path"]
@@ -119,5 +125,3 @@ DML_STREAM_STABLE = settings["Unlock Thread (Streamer)"] # Unlock thread for Dir
 USE_TORCH_COMPILE = settings["torch.compile"] # compile model with torch.compile
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
-
-USE_3D_MONITOR = True
