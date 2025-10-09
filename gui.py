@@ -163,7 +163,7 @@ DEFAULTS = {
     "Run Mode": "Viewer",
     "Streamer Host": None,
     "Streamer Port": DEFAULT_PORT,
-    "Stream Quality": 90
+    "Stream Quality": 100
 }
 
 UI_TEXTS = {
@@ -817,7 +817,9 @@ class ConfigGUI(tk.Tk):
         self.label_language.config(text=texts["Set Language:"])
         # Update run mode labels & combobox values
         self.label_run_mode.config(text=texts.get("Run Mode:", "Run Mode:"))
-        localized_run_vals = [texts.get("Viewer", "Viewer"), texts.get("Streamer", "Streamer"), texts.get("3D Monitor", "3D Monitor")]
+        localized_run_vals = [texts.get("Viewer", "Viewer"), texts.get("Streamer", "Streamer")]
+        if OS_NAME == "Windows":
+            localized_run_vals.append(texts.get("3D Monitor", "3D Monitor"))
         self.run_mode_cb["values"] = localized_run_vals
         # Add Inference Optimizer text update
         self.label_inference_optimizer.config(text=texts.get("Inference Optimizer:", "Inference Optimizer:"))
@@ -1062,6 +1064,8 @@ class ConfigGUI(tk.Tk):
         # Run mode + streamer settings
         if keep_optional:
             run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Viewer"))
+            if run_mode == "3D Monitor" and OS_NAME != "Windows":
+                run_mode = "Viewer"  # Fall back to Viewer on non-Windows
             self.run_mode_key = run_mode
         port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", DEFAULT_PORT))
         self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")

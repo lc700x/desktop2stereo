@@ -62,7 +62,7 @@ if USE_3D_MONITOR:
             # Initialize with default values
             self.title = "Stereo SBS Viewer"
             self.ipd_uv = ipd
-            self.depth_strength = 0.2
+            self.depth_strength = 0.1
             self.depth_ratio = depth_ratio
             self.depth_ratio_original = depth_ratio
             self._modes = ["Full-SBS", "Half-SBS", "TAB"]

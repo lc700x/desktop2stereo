@@ -770,8 +770,8 @@ def warp_with_grid_sample_torch(rgb_t, disp_t, direction='left', align_corners=T
         warped = torch.gather(rgb_t, 3, gather_idx)
         return warped
     
-    # For CUDA devices, use optimized grid_sample
-    elif "CUDA" in DEVICE_INFO:
+    # For CUDA/MPS devices, use optimized grid_sample
+    else:
         # Prepare coordinate grid
         xs = torch.linspace(0, W-1, W, device=disp_t.device, dtype=disp_t.dtype).view(1, W).expand(H, W)
         ys = torch.linspace(0, H-1, H, device=disp_t.device, dtype=disp_t.dtype).view(H, 1).expand(H, W)
@@ -790,20 +790,21 @@ def warp_with_grid_sample_torch(rgb_t, disp_t, direction='left', align_corners=T
         grid = torch.stack((nx, ny), dim=2).unsqueeze(0)  # 1xHxWx2
         
         # Run grid_sample
-        return F.grid_sample(rgb_t, grid, mode='bilinear', padding_mode='zeros', align_corners=align_corners)
+        if "CUDA" in DEVICE_INFO or "MPS" in DEVICE_INFO:
+            return F.grid_sample(rgb_t, grid, mode='bilinear', padding_mode='zeros', align_corners=align_corners)
     
-    # Fallback for other devices (MPS/CPU)
-    else:
-        # Handle dtype conversion for non-CUDA devices
-        if rgb_t.device.type != 'cuda' and rgb_t.dtype == torch.float16:
-            rgb_fp32 = rgb_t.to(dtype=torch.float32)
-            grid_fp32 = grid.to(dtype=torch.float32)
-            sampled = F.grid_sample(rgb_fp32, grid_fp32, mode='bilinear',
-                                    padding_mode='zeros', align_corners=align_corners)
-            return sampled.to(dtype=rgb_t.dtype)
+        # Fallback for other devices (MPS/CPU)
         else:
-            return F.grid_sample(rgb_t, grid, mode='bilinear',
-                                 padding_mode='zeros', align_corners=align_corners)
+            # Handle dtype conversion for non-CUDA devices
+            if rgb_t.device.type != 'cuda' and rgb_t.dtype == torch.float16:
+                rgb_fp32 = rgb_t.to(dtype=torch.float32)
+                grid_fp32 = grid.to(dtype=torch.float32)
+                sampled = F.grid_sample(rgb_fp32, grid_fp32, mode='bilinear',
+                                        padding_mode='zeros', align_corners=align_corners)
+                return sampled.to(dtype=rgb_t.dtype)
+            else:
+                return F.grid_sample(rgb_t, grid, mode='bilinear',
+                                    padding_mode='zeros', align_corners=align_corners)
 
 
 # Updated make_sbs_core function using the new disparity functions
@@ -819,7 +820,7 @@ def make_sbs_core(rgb: torch.Tensor,
     img = rgb.unsqueeze(0)  # [1,C,H,W]
     
     # Convert depth to disparity
-    baseline_px = ipd_uv * W * 0.2  # Convert IPD from UV to pixels
+    baseline_px = ipd_uv * W * 0.1  # Convert IPD from UV to pixels
     disp = disparity_from_depth_tensor(depth, baseline_px=baseline_px, zero_parallax=0.5, depth_ratio=depth_ratio)
     # Warp left and right views
     left = warp_with_grid_sample_torch(img, disp, direction='left')
