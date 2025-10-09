@@ -246,11 +246,11 @@ elif OS_NAME == "Darwin":
                 if bounds:
                     return int(bounds.get("X",0)), int(bounds.get("Y",0)), int(bounds.get("Width",0)), int(bounds.get("Height",0))
         return None
-
+    
     # Cursor loader with caching & precomputation
     def get_cursor_image_and_hotspot():
         """
-        Retrieve current system cursor image (BGRA uint8 numpy) and hotspot, but also
+        Retrieve current system cursor image (BGRA uint8 numpy) and hotspot, also
         return precomputed helpers for fast per-frame overlay:
         - cursor_bgra: original BGRA uint8 (H,W,4)
         - hotspot: (x,y) in pixels
@@ -267,46 +267,36 @@ elif OS_NAME == "Darwin":
             if ns_image is None:
                 return None, None, None, None
 
-            # hotspot in points -> pixels
+            # Get hotspot in pixels
             hot_pt = cursor.hotSpot()
-            hotspot_x = hot_pt.x
-            hotspot_y = hot_pt.y 
+            hotspot = (hot_pt.x, hot_pt.y)
 
-            tiff = ns_image.TIFFRepresentation()
-            if tiff is None:
+            # Get TIFF representation
+            tiff_data = ns_image.TIFFRepresentation()
+            if tiff_data is None:
                 return None, None, None, None
-            bitmap = NSBitmapImageRep.imageRepWithData_(tiff)
+
+            bitmap = NSBitmapImageRep.imageRepWithData_(tiff_data)
             if bitmap is None:
                 return None, None, None, None
 
+            # Convert to PNG bytes for PIL
             png_data = bitmap.representationUsingType_properties_(NSPNGFileType, None)
             if png_data is None:
                 return None, None, None, None
-            # Get current cursor
-            
-            cursor = NSCursor.currentSystemCursor()
-            image = cursor.image()
-            bitmap_rep = NSBitmapImageRep.imageRepWithData_(image.TIFFRepresentation())
-            png_data = bitmap_rep.representationUsingType_properties_(NSPNGFileType, None)
-            buffer = io.BytesIO(png_data)
-            img_array = Image.open(buffer)
-            rgba = np.array(img_array)
+
+            # Load image once
+            img = Image.open(io.BytesIO(png_data)).convert("RGBA")
+            rgba = np.array(img)  # H x W x 4
+
+            # Convert to BGRA for OpenCV
             bgra = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)
 
-            buf = io.BytesIO(png_data)
-            pil_img = Image.open(buf).convert("RGBA")
-            rgba = np.array(pil_img)  # H x W x 4 (RGBA)
+            # Compute alpha and premultiplied BGR
+            alpha = bgra[:, :, 3].astype(np.float32) / 255.0
+            premultiplied_bgr = bgra[:, :, :3].astype(np.float32) * alpha[:, :, None]
 
-            # Convert to BGRA uint8 (same memory layout as OpenCV expects)
-            bgra = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)  # uint8
-
-            # Precompute alpha (float32 [0..1]) and premultiplied BGR (float32)
-            alpha = (bgra[:, :, 3].astype(np.float32) / 255.0)  # H x W float32
-            # convert BGR channels to float32 and premultiply by alpha: (B,G,R) * alpha
-            bgr = bgra[:, :, :3].astype(np.float32)
-            premultiplied = bgr * alpha[:, :, None]  # H x W x 3 float32
-
-            return bgra, (hotspot_x, hotspot_y), alpha, premultiplied
+            return bgra, hotspot, alpha, premultiplied_bgr
 
         except Exception:
             return None, None, None, None
@@ -318,24 +308,38 @@ elif OS_NAME == "Darwin":
         return loc.x, loc.y
 
     # Fast overlay using cached premultiplied data
-    def overlay_cursor_on_frame(frame_bgr, cursor_bgra, hotspot, cursor_pos, alpha_f32=None, premultiplied_bgr_f32=None):
+    def overlay_cursor_on_frame(frame_bgr, cursor_bgra, hotspot, cursor_pos,
+                                alpha_f32=None, premultiplied_bgr_f32=None):
         """
-        Fast overlay of cursor_bgra onto frame_bgr.
+        Fast overlay of cursor_bgra onto frame_bgr (modified in-place).
 
-        frame_bgr: HxW x 3 uint8, modified in place and returned
-        cursor_bgra: full cursor BGRA uint8 array (or None)
-        hotspot: (hot_x, hot_y) in pixels
-        cursor_pos: (x, y) in frame coordinates
-        alpha_f32, premultiplied_bgr_f32: optional precomputed arrays returned by get_cursor_image_and_hotspot
+        Parameters
+        ----------
+        frame_bgr : (H,W,3) uint8
+            Destination frame (modified in place).
+        cursor_bgra : (h,w,4) uint8 or None
+            Cursor image in BGRA, or None to draw fallback dot.
+        hotspot : (hot_x, hot_y)
+            Cursor hotspot in pixels.
+        cursor_pos : (x, y)
+            Cursor center position in frame coordinates.
+        alpha_f32 : (h,w) float32, optional
+            Precomputed alpha in [0..1].
+        premultiplied_bgr_f32 : (h,w,3) float32, optional
+            Precomputed (BGR * alpha).
+
+        Returns
+        -------
+        frame_bgr : same object, with cursor blended in.
         """
-        h_frame, w_frame = frame_bgr.shape[:2]
-        x_cv, y_cv = cursor_pos
-
+        # Fast fallback if no cursor
         if cursor_bgra is None:
-            # fallback dot (very cheap)
-            cv2.circle(frame_bgr, (x_cv, y_cv), 8, (0, 0, 255), -1)
+            x_cv, y_cv = cursor_pos
+            cv2.circle(frame_bgr, (int(round(x_cv)), int(round(y_cv))), 8, (0, 0, 255), -1)
             return frame_bgr
 
+        h_frame, w_frame = frame_bgr.shape[:2]
+        x_cv, y_cv = cursor_pos
         cur_h, cur_w = cursor_bgra.shape[:2]
         hot_x, hot_y = hotspot
 
@@ -349,56 +353,73 @@ elif OS_NAME == "Darwin":
         y1 = min(top_left_y + cur_h, h_frame)
 
         if x0 >= x1 or y0 >= y1:
+            # fully outside
             return frame_bgr
 
-        # source rectangle inside the cursor image
         src_x0 = x0 - top_left_x
         src_y0 = y0 - top_left_y
         src_x1 = src_x0 + (x1 - x0)
         src_y1 = src_y0 + (y1 - y0)
 
-        dst_region = frame_bgr[y0:y1, x0:x1]  # view (H_roi, W_roi, 3), uint8
+        dst_region = frame_bgr[y0:y1, x0:x1]                         # uint8 view
 
-        # If precomputed premultiplied is available, use it; otherwise make minimal local copies
+        # Use precomputed arrays if available (avoid recompute)
         if premultiplied_bgr_f32 is not None and alpha_f32 is not None:
             src_premult = premultiplied_bgr_f32[src_y0:src_y1, src_x0:src_x1]  # float32
-            alpha_roi = alpha_f32[src_y0:src_y1, src_x0:src_x1]  # float32
+            alpha_roi = alpha_f32[src_y0:src_y1, src_x0:src_x1]               # float32
+            src_region = None
         else:
-            # Minimal local computation if not precomputed (still faster than repeated heavy numpy casts)
-            src_region = cursor_bgra[src_y0:src_y1, src_x0:src_x1]  # uint8 BGRA
-            alpha_roi = src_region[:, :, 3].astype(np.float32) / 255.0
-            src_premult = src_region[:, :, :3].astype(np.float32) * alpha_roi[:, :, None]
+            src_region = cursor_bgra[src_y0:src_y1, src_x0:src_x1]   # uint8 BGRA
+            # compute alpha and premultiplied only for roi
+            alpha_roi = src_region[:, :, 3].astype(np.float32, copy=False) / 255.0
+            src_premult = src_region[:, :, :3].astype(np.float32, copy=False) * alpha_roi[..., None]
 
-        # Fast path: if alpha is binary (only 0 or 1), we can avoid blending cost -> use copy / mask
-        # Check quickly by testing min/max of alpha_roi with small thresholds
+        # quick checks
         a_min = float(alpha_roi.min())
         a_max = float(alpha_roi.max())
-        if a_min >= 0.999:  # fully opaque -> direct copy
-            dst_region[:, :, :] = src_premult.astype(np.uint8)
+
+        if a_max <= 1e-6:
+            # fully transparent ROI -> nothing to do
             return frame_bgr
-        elif a_max <= 1e-6:  # fully transparent -> nothing to do
+
+        if a_min >= 0.999:
+            # fully opaque ROI -> direct copy (fastest path)
+            if src_region is not None:
+                dst_region[:, :, :] = src_region[:, :, :3]   # uint8 copy
+            else:
+                # premultiplied may be float; round to uint8
+                np.copyto(dst_region, np.clip(src_premult + 0.5, 0, 255).astype(np.uint8))
             return frame_bgr
 
-        # General alpha blend using OpenCV native operations (float32)
-        # dst_scaled = dst * (1 - alpha)
-        dst_f32 = dst_region.astype(np.float32)
+        # General blending:
+        # res = src_premult + dst * (1 - alpha)
+        # Avoid cv2.merge; use broadcasting
+        dst_f32 = dst_region.astype(np.float32, copy=False)
 
-        # Build one_minus_alpha 3-channel float32 by merging
-        one_minus_alpha = (1.0 - alpha_roi).astype(np.float32)
-        one_minus_alpha_3 = cv2.merge([one_minus_alpha, one_minus_alpha, one_minus_alpha])  # float32
+        one_minus = (1.0 - alpha_roi)[..., None]   # shape HxWx1 float32
+        # compute dst * (1-alpha) in-place into a temporary f32 array
+        res_f32 = dst_f32 * one_minus             # broadcasting, new array
+        # Add src_premult (float32) into res_f32
+        np.add(res_f32, src_premult, out=res_f32)
 
-        # Multiply in C (fast)
-        dst_scaled = np.empty_like(dst_f32)
-        cv2.multiply(dst_f32, one_minus_alpha_3, dst_scaled)  # dst * (1-alpha)
+        # clip + cast back to uint8
+        np.clip(res_f32, 0, 255, out=res_f32)
+        res_uint8 = res_f32.astype(np.uint8, copy=False)
 
-        # result = src_premult + dst_scaled
-        res_f32 = dst_scaled
-        cv2.add(src_premult, dst_scaled, res_f32)  # in-place add into res_f32
+        # For pixels that are effectively opaque, ensure exact copy (avoid rounding differences)
+        if a_max >= 0.999 or np.any(alpha_roi >= 0.999):
+            # mask of opaque pixels
+            mask_opaque = (alpha_roi >= 0.999)
+            if mask_opaque.any():
+                if src_region is not None:
+                    res_uint8[mask_opaque] = src_region[:, :, :3][mask_opaque]
+                else:
+                    res_uint8[mask_opaque] = np.clip(src_premult + 0.5, 0, 255).astype(np.uint8)[mask_opaque]
 
-        # Write result back to frame (convert to uint8)
-        # Use round and clip via convertScaleAbs can be used, but we'll cast safely
-        np.copyto(dst_region, np.clip(res_f32, 0, 255).astype(np.uint8))
+        # write back
+        np.copyto(dst_region, res_uint8)
         return frame_bgr
+
 
     class DesktopGrabber:
         def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, with_cursor=True):
