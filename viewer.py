@@ -548,7 +548,7 @@ else:
             self.window_size = (1280, 720)
             self.title = "Stereo SBS Viewer"
             self.ipd_uv = ipd
-            self.depth_strength = 0.2
+            self.depth_strength = 0.1
             self._last_window_position = None
             self._last_window_size = None
             self._fullscreen = False

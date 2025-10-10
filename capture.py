@@ -212,7 +212,7 @@ if OS_NAME == "Windows":
             """
             if self.capture_mode != "Monitor":
                 self._ensure_camera_matches_window()  # Ensure camera is up to date for window capture
-            img_array, _ = self.camera.get_bgr_frame()
+            img_array, _ = self.camera.get_rgb_frame()
             return img_array, self.scaled_height
 
         def close(self):
@@ -539,7 +539,8 @@ elif OS_NAME == "Darwin":
                 self.cursor_hotspot = (0, 0)
                 self.cursor_alpha = None
                 self.cursor_premultiplied = None
-            return frame_bgr, self.scaled_height
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            return frame_rgb, self.scaled_height
 
 
 elif OS_NAME.startswith("Linux"):
@@ -693,5 +694,6 @@ elif OS_NAME.startswith("Linux"):
                 
             monitor = {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
             shot = self._mss.grab(monitor)
-            frame_bgr = np.asarray(shot)
-            return frame_bgr, self.scaled_height
+            arr = np.asarray(shot)
+            frame_rgb = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
+            return frame_rgb, self.scaled_height

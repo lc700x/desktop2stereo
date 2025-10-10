@@ -220,17 +220,16 @@ def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
     t = t / 255.0
     return t
 
-def process(img_bgr: np.ndarray, height) -> np.ndarray:
+def process(frame_rgb: np.ndarray, height) -> np.ndarray:
     """
     Resize BGR/UMat numpy image to target height, keeping aspect ratio.
     """
-    if isinstance(img_bgr, cv2.UMat):
-        img_bgr = img_bgr.get()
-    h0 = img_bgr.shape[0]
+    if isinstance(frame_rgb, cv2.UMat):
+        frame_rgb = frame_rgb.get()
+    h0 = frame_rgb.shape[0]
     if height < h0:
-        width = int(img_bgr.shape[1] / h0 * height)
-        img_bgr = cv2.resize(img_bgr, (width, height), interpolation=cv2.INTER_AREA)
-    frame_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGRA2RGB)
+        width = int(frame_rgb.shape[1] / h0 * height)
+        frame_rgb = cv2.resize(frame_rgb, (width, height), interpolation=cv2.INTER_AREA)
     return frame_rgb
 
 def normalize_tensor(tensor):
@@ -618,7 +617,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     """
     h, w = image_rgb.shape[:2]
     if return_tuple:
-        tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)
+        tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=MODEL_DTYPE, non_blocking=True)
         rgb_c = tensor.permute(2,0,1).contiguous()  # [C,H,W]
         tensor = rgb_c.unsqueeze(0) / 255.0
         tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=True)
