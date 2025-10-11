@@ -1,7 +1,6 @@
 import threading
 import queue
-import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, IPD, FPS, DEPTH_STRENTH, SHOW_FPS, STREAM_PORT
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, IPD, FPS, DEPTH_STRENGTH
 from capture import DesktopGrabber
 from depth import predict_depth_tensor, process, make_sbs
 from streamer import WebRTCStreamer
@@ -79,7 +78,7 @@ def main():
                     rgb,
                     depth,
                     ipd_uv=IPD,
-                    depth_strength=DEPTH_STRENTH,
+                    depth_strength=DEPTH_STRENGTH,
                     display_mode=DISPLAY_MODE
                 )
 

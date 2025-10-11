@@ -1,7 +1,7 @@
 import threading
 import queue
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, IPD, FPS, DEPTH_STRENTH, SHOW_FPS, STREAM_PORT
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, IPD, FPS, DEPTH_STRENGTH, SHOW_FPS, STREAM_PORT
 from capture import DesktopGrabber
 from depth import predict_depth_tensor, process, make_sbs_tensor
 from streamer import MJPEGStreamer
@@ -79,7 +79,7 @@ def main():
         while True:
             try:
                 rgb, depth = depth_q.get(timeout = TIME_SLEEP)
-                sbs = make_sbs_tensor(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENTH, display_mode = DISPLAY_MODE)
+                sbs = make_sbs_tensor(rgb, depth, ipd_uv=IPD, depth_strength=DEPTH_STRENGTH, display_mode = DISPLAY_MODE)
                 jpg = streamer.encode_jpeg(sbs)
                 # push into the HTTP MJPEG server
                 streamer.set_frame(jpg)

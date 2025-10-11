@@ -2,108 +2,155 @@ import threading
 import queue
 import glfw
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, DML_STREAM_STABLE
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, DML_STREAM_STABLE
 from capture import DesktopGrabber
 from depth import process, predict_depth
+import torch
 
+# Constants
+FPS = FPS  # Double the input FPS
+FRAME_INTERVAL = 0.5 / FPS
 
-# Use precise frame interval
-TIME_SLEEP = 1.0 / FPS
+def interpolate_depth_gpu(prev_depth, next_depth, alpha=0.5, device="cuda"):
+    """GPU linear interpolation for depth only"""
+    if not prev_depth.is_cuda:
+        prev_depth = prev_depth.to(device)
+    if not next_depth.is_cuda:
+        next_depth = next_depth.to(device)
+    return (1 - alpha) * prev_depth + alpha * next_depth
 
-# Queues with size=1 (latest-frame-only logic)
-raw_q = queue.Queue(maxsize=1)
-proc_q = queue.Queue(maxsize=1)
-depth_q = queue.Queue(maxsize=1)
+# Queues with appropriate buffering
+raw_q = queue.Queue(maxsize=2)
+proc_q = queue.Queue(maxsize=2)
+depth_q = queue.Queue(maxsize=2)
+interp_q = queue.Queue(maxsize=3)  # Need space for original + interpolated frames
 
 def put_latest(q, item):
-    """Put item into queue, dropping old one if needed (non-blocking)."""
-    if q.full():
-        try:
-            q.get_nowait()
-        except queue.Empty:
-            pass
+    """Thread-safe queue put with overwrite if full"""
     try:
+        if q.full():
+            q.get_nowait()
         q.put_nowait(item)
-    except queue.Full:
-        pass  # drop if race condition
+    except queue.Empty:
+        pass
 
 def capture_loop():
+    """High-speed capture thread"""
     cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS)
     while True:
         try:
             frame_raw, size = cap.grab()
-        except queue.Empty:
-            continue
+            put_latest(raw_q, (frame_raw, size, time.perf_counter()))
         except Exception:
-            continue
-        put_latest(raw_q, (frame_raw, size))
+            time.sleep(0.001)
 
 def process_loop():
+    """Frame processing thread"""
     while True:
         try:
-            frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
+            frame_raw, size, timestamp = raw_q.get(timeout=FRAME_INTERVAL)
+            frame_rgb = process(frame_raw, size)
+            put_latest(proc_q, (frame_rgb, timestamp))
         except queue.Empty:
             continue
-        frame_rgb = process(frame_raw, size)
-        put_latest(proc_q, frame_rgb)
 
 def main(mode="Viewer"):
+    # Start all processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
 
+    # Performance tracking
     frame_count = 0
     last_time = time.perf_counter()
-    current_fps = None
+    current_fps = 0
     total_frames = 0
     start_time = time.perf_counter()
-
-    streamer, window = None, None
 
     try:
         if mode == "Viewer":
             from viewer import StereoWindow
-
             def depth_loop():
+                """Depth prediction thread"""
                 while True:
                     try:
-                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        frame_rgb, timestamp = proc_q.get(timeout=FRAME_INTERVAL)
+                        depth = predict_depth(frame_rgb)
+                        put_latest(depth_q, (frame_rgb, depth, timestamp))
                     except queue.Empty:
                         continue
-                    depth = predict_depth(frame_rgb)
-                    put_latest(depth_q, (frame_rgb, depth))
 
+            def frame_generation_loop():
+                """Frame interpolation thread (depth only)"""
+                prev_depth, prev_time = None, None
+                
+                while True:
+                    try:
+                        # Get latest frame with timestamp
+                        rgb, depth, frame_time = depth_q.get(timeout=FRAME_INTERVAL)
+                        
+                        # Generate interpolated frame if we have previous frame
+                        if prev_depth is not None:
+                            # Calculate proper interpolation weight
+                            time_between_frames = frame_time - prev_time
+                            alpha = min(0.5, (time.perf_counter() - prev_time) / time_between_frames)
+                            
+                            # Generate interpolated depth (using current RGB frame)
+                            depth_mid = interpolate_depth_gpu(
+                                prev_depth, depth, 
+                                alpha=alpha,
+                                device=depth.device
+                            )
+                            put_latest(interp_q, (rgb, depth_mid, 'interpolated'))
+                        
+                        # Queue the original frame
+                        put_latest(interp_q, (rgb, depth, 'original'))
+                        prev_depth, prev_time = depth, frame_time
+                        
+                    except queue.Empty:
+                        continue
             threading.Thread(target=depth_loop, daemon=True).start()
-            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS)
-            print(f"[Main] Viewer Started")
+            threading.Thread(target=frame_generation_loop, daemon=True).start()
+            
+            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, 
+                                display_mode=DISPLAY_MODE, show_fps=SHOW_FPS)
+            print("[Main] Viewer Started")
+            
+            last_frame_time = time.perf_counter()
             while not glfw.window_should_close(window.window):
-                try:
-                    rgb, depth = depth_q.get_nowait()
-                    window.update_frame(rgb, depth)
-                    if SHOW_FPS:
+                # Frame pacing for target FPS
+                now = time.perf_counter()
+                if now - last_frame_time >= FRAME_INTERVAL:
+                    try:
+                        rgb, depth, _ = interp_q.get_nowait()
+                        window.update_frame(rgb, depth)
+                        
+                        # FPS calculation
                         frame_count += 1
                         total_frames += 1
-                        current_time = time.perf_counter()
-                        if current_time - last_time >= 1.0:
-                            current_fps = frame_count / (current_time - last_time)
+                        if now - last_time >= 1.0:
+                            current_fps = frame_count / (now - last_time)
                             frame_count = 0
-                            last_time = current_time
-                            glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {current_fps:.1f} | Depth: {window.depth_ratio:.1f}")
-                except queue.Empty:
-                    pass
+                            last_time = now
+                            if SHOW_FPS:
+                                title = f"Stereo Viewer | FPS: {current_fps:.1f}"
+                                glfw.set_window_title(window.window, title)
+                        
+                        last_frame_time = now
+                    except queue.Empty:
+                        pass
 
                 window.render()
                 glfw.swap_buffers(window.window)
                 glfw.poll_events()
 
             glfw.terminate()
-
         else:
             from depth import make_sbs, DEVICE_INFO
             BOOST = not (DML_STREAM_STABLE and "DirectML" in DEVICE_INFO)
             from streamer import MJPEGStreamer
             if BOOST:
                 def make_output(rgb, depth):
-                    return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, fps=current_fps)
+                    return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
             else:
                 sbs_q = queue.Queue(maxsize=1)
                 def make_output(rgb, depth):
@@ -112,24 +159,21 @@ def main(mode="Viewer"):
                 def sbs_loop():
                     while True:
                         try:
-                            rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+                            rgb, depth = depth_q.get(timeout=FRAME_INTERVAL)
                         except queue.Empty:
                             continue
-                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENTH, display_mode=DISPLAY_MODE, fps=current_fps)
+                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
                         put_latest(sbs_q, sbs)
-
-
 
             def depth_loop():
                 while True:
                     try:
-                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        frame_rgb, timestamp = proc_q.get(timeout=FRAME_INTERVAL)
                     except queue.Empty:
                         continue
                     depth, rgb = predict_depth(frame_rgb, return_tuple=True)
                     put_latest(depth_q, make_output(rgb, depth))
                     
-
             threading.Thread(target=depth_loop, daemon=True).start()
             if not BOOST:
                 threading.Thread(target=sbs_loop, daemon=True).start()
@@ -141,9 +185,10 @@ def main(mode="Viewer"):
             while True:
                 try:
                     if BOOST: # Fix for unstable dml runtime error
-                        sbs = depth_q.get(timeout=TIME_SLEEP)
+                        sbs = depth_q.get(timeout=FRAME_INTERVAL)
                     else:
-                        sbs = sbs_q.get(timeout=TIME_SLEEP)
+                        sbs = sbs_q.get(timeout=FRAME_INTERVAL)
+                    
                     streamer.set_frame(sbs)
                     if SHOW_FPS:
                         frame_count += 1
@@ -157,19 +202,16 @@ def main(mode="Viewer"):
                     continue
 
     except KeyboardInterrupt:
-        print("\n[Main] Shutting down…")
-
-    # except Exception as e:
-    #     print(e)
-    # finally:
-    #     if streamer:
-    #         streamer.stop()
-    #     if window:
-    #         glfw.terminate()
-    #     #     print(f"[Main] {mode} Stopped")
-    #     # total_time = time.perf_counter() - start_time
-    #     # avg_fps = frame_count / total_time if total_time > 0 else 0
-    #     # print(f"Average FPS: {avg_fps:.2f}")
+        print("\n[Main] Shutting down...")
+    finally:
+        if 'streamer' in locals():
+            streamer.stop()
+        if 'window' in locals():
+            glfw.terminate()
+        
+        total_time = time.perf_counter() - start_time
+        avg_fps = total_frames / total_time if total_time > 0 else 0
+        print(f"Average FPS: {avg_fps:.2f}")
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)
