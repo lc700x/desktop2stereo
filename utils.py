@@ -110,18 +110,18 @@ CAPTURE_MODE = settings["Capture Mode"]
 WINDOW_TITLE = settings["Window Title"]
 
 # Image Processing Parameters
-# FOREGROUND_SCALE = settings["Foreground Scale"] # 0-10
-FOREGROUND_SCALE = 1
+FOREGROUND_SCALE = settings["Foreground Scale"] # 0-10
 AA_STRENTH = settings["Anti-aliasing"] # 0-10
  
 # Adjust anti-aliasing and dept dilution value for Mac
 if OS_NAME != "Darwin":
-    AA_STRENTH *= 40 # 0-100
+    AA_STRENTH *= 4 # 0-100
 else:
-    AA_STRENTH *= 4
+    AA_STRENTH *= 0.4
 
 # Experimental Settings
-DML_STREAM_STABLE = settings["Unlock Thread (Streamer)"] # Unlock thread for DirectML streamer
+DML_BOOST = settings["Unlock Thread (Streamer)"] # Unlock thread for DirectML streamer
 USE_TORCH_COMPILE = settings["torch.compile"] # compile model with torch.compile
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
+KEEP_RATIO = False

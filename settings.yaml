@@ -1,9 +1,9 @@
 Capture Mode: Monitor
-Monitor Index: 2
+Monitor Index: 1
 Window Title: ''
 FPS: 60
 Show FPS: true
-Output Resolution: 2160
+Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
@@ -404,7 +404,7 @@ Language: EN
 Run Mode: Streamer
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: true
+torch.compile: false
 TensorRT: false
-Recompile TensorRT: true
+Recompile TensorRT: false
 Unlock Thread (Streamer): false

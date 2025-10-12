@@ -9,7 +9,7 @@ from threading import Lock
 from PIL import Image
 img  = Image.open("assets/cats.jpg").convert("RGB")
 image_rgb = np.array(img)
-AA_STRENTH = 4
+AA_STRENTH = 8
 DILATION_SIZE = 0
 FP16 = True
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -17,7 +17,7 @@ CACHE_PATH = "models"
 DEVICE_ID = 0
 MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 DEPTH_RESOLUTION = 336
-FOREGROUND_SCALE = 1
+FOREGROUND_SCALE = 3
 
 def get_device(index=0):
     try:
@@ -351,7 +351,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     """
     h, w = image_rgb.shape[:2]
     if return_tuple:
-        tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)
+        tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=MODEL_DTYPE, non_blocking=True)
         rgb_c = tensor.permute(2,0,1).contiguous()  # [C,H,W]
         tensor = rgb_c.unsqueeze(0) / 255.0
         tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=True)
@@ -377,7 +377,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
             depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=True)[0,0]
     
     # Robust normalize and Post depth processing
-    depth = apply_stretch(depth, 5, 95)
+    depth = apply_stretch(depth, 2, 98)
     
     # invert for metric models
     if 'Metric' in MODEL_ID:
@@ -394,14 +394,18 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     # Optional temporal stabilization (EMA)
     if use_temporal_smooth:
         depth = depth_stabilizer(depth)
-    
+        
+     # Interpolate output to original size
+    depth = F.interpolate(depth.unsqueeze(0).unsqueeze(0), size=(h, w), mode='bilinear', align_corners=True)
+    depth = depth.squeeze(0)
     if return_tuple:
         return depth, rgb_c
     else:
         return depth   
+   
 
 if __name__ == "__main__":
-    depth = predict_depth(image_rgb)
+    depth = predict_depth(image_rgb).squeeze(0)
 
     import matplotlib.pyplot as plt
     plt.imshow(depth.cpu().numpy(), cmap='inferno')

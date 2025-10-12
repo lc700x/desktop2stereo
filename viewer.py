@@ -6,7 +6,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, USE_3D_MONITOR
+from utils import OS_NAME, crop_icon, USE_3D_MONITOR, KEEP_RATIO
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
 
@@ -58,7 +58,7 @@ if USE_3D_MONITOR:
     class StereoWindow:
         """Optimized stereo viewer with performance improvements"""
         
-        def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", show_fps=True):
+        def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", keep_ratio=KEEP_RATIO, show_fps=True):
             # Initialize with default values
             self.title = "Stereo SBS Viewer"
             self.ipd_uv = ipd
@@ -69,6 +69,7 @@ if USE_3D_MONITOR:
             self.display_mode = display_mode
             self._texture_size = None
             self.monitor_index = 0
+            self.keep_ratio = keep_ratio
             self.show_fps = show_fps
             self.frame_size = (1280, 720)
             
@@ -448,102 +449,173 @@ if USE_3D_MONITOR:
             )
 
         def render(self):
-            """Render the stereo view"""
+            """Optimized rendering with reduced GL calls"""
             if not self.color_tex or not self.depth_tex:
                 return
-                
-            # Get window dimensions
+
+            # Get window dimensions once
             win_w, win_h = glfw.get_framebuffer_size(self.window)
             tex_w, tex_h = self._texture_size
             
-            # Clear screen
+            # Clear screen once
             self.ctx.clear(0.1, 0.1, 0.1)
             
-            # Bind textures
-            self.color_tex.use(location=0)
-            self.depth_tex.use(location=1)
+            if self.keep_ratio:
             
-            # Set common uniform values
-            self.prog['u_depth_strength'].value = self.depth_strength
             
-            if self.display_mode == "Full-SBS":
-                # Full Side-by-Side mode
-                src_w, src_h = tex_w, tex_h
-                max_w, max_h = win_w / 2.0, win_h
-                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-                center_y = win_h / 2.0
                 
-                # Left view
-                self.ctx.viewport = (
-                    int(win_w / 4.0 - render_w / 2),
-                    int(center_y - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                # Bind textures once
+                self.color_tex.use(location=0)
+                self.depth_tex.use(location=1)
                 
-                # Right view
-                self.ctx.viewport = (
-                    int(3 * win_w / 4.0 - render_w / 2),
-                    int(center_y - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                # Set common uniform values
+                self.prog['u_depth_strength'].value = self.depth_strength
+                
+                if self.display_mode == "Full-SBS":
+                    # Full Side-by-Side mode
+                    src_w, src_h = tex_w, tex_h
+                    max_w, max_h = win_w / 2.0, win_h
+                    render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+                    center_y = win_h / 2.0
+                    
+                    # Left view
+                    self.ctx.viewport = (
+                        int(win_w / 4.0 - render_w / 2),
+                        int(center_y - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                    
+                    # Right view
+                    self.ctx.viewport = (
+                        int(3 * win_w / 4.0 - render_w / 2),
+                        int(center_y - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-            elif self.display_mode == "Half-SBS":
-                # Half Side-by-Side mode
-                src_w, src_h = tex_w / 2.0, tex_h
-                max_w, max_h = win_w / 2.0, win_h
-                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-                center_y = win_h / 2.0
-                
-                # Left view
-                self.ctx.viewport = (
-                    int(win_w / 4.0 - render_w / 2),
-                    int(center_y - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-                
-                # Right view
-                self.ctx.viewport = (
-                    int(3 * win_w / 4.0 - render_w / 2),
-                    int(center_y - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                elif self.display_mode == "Half-SBS":
+                    # Half Side-by-Side mode
+                    src_w, src_h = tex_w / 2.0, tex_h
+                    max_w, max_h = win_w / 2.0, win_h
+                    render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+                    center_y = win_h / 2.0
+                    
+                    # Left view
+                    self.ctx.viewport = (
+                        int(win_w / 4.0 - render_w / 2),
+                        int(center_y - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                    
+                    # Right view
+                    self.ctx.viewport = (
+                        int(3 * win_w / 4.0 - render_w / 2),
+                        int(center_y - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-            elif self.display_mode == "TAB":
-                # Top-and-Bottom mode
-                src_w, src_h = tex_w, tex_h / 2.0
-                max_w, max_h = win_w, win_h / 2.0
-                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-                
-                # Top view
-                self.ctx.viewport = (
-                    int(win_w / 2.0 - render_w / 2),
-                    int(win_h / 4.0 - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-                
-                # Bottom view
-                self.ctx.viewport = (
-                    int(win_w / 2.0 - render_w / 2),
-                    int(3 * win_h / 4.0 - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                elif self.display_mode == "TAB":
+                    # Top-and-Bottom mode
+                    src_w, src_h = tex_w, tex_h / 2.0
+                    max_w, max_h = win_w, win_h / 2.0
+                    render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+                    
+                    # Top view
+                    self.ctx.viewport = (
+                        int(win_w / 2.0 - render_w / 2),
+                        int(win_h / 4.0 - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                    
+                    # Bottom view
+                    self.ctx.viewport = (
+                        int(win_w / 2.0 - render_w / 2),
+                        int(3 * win_h / 4.0 - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+            
+            else:
+                # Determine effective stereo frame size by display mode
+                if self.display_mode == "Full-SBS":
+                    disp_w, disp_h = 2 * tex_w, tex_h
+                elif self.display_mode == "Half-SBS":
+                    disp_w, disp_h = tex_w, tex_h
+                elif self.display_mode == "TAB":
+                    disp_w, disp_h = tex_w, tex_h
+                else:
+                    disp_w, disp_h = 2 * tex_w, tex_h  # default full SBS
+
+                target_aspect = disp_h / disp_w
+                window_aspect = win_h / win_w
+
+                # Scale to fit window, preserving aspect ratio
+                if window_aspect <= target_aspect:
+                    # Window is wider than content
+                    view_h = win_h
+                    view_w = int(view_h / target_aspect)
+                else:
+                    # Window is taller than content
+                    view_w = win_w
+                    view_h = int(view_w * target_aspect)
+
+                offset_x = (win_w - view_w) // 2
+                offset_y = (win_h - view_h) // 2
+
+                self.color_tex.use(location=0)
+                self.depth_tex.use(location=1)
+
+                if self.display_mode == "Full-SBS":
+                    # Left eye
+                    self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_depth_strength'].value = self.depth_strength
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                    # Right eye
+                    self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                elif self.display_mode == "Half-SBS":
+                    # Same as FULL but both squeezed into width
+                    self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_depth_strength'].value = self.depth_strength
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                    self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                elif self.display_mode == "TAB":
+                    # Top eye
+                    self.ctx.viewport = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_depth_strength'].value = self.depth_strength
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                    # Bottom eye
+                    self.ctx.viewport = (offset_x, offset_y, view_w, view_h // 2)
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                    
 else:
     class StereoWindow:
         """Optimized stereo viewer with performance improvements"""
         
-        def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", show_fps=True):
+        def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", keep_ratio=KEEP_RATIO, show_fps=True):
             # Initialize with default values
             self.window_size = (1280, 720)
             self.title = "Stereo SBS Viewer"
@@ -558,6 +630,7 @@ else:
             self.display_mode = display_mode
             self._texture_size = None
             self.monitor_index = 0
+            self.keep_ratio = keep_ratio
             self.show_fps = show_fps
             self.frame_size = (1280, 720)
             
@@ -978,7 +1051,7 @@ else:
             """Optimized rendering with reduced GL calls"""
             if not self.color_tex or not self.depth_tex:
                 return
-                
+
             # Get window dimensions once
             win_w, win_h = glfw.get_framebuffer_size(self.window)
             tex_w, tex_h = self._texture_size
@@ -986,84 +1059,153 @@ else:
             # Clear screen once
             self.ctx.clear(0.1, 0.1, 0.1)
             
-            # Bind textures once
-            self.color_tex.use(location=0)
-            self.depth_tex.use(location=1)
+            if self.keep_ratio:
             
-            # Set common uniform values
-            self.prog['u_depth_strength'].value = self.depth_strength
             
-            if self.display_mode == "Full-SBS":
-                # Full Side-by-Side mode
-                src_w, src_h = tex_w, tex_h
-                max_w, max_h = win_w / 2.0, win_h
-                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-                center_y = win_h / 2.0
                 
-                # Left view
-                self.ctx.viewport = (
-                    int(win_w / 4.0 - render_w / 2),
-                    int(center_y - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                # Bind textures once
+                self.color_tex.use(location=0)
+                self.depth_tex.use(location=1)
                 
-                # Right view
-                self.ctx.viewport = (
-                    int(3 * win_w / 4.0 - render_w / 2),
-                    int(center_y - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                # Set common uniform values
+                self.prog['u_depth_strength'].value = self.depth_strength
+                
+                if self.display_mode == "Full-SBS":
+                    # Full Side-by-Side mode
+                    src_w, src_h = tex_w, tex_h
+                    max_w, max_h = win_w / 2.0, win_h
+                    render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+                    center_y = win_h / 2.0
+                    
+                    # Left view
+                    self.ctx.viewport = (
+                        int(win_w / 4.0 - render_w / 2),
+                        int(center_y - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                    
+                    # Right view
+                    self.ctx.viewport = (
+                        int(3 * win_w / 4.0 - render_w / 2),
+                        int(center_y - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-            elif self.display_mode == "Half-SBS":
-                # Half Side-by-Side mode
-                src_w, src_h = tex_w / 2.0, tex_h
-                max_w, max_h = win_w / 2.0, win_h
-                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-                center_y = win_h / 2.0
-                
-                # Left view
-                self.ctx.viewport = (
-                    int(win_w / 4.0 - render_w / 2),
-                    int(center_y - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-                
-                # Right view
-                self.ctx.viewport = (
-                    int(3 * win_w / 4.0 - render_w / 2),
-                    int(center_y - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                elif self.display_mode == "Half-SBS":
+                    # Half Side-by-Side mode
+                    src_w, src_h = tex_w / 2.0, tex_h
+                    max_w, max_h = win_w / 2.0, win_h
+                    render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+                    center_y = win_h / 2.0
+                    
+                    # Left view
+                    self.ctx.viewport = (
+                        int(win_w / 4.0 - render_w / 2),
+                        int(center_y - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                    
+                    # Right view
+                    self.ctx.viewport = (
+                        int(3 * win_w / 4.0 - render_w / 2),
+                        int(center_y - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-            elif self.display_mode == "TAB":
-                # Top-and-Bottom mode
-                src_w, src_h = tex_w, tex_h / 2.0
-                max_w, max_h = win_w, win_h / 2.0
-                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-                
-                # Top view
-                self.ctx.viewport = (
-                    int(win_w / 2.0 - render_w / 2),
-                    int(win_h / 4.0 - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-                
-                # Bottom view
-                self.ctx.viewport = (
-                    int(win_w / 2.0 - render_w / 2),
-                    int(3 * win_h / 4.0 - render_h / 2),
-                    render_w, render_h
-                )
-                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                elif self.display_mode == "TAB":
+                    # Top-and-Bottom mode
+                    src_w, src_h = tex_w, tex_h / 2.0
+                    max_w, max_h = win_w, win_h / 2.0
+                    render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+                    
+                    # Top view
+                    self.ctx.viewport = (
+                        int(win_w / 2.0 - render_w / 2),
+                        int(win_h / 4.0 - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                    
+                    # Bottom view
+                    self.ctx.viewport = (
+                        int(win_w / 2.0 - render_w / 2),
+                        int(3 * win_h / 4.0 - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
 
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+            
+            else:
+                # Determine effective stereo frame size by display mode
+                if self.display_mode == "Full-SBS":
+                    disp_w, disp_h = 2 * tex_w, tex_h
+                elif self.display_mode == "Half-SBS":
+                    disp_w, disp_h = tex_w, tex_h
+                elif self.display_mode == "TAB":
+                    disp_w, disp_h = tex_w, tex_h
+                else:
+                    disp_w, disp_h = 2 * tex_w, tex_h  # default full SBS
+
+                target_aspect = disp_h / disp_w
+                window_aspect = win_h / win_w
+
+                # Scale to fit window, preserving aspect ratio
+                if window_aspect <= target_aspect:
+                    # Window is wider than content
+                    view_h = win_h
+                    view_w = int(view_h / target_aspect)
+                else:
+                    # Window is taller than content
+                    view_w = win_w
+                    view_h = int(view_w * target_aspect)
+
+                offset_x = (win_w - view_w) // 2
+                offset_y = (win_h - view_h) // 2
+
+                self.color_tex.use(location=0)
+                self.depth_tex.use(location=1)
+
+                if self.display_mode == "Full-SBS":
+                    # Left eye
+                    self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_depth_strength'].value = self.depth_strength
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                    # Right eye
+                    self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                elif self.display_mode == "Half-SBS":
+                    # Same as FULL but both squeezed into width
+                    self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_depth_strength'].value = self.depth_strength
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                    self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                elif self.display_mode == "TAB":
+                    # Top eye
+                    self.ctx.viewport = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_depth_strength'].value = self.depth_strength
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                    # Bottom eye
+                    self.ctx.viewport = (offset_x, offset_y, view_w, view_h // 2)
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)

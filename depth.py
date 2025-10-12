@@ -1,7 +1,7 @@
 # depth.py
 import torch
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, KEEP_RATIO
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -715,11 +715,8 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         with torch.no_grad():
             depth = model_wraper(tensor)
     
-    # Interpolate output to original size
-    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=True)
-    
     # Robust normalize and Post depth processing
-    depth = apply_stretch(depth, 5, 95)
+    depth = apply_stretch(depth, 2, 98)
     
     # invert for metric models
     if 'Metric' in MODEL_ID:
@@ -736,7 +733,10 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     # Optional temporal stabilization (EMA)
     if use_temporal_smooth:
         depth = depth_stabilizer(depth)
-    
+        
+     # Interpolate output to original size
+    depth = F.interpolate(depth.unsqueeze(0).unsqueeze(0), size=(h, w), mode='bilinear', align_corners=True)
+    depth = depth.squeeze(0)
     if return_tuple:
         return depth, rgb_c
     else:
@@ -799,6 +799,7 @@ def make_sbs_core(rgb: torch.Tensor,
                   ipd_uv=0.064,
                   depth_ratio=1.0,
                   display_mode="Half-SBS",
+                  keep_ratio=KEEP_RATIO,
                   device=DEVICE) -> torch.Tensor:
     """
     Core tensor operations for side-by-side stereo.
@@ -827,9 +828,9 @@ def make_sbs_core(rgb: torch.Tensor,
         grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
         grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
 
-        sampled_left = F.grid_sample(img, grid_left, mode="bilinear",
+        left = F.grid_sample(img, grid_left, mode="bilinear",
                                      padding_mode="border", align_corners=True)[0]
-        sampled_right = F.grid_sample(img, grid_right, mode="bilinear",
+        right = F.grid_sample(img, grid_right, mode="bilinear",
                                       padding_mode="border", align_corners=True)[0]
 
     # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
@@ -840,11 +841,11 @@ def make_sbs_core(rgb: torch.Tensor,
 
         # Left eye
         gather_idx_left = coords_left.unsqueeze(0).expand(C, H, W).unsqueeze(0)  # [1,C,H,W]
-        sampled_left = torch.gather(img.expand(1, C, H, W), 3, gather_idx_left)[0]  # [C,H,W]
+        left = torch.gather(img.expand(1, C, H, W), 3, gather_idx_left)[0]  # [C,H,W]
 
         # Right eye
         gather_idx_right = coords_right.unsqueeze(0).expand(C, H, W).unsqueeze(0)
-        sampled_right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
+        right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
 
     # Aspect pad helper
     def pad_to_aspect_tensor(tensor, target_ratio=(16, 9)):
@@ -863,8 +864,9 @@ def make_sbs_core(rgb: torch.Tensor,
             return F.pad(tensor, (pad_left, new_w - w - pad_left, 0, 0))
 
     # Aspect pad & arrange SBS/TAB
-    left = pad_to_aspect_tensor(sampled_left)
-    right = pad_to_aspect_tensor(sampled_right)
+    if keep_ratio:
+        left = pad_to_aspect_tensor(left)
+        right = pad_to_aspect_tensor(right)
 
     if display_mode == "TAB":
         out = torch.cat([left, right], dim=1)
