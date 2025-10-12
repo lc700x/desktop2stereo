@@ -8,7 +8,6 @@ from depth import process, predict_depth
 import torch
 
 # Constants
-FPS = FPS  # Double the input FPS
 FRAME_INTERVAL = 0.5 / FPS
 
 def interpolate_depth_gpu(prev_depth, next_depth, alpha=0.5, device="cuda"):
@@ -23,7 +22,7 @@ def interpolate_depth_gpu(prev_depth, next_depth, alpha=0.5, device="cuda"):
 raw_q = queue.Queue(maxsize=2)
 proc_q = queue.Queue(maxsize=2)
 depth_q = queue.Queue(maxsize=2)
-interp_q = queue.Queue(maxsize=3)  # Need space for original + interpolated frames
+interp_q = queue.Queue(maxsize=3)  # Need space for original + interpolated frames (used in both viewer and streamer modes)
 
 def put_latest(q, item):
     """Thread-safe queue put with overwrite if full"""
@@ -148,6 +147,50 @@ def main(mode="Viewer"):
             from depth import make_sbs, DEVICE_INFO
             BOOST = not (DML_STREAM_STABLE and "DirectML" in DEVICE_INFO)
             from streamer import MJPEGStreamer
+            
+            # Modified to support frame generation
+            def depth_loop():
+                """Depth prediction thread"""
+                while True:
+                    try:
+                        frame_rgb, timestamp = proc_q.get(timeout=FRAME_INTERVAL)
+                        depth, rgb = predict_depth(frame_rgb, return_tuple=True)
+                        put_latest(depth_q, (rgb, depth, timestamp))  # Include timestamp for interpolation
+                    except queue.Empty:
+                        continue
+
+            # NEW: Frame generation loop for streamer mode
+            def frame_generation_loop():
+                """Frame interpolation thread for streamer mode (depth only)"""
+                prev_depth, prev_time = None, None
+                
+                while True:
+                    try:
+                        # Get latest frame with timestamp
+                        rgb, depth, frame_time = depth_q.get(timeout=FRAME_INTERVAL)
+                        
+                        # Generate interpolated frame if we have previous frame
+                        if prev_depth is not None:
+                            # Calculate proper interpolation weight
+                            time_between_frames = frame_time - prev_time
+                            alpha = min(0.5, (time.perf_counter() - prev_time) / time_between_frames)
+                            
+                            # Generate interpolated depth (using current RGB frame)
+                            depth_mid = interpolate_depth_gpu(
+                                prev_depth, depth, 
+                                alpha=alpha,
+                                device=depth.device
+                            )
+                            put_latest(interp_q, (rgb, depth_mid, 'interpolated'))
+                        
+                        # Queue the original frame
+                        put_latest(interp_q, (rgb, depth, 'original'))
+                        prev_depth, prev_time = depth, frame_time
+                        
+                    except queue.Empty:
+                        continue
+
+            # Modified SBS generation to handle interpolated frames
             if BOOST:
                 def make_output(rgb, depth):
                     return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
@@ -159,22 +202,15 @@ def main(mode="Viewer"):
                 def sbs_loop():
                     while True:
                         try:
-                            rgb, depth = depth_q.get(timeout=FRAME_INTERVAL)
+                            rgb, depth, _ = interp_q.get(timeout=FRAME_INTERVAL)  # Use interp_q
+                            sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
+                            put_latest(sbs_q, sbs)
                         except queue.Empty:
                             continue
-                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
-                        put_latest(sbs_q, sbs)
 
-            def depth_loop():
-                while True:
-                    try:
-                        frame_rgb, timestamp = proc_q.get(timeout=FRAME_INTERVAL)
-                    except queue.Empty:
-                        continue
-                    depth, rgb = predict_depth(frame_rgb, return_tuple=True)
-                    put_latest(depth_q, make_output(rgb, depth))
-                    
+            # Start depth and frame generation threads
             threading.Thread(target=depth_loop, daemon=True).start()
+            threading.Thread(target=frame_generation_loop, daemon=True).start()  # NEW: Start frame generation
             if not BOOST:
                 threading.Thread(target=sbs_loop, daemon=True).start()
             
@@ -184,8 +220,9 @@ def main(mode="Viewer"):
             
             while True:
                 try:
-                    if BOOST: # Fix for unstable dml runtime error
-                        sbs = depth_q.get(timeout=FRAME_INTERVAL)
+                    if BOOST:
+                        rgb, depth, _ = interp_q.get(timeout=FRAME_INTERVAL)  # Use interp_q
+                        sbs = make_output(rgb, depth)
                     else:
                         sbs = sbs_q.get(timeout=FRAME_INTERVAL)
                     
