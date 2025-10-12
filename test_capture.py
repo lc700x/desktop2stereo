@@ -1,15 +1,16 @@
 import cv2
 from time import sleep
-from utils import WINDOW_TITLE, CAPTURE_MODE, MONITOR_INDEX
+from utils import WINDOW_TITLE, CAPTURE_MODE, MONITOR_INDEX, OUTPUT_RESOLUTION, FPS
 from capture import DesktopGrabber
 
 
 def main():
     grabber = DesktopGrabber(
-        output_resolution=720,   # scale height
-        fps=30,
+        output_resolution=OUTPUT_RESOLUTION,   # scale height
+        fps=FPS,
         window_title=WINDOW_TITLE,
-        capture_mode=CAPTURE_MODE
+        capture_mode=CAPTURE_MODE,
+        monitor_index=MONITOR_INDEX
     )
 
     while True:
