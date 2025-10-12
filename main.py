@@ -5,18 +5,21 @@ import time
 from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, DML_STREAM_STABLE
 from capture import DesktopGrabber
 from depth import process, predict_depth
-import torch
 
 # Constants
-FRAME_INTERVAL = 0.5 / FPS
+FRAMES = 1
+FRAME_INTERVAL = 1 / (FPS * (FRAMES +1))
 
 def interpolate_depth_gpu(prev_depth, next_depth, alpha=0.5, device="cuda"):
-    """GPU linear interpolation for depth only"""
-    if not prev_depth.is_cuda:
-        prev_depth = prev_depth.to(device)
-    if not next_depth.is_cuda:
-        next_depth = next_depth.to(device)
-    return (1 - alpha) * prev_depth + alpha * next_depth
+    try:
+        """GPU linear interpolation for depth only"""
+        if not prev_depth.is_cuda:
+            prev_depth = prev_depth.to(device)
+        if not next_depth.is_cuda:
+            next_depth = next_depth.to(device)
+        return (1 - alpha) * prev_depth + alpha * next_depth
+    except RuntimeError:
+        return prev_depth
 
 # Queues with appropriate buffering
 raw_q = queue.Queue(maxsize=2)
@@ -136,6 +139,9 @@ def main(mode="Viewer"):
                         
                         last_frame_time = now
                     except queue.Empty:
+                        pass
+                    except Exception as e:
+                        # print(f"[Warning]: {e}")
                         pass
 
                 window.render()

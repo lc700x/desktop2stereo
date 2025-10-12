@@ -2,6 +2,15 @@
 import torch
 torch.set_num_threads(1)
 from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT
+import torch.nn.functional as F
+from transformers import AutoModelForDepthEstimation
+import numpy as np
+from threading import Lock
+import cv2
+import os, warnings
+
+USE_FA = True
+
 # Initialize DirectML Device
 def get_device(index=0):
     try:
@@ -31,17 +40,83 @@ if torch.cuda.is_available():
     torch.backends.cudnn.allow_tf32 = True
     # Enable TF32 matrix multiplication for better performance
     torch.set_float32_matmul_precision('high')
+    # Enable math attention
+    torch.backends.cuda.enable_flash_sdp(True)
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    torch.backends.cuda.enable_math_sdp(True)
+    
+    # deploy flash attention
+    from flash_attn import flash_attn_func
+    def supports_flash_attention(device_id):
+        """Check if a GPU supports FlashAttention."""
+        major, minor = torch.cuda.get_device_capability(device_id)
+        
+        # Check if the GPU architecture is Ampere (SM 8.x) or newer (SM 9.0)
+        is_sm8x = major >= 8 and minor >= 0
+        is_sm90 = major >= 9 and minor >= 0
+
+        return is_sm8x or is_sm90
+    
+    def flash_scaled_dot_product_attention(
+        query,
+        key,
+        value,
+        attn_mask=None,
+        dropout_p=0.0,
+        is_causal=False,
+        *args,
+        **kwargs
+    ):
+        """
+        A universal wrapper for torch.nn.functional.scaled_dot_product_attention
+        that transparently uses FlashAttention if available.
+
+        Extra args/kwargs (like 'scale', 'dropout_mask', etc.) are ignored safely.
+        """
+        # Handle optional scale parameter gracefully
+        scale = kwargs.pop("scale", None)
+
+        if USE_FA and query.is_cuda:
+            try:
+                q, k, v = query, key, value
+
+                # Enforce dtype compatibility
+                if q.dtype not in (torch.float16, torch.bfloat16):
+                    q = q.to(torch.float16)
+                    k = k.to(torch.float16)
+                    v = v.to(torch.float16)
+
+                # FlashAttention expects 4D input: [batch, seq, nheads, head_dim]
+                out = flash_attn_func(q, k, v, dropout_p=dropout_p, causal=is_causal)
+                return out
+            except Exception as e:
+                print(f"FlashAttention failed: {type(e).__name__}: {e}")
+                print("Falling back to PyTorch SDPA.")
+
+        # Fall back to PyTorch SDPA with scale (if provided)
+        if scale is not None:
+            with torch.nn.attention.sdpa_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
+                return F.scaled_dot_product_attention(
+                    query, key, value,
+                    attn_mask=attn_mask,
+                    dropout_p=dropout_p,
+                    is_causal=is_causal,
+                    scale=scale
+                )
+        else:
+            return F.scaled_dot_product_attention(
+                query, key, value,
+                attn_mask=attn_mask,
+                dropout_p=dropout_p,
+                is_causal=is_causal
+            )
+    if supports_flash_attention(device_id=DEVICE_ID):
+        F.scaled_dot_product_attention = flash_scaled_dot_product_attention
+    
 
 print(DEVICE_INFO)
 print(f"Model: {MODEL_ID}")
 
-
-import torch.nn.functional as F
-from transformers import AutoModelForDepthEstimation
-import numpy as np
-from threading import Lock
-import cv2
-import os, warnings
 
 if USE_TORCH_COMPILE and torch.cuda.is_available():
     warnings.filterwarnings(

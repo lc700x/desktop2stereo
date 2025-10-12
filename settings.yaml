@@ -1,9 +1,9 @@
 Capture Mode: Monitor
-Monitor Index: 1
+Monitor Index: 2
 Window Title: ''
 FPS: 60
 Show FPS: true
-Output Resolution: 1080
+Output Resolution: 2160
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
@@ -401,10 +401,10 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: EN
-Run Mode: Viewer
+Run Mode: Streamer
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: false
+torch.compile: true
 TensorRT: false
-Recompile TensorRT: false
+Recompile TensorRT: true
 Unlock Thread (Streamer): false
