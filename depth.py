@@ -33,13 +33,15 @@ DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
 
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
-    # if not FP16:
-    # Enable TF32 for matrix multiplications
-    torch.backends.cuda.matmul.allow_tf32 = True
-    # Enable TF32 for cuDNN (convolution operations)
-    torch.backends.cudnn.allow_tf32 = True
-    # Enable TF32 matrix multiplication for better performance
-    torch.set_float32_matmul_precision('high')
+    if not FP16:
+        # Enable TF32 for matrix multiplications
+        torch.backends.cuda.matmul.allow_tf32 = True
+        # Enable TF32 for cuDNN (convolution operations)
+        torch.backends.cudnn.allow_tf32 = True
+        # Enable TF32 matrix multiplication for better performance
+        torch.set_float32_matmul_precision('high')
+    else:
+        torch.set_autocast_enabled()
     # Enable math attention
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
@@ -161,6 +163,7 @@ def apply_stretch(x: torch.Tensor, low: float = 2.0, high: float = 98.0) -> torc
     Percentile-based clipping + normalization.
     Fully DirectML compatible (no torch.clamp).
     """
+    x = x.to(DTYPE)
     if x.numel() < 2:
         return x
 
@@ -228,9 +231,6 @@ def apply_foreground_scale(depth: torch.Tensor, scale: float) -> torch.Tensor:
     Returns:
         torch.Tensor: scaled depth map of same shape as input
     """
-    if not torch.is_floating_point(depth):
-        depth = depth.float()
-
     if scale > 0:
         # Exaggerate separation: foreground closer, background further
         return torch.pow(depth, 1.0 + scale)
@@ -291,7 +291,7 @@ def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
     # convert to torch tensor on CPU (uint8) then float on device to avoid double copy
     t_cpu = torch.from_numpy(np_img)  # shape H,W,C dtype=uint8
     # move to device and convert in one step
-    t = t_cpu.permute(2, 0, 1).contiguous().unsqueeze(0).to(device=DEVICE, dtype=MODEL_DTYPE, non_blocking=True)
+    t = t_cpu.permute(2, 0, 1).contiguous().unsqueeze(0).to(device=DEVICE, dtype=MODEL_DTYPE)
     t = t / 255.0
     return t
 
@@ -432,7 +432,7 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
     """
     Export the depth estimation model to ONNX format with dynamic axes.
     """
-    dummy_input = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=DEVICE, dtype=dtype)
+    dummy_input = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=device, dtype=dtype)
     
     input_names = ["pixel_values"]
     output_names = ["predicted_depth"]
@@ -569,6 +569,9 @@ class DepthModelWrapper:
             # Use PyTorch backend for DirectML/MPS/CPU
             self.backend = "PyTorch"
             self.model = self._load_pytorch_model()
+        
+        if hasattr(self.model, 'to'):
+            self.model.to(DTYPE)
         
         print(f"Using backend: {self.backend}")
     
@@ -716,7 +719,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
             depth = model_wraper(tensor)
     
     # Robust normalize and Post depth processing
-    depth = apply_stretch(depth, 2, 98)
+    depth = apply_stretch(depth, 5, 95)
     
     # invert for metric models
     if 'Metric' in MODEL_ID:
@@ -740,8 +743,15 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     if return_tuple:
         return depth, rgb_c
     else:
-        return depth   
-    
+        return depth  
+ 
+# depth interploation to boost performance
+def interpolate_depth(prev_depth, next_depth, alpha=0.5):
+    try:
+        return (1 - alpha) * prev_depth + alpha * next_depth
+    except RuntimeError:
+        return prev_depth
+
 def build_font(device="cpu", dtype=torch.float32):
     chars = sorted(font_dict.keys())
     font_tensor = torch.stack([
@@ -835,7 +845,7 @@ def make_sbs_core(rgb: torch.Tensor,
 
     # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
     else:
-        base = torch.arange(W, device=device).view(1, -1).expand(H, -1).float()
+        base = torch.arange(W, device=device).view(1, -1).expand(H, -1)
         coords_left = (base + shifts).clamp(0, W - 1).long()   # [H,W]
         coords_right = (base - shifts).clamp(0, W - 1).long()  # [H,W]
 
@@ -885,7 +895,17 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
     """
     if depth.dim() == 3 and depth.shape[0] == 1:
         depth = depth[0]
-    rgb = rgb_c.to(device=DEVICE, dtype=MODEL_DTYPE)
+        
+    # Handle input type conversion
+    if isinstance(rgb_c, np.ndarray):
+        # Convert numpy array to tensor with matching device/dtype
+        rgb = torch.from_numpy(rgb_c).to(device=depth.device, dtype=depth.dtype)
+        # Convert from HWC to CHW format
+        if rgb.ndim == 3 and rgb.shape[2] == 3:
+            rgb = rgb.permute(2, 0, 1)
+    else:
+        # Ensure tensor is on correct device and dtype
+        rgb = rgb_c.to(device=depth.device, dtype=depth.dtype)
 
     # Optional FPS overlay can stay in Python side (avoids torch.compile recompiles)
     if fps is not None:

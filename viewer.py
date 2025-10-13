@@ -624,7 +624,10 @@ class StereoWindow:
                 disp_w, disp_h = 2 * tex_w, tex_h  # default full SBS
 
             target_aspect = disp_h / disp_w
-            window_aspect = win_h / win_w
+            try:
+                window_aspect = win_h / win_w
+            except ZeroDivisionError:
+                window_aspect = 9/16
 
             # Scale to fit window, preserving aspect ratio
             if window_aspect <= target_aspect:

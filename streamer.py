@@ -196,22 +196,26 @@ class MJPEGStreamer:
             self.new_raw_event.set()
 
     def _encoder_loop(self):
+        prev_time = 0
         while not self.shutdown.is_set():
             if not self.new_raw_event.wait(timeout=1):
                 continue
             self.new_raw_event.clear()
 
+            if time.perf_counter() - prev_time < self.delay:
+                continue  # skip to maintain FPS
+            prev_time = time.perf_counter()
+
             raw = self.raw_frame
             if raw is None:
                 continue
-            try:
-                bgr = np.ascontiguousarray(raw[..., ::-1])
-                success, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
-                if success:
-                    self.encoded_frame = buf.tobytes()
-                    self.new_encoded_event.set()
-            except Exception as e:
-                print("[MJPEGStreamer] Encoding error:", e)
+
+            # Encode frame
+            bgr = np.ascontiguousarray(raw[..., ::-1])
+            success, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+            if success:
+                self.encoded_frame = buf.tobytes()
+                self.new_encoded_event.set()
 
     def _generate(self):
         next_frame_time = time.perf_counter()

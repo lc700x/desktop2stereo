@@ -2,7 +2,7 @@ import threading
 import queue
 import glfw
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, DML_STREAM_STABLE
+from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST
 from capture import DesktopGrabber
 from depth import process, predict_depth
 
@@ -99,9 +99,9 @@ def main(mode="Viewer"):
 
         else:
             from depth import make_sbs, DEVICE_INFO
-            BOOST = not (DML_STREAM_STABLE and "DirectML" in DEVICE_INFO)
+            BOOST = (not "DirectML" in DEVICE_INFO) or DML_BOOST
             from streamer import MJPEGStreamer
-            if BOOST:
+            if not BOOST:
                 def make_output(rgb, depth):
                     return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
             else:
@@ -131,7 +131,7 @@ def main(mode="Viewer"):
                     
 
             threading.Thread(target=depth_loop, daemon=True).start()
-            if not BOOST:
+            if BOOST:
                 threading.Thread(target=sbs_loop, daemon=True).start()
             
             streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
@@ -140,7 +140,7 @@ def main(mode="Viewer"):
             
             while True:
                 try:
-                    if BOOST: # Fix for unstable dml runtime error
+                    if not BOOST: # Fix for unstable dml runtime error
                         sbs = depth_q.get(timeout=TIME_SLEEP)
                     else:
                         sbs = sbs_q.get(timeout=TIME_SLEEP)
