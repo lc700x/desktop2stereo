@@ -7,7 +7,7 @@ from capture import DesktopGrabber
 from depth import process, predict_depth
 
 # Constants
-FRAMES = 2  # Number of interpolated frames to generate between original frames
+FRAMES = 4  # Number of interpolated frames to generate between original frames
 FRAME_INTERVAL = 1 / (FPS * (FRAMES + 1))  # Adjusted interval for interpolated frames
 
 def interpolate_depth_gpu(prev_depth, next_depth, alpha=0.5, device="cuda"):
