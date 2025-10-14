@@ -125,3 +125,4 @@ USE_TORCH_COMPILE = settings["torch.compile"] # compile model with torch.compile
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
 KEEP_RATIO = False
+CAPTURE_TOOL = "WindowsCapture" # DXCamera or WindowsCapture

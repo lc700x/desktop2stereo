@@ -1,168 +1,200 @@
 import numpy as np
 import mss
-from utils import OS_NAME, CAPTURE_MODE, MONITOR_INDEX, WINDOW_TITLE
+from utils import OS_NAME, CAPTURE_MODE, MONITOR_INDEX, WINDOW_TITLE, CAPTURE_TOOL
 
 if OS_NAME == "Windows":
-    import win32gui
     from ctypes import windll
-    from wincam import DXCamera
-
     # Enable DPI awareness to improve capture quality on high-resolution displays
     try:
         windll.user32.SetProcessDPIAware()
     except Exception:
         pass  # Silently ignore failure to set DPI awareness
+    if CAPTURE_TOOL == "DXCamera":
+        import win32gui
+        from wincam import DXCamera
 
-    def get_window_client_bounds(hwnd):
-        """
-        Retrieve the client area of a window in screen coordinates.
-
-        Args:
-            hwnd (int): The window handle.
-
-        Returns:
-            tuple: (left, top, width, height) in screen pixel coordinates.
-
-        Raises:
-            Exception: If the window handle is invalid or the window cannot be found.
-        """
-        rc = win32gui.GetClientRect(hwnd)
-        if rc is None:
-            raise Exception(f"Window not found {hwnd}")
-
-        left, top, right, bottom = rc
-        w = right - left
-        h = bottom - top
-        left, top = win32gui.ClientToScreen(hwnd, (left, top))
-        return left, top, w, h
-
-    class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX):
+        def get_window_client_bounds(hwnd):
             """
-            Initialize the desktop frame grabber for either a window or a monitor.
+            Retrieve the client area of a window in screen coordinates.
 
             Args:
-                output_resolution (int): Output image height (used for scaling).
-                fps (int): Frames per second for the capture device.
-                window_title (str): Title of the application window to capture.
-                capture_mode (str): 'Window' to capture an app window, 'Monitor' to capture a screen.
-                monitor_index (int): Index of the monitor to use when capture_mode is 'Monitor'.
-            """
-            self.scaled_height = output_resolution
-            self.fps = fps
-            self._mss = mss.mss()  # Multi-screen capture utility
-            self.capture_mode = capture_mode
-            self.camera = None  # DXCamera object for hardware-accelerated capture
-            self.prev_rect = None  # Previously captured window bounds to avoid redundant updates
-            self.window_title = window_title
+                hwnd (int): The window handle.
 
-            if self.capture_mode == "Monitor":
-                # Capture a specific monitor directly using MSS
-                mon = self._mss.monitors[monitor_index]
-                self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
-                self.camera = DXCamera(self.left, self.top, self.width, self.height, fps=self.fps)
+            Returns:
+                tuple: (left, top, width, height) in screen pixel coordinates.
+
+            Raises:
+                Exception: If the window handle is invalid or the window cannot be found.
+            """
+            rc = win32gui.GetClientRect(hwnd)
+            if rc is None:
+                raise Exception(f"Window not found {hwnd}")
+
+            left, top, right, bottom = rc
+            w = right - left
+            h = bottom - top
+            left, top = win32gui.ClientToScreen(hwnd, (left, top))
+            return left, top, w, h
+
+        class DesktopGrabber:
+            def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX):
+                """
+                Initialize the desktop frame grabber for either a window or a monitor.
+
+                Args:
+                    output_resolution (int): Output image height (used for scaling).
+                    fps (int): Frames per second for the capture device.
+                    window_title (str): Title of the application window to capture.
+                    capture_mode (str): 'Window' to capture an app window, 'Monitor' to capture a screen.
+                    monitor_index (int): Index of the monitor to use when capture_mode is 'Monitor'.
+                """
+                self.scaled_height = output_resolution
+                self.fps = fps
+                self._mss = mss.mss()  # Multi-screen capture utility
+                self.capture_mode = capture_mode
+                self.camera = None  # DXCamera object for hardware-accelerated capture
+                self.prev_rect = None  # Previously captured window bounds to avoid redundant updates
+                self.window_title = window_title
+
+                if self.capture_mode == "Monitor":
+                    # Capture a specific monitor directly using MSS
+                    mon = self._mss.monitors[monitor_index]
+                    self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
+                    self.camera = DXCamera(self.left, self.top, self.width, self.height, fps=self.fps)
+                    try:
+                        self.camera.__enter__()  # Start the camera if it supports context management
+                    except AttributeError:
+                        pass
+                else:
+                    # Capture a specific window by title
+                    self.hwnd = win32gui.FindWindow(None, self.window_title)
+                    if not self.hwnd:
+                        raise RuntimeError(f"Window '{self.window_title}' not found")
+
+            def _monitor_contains(self, mon, rect):
+                """
+                Check whether a rectangle is completely inside a monitor's bounds.
+
+                Args:
+                    mon (dict): Monitor information from MSS (with left, top, width, height).
+                    rect (tuple): Rectangle as (left, top, width, height).
+
+                Returns:
+                    bool: True if the rectangle is fully contained in the monitor.
+                """
+                left, top, w, h = rect
+                right, bottom = left + w, top + h
+                mon_left, mon_top = mon['left'], mon['top']
+                mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
+                return left >= mon_left and top >= mon_top and right <= mon_right and bottom <= mon_bottom
+
+            def _monitor_intersection_area(self, mon, rect):
+                """
+                Compute the area of overlap between a rectangle and a monitor.
+
+                Args:
+                    mon (dict): Monitor dictionary.
+                    rect (tuple): Rectangle as (left, top, width, height).
+
+                Returns:
+                    int: The overlapping area (width * height).
+                """
+                left, top, w, h = rect
+                right, bottom = left + w, top + h
+                mon_left, mon_top = mon['left'], mon['top']
+                mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
+                inter_w = max(0, min(mon_right, right) - max(mon_left, left))
+                inter_h = max(0, min(mon_bottom, bottom) - max(mon_top, top))
+                return inter_w * inter_h
+
+            def _choose_monitor_and_rect(self, rect):
+                """
+                Select the most appropriate monitor to display the window and adjust its bounds
+                to fit within that monitor.
+
+                Args:
+                    rect (tuple): The window bounds as (left, top, width, height).
+
+                Returns:
+                    tuple: (monitor_info, adjusted_rect) where adjusted_rect is clamped to the monitor.
+                """
+                left, top, w, h = rect
+                right, bottom = left + w, top + h
+
+                # Check if the window is fully inside any secondary monitor (index >= 1)
+                for mon in self._mss.monitors[1:]:
+                    if self._monitor_contains(mon, rect):
+                        return mon, rect
+
+                # If not fully inside any, find the monitor with the largest overlapping area
+                best_mon, best_area = None, -1
+                for mon in self._mss.monitors[1:]:
+                    area = self._monitor_intersection_area(mon, rect)
+                    if area > best_area:
+                        best_area = area
+                        best_mon = mon
+
+                # Fallback to the first non-primary monitor if no significant overlap
+                if best_mon is None or best_area <= 0:
+                    best_mon = self._mss.monitors[1]
+
+                # Clamp the rectangle to the chosen monitor's screen space
+                mon_left, mon_top = best_mon['left'], best_mon['top']
+                mon_right, mon_bottom = mon_left + best_mon['width'], mon_top + best_mon['height']
+                new_left = max(left, mon_left)
+                new_top = max(top, mon_top)
+                new_right = min(right, mon_right)
+                new_bottom = min(bottom, mon_bottom)
+                new_w = max(0, new_right - new_left)
+                new_h = max(0, new_bottom - new_top)
+
+                # If clamping results in an empty area, default to the full monitor
+                if new_w == 0 or new_h == 0:
+                    return best_mon, (mon_left, mon_top, best_mon['width'], best_mon['height'])
+
+                return best_mon, (new_left, new_top, new_w, new_h)
+
+            def _ensure_camera_matches_window(self):
+                """
+                Ensure the DXCamera is correctly configured to the current window position and size.
+                Reinitializes the camera if the window has moved, resized, or is newly detected.
+                """
                 try:
-                    self.camera.__enter__()  # Start the camera if it supports context management
-                except AttributeError:
-                    pass
-            else:
-                # Capture a specific window by title
-                self.hwnd = win32gui.FindWindow(None, self.window_title)
-                if not self.hwnd:
-                    raise RuntimeError(f"Window '{self.window_title}' not found")
+                    bounds = get_window_client_bounds(self.hwnd)
+                    if bounds is None:
+                        # Window is not valid (minimized, closed, etc.)
+                        if self.camera:
+                            try:
+                                self.camera.__exit__(None, None, None)
+                            except AttributeError:
+                                pass
+                            self.camera = None
+                        self.prev_rect = None
+                        return
 
-        def _monitor_contains(self, mon, rect):
-            """
-            Check whether a rectangle is completely inside a monitor's bounds.
+                    if bounds == self.prev_rect:
+                        # No change in window bounds, no need to update camera
+                        return
 
-            Args:
-                mon (dict): Monitor information from MSS (with left, top, width, height).
-                rect (tuple): Rectangle as (left, top, width, height).
+                    self.prev_rect = bounds  # Cache the latest valid bounds
 
-            Returns:
-                bool: True if the rectangle is fully contained in the monitor.
-            """
-            left, top, w, h = rect
-            right, bottom = left + w, top + h
-            mon_left, mon_top = mon['left'], mon['top']
-            mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
-            return left >= mon_left and top >= mon_top and right <= mon_right and bottom <= mon_bottom
+                    # Determine the best monitor to contain this window and adjust bounds
+                    _, rect = self._choose_monitor_and_rect(bounds)
 
-        def _monitor_intersection_area(self, mon, rect):
-            """
-            Compute the area of overlap between a rectangle and a monitor.
+                    # Recreate the camera if needed
+                    if self.camera:
+                        try:
+                            self.camera.__exit__(None, None, None)
+                        except AttributeError:
+                            pass
+                    self.camera = DXCamera(*rect, fps=self.fps)
+                    try:
+                        self.camera.__enter__()
+                    except AttributeError:
+                        pass
 
-            Args:
-                mon (dict): Monitor dictionary.
-                rect (tuple): Rectangle as (left, top, width, height).
-
-            Returns:
-                int: The overlapping area (width * height).
-            """
-            left, top, w, h = rect
-            right, bottom = left + w, top + h
-            mon_left, mon_top = mon['left'], mon['top']
-            mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
-            inter_w = max(0, min(mon_right, right) - max(mon_left, left))
-            inter_h = max(0, min(mon_bottom, bottom) - max(mon_top, top))
-            return inter_w * inter_h
-
-        def _choose_monitor_and_rect(self, rect):
-            """
-            Select the most appropriate monitor to display the window and adjust its bounds
-            to fit within that monitor.
-
-            Args:
-                rect (tuple): The window bounds as (left, top, width, height).
-
-            Returns:
-                tuple: (monitor_info, adjusted_rect) where adjusted_rect is clamped to the monitor.
-            """
-            left, top, w, h = rect
-            right, bottom = left + w, top + h
-
-            # Check if the window is fully inside any secondary monitor (index >= 1)
-            for mon in self._mss.monitors[1:]:
-                if self._monitor_contains(mon, rect):
-                    return mon, rect
-
-            # If not fully inside any, find the monitor with the largest overlapping area
-            best_mon, best_area = None, -1
-            for mon in self._mss.monitors[1:]:
-                area = self._monitor_intersection_area(mon, rect)
-                if area > best_area:
-                    best_area = area
-                    best_mon = mon
-
-            # Fallback to the first non-primary monitor if no significant overlap
-            if best_mon is None or best_area <= 0:
-                best_mon = self._mss.monitors[1]
-
-            # Clamp the rectangle to the chosen monitor's screen space
-            mon_left, mon_top = best_mon['left'], best_mon['top']
-            mon_right, mon_bottom = mon_left + best_mon['width'], mon_top + best_mon['height']
-            new_left = max(left, mon_left)
-            new_top = max(top, mon_top)
-            new_right = min(right, mon_right)
-            new_bottom = min(bottom, mon_bottom)
-            new_w = max(0, new_right - new_left)
-            new_h = max(0, new_bottom - new_top)
-
-            # If clamping results in an empty area, default to the full monitor
-            if new_w == 0 or new_h == 0:
-                return best_mon, (mon_left, mon_top, best_mon['width'], best_mon['height'])
-
-            return best_mon, (new_left, new_top, new_w, new_h)
-
-        def _ensure_camera_matches_window(self):
-            """
-            Ensure the DXCamera is correctly configured to the current window position and size.
-            Reinitializes the camera if the window has moved, resized, or is newly detected.
-            """
-            try:
-                bounds = get_window_client_bounds(self.hwnd)
-                if bounds is None:
-                    # Window is not valid (minimized, closed, etc.)
+                except Exception:
+                    # On any error, reset the camera to avoid crashes
                     if self.camera:
                         try:
                             self.camera.__exit__(None, None, None)
@@ -170,61 +202,106 @@ if OS_NAME == "Windows":
                             pass
                         self.camera = None
                     self.prev_rect = None
-                    return
 
-                if bounds == self.prev_rect:
-                    # No change in window bounds, no need to update camera
-                    return
+            def grab(self):
+                """
+                Capture a single frame from the current source (window or monitor).
 
-                self.prev_rect = bounds  # Cache the latest valid bounds
+                Returns:
+                    tuple: (image_array, scaled_height) where image_array is the captured frame.
+                """
+                if self.capture_mode != "Monitor":
+                    self._ensure_camera_matches_window()  # Ensure camera is up to date for window capture
+                img_array, _ = self.camera.get_rgb_frame()
+                return img_array, self.scaled_height
 
-                # Determine the best monitor to contain this window and adjust bounds
-                _, rect = self._choose_monitor_and_rect(bounds)
-
-                # Recreate the camera if needed
-                if self.camera:
-                    try:
-                        self.camera.__exit__(None, None, None)
-                    except AttributeError:
-                        pass
-                self.camera = DXCamera(*rect, fps=self.fps)
-                try:
-                    self.camera.__enter__()
-                except AttributeError:
-                    pass
-
-            except Exception:
-                # On any error, reset the camera to avoid crashes
+            def close(self):
+                """
+                Clean up and release the capture device.
+                """
                 if self.camera:
                     try:
                         self.camera.__exit__(None, None, None)
                     except AttributeError:
                         pass
                     self.camera = None
-                self.prev_rect = None
+                    
+    elif CAPTURE_TOOL == "WindowsCapture":
+        import time, threading
+        import cv2
+        from windows_capture import WindowsCapture, Frame, InternalCaptureControl
+        class DesktopGrabber:
+            def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, 
+                        capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX):
+                self.scaled_height = output_resolution
+                self.fps = fps
+                self.capture_mode = capture_mode
+                self.window_title = window_title
+                
+                self.latest_frame = None
+                self._lock = threading.Lock()
+                self.fps_values = []
+                self.stop_event = threading.Event()
+                self.frame_event = threading.Event()
+                self.sleep_time = 1/self.fps
 
-        def grab(self):
-            """
-            Capture a single frame from the current source (window or monitor).
+                if self.capture_mode != "Window":
+                    self.capture = WindowsCapture(monitor_index=monitor_index)
+                else:
+                    # Create capture object
+                    self.capture = WindowsCapture(window_name=self.window_title)
 
-            Returns:
-                tuple: (image_array, scaled_height) where image_array is the captured frame.
-            """
-            if self.capture_mode != "Monitor":
-                self._ensure_camera_matches_window()  # Ensure camera is up to date for window capture
-            img_array, _ = self.camera.get_rgb_frame()
-            return img_array, self.scaled_height
+                    if not self.window_title:
+                        raise ValueError("No window title specified for window capture")
 
-        def close(self):
-            """
-            Clean up and release the capture device.
-            """
-            if self.camera:
+
+                # Register callback for frames
+                @self.capture.event
+                def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
+                    with self._lock:
+                        tick = time.perf_counter()
+                        source_frame = frame.frame_buffer
+                        # Convert BGRA to RGB
+                        self.frame_event.set()
+                        self.latest_frame = source_frame
+                        process_time = time.perf_counter() - tick
+                        wait_time = max(self.sleep_time - process_time, 0)
+                        time.sleep(wait_time)
+                        
+
+                    if self.stop_event.is_set():
+                        capture_control.stop()
+
+                @self.capture.event
+                def on_closed():
+                    print("Capture session closed")
+                    self.stop_event.set()
+
+                # Start capture in background thread
+                self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+                self._thread.start()
+
+                # Wait until first frame arrives
+                if not self.frame_event.wait(timeout=10.0):
+                    raise TimeoutError("Failed to receive first frame within timeout period")
+
+            def _capture_loop(self):
+                """Capture event loop"""
                 try:
-                    self.camera.__exit__(None, None, None)
-                except AttributeError:
-                    pass
-                self.camera = None
+                    self.capture.start()
+                finally:
+                    self.frame_event.set()
+                    time.sleep(0.1)
+
+            def grab(self):
+                with self._lock:
+                    if self.latest_frame is None:
+                        return None, self.scaled_height
+                    img_array = self.latest_frame
+                    img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGRA2RGB)
+                return img_rgb, self.scaled_height
+            
+
 
 elif OS_NAME == "Darwin":
     import io, cv2

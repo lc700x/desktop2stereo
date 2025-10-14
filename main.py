@@ -41,7 +41,7 @@ def capture_loop():
 def process_loop():
     while True:
         try:
-            frame_raw, size = raw_q.get(timeout=0.01)
+            frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
         except queue.Empty:
             continue
         frame_rgb = process(frame_raw, size)
@@ -55,7 +55,6 @@ def main(mode="Viewer"):
     last_time = time.perf_counter()
     current_fps = None
     total_frames = 0
-    start_time = time.perf_counter()
 
     streamer, window = None, None
 
@@ -66,7 +65,7 @@ def main(mode="Viewer"):
             def depth_loop():
                 while True:
                     try:
-                        frame_rgb = proc_q.get(timeout=0.01)
+                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
                     except queue.Empty:
                         continue
                     depth = predict_depth(frame_rgb)
@@ -112,7 +111,7 @@ def main(mode="Viewer"):
                 def sbs_loop():
                     while True:
                         try:
-                            rgb, depth = depth_q.get(timeout=0.01)
+                            rgb, depth = depth_q.get(timeout=TIME_SLEEP)
                         except queue.Empty:
                             continue
                         sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
@@ -121,7 +120,7 @@ def main(mode="Viewer"):
             def depth_loop():
                 while True:
                     try:
-                        frame_rgb = proc_q.get(timeout=0.01)
+                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
                     except queue.Empty:
                         continue
                     depth, rgb = predict_depth(frame_rgb, return_tuple=True)
@@ -139,9 +138,9 @@ def main(mode="Viewer"):
             while True:
                 try:
                     if not BOOST: # Fix for unstable dml runtime error
-                        sbs = depth_q.get_nowait()
+                        sbs = depth_q.get(timeout=TIME_SLEEP)
                     else:
-                        sbs = sbs_q.get_nowait()
+                        sbs = sbs_q.get(timeout=TIME_SLEEP)
                     streamer.set_frame(sbs)
                     if SHOW_FPS:
                         frame_count += 1
