@@ -41,7 +41,7 @@ if torch.cuda.is_available():
         # Enable TF32 matrix multiplication for better performance
         torch.set_float32_matmul_precision('high')
     else:
-        torch.set_autocast_enabled()
+        torch.set_autocast_enabled(True)
     # Enable math attention
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
