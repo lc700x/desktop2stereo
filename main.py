@@ -41,7 +41,7 @@ def capture_loop():
 def process_loop():
     while True:
         try:
-            frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
+            frame_raw, size = raw_q.get(timeout=0.01)
         except queue.Empty:
             continue
         frame_rgb = process(frame_raw, size)
@@ -66,7 +66,7 @@ def main(mode="Viewer"):
             def depth_loop():
                 while True:
                     try:
-                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        frame_rgb = proc_q.get(timeout=0.01)
                     except queue.Empty:
                         continue
                     depth = predict_depth(frame_rgb)
@@ -77,7 +77,7 @@ def main(mode="Viewer"):
             print(f"[Main] Viewer Started")
             while not glfw.window_should_close(window.window):
                 try:
-                    rgb, depth = depth_q.get()
+                    rgb, depth = depth_q.get_nowait()
                     window.update_frame(rgb, depth)
                     if SHOW_FPS:
                         frame_count += 1
@@ -112,7 +112,7 @@ def main(mode="Viewer"):
                 def sbs_loop():
                     while True:
                         try:
-                            rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+                            rgb, depth = depth_q.get(timeout=0.01)
                         except queue.Empty:
                             continue
                         sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
@@ -121,7 +121,7 @@ def main(mode="Viewer"):
             def depth_loop():
                 while True:
                     try:
-                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        frame_rgb = proc_q.get(timeout=0.01)
                     except queue.Empty:
                         continue
                     depth, rgb = predict_depth(frame_rgb, return_tuple=True)
@@ -139,9 +139,9 @@ def main(mode="Viewer"):
             while True:
                 try:
                     if not BOOST: # Fix for unstable dml runtime error
-                        sbs = depth_q.get()
+                        sbs = depth_q.get_nowait()
                     else:
-                        sbs = sbs_q.get()
+                        sbs = sbs_q.get_nowait()
                     streamer.set_frame(sbs)
                     if SHOW_FPS:
                         frame_count += 1

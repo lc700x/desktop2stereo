@@ -744,14 +744,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         return depth, rgb_c
     else:
         return depth  
- 
-# depth interploation to boost performance
-def interpolate_depth(prev_depth, next_depth, alpha=0.5):
-    try:
-        return (1 - alpha) * prev_depth + alpha * next_depth
-    except RuntimeError:
-        return prev_depth
-
+    
 def build_font(device="cpu", dtype=torch.float32):
     chars = sorted(font_dict.keys())
     font_tensor = torch.stack([

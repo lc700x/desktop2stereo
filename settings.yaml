@@ -3,7 +3,7 @@ Monitor Index: 1
 Window Title: ''
 FPS: 60
 Show FPS: true
-Output Resolution: 2160
+Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
@@ -396,7 +396,7 @@ Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 1.0
 Depth Resolution: 336
-FP16: false
+FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
