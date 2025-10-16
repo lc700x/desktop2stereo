@@ -1,11 +1,10 @@
+# main.py
 import threading
 import queue
 import glfw
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST
-from capture import DesktopGrabber
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST
 from depth import process, predict_depth
-
 
 # Use precise frame interval
 TIME_SLEEP = 1.0 / FPS
@@ -19,38 +18,58 @@ depth_q = queue.Queue(maxsize=1)
 stop_event = threading.Event()
 
 # Initialize capture
-cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS)
-
-def put_latest(q, item):
-    """Put item into queue, dropping old one if needed (non-blocking)."""
-    if q.full():
-        try:
-            q.get_nowait()
-        except queue.Empty:
-            pass
+if CAPTURE_TOOL == "WindowsCapture" and OS_NAME ==  "Windows":
+    from windows_capture import WindowsCapture, Frame, InternalCaptureControl
+    import cv2, ctypes
+    # get windows Hi-DPI scale
     try:
-        q.put_nowait(item)
-    except queue.Full:
-        pass  # drop if race condition
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except:
+        ctypes.windll.user32.SetProcessDPIAware()
+    dwmapi = ctypes.WinDLL("dwmapi")
+    cap = WindowsCapture(window_name=WINDOW_TITLE) if CAPTURE_MODE == "Window" else WindowsCapture(monitor_index=MONITOR_INDEX)
+    
+    def capture_loop():
+        @cap.event
+        def on_frame_arrived(frame: Frame, _capture_control: InternalCaptureControl):
+            global capture_control
+            tick = time.perf_counter()
+            capture_control = _capture_control
+            dwmapi.DwmFlush()
+            _frame_buffer = frame.frame_buffer
+            raw_q.put((cv2.cvtColor(_frame_buffer, cv2.COLOR_BGRA2RGB), OUTPUT_RESOLUTION))
+            process_time = time.perf_counter() - tick
+            wait_time = max(TIME_SLEEP - process_time, 0)
+            time.sleep(wait_time)
 
-def capture_loop():
-    while not stop_event.is_set():
-        try:
-            frame_raw, size = cap.grab()
-        except queue.Empty:
-            continue
-        except Exception:
-            continue
-        put_latest(raw_q, (frame_raw, size))
+        @cap.event
+        def on_closed():
+            print("Capture Session Closed")
+
+        cap.start()
+else:
+    # DXCamera based wincam
+    from capture import DesktopGrabber
+    cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX)
+
+    def capture_loop():
+        while True:
+            try:
+                frame_raw, size = cap.grab()
+            except queue.Empty:
+                continue
+            except Exception:
+                continue
+            raw_q.put((frame_raw, size))
 
 def process_loop():
-    while not stop_event.is_set():
+    while True:
         try:
-            frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
+            frame_raw, size = raw_q.get()
         except queue.Empty:
             continue
         frame_rgb = process(frame_raw, size)
-        put_latest(proc_q, frame_rgb)
+        proc_q.put(frame_rgb)
 
 def main(mode="Viewer"):
     threading.Thread(target=capture_loop, daemon=True).start()
@@ -69,20 +88,20 @@ def main(mode="Viewer"):
             from viewer import StereoWindow
 
             def depth_loop():
-                while not stop_event.is_set():
+                while True:
                     try:
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
                     except queue.Empty:
                         continue
                     depth = predict_depth(frame_rgb)
-                    put_latest(depth_q, (frame_rgb, depth))
+                    depth_q.put((frame_rgb, depth))
 
             threading.Thread(target=depth_loop, daemon=True).start()
             window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS)
             print(f"[Main] Viewer Started")
             while not glfw.window_should_close(window.window):
                 try:
-                    rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+                    rgb, depth = depth_q.get()
                     window.update_frame(rgb, depth)
                     if SHOW_FPS:
                         frame_count += 1
@@ -115,22 +134,22 @@ def main(mode="Viewer"):
                     return (rgb, depth)
                 
                 def sbs_loop():
-                    while not stop_event.is_set():
+                    while True:
                         try:
-                            rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+                            rgb, depth = depth_q.get()
                         except queue.Empty:
                             continue
                         sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
-                        put_latest(sbs_q, sbs)
+                        sbs_q.put(sbs)
 
             def depth_loop():
-                while not stop_event.is_set():
+                while True:
                     try:
-                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        frame_rgb = proc_q.get()
                     except queue.Empty:
                         continue
                     depth, rgb = predict_depth(frame_rgb, return_tuple=True)
-                    put_latest(depth_q, make_output(rgb, depth))
+                    depth_q.put(make_output(rgb, depth))
                     
 
             threading.Thread(target=depth_loop, daemon=True).start()
@@ -141,12 +160,12 @@ def main(mode="Viewer"):
             streamer.start()
             print(f"[Main] Streamer Started")
             
-            while not stop_event.is_set():
+            while True:
                 try:
                     if not BOOST: # Fix for unstable dml runtime error
-                        sbs = depth_q.get(timeout=TIME_SLEEP)
+                        sbs = depth_q.get()
                     else:
-                        sbs = sbs_q.get(timeout=TIME_SLEEP)
+                        sbs = sbs_q.get()
                     streamer.set_frame(sbs)
                     if SHOW_FPS:
                         frame_count += 1
@@ -169,9 +188,13 @@ def main(mode="Viewer"):
             streamer.stop()
         if window:
             glfw.terminate()
-        if cap:
+        try:
             cap.stop()
-            print(f"[Main] {mode} Stopped")
+        except AttributeError:
+            # stop for WindowsCapture
+            if OS_NAME == "Windows" and CAPTURE_MODE == "WindowsCapture":
+                capture_control.stop()
+        print(f"[Main] {mode} Stopped")
         # if SHOW_FPS:
         #     total_time = time.perf_counter() - start_time
         #     avg_fps = frame_count / total_time if total_time > 0 else 0

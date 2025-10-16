@@ -1,6 +1,6 @@
 import numpy as np
 import mss
-from utils import OS_NAME, CAPTURE_MODE, MONITOR_INDEX, WINDOW_TITLE, CAPTURE_TOOL
+from utils import OS_NAME, CAPTURE_TOOL
 
 if OS_NAME == "Windows":
     from ctypes import windll
@@ -37,7 +37,7 @@ if OS_NAME == "Windows":
             return left, top, w, h
 
         class DesktopGrabber:
-            def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX):
+            def __init__(self, output_resolution=1080, fps=60, window_title=None, capture_mode="Monitor", monitor_index=1):
                 """
                 Initialize the desktop frame grabber for either a window or a monitor.
 
@@ -231,8 +231,8 @@ if OS_NAME == "Windows":
         import cv2
         from windows_capture import WindowsCapture, Frame, InternalCaptureControl
         class DesktopGrabber:
-            def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, 
-                        capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX):
+            def __init__(self, output_resolution=1080, fps=60, window_title=None, 
+                        capture_mode="Monitor", monitor_index=1):
                 self.scaled_height = output_resolution
                 self.fps = fps
                 self.capture_mode = capture_mode
@@ -504,7 +504,7 @@ elif OS_NAME == "Darwin":
 
 
     class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, with_cursor=True):
+        def __init__(self, output_resolution=1080, fps=60, window_title=None, capture_mode="Monitor", with_cursor=True):
             self.scaled_height = output_resolution
             self.fps = fps
             self.with_cursor = with_cursor
@@ -680,7 +680,7 @@ elif OS_NAME.startswith("Linux"):
         return None
 
     class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX):
+        def __init__(self, output_resolution=1080, fps=60, window_title=None, capture_mode="Monitor", monitor_index=1):
             self.scaled_height = output_resolution
             self.fps = fps
             self.window_title = window_title

@@ -6,7 +6,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT
+from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
@@ -118,19 +118,19 @@ class StereoWindow:
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.RESIZABLE, True)
+        
+        # Get primary monitor resolution
+        monitors = glfw.get_monitors()
+        if not monitors:
+            glfw.terminate()
+            raise RuntimeError("No monitors found")
         if self.use_3d:
             glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
             glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
             glfw.window_hint(glfw.DECORATED, glfw.FALSE)  # No window decorations
             glfw.window_hint(glfw.FLOATING, glfw.TRUE)    # Always on top
             
-            # Get primary monitor resolution
-            monitors = glfw.get_monitors()
-            if not monitors:
-                glfw.terminate()
-                raise RuntimeError("No monitors found")
-            
-            monitor = monitors[0]
+            monitor = monitors[MONITOR_INDEX-1]
             vidmode = glfw.get_video_mode(monitor)
             self.window_size = (vidmode.size.width, vidmode.size.height)
             
@@ -146,12 +146,7 @@ class StereoWindow:
             raise RuntimeError("Could not create window")
         
         add_logo(self.window)
-        if self.use_3d:
-            # Position window to cover entire monitor
-            mon_x, mon_y = glfw.get_monitor_pos(monitor)
-            glfw.set_window_pos(self.window, mon_x, mon_y)
-        else:
-            self.position_on_monitor(0)
+        self.position_on_monitor(MONITOR_INDEX-1)
         
         # Set up OpenGL context
         glfw.make_context_current(self.window)
