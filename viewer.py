@@ -6,7 +6,8 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, USE_3D_MONITOR, KEEP_RATIO
+from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT
+# 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
 
@@ -57,7 +58,7 @@ def add_logo(window):
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
     
-    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", keep_ratio=KEEP_RATIO, show_fps=True, use_3d=USE_3D_MONITOR):
+    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT):
         # Initialize with default values
         self.use_3d = use_3d
         if not self.use_3d:
@@ -74,7 +75,8 @@ class StereoWindow:
         self.display_mode = display_mode
         self._texture_size = None
         self.monitor_index = 0
-        self.keep_ratio = keep_ratio
+        self.fill_16_9 = fill_16_9
+        self.fix_aspect = fix_aspect
         self.show_fps = show_fps
         self.frame_size = (1280, 720)
         
@@ -405,14 +407,39 @@ class StereoWindow:
             self._last_window_position = glfw.get_window_pos(self.window)
             self._last_window_size = glfw.get_window_size(self.window)
 
+            # Get monitor info
             mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
             vidmode = glfw.get_video_mode(current_monitor)
             full_w, full_h = vidmode.size.width, vidmode.size.height
 
+            # Make the window undecorated and floating
             glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
-            glfw.set_window_size(self.window, full_w, full_h)
-            glfw.set_window_pos(self.window, mon_x, mon_y)
+
+            # Set the desired window size (fullscreen or fixed aspect)
+            if self.fix_aspect:
+                # Keep aspect ratio, scale window to fit screen height or width
+                window_w, window_h = self._last_window_size
+
+                # Compute aspect ratio
+                aspect = window_w / window_h
+
+                # Fit window inside monitor while preserving aspect
+                if full_w / full_h > aspect:
+                    # Screen is wider than aspect — fit by height
+                    window_h = full_h
+                    window_w = int(full_h * aspect)
+                else:
+                    # Screen is taller — fit by width
+                    window_w = full_w
+                    window_h = int(full_w / aspect)
+
+                glfw.set_window_size(self.window, window_w, window_h)
+
+                # Center window on screen
+                center_x = mon_x + (full_w - window_w) // 2
+                center_y = mon_y + (full_h - window_h) // 2
+                glfw.set_window_pos(self.window, center_x, center_y)
 
             self._fullscreen = True
         else:
@@ -459,6 +486,14 @@ class StereoWindow:
             elif key == glfw.KEY_F:  # Add FPS toggle with F key
                 self.show_fps = not self.show_fps
                 # Force overlay regen when toggling show_fps
+                self._overlay_cache['last_update'] = 0.0
+            elif key == glfw.KEY_A:  # Toggle fill 16:0 with A key
+                self.fill_16_9 = not self.fill_16_9
+                # Force overlay regen to show aspect ratio status
+                self._overlay_cache['last_update'] = 0.0
+            elif key == glfw.KEY_L:  # Toggle viewer aspect ratio lock with F key
+                self.fix_aspect = not self.fix_aspect
+                # Force overlay regen to show aspect ratio status
                 self._overlay_cache['last_update'] = 0.0
 
     def update_frame(self, rgb, depth):
@@ -522,14 +557,15 @@ class StereoWindow:
         # Get window dimensions once
         win_w, win_h = glfw.get_framebuffer_size(self.window)
         tex_w, tex_h = self._texture_size
-        
+        if self.fix_aspect:
+            if self.display_mode == "Full-SBS":
+                glfw.set_window_aspect_ratio(self.window, 2*tex_w, tex_h)
+            else:
+                glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
         # Clear screen once
         self.ctx.clear(0.1, 0.1, 0.1)
         
-        if self.keep_ratio:
-        
-        
-            
+        if self.fill_16_9:
             # Bind textures once
             self.color_tex.use(location=0)
             self.depth_tex.use(location=1)

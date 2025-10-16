@@ -6,7 +6,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, USE_3D_MONITOR, KEEP_RATIO
+from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
 
@@ -58,7 +58,7 @@ def add_logo(window):
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
     
-    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", keep_ratio=KEEP_RATIO, show_fps=True):
+    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True):
         # Initialize with default values
         self.window_size = (1280, 720)
         self.title = "Stereo SBS Viewer"
@@ -73,7 +73,7 @@ class StereoWindow:
         self.display_mode = display_mode
         self._texture_size = None
         self.monitor_index = 0
-        self.keep_ratio = keep_ratio
+        self.fill_16_9 = fill_16_9
         self.show_fps = show_fps
         self.frame_size = (1280, 720)
         
@@ -502,7 +502,7 @@ class StereoWindow:
         # Clear screen once
         self.ctx.clear(0.1, 0.1, 0.1)
         
-        if self.keep_ratio:
+        if self.fill_16_9:
         
         
             

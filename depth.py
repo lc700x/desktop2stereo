@@ -1,7 +1,7 @@
 # depth.py
 import torch
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, KEEP_RATIO
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -802,7 +802,7 @@ def make_sbs_core(rgb: torch.Tensor,
                   ipd_uv=0.064,
                   depth_ratio=1.0,
                   display_mode="Half-SBS",
-                  keep_ratio=KEEP_RATIO,
+                  fill_16_9=FILL_16_9,
                   device=DEVICE) -> torch.Tensor:
     """
     Core tensor operations for side-by-side stereo.
@@ -867,7 +867,7 @@ def make_sbs_core(rgb: torch.Tensor,
             return F.pad(tensor, (pad_left, new_w - w - pad_left, 0, 0))
 
     # Aspect pad & arrange SBS/TAB
-    if keep_ratio:
+    if fill_16_9:
         left = pad_to_aspect_tensor(left)
         right = pad_to_aspect_tensor(right)
 

@@ -163,7 +163,10 @@ DEFAULTS = {
     "Run Mode": "Viewer",
     "Streamer Host": None,
     "Streamer Port": DEFAULT_PORT,
-    "Stream Quality": 100
+    "Stream Quality": 100,
+    "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
+    "Fill 16:9": False,  # force 16:9 output
+    "Fixed Viewer Aspect": False # keep the viewer window aspect ratio not change
 }
 
 UI_TEXTS = {
@@ -229,7 +232,10 @@ UI_TEXTS = {
         "Failed to copy URL": "Failed to copy URL",
         "Failed to open browser": "Failed to open browser",
         "Copied URL": "Copied URL",
-        "Opening URL in browser": "Opening URL in browser"
+        "Opening URL in browser": "Opening URL in browser",
+        "Capture Tool:": "Capture Tool:",
+        "Fill 16:9": "Fill 16:9",
+        "Fixed Viewer Aspect": "Fixed Viewer Aspect"
     },
     "CN": {
         "Monitor": "显示器",
@@ -293,10 +299,12 @@ UI_TEXTS = {
         "Failed to copy URL": "复制网址失败",
         "Failed to open browser": "打开浏览器失败",
         "Copied URL": "已复制网址",
-        "Opening URL in browser": "正在浏览器中打开网址"
+        "Opening URL in browser": "正在浏览器中打开网址",
+        "Capture Tool:": "捕获工具:",  
+        "Fill 16:9": "填充16:9",
+        "Fixed Viewer Aspect": "固定窗口比例"
     }
 }
-
 class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -441,13 +449,17 @@ class ConfigGUI(tk.Tk):
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
         self.showfps_cb.grid(row=4, column=3, sticky="w", **self.pad)
         
-        # Output Resolution
-        self.label_res = ttk.Label(self.content_frame, text="Output Resolution:")
-        self.label_res.grid(row=5, column=0, sticky="w", **self.pad)
-        self.res_values = ["480", "720", "1080", "1440", "2160"]
-        self.res_cb = ttk.Combobox(self.content_frame, values=self.res_values, state="normal")
-        self.res_cb.grid(row=5, column=1, sticky="ew", **self.pad)
-        
+        # Capture Tool
+        if OS_NAME == "Windows":
+            self.label_capture_tool = ttk.Label(self.content_frame, text="Capture Tool:")
+            self.label_capture_tool.grid(row=5, column=0, sticky="w", **self.pad)
+            self.capture_tool_values = ["WindowsCapture", "DXCamera"]
+            self.capture_tool_cb = ttk.Combobox(self.content_frame, values=self.capture_tool_values, state="readonly")
+            self.capture_tool_cb.grid(row=5, column=1, sticky="ew", **self.pad)
+        else:
+            # Hide capture tool selection on non-Windows
+            self.capture_tool_cb = None
+            
         # FPS
         self.label_fps = ttk.Label(self.content_frame, text="FPS:")
         self.label_fps.grid(row=5, column=2, sticky="w", **self.pad)
@@ -455,42 +467,58 @@ class ConfigGUI(tk.Tk):
         self.fps_cb = ttk.Combobox(self.content_frame, values=self.fps_values, state="normal")
         self.fps_cb.grid(row=5, column=3, sticky="ew", **self.pad)
         
+        # Output Resolution
+        self.label_res = ttk.Label(self.content_frame, text="Output Resolution:")
+        self.label_res.grid(row=6, column=0, sticky="w", **self.pad)
+        self.res_values = ["480", "720", "1080", "1440", "2160"]
+        self.res_cb = ttk.Combobox(self.content_frame, values=self.res_values, state="normal")
+        self.res_cb.grid(row=6, column=1, sticky="ew", **self.pad)
+        
+        # Fill 16:9 checkbox
+        self.fill_16_9_var = tk.BooleanVar()
+        self.fill_16_9_cb = ttk.Checkbutton(self.content_frame, text="Fill 16:9", variable=self.fill_16_9_var)
+        self.fill_16_9_cb.grid(row=6, column=2, sticky="w", **self.pad)
+        
+        # Fixed Viewer Aspect checkbox
+        self.fixed_viwer_aspect_var = tk.BooleanVar()
+        self.fixed_viwer_aspect_cb = ttk.Checkbutton(self.content_frame, text="Fixed Viewer Aspect", variable=self.fixed_viwer_aspect_var)
+        
         # Depth Resolution and Depth Strength
         self.label_depth_res = ttk.Label(self.content_frame, text="Depth Resolution:")
-        self.label_depth_res.grid(row=6, column=0, sticky="w", **self.pad)
+        self.label_depth_res.grid(row=7, column=0, sticky="w", **self.pad)
         self.depth_res_cb = ttk.Combobox(self.content_frame, state="normal")
-        self.depth_res_cb.grid(row=6, column=1, sticky="ew", **self.pad)
+        self.depth_res_cb.grid(row=7, column=1, sticky="ew", **self.pad)
         
         self.label_depth_strength = ttk.Label(self.content_frame, text="Depth Strength:")
-        self.label_depth_strength.grid(row=6, column=2, sticky="w", **self.pad)
+        self.label_depth_strength.grid(row=7, column=2, sticky="w", **self.pad)
         self.depth_strength_values = [f"{i/2.0:.1f}" for i in range(21)]  # 0-10
         self.depth_strength_cb = ttk.Combobox(self.content_frame, values=self.depth_strength_values, state="normal")
-        self.depth_strength_cb.grid(row=6, column=3, sticky="ew", **self.pad)
+        self.depth_strength_cb.grid(row=7, column=3, sticky="ew", **self.pad)
         
         # Anti-aliasing
         self.label_antialiasing = ttk.Label(self.content_frame, text="Anti-aliasing:")
-        self.label_antialiasing.grid(row=7, column=0, sticky="w", **self.pad)
+        self.label_antialiasing.grid(row=8, column=0, sticky="w", **self.pad)
         self.antialiasing_values = [str(i) for i in range(11)]  # 0-10
         self.antialiasing_cb = ttk.Combobox(self.content_frame, values=self.antialiasing_values, state="normal")
-        self.antialiasing_cb.grid(row=7, column=1, sticky="ew", **self.pad)
+        self.antialiasing_cb.grid(row=8, column=1, sticky="ew", **self.pad)
         
         # Edge Dilation
         self.label_foreground_scale = ttk.Label(self.content_frame, text="Foreground Scale:")
-        self.label_foreground_scale.grid(row=7, column=2, sticky="w", **self.pad)
+        self.label_foreground_scale.grid(row=8, column=2, sticky="w", **self.pad)
         self.foreground_scale_values = [f"{i/2.0:.1f}" for i in range(-10, 10)] # -5 (squeeze depth scale) to 5 (extend depth scale)
         self.foreground_scale_cb = ttk.Combobox(self.content_frame, values=self.foreground_scale_values, state="normal")
-        self.foreground_scale_cb.grid(row=7, column=3, sticky="ew", **self.pad)
+        self.foreground_scale_cb.grid(row=8, column=3, sticky="ew", **self.pad)
 
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
-        self.label_display_mode.grid(row=8, column=0, sticky="w", **self.pad)
+        self.label_display_mode.grid(row=9, column=0, sticky="w", **self.pad)
         self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB"]
         self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
-        self.display_mode_cb.grid(row=8, column=1, sticky="ew", **self.pad)
+        self.display_mode_cb.grid(row=9, column=1, sticky="ew", **self.pad)
         
         # IPD
         self.label_ipd = ttk.Label(self.content_frame, text="IPD (m):")
-        self.label_ipd.grid(row=8, column=2, sticky="w", **self.pad)
+        self.label_ipd.grid(row=9, column=2, sticky="w", **self.pad)
         self.ipd_var = tk.StringVar()
         self.ipd_spin = ttk.Spinbox(
             self.content_frame,
@@ -500,23 +528,23 @@ class ConfigGUI(tk.Tk):
             textvariable=self.ipd_var,
             state="normal"
         )
-        self.ipd_spin.grid(row=8, column=3, sticky="ew", **self.pad)
+        self.ipd_spin.grid(row=9, column=3, sticky="ew", **self.pad)
         
         # Download path
         self.label_download = ttk.Label(self.content_frame, text="Download Path:")
-        self.label_download.grid(row=9, column=0, sticky="w", **self.pad)
+        self.label_download.grid(row=10, column=0, sticky="w", **self.pad)
         self.download_var = tk.StringVar()
         self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
-        self.download_entry.grid(row=9, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.download_entry.grid(row=10, column=1, columnspan=2, sticky="ew", **self.pad)
         self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
-        self.btn_browse.grid(row=9, column=3, sticky="ew", **self.pad)
+        self.btn_browse.grid(row=10, column=3, sticky="ew", **self.pad)
         
         # Depth Model
         self.label_depth_model = ttk.Label(self.content_frame, text="Depth Model:")
-        self.label_depth_model.grid(row=10, column=0, sticky="w", **self.pad)
+        self.label_depth_model.grid(row=11, column=0, sticky="w", **self.pad)
         self.depth_model_var = tk.StringVar()
         self.depth_model_cb = ttk.Combobox(self.content_frame, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
-        self.depth_model_cb.grid(row=10, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.depth_model_cb.grid(row=11, column=1, columnspan=2, sticky="ew", **self.pad)
         self.depth_model_cb.bind("<<ComboboxSelected>>", self.on_depth_model_change)
 
                 
@@ -525,33 +553,33 @@ class ConfigGUI(tk.Tk):
         self.use_tensorrt = tk.BooleanVar()
         self.unlock_streamer_thread = tk.BooleanVar()
         self.label_inference_optimizer = ttk.Label(self.content_frame, text="Inference Optimizer:")
-        self.label_inference_optimizer.grid(row=11, column=0, sticky="w", **self.pad)
+        self.label_inference_optimizer.grid(row=12, column=0, sticky="w", **self.pad)
 
         # Torch Compile
         self.check_torch_compile = ttk.Checkbutton(self.content_frame, text="torch.compile", variable=self.use_torch_compile)
-        self.check_torch_compile.grid(row=11, column=1, sticky="w", **self.pad)
+        self.check_torch_compile.grid(row=12, column=1, sticky="w", **self.pad)
 
         # TensorRT
         self.check_tensorrt = ttk.Checkbutton(self.content_frame, text="TensorRT", variable=self.use_tensorrt)
-        self.check_tensorrt.grid(row=11, column=2, sticky="w", **self.pad)
+        self.check_tensorrt.grid(row=12, column=2, sticky="w", **self.pad)
 
         # Unlock Thread (Streamer)
         self.check_unlock_streamer_thread = ttk.Checkbutton(self.content_frame, text="Unlock Thread (Streamer)", variable=self.unlock_streamer_thread)
-        self.check_unlock_streamer_thread.grid(row=11, column=1, sticky="w", **self.pad)
+        self.check_unlock_streamer_thread.grid(row=12, column=1, sticky="w", **self.pad)
         self.use_tensorrt.trace_add("write", self.update_recompile_trt_visibility)
         
         # Recompile TensorRT (only visible when TensorRT is selected)
         self.recompile_trt_var = tk.BooleanVar()
         self.check_recompile_trt = ttk.Checkbutton(self.content_frame, text="Recompile TensorRT", variable=self.recompile_trt_var)
-        self.check_recompile_trt.grid(row=11, column=3, sticky="w", **self.pad)
+        self.check_recompile_trt.grid(row=12, column=3, sticky="w", **self.pad)
         
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
-        self.label_hf_endpoint.grid(row=12, column=0, sticky="w", **self.pad)
+        self.label_hf_endpoint.grid(row=13, column=0, sticky="w", **self.pad)
         self.hf_endpoint_var = tk.StringVar()
         self.hf_endpoint_cb = ttk.Combobox(self.content_frame, textvariable=self.hf_endpoint_var, state="normal")
         self.hf_endpoint_cb["values"] = ["https://huggingface.co", "https://hf-mirror.com"]
-        self.hf_endpoint_cb.grid(row=12, column=1, sticky="ew", **self.pad)
+        self.hf_endpoint_cb.grid(row=13, column=1, sticky="ew", **self.pad)
         
         # Streamer Host and Port (only visible when run mode is streamer)
         self.label_streamer_host = ttk.Label(self.content_frame, text="Streamer URL:")
@@ -576,13 +604,13 @@ class ConfigGUI(tk.Tk):
 
         # Buttons (moved down a bit to make room)
         self.btn_reset = ttk.Button(self.content_frame, text="Reset", command=self.reset_to_defaults)
-        self.btn_reset.grid(row=10, column=3, sticky="ew", **self.pad)
+        self.btn_reset.grid(row=11, column=3, sticky="ew", **self.pad)
         
         self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
-        self.btn_stop.grid(row=12, column=2, sticky="ew", **self.pad)
+        self.btn_stop.grid(row=13, column=2, sticky="ew", **self.pad)
         
         self.btn_run = ttk.Button(self.content_frame, text="Run", command=self.save_settings)
-        self.btn_run.grid(row=12, column=3, sticky="ew", **self.pad)
+        self.btn_run.grid(row=13, column=3, sticky="ew", **self.pad)
         
         # Column weights inside content frame
         for col in range(4):
@@ -828,10 +856,15 @@ class ConfigGUI(tk.Tk):
         # Select the appropriate label
         if self.run_mode_key == "Viewer":
             self.run_mode_var_label.set(localized_run_vals[0])
+            self.fixed_viwer_aspect_cb.config(text=texts.get("Fixed Viewer Aspect", "Fixed Viewer Aspect"))
         elif self.run_mode_key == "Streamer":
             self.run_mode_var_label.set(localized_run_vals[1])
         else:  # 3D Monitor
             self.run_mode_var_label.set(localized_run_vals[2])
+            self.fixed_viwer_aspect_cb.config(text=texts.get("Fixed Viewer Aspect", "Fixed Viewer Aspect"))
+        if OS_NAME == "Windows":
+            self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
+        self.fill_16_9_cb.config(text=texts.get("Fill 16:9", "Fill 16:9"))
             
         # Update capture mode combobox values
         localized_capture_vals = [texts.get("Monitor", "Monitor"), texts.get("Window", "Window")]
@@ -900,9 +933,12 @@ class ConfigGUI(tk.Tk):
             self.stream_quality_cb.grid(row=2, column=3, sticky="ew", **self.pad)
             self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
             self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
+            self.fixed_viwer_aspect_cb.grid_remove()
+            
         else:
             self.run_mode_key = "Viewer" if label == viewer_label else "3D Monitor"
             # hide streamer controls for 3D Monitor mode
+            self.fixed_viwer_aspect_cb.grid(row=6, column=3, sticky="w", **self.pad)
             self.label_streamer_host.grid_remove()
             self.streamer_host_entry.grid_remove()
             self.label_streamer_port.grid_remove()
@@ -1071,6 +1107,13 @@ class ConfigGUI(tk.Tk):
         self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
         self.streamer_port_var.set(str(port))
         self.stream_quality_cb.set(str(cfg.get("Stream Quality", DEFAULTS["Stream Quality"])))
+        # Capture option
+        self.capture_tool_cb.set(cfg.get("Capture Tool", DEFAULTS["Capture Tool"]))
+        self.fill_16_9_var.set(cfg.get("Fill 16:9", DEFAULTS["Fill 16:9"]))
+        
+        # Fixed Viewer Ratio
+        self.fixed_viwer_aspect_var.set(cfg.get("Fixed Viewer Aspect", DEFAULTS["Fixed Viewer Aspect"]))
+        
         # Capture mode
         capture_mode = cfg.get("Capture Mode", DEFAULTS.get("Capture Mode", "Monitor"))
         self.capture_mode_key = capture_mode
@@ -1198,7 +1241,11 @@ class ConfigGUI(tk.Tk):
             "TensorRT": self.use_tensorrt.get(),
             "Recompile TensorRT": self.recompile_trt_var.get(),
             "Unlock Thread (Streamer)": self.unlock_streamer_thread.get(),
+            "Capture Tool": self.capture_tool_cb.get(),
+            "Fill 16:9": self.fill_16_9_var.get(),
+            "FIX_VIEWER_ASPECT": self.fixed_viwer_aspect_var.get()
         }
+        
         success = self.save_yaml("settings.yaml", cfg)
         if success:
             # Show a message with countdown

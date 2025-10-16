@@ -215,7 +215,7 @@ if OS_NAME == "Windows":
                 img_array, _ = self.camera.get_rgb_frame()
                 return img_array, self.scaled_height
 
-            def close(self):
+            def stop(self):
                 """
                 Clean up and release the capture device.
                 """
@@ -300,6 +300,11 @@ if OS_NAME == "Windows":
                     img_array = self.latest_frame
                     img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGRA2RGB)
                 return img_rgb, self.scaled_height
+            
+            def stop(self):
+                """Stop capture gracefully."""
+                self.stop_event.set()
+                self._thread.join(timeout=2.0)
             
 
 
@@ -618,6 +623,17 @@ elif OS_NAME == "Darwin":
                 self.cursor_premultiplied = None
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             return frame_rgb, self.scaled_height
+        
+        def stop(self):
+            """Stop the capture and clean up resources."""
+            if hasattr(self, '_mss'):
+                try:
+                    self._mss.close()
+                except:
+                    pass
+            # Clear cursor cache
+            if hasattr(self, '_cursor_cache'):
+                self._cursor_cache.clear()
 
 
 elif OS_NAME.startswith("Linux"):
@@ -774,3 +790,11 @@ elif OS_NAME.startswith("Linux"):
             arr = np.asarray(shot)
             frame_rgb = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
             return frame_rgb, self.scaled_height
+
+        def stop(self):
+            """Stop the capture and clean up resources."""
+            if hasattr(self, '_mss'):
+                try:
+                    self._mss.close()
+                except:
+                    pass

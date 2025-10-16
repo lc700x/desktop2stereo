@@ -15,6 +15,12 @@ raw_q = queue.Queue(maxsize=1)
 proc_q = queue.Queue(maxsize=1)
 depth_q = queue.Queue(maxsize=1)
 
+# Set up a stop event
+stop_event = threading.Event()
+
+# Initialize capture
+cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS)
+
 def put_latest(q, item):
     """Put item into queue, dropping old one if needed (non-blocking)."""
     if q.full():
@@ -28,8 +34,7 @@ def put_latest(q, item):
         pass  # drop if race condition
 
 def capture_loop():
-    cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS)
-    while True:
+    while not stop_event.is_set():
         try:
             frame_raw, size = cap.grab()
         except queue.Empty:
@@ -39,7 +44,7 @@ def capture_loop():
         put_latest(raw_q, (frame_raw, size))
 
 def process_loop():
-    while True:
+    while not stop_event.is_set():
         try:
             frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
         except queue.Empty:
@@ -52,6 +57,7 @@ def main(mode="Viewer"):
     threading.Thread(target=process_loop, daemon=True).start()
 
     frame_count = 0
+    start_time = time.perf_counter()
     last_time = time.perf_counter()
     current_fps = None
     total_frames = 0
@@ -63,7 +69,7 @@ def main(mode="Viewer"):
             from viewer import StereoWindow
 
             def depth_loop():
-                while True:
+                while not stop_event.is_set():
                     try:
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
                     except queue.Empty:
@@ -76,7 +82,7 @@ def main(mode="Viewer"):
             print(f"[Main] Viewer Started")
             while not glfw.window_should_close(window.window):
                 try:
-                    rgb, depth = depth_q.get_nowait()
+                    rgb, depth = depth_q.get(timeout=TIME_SLEEP)
                     window.update_frame(rgb, depth)
                     if SHOW_FPS:
                         frame_count += 1
@@ -109,7 +115,7 @@ def main(mode="Viewer"):
                     return (rgb, depth)
                 
                 def sbs_loop():
-                    while True:
+                    while not stop_event.is_set():
                         try:
                             rgb, depth = depth_q.get(timeout=TIME_SLEEP)
                         except queue.Empty:
@@ -118,7 +124,7 @@ def main(mode="Viewer"):
                         put_latest(sbs_q, sbs)
 
             def depth_loop():
-                while True:
+                while not stop_event.is_set():
                     try:
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
                     except queue.Empty:
@@ -135,7 +141,7 @@ def main(mode="Viewer"):
             streamer.start()
             print(f"[Main] Streamer Started")
             
-            while True:
+            while not stop_event.is_set():
                 try:
                     if not BOOST: # Fix for unstable dml runtime error
                         sbs = depth_q.get(timeout=TIME_SLEEP)
@@ -163,10 +169,13 @@ def main(mode="Viewer"):
             streamer.stop()
         if window:
             glfw.terminate()
-        #     print(f"[Main] {mode} Stopped")
-        # total_time = time.perf_counter() - start_time
-        # avg_fps = frame_count / total_time if total_time > 0 else 0
-        # print(f"Average FPS: {avg_fps:.2f}")
+        if cap:
+            cap.stop()
+            print(f"[Main] {mode} Stopped")
+        # if SHOW_FPS:
+        #     total_time = time.perf_counter() - start_time
+        #     avg_fps = frame_count / total_time if total_time > 0 else 0
+        #     print(f"Average FPS: {avg_fps:.2f}")
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)
