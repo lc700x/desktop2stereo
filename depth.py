@@ -113,6 +113,7 @@ if torch.cuda.is_available():
                 is_causal=is_causal
             )
     if supports_flash_attention(device_id=DEVICE_ID):
+        print("Flash attention enabled")
         F.scaled_dot_product_attention = flash_scaled_dot_product_attention
     
 

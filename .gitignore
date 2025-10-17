@@ -19,3 +19,4 @@ test*
 datasets
 *.png
 *.jpg
+*.whl
