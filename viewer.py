@@ -76,9 +76,11 @@ class StereoWindow:
         self._texture_size = None
         self.monitor_index = 0
         self.fill_16_9 = fill_16_9
+        self.frame_size = (1280, 720) 
+        self.aspect = self.frame_size[0] / self.frame_size[1]
         self.fix_aspect = fix_aspect
         self.show_fps = show_fps
-        self.frame_size = (1280, 720)
+        
         
         # FPS tracking variables
         self.frame_count = 0
@@ -119,17 +121,13 @@ class StereoWindow:
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.RESIZABLE, True)
         
-        # Get primary monitor resolution
-        monitors = glfw.get_monitors()
-        if not monitors:
-            glfw.terminate()
-            raise RuntimeError("No monitors found")
         if self.use_3d:
             glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
             glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
             glfw.window_hint(glfw.DECORATED, glfw.FALSE)  # No window decorations
             glfw.window_hint(glfw.FLOATING, glfw.TRUE)    # Always on top
-            
+            # Get primary monitor resolution
+            monitors = glfw.get_monitors()
             monitor = monitors[MONITOR_INDEX-1]
             vidmode = glfw.get_video_mode(monitor)
             self.window_size = (vidmode.size.width, vidmode.size.height)
@@ -146,11 +144,11 @@ class StereoWindow:
             raise RuntimeError("Could not create window")
         
         add_logo(self.window)
-        self.position_on_monitor(MONITOR_INDEX-1)
+        self.position_on_monitor(0)
         
         # Set up OpenGL context
         glfw.make_context_current(self.window)
-        glfw.swap_interval(1)  # VSync off for maximum performance
+        glfw.swap_interval(1)  # VSync on
         self.ctx = moderngl.create_context()
         
         # Precompile shaders and create VAO
@@ -410,32 +408,30 @@ class StereoWindow:
             # Make the window undecorated and floating
             glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
-
-            # Set the desired window size (fullscreen or fixed aspect)
             if self.fix_aspect:
-                # Keep aspect ratio, scale window to fit screen height or width
-                window_w, window_h = self._last_window_size
+                monitor_aspect = full_w / full_h
+                if monitor_aspect > self.aspect:
+                    # Monitor is wider than target aspect
+                    new_h = full_h
+                    new_w = int(new_h * self.aspect)
 
-                # Compute aspect ratio
-                aspect = window_w / window_h
-
-                # Fit window inside monitor while preserving aspect
-                if full_w / full_h > aspect:
-                    # Screen is wider than aspect — fit by height
-                    window_h = full_h
-                    window_w = int(full_h * aspect)
                 else:
                     # Screen is taller — fit by width
-                    window_w = full_w
-                    window_h = int(full_w / aspect)
+                    new_w = full_w
+                    new_h = int(full_w / self.aspect)
 
-                glfw.set_window_size(self.window, window_w, window_h)
+                glfw.set_window_size(self.window, new_w, new_h)
 
                 # Center window on screen
-                center_x = mon_x + (full_w - window_w) // 2
-                center_y = mon_y + (full_h - window_h) // 2
+                center_x = mon_x + (full_w - new_w) // 2
+                center_y = mon_y + (full_h - new_h) // 2
+                if self.display_mode == "Full-SBS":
+                    # Center window on screen
+                    center_y = mon_y + (full_h - new_h//2) // 2
                 glfw.set_window_pos(self.window, center_x, center_y)
-
+            else:
+                glfw.set_window_size(self.window, full_w, full_h)
+                glfw.set_window_pos(self.window, mon_x, mon_y)
             self._fullscreen = True
         else:
             # Exit fullscreen
