@@ -126,5 +126,4 @@ USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
 CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture
 FILL_16_9 = settings["Fill 16:9"]
-FIX_VIEWER_ASPECT = True
-# FIX_VIEWER_ASPECT = settings["Fixed Viewer Aspect"]
+FIX_VIEWER_ASPECT = settings["Fix Viewer Aspect"]

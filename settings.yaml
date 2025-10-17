@@ -404,10 +404,10 @@ Language: EN
 Run Mode: Viewer
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: false
-TensorRT: false
+torch.compile: true
+TensorRT: true
 Recompile TensorRT: false
 Unlock Thread (Streamer): false
-Capture Tool: WindowsCapture
+Capture Tool: DXCamera
 Fill 16:9: false
-FIX_VIEWER_ASPECT: false
+Fix Viewer Aspect: false

@@ -166,7 +166,7 @@ DEFAULTS = {
     "Stream Quality": 100,
     "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
     "Fill 16:9": False,  # force 16:9 output
-    "Fixed Viewer Aspect": False # keep the viewer window aspect ratio not change
+    "Fix Viewer Aspect": False # keep the viewer window aspect ratio not change
 }
 
 UI_TEXTS = {
@@ -235,7 +235,7 @@ UI_TEXTS = {
         "Opening URL in browser": "Opening URL in browser",
         "Capture Tool:": "Capture Tool:",
         "Fill 16:9": "Fill 16:9",
-        "Fixed Viewer Aspect": "Fixed Viewer Aspect"
+        "Fix Viewer Aspect": "Fix Viewer Aspect"
     },
     "CN": {
         "Monitor": "显示器",
@@ -302,7 +302,7 @@ UI_TEXTS = {
         "Opening URL in browser": "正在浏览器中打开网址",
         "Capture Tool:": "捕获工具:",  
         "Fill 16:9": "填充16:9",
-        "Fixed Viewer Aspect": "固定窗口比例"
+        "Fix Viewer Aspect": "固定窗口比例"
     }
 }
 class ConfigGUI(tk.Tk):
@@ -479,9 +479,9 @@ class ConfigGUI(tk.Tk):
         self.fill_16_9_cb = ttk.Checkbutton(self.content_frame, text="Fill 16:9", variable=self.fill_16_9_var)
         self.fill_16_9_cb.grid(row=6, column=2, sticky="w", **self.pad)
         
-        # Fixed Viewer Aspect checkbox
+        # Fix Viewer Aspect checkbox
         self.fixed_viwer_aspect_var = tk.BooleanVar()
-        self.fixed_viwer_aspect_cb = ttk.Checkbutton(self.content_frame, text="Fixed Viewer Aspect", variable=self.fixed_viwer_aspect_var)
+        self.fixed_viwer_aspect_cb = ttk.Checkbutton(self.content_frame, text="Fix Viewer Aspect", variable=self.fixed_viwer_aspect_var)
         
         # Depth Resolution and Depth Strength
         self.label_depth_res = ttk.Label(self.content_frame, text="Depth Resolution:")
@@ -856,12 +856,12 @@ class ConfigGUI(tk.Tk):
         # Select the appropriate label
         if self.run_mode_key == "Viewer":
             self.run_mode_var_label.set(localized_run_vals[0])
-            self.fixed_viwer_aspect_cb.config(text=texts.get("Fixed Viewer Aspect", "Fixed Viewer Aspect"))
+            self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
         elif self.run_mode_key == "Streamer":
             self.run_mode_var_label.set(localized_run_vals[1])
         else:  # 3D Monitor
             self.run_mode_var_label.set(localized_run_vals[2])
-            self.fixed_viwer_aspect_cb.config(text=texts.get("Fixed Viewer Aspect", "Fixed Viewer Aspect"))
+            self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
         if OS_NAME == "Windows":
             self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
         self.fill_16_9_cb.config(text=texts.get("Fill 16:9", "Fill 16:9"))
@@ -1112,7 +1112,7 @@ class ConfigGUI(tk.Tk):
         self.fill_16_9_var.set(cfg.get("Fill 16:9", DEFAULTS["Fill 16:9"]))
         
         # Fixed Viewer Ratio
-        self.fixed_viwer_aspect_var.set(cfg.get("Fixed Viewer Aspect", DEFAULTS["Fixed Viewer Aspect"]))
+        self.fixed_viwer_aspect_var.set(cfg.get("Fix Viewer Aspect", DEFAULTS["Fix Viewer Aspect"]))
         
         # Capture mode
         capture_mode = cfg.get("Capture Mode", DEFAULTS.get("Capture Mode", "Monitor"))
@@ -1243,7 +1243,7 @@ class ConfigGUI(tk.Tk):
             "Unlock Thread (Streamer)": self.unlock_streamer_thread.get(),
             "Capture Tool": self.capture_tool_cb.get(),
             "Fill 16:9": self.fill_16_9_var.get(),
-            "FIX_VIEWER_ASPECT": self.fixed_viwer_aspect_var.get()
+            "Fix Viewer Aspect": self.fixed_viwer_aspect_var.get()
         }
         
         success = self.save_yaml("settings.yaml", cfg)

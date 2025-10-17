@@ -27,7 +27,7 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME ==  "Windows":
     except:
         ctypes.windll.user32.SetProcessDPIAware()
     dwmapi = ctypes.WinDLL("dwmapi")
-    cap = WindowsCapture(window_name=WINDOW_TITLE) if CAPTURE_MODE == "Window" else WindowsCapture(monitor_index=MONITOR_INDEX)
+    cap = WindowsCapture(window_name=WINDOW_TITLE, draw_border=False) if CAPTURE_MODE == "Window" else WindowsCapture(monitor_index=MONITOR_INDEX, draw_border=False)
     
     def capture_loop():
         @cap.event
