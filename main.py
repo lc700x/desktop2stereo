@@ -26,21 +26,20 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME ==  "Windows":
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except:
         ctypes.windll.user32.SetProcessDPIAware()
-    dwmapi = ctypes.WinDLL("dwmapi")
-    cap = WindowsCapture(window_name=WINDOW_TITLE, draw_border=False) if CAPTURE_MODE == "Window" else WindowsCapture(monitor_index=MONITOR_INDEX, draw_border=False)
+    
+    cap = WindowsCapture(window_name=WINDOW_TITLE) if CAPTURE_MODE == "Window" else WindowsCapture(monitor_index=MONITOR_INDEX)
     
     def capture_loop():
+        global capture_control
         @cap.event
-        def on_frame_arrived(frame: Frame, _capture_control: InternalCaptureControl):
-            global capture_control
-            tick = time.perf_counter()
-            capture_control = _capture_control
+        def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
+            # tick = time.perf_counter()
+            dwmapi = ctypes.WinDLL("dwmapi")
             dwmapi.DwmFlush()
-            _frame_buffer = frame.frame_buffer
-            raw_q.put((cv2.cvtColor(_frame_buffer, cv2.COLOR_BGRA2RGB), OUTPUT_RESOLUTION))
-            process_time = time.perf_counter() - tick
-            wait_time = max(TIME_SLEEP - process_time, 0)
-            time.sleep(wait_time)
+            raw_q.put((frame.frame_buffer, OUTPUT_RESOLUTION))
+            # process_time = time.perf_counter() - tick
+            # wait_time = max(TIME_SLEEP - process_time, 0)
+            # time.sleep(wait_time)
 
         @cap.event
         def on_closed():
@@ -65,9 +64,11 @@ else:
 def process_loop():
     while True:
         try:
-            frame_raw, size = raw_q.get()
+            frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
         except queue.Empty:
             continue
+        if CAPTURE_TOOL == "WindowsCapture"  and OS_NAME == "Windows":
+            frame_raw = cv2.cvtColor(frame_raw, cv2.COLOR_BGRA2RGB)
         frame_rgb = process(frame_raw, size)
         proc_q.put(frame_rgb)
 
@@ -101,7 +102,7 @@ def main(mode="Viewer"):
             print(f"[Main] Viewer Started")
             while not glfw.window_should_close(window.window):
                 try:
-                    rgb, depth = depth_q.get()
+                    rgb, depth = depth_q.get_nowait()
                     window.update_frame(rgb, depth)
                     if SHOW_FPS:
                         frame_count += 1
@@ -136,7 +137,7 @@ def main(mode="Viewer"):
                 def sbs_loop():
                     while True:
                         try:
-                            rgb, depth = depth_q.get()
+                            rgb, depth = depth_q.get(timeout=TIME_SLEEP)
                         except queue.Empty:
                             continue
                         sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
@@ -145,7 +146,7 @@ def main(mode="Viewer"):
             def depth_loop():
                 while True:
                     try:
-                        frame_rgb = proc_q.get()
+                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
                     except queue.Empty:
                         continue
                     depth, rgb = predict_depth(frame_rgb, return_tuple=True)

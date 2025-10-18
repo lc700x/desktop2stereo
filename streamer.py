@@ -10,23 +10,43 @@ from utils import get_local_ip
 ICON_PATH = "icon2.ico"
 
 # Custom WSGI server class that supports threading
+# Modified: Added connection limiting to reduce server pressure from too many concurrent clients
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     allow_reuse_address = True
     block_on_close = False
+    max_connections = 10  # Limit concurrent clients to prevent overload
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.active_connections = 0
+        self.connection_lock = threading.Lock()
+
+    def process_request(self, request, client_address):
+        with self.connection_lock:
+            if self.active_connections >= self.max_connections:
+                request.close()
+                return  # Gracefully reject excess connections
+            self.active_connections += 1
+        try:
+            super().process_request(request, client_address)
+        finally:
+            with self.connection_lock:
+                self.active_connections -= 1
 
 class MJPEGStreamer:
     def __init__(self, host="0.0.0.0", port=1303, fps=60, quality=90):
         """
         Initialize the MJPEG streamer with configuration parameters.
+        Note: Quality is kept constant as specified, no dynamic adjustments.
         """
         # MJPEG stream boundary marker
         self.boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-        self.quality = int(quality)
+        self.quality = int(quality)  # Fixed quality, no changes during runtime
         self.fps = fps
         self.delay = 1.0 / fps
 
-        self.raw_frame = None       # latest frame (numpy RGB)
-        self.encoded_frame = None   # latest JPEG
+        self.raw_frame = None       # Latest frame (numpy RGB)
+        self.encoded_frame = None   # Latest JPEG
         self.lock = threading.Lock()
 
         self.shutdown = threading.Event()
@@ -39,6 +59,7 @@ class MJPEGStreamer:
         self.index_bytes = None
 
         # HTML template with auto reconnect and fullscreen
+        # Modified: Optimized render loop to skip redundant draws and added onerror for robust reconnection
         self.template = """<!DOCTYPE html>
 <html>
     <head>
@@ -93,15 +114,24 @@ class MJPEGStreamer:
                     ensureCanvasSize(w, h);
 
                     function render(timestamp) {{
-                        if (timestamp - last_timestamp >= 1000.0 / (FPS || 30)) {{
-                            last_timestamp = timestamp;
-                            try {{ ctx.drawImage(img, 0, 0, canvas.width, canvas.height); }} catch(e) {{}}
+                        if (timestamp - last_timestamp < 1000.0 / (FPS || 30)) {{
+                            requestAnimationFrame(render);
+                            return; // Skip redundant draws to reduce client CPU usage
                         }}
+                        last_timestamp = timestamp;
+                        try {{ ctx.drawImage(img, 0, 0, canvas.width, canvas.height); }} catch(e) {{ console.error("Failed to draw frame:", e); }}
                         requestAnimationFrame(render);
                     }}
 
                     // Start (or continue) the render loop
                     requestAnimationFrame(render);
+                }};
+
+                // Modified: Added onerror to reconnect on stream failure, reducing client stalls
+                img.onerror = () => {{
+                    setTimeout(() => {{
+                        img.src = STREAM_URI + "?t=" + new Date().getTime(); // Prevent cache
+                    }}, 1000);
                 }};
 
                 // insert canvas into the page visually hidden (video shows the captured stream)
@@ -125,6 +155,7 @@ class MJPEGStreamer:
 """
 
         # WSGI application handler
+        # Note: No quality or scale query parsing, keeping original quality
         def app(environ, start_response):
             path = environ.get("PATH_INFO", "/")
 
@@ -172,6 +203,7 @@ class MJPEGStreamer:
         Set the current frame to be streamed. This will also update the cached HTML
         page if the output resolution changes so newly-connecting clients see the
         correct initial dimensions.
+        Note: No scaling applied, preserving original frame resolution.
         """
         with self.lock:
             h, w = frame_np.shape[:2]
@@ -196,38 +228,46 @@ class MJPEGStreamer:
             self.new_raw_event.set()
 
     def _encoder_loop(self):
+        # Modified: Reduced wait timeout for lower latency, added frame copy to avoid race conditions, ensured FPS maintenance
         prev_time = 0
         while not self.shutdown.is_set():
-            if not self.new_raw_event.wait(timeout=1):
+            if not self.new_raw_event.wait(timeout=0.1):  # Reduced timeout for faster response
                 continue
             self.new_raw_event.clear()
 
-            if time.perf_counter() - prev_time < self.delay:
-                continue  # skip to maintain FPS
-            prev_time = time.perf_counter()
+            with self.lock:
+                if self.raw_frame is None:
+                    continue
+                raw = self.raw_frame.copy()  # Copy to prevent race conditions during encoding
 
-            raw = self.raw_frame
-            if raw is None:
+            # Skip if not enough time has passed to maintain FPS
+            current_time = time.perf_counter()
+            if current_time - prev_time < self.delay:
                 continue
+            prev_time = current_time
 
-            # Encode frame
+            # Encode frame with original quality
             bgr = np.ascontiguousarray(raw[..., ::-1])
             success, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
             if success:
-                self.encoded_frame = buf.tobytes()
-                self.new_encoded_event.set()
+                with self.lock:
+                    self.encoded_frame = buf.tobytes()
+                    self.new_encoded_event.set()
 
     def _generate(self):
+        # Modified: Reduced wait timeout for lower latency, no quality/scale adjustments to preserve original quality
         next_frame_time = time.perf_counter()
         while not self.shutdown.is_set():
-            # Wait for a new frame
-            if not self.new_encoded_event.wait(timeout=1):
+            if not self.new_encoded_event.wait(timeout=0.1):  # Reduced timeout for faster response
                 continue
             self.new_encoded_event.clear()
 
-            f = self.encoded_frame
-            if f:
-                yield self.boundary + f + b"\r\n"
+            with self.lock:
+                f = self.encoded_frame
+                if not f:
+                    continue
+
+            yield self.boundary + f + b"\r\n"
 
             # Enforce consistent pacing
             next_frame_time += self.delay
@@ -240,6 +280,7 @@ class MJPEGStreamer:
         yield b""
 
     def encode_jpeg(self, arr: np.ndarray) -> bytes:
+        # Note: Uses original quality setting
         if arr is None:
             return b""
         bgr = np.ascontiguousarray(arr[..., ::-1])

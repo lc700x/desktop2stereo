@@ -9,8 +9,6 @@ from threading import Lock
 import cv2
 import os, warnings
 
-USE_FA = True
-
 # Initialize DirectML Device
 def get_device(index=0):
     try:
@@ -30,8 +28,11 @@ def get_device(index=0):
         return torch.device("cpu"), "Using CPU device"
     
 DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
+print(DEVICE_INFO)
+print(f"Model: {MODEL_ID}")
 
-if torch.cuda.is_available():
+# Optimization for CUDA
+if "CUDA" in DEVICE_INFO:
     torch.backends.cudnn.benchmark = True
     if not FP16:
         # Enable TF32 for matrix multiplications
@@ -46,80 +47,6 @@ if torch.cuda.is_available():
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
     torch.backends.cuda.enable_math_sdp(True)
-    
-    # deploy flash attention
-    from flash_attn import flash_attn_func
-    def supports_flash_attention(device_id):
-        """Check if a GPU supports FlashAttention."""
-        major, minor = torch.cuda.get_device_capability(device_id)
-        
-        # Check if the GPU architecture is Ampere (SM 8.x) or newer (SM 9.0)
-        is_sm8x = major >= 8 and minor >= 0
-        is_sm90 = major >= 9 and minor >= 0
-
-        return is_sm8x or is_sm90
-    
-    def flash_scaled_dot_product_attention(
-        query,
-        key,
-        value,
-        attn_mask=None,
-        dropout_p=0.0,
-        is_causal=False,
-        *args,
-        **kwargs
-    ):
-        """
-        A universal wrapper for torch.nn.functional.scaled_dot_product_attention
-        that transparently uses FlashAttention if available.
-
-        Extra args/kwargs (like 'scale', 'dropout_mask', etc.) are ignored safely.
-        """
-        # Handle optional scale parameter gracefully
-        scale = kwargs.pop("scale", None)
-
-        if USE_FA and query.is_cuda:
-            try:
-                q, k, v = query, key, value
-
-                # Enforce dtype compatibility
-                if q.dtype not in (torch.float16, torch.bfloat16):
-                    q = q.to(torch.float16)
-                    k = k.to(torch.float16)
-                    v = v.to(torch.float16)
-
-                # FlashAttention expects 4D input: [batch, seq, nheads, head_dim]
-                out = flash_attn_func(q, k, v, dropout_p=dropout_p, causal=is_causal)
-                return out
-            except Exception as e:
-                print(f"FlashAttention failed: {type(e).__name__}: {e}")
-                print("Falling back to PyTorch SDPA.")
-
-        # Fall back to PyTorch SDPA with scale (if provided)
-        if scale is not None:
-            with torch.nn.attention.sdpa_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
-                return F.scaled_dot_product_attention(
-                    query, key, value,
-                    attn_mask=attn_mask,
-                    dropout_p=dropout_p,
-                    is_causal=is_causal,
-                    scale=scale
-                )
-        else:
-            return F.scaled_dot_product_attention(
-                query, key, value,
-                attn_mask=attn_mask,
-                dropout_p=dropout_p,
-                is_causal=is_causal
-            )
-    if supports_flash_attention(device_id=DEVICE_ID):
-        print("Flash attention enabled")
-        F.scaled_dot_product_attention = flash_scaled_dot_product_attention
-    
-
-print(DEVICE_INFO)
-print(f"Model: {MODEL_ID}")
-
 
 if USE_TORCH_COMPILE and torch.cuda.is_available():
     warnings.filterwarnings(
@@ -624,13 +551,22 @@ class DepthModelWrapper:
     
     def __call__(self, tensor):
         """Run inference using the active backend."""
-        with torch.no_grad():
-            if self.backend == "PyTorch":
-                if "Video-Depth-Anything" in MODEL_ID:
-                    return self.model(pixel_values=tensor)
-                return self.model(pixel_values=tensor).predicted_depth
-            else:
-                return self.model(tensor)
+        if "CUDA" in DEVICE_INFO:
+            with torch.amp.autocast('cuda'):
+                if self.backend == "PyTorch":
+                    if "Video-Depth-Anything" in MODEL_ID:
+                        return self.model(pixel_values=tensor)
+                    return self.model(pixel_values=tensor).predicted_depth
+                else:
+                    return self.model(tensor)
+        else:
+            with torch.no_grad():
+                if self.backend == "PyTorch":
+                    if "Video-Depth-Anything" in MODEL_ID:
+                        return self.model(pixel_values=tensor)
+                    return self.model(pixel_values=tensor).predicted_depth
+                else:
+                    return self.model(tensor)
 
 # Initialize model wrapper
 model_wraper = DepthModelWrapper(
@@ -655,12 +591,19 @@ if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
 
 # Initialize with dummy input for warmup
 def warmup_model(model_wraper, steps: int = 3):
-    with torch.no_grad():
-        for i in range(steps):
-            dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
-                                device=DEVICE, dtype=MODEL_DTYPE)
-            model_wraper(dummy)
-    # print(f"Warmup complete with {steps} iterations.")
+    if "CUDA" in DEVICE_INFO:
+        with torch.amp.autocast('cuda'):
+            for i in range(steps):
+                dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
+                                    device=DEVICE, dtype=MODEL_DTYPE)
+                model_wraper(dummy)
+    else:
+        with torch.no_grad():
+            for i in range(steps):
+                dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
+                                    device=DEVICE, dtype=MODEL_DTYPE)
+                model_wraper(dummy)
+        # print(f"Warmup complete with {steps} iterations.")
 
 warmup_model(model_wraper, steps=3)
 
@@ -716,8 +659,12 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     if 'Video-Depth-Anything' in MODEL_ID:
         depth = model_wraper(tensor)
     else:
-        with torch.no_grad():
-            depth = model_wraper(tensor)
+        if "CUDA" in DEVICE_INFO:
+            with torch.amp.autocast('cuda'):
+                depth = model_wraper(tensor)
+        else:
+            with torch.no_grad():
+                depth = model_wraper(tensor)
     
     # Robust normalize and Post depth processing
     depth = apply_stretch(depth, 5, 95)
