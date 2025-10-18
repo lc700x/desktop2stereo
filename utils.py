@@ -1,8 +1,11 @@
-import yaml
+import yaml, threading
 import os, platform, socket
 
 # App Version
 VERSION = "2.3.5"
+
+# Global shutdown event
+shutdown_event = threading.Event()
 
 def read_yaml(path):
     try:
@@ -56,7 +59,7 @@ if settings["HF Endpoint"]:
     os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 if OS_NAME == "Windows":
-    import ctypes
+    import ctypes, win32gui, win32con
     # get windows Hi-DPI scale
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -81,7 +84,14 @@ if OS_NAME == "Windows":
         else:
             print(f"Failed to set display affinity. Error code: {ctypes.get_last_error()}")
 
-
+    def set_window_to_bottom(glfw_window):
+        """
+        Finds a window by its title and sets its Z-order to the bottom.
+        """
+        hwnd = glfw.get_win32_window(glfw_window)
+        if hwnd:
+            win32gui.SetWindowPos(hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0,
+                                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
 
 # Streamer Settings
 DEFAULT_PORT = 1122
@@ -127,3 +137,7 @@ RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
 CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture
 FILL_16_9 = settings["Fill 16:9"]
 FIX_VIEWER_ASPECT = settings["Fix Viewer Aspect"]
+STEREOMIX_DEVICE = "立体声混音 (Realtek(R) Audio)"
+USE_RTMP = True
+USE_RTMP = True if OS_NAME == "Windows" and USE_RTMP == True else False
+STREAM_KEY = "live"

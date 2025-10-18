@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 1
+Monitor Index: 2
 Window Title: ''
 FPS: 60
 Show FPS: true
@@ -403,7 +403,7 @@ Device: 0
 Language: EN
 Run Mode: Streamer
 Streamer Port: 1122
-Stream Quality: 90
+Stream Quality: 100
 torch.compile: true
 TensorRT: true
 Recompile TensorRT: false

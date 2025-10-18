@@ -4,7 +4,7 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, crop_icon, get_local_ip
+from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, crop_icon, get_local_ip, shutdown_event
 
 # Get model lists
 DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
@@ -1279,7 +1279,7 @@ class ConfigGUI(tk.Tk):
                     UI_TEXTS[self.language]["Error"],
                     f"{UI_TEXTS[self.language]['Failed to run process:']} {e}"
                 )
-                print(f"[Main] {self.run_mode_key} Stopped")
+                print(f"[Main] Stopped")
                 self.update_status(UI_TEXTS[self.language]["Stopped"])
 
     def _monitor_process(self):
@@ -1287,19 +1287,29 @@ class ConfigGUI(tk.Tk):
         if self.process and self.process.poll() is not None:
             # Process ended or was killed outside
             self.process = None
-            print(f"[Main] {self.run_mode_key} Stopped")
+            print(f"[Main] Stopped")
             self.update_status(UI_TEXTS[self.language]["Stopped"])
         else:
             # Keep checking every second
             self.after(1000, self._monitor_process)
                     
     def stop_process(self):
-        if self.process and self.process.poll() is None:  # still running
+        """Fully shutdown all processes using signals"""
+        print("[Stop] Stopping all processes...")
+        
+        # Set shutdown event to signal all threads
+        shutdown_event.set()
+        
+        # Stop main process
+        if self.process and self.process.poll() is None:
             try:
+                print("[Stop] Stopping main process...")
                 self.process.terminate()
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                print("[Stop] Force killing main process...")
                 self.process.kill()
+                self.process.wait()
             except Exception as e:
                 messagebox.showerror(
                     UI_TEXTS[self.language]["Error"],
@@ -1307,11 +1317,23 @@ class ConfigGUI(tk.Tk):
                 )
             finally:
                 self.process = None
-                print(f"[Main] {self.run_mode_key} Stopped")
-                self.update_status(UI_TEXTS[self.language]["Stopped"])
-        else:
-            print(f"[Main] {self.run_mode_key} Stopped")
-            self.update_status(UI_TEXTS[self.language]["Stopped"])
+        
+        # Additional cleanup
+        self.cleanup_resources()
+        
+        print(f"[Main] Stopped")
+        self.update_status(UI_TEXTS[self.language]["Stopped"])
+
+    def cleanup_resources(self):
+        """Clean up all resources from GUI"""
+        # Additional Windows-specific cleanup for FFmpeg
+        if OS_NAME == "Windows":
+            # taskkill if available
+            import subprocess
+            subprocess.run(['taskkill', '/f', '/im', 'ffmpeg.exe'], 
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['taskkill', '/f', '/im', 'mediamtx.exe'], 
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 if __name__ == "__main__":
     app = ConfigGUI()

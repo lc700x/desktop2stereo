@@ -3,8 +3,18 @@ import threading
 import queue
 import glfw
 import time
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST
+import signal
+import sys
+import subprocess
+import cv2
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, USE_RTMP, STREAM_KEY, LOCAL_IP, shutdown_event
 from depth import process, predict_depth
+
+# Global process references
+global_processes = {
+    'ffmpeg': None,
+    'rtmp_server': None
+}
 
 # Use precise frame interval
 TIME_SLEEP = 1.0 / FPS
@@ -14,13 +24,11 @@ raw_q = queue.Queue(maxsize=1)
 proc_q = queue.Queue(maxsize=1)
 depth_q = queue.Queue(maxsize=1)
 
-# Set up a stop event
-stop_event = threading.Event()
-
 # Initialize capture
-if CAPTURE_TOOL == "WindowsCapture" and OS_NAME ==  "Windows":
+if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
     from windows_capture import WindowsCapture, Frame, InternalCaptureControl
-    import cv2, ctypes
+    import ctypes
+    
     # get windows Hi-DPI scale
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -31,8 +39,11 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME ==  "Windows":
     
     def capture_loop():
         global capture_control
+        
         @cap.event
         def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
+            if shutdown_event.is_set():
+                return
             # tick = time.perf_counter()
             dwmapi = ctypes.WinDLL("dwmapi")
             dwmapi.DwmFlush()
@@ -40,67 +51,225 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME ==  "Windows":
             # process_time = time.perf_counter() - tick
             # wait_time = max(TIME_SLEEP - process_time, 0)
             # time.sleep(wait_time)
-
+        
         @cap.event
         def on_closed():
             print("Capture Session Closed")
-
+        
         cap.start()
 else:
     # DXCamera based wincam
     from capture import DesktopGrabber
     cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX)
-
+    
     def capture_loop():
-        while True:
+        while not shutdown_event.is_set():
             try:
                 frame_raw, size = cap.grab()
+                if shutdown_event.is_set():
+                    break
+                raw_q.put((frame_raw, size))
             except queue.Empty:
                 continue
             except Exception:
                 continue
-            raw_q.put((frame_raw, size))
 
 def process_loop():
-    while True:
+    while not shutdown_event.is_set():
         try:
             frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
+            if shutdown_event.is_set():
+                break
+            if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
+                frame_raw = cv2.cvtColor(frame_raw, cv2.COLOR_BGRA2RGB)
+            frame_rgb = process(frame_raw, size)
+            proc_q.put(frame_rgb)
         except queue.Empty:
             continue
-        if CAPTURE_TOOL == "WindowsCapture"  and OS_NAME == "Windows":
-            frame_raw = cv2.cvtColor(frame_raw, cv2.COLOR_BGRA2RGB)
-        frame_rgb = process(frame_raw, size)
-        proc_q.put(frame_rgb)
+
+def cleanup_all_resources():
+    """Global cleanup function"""
+    print("[Cleanup] Shutting down all resources...")
+    
+    # Kill all processes
+    for proc_name, process in global_processes.items():
+        if process and hasattr(process, 'poll'):
+            try:
+                print(f"[Cleanup] Stopping {proc_name}...")
+                process.terminate()
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    print(f"[Cleanup] Force killing {proc_name}...")
+                    process.kill()
+                    process.wait()
+                except:
+                    pass
+            except Exception as e:
+                print(f"[Cleanup] Error stopping {proc_name}: {e}")
+            finally:
+                global_processes[proc_name] = None
+    
+    # GLFW cleanup
+    try:
+        import glfw
+        if glfw.get_current_context():
+            glfw.terminate()
+        print("[Cleanup] GLFW terminated")
+    except Exception as e:
+        print(f"[Cleanup] Error terminating GLFW: {e}")
+    
+    # Stop capture
+    try:
+        if 'cap' in globals():
+            try:
+                cap.stop()
+            except AttributeError:
+                # stop for WindowsCapture
+                if OS_NAME == "Windows" and CAPTURE_MODE == "WindowsCapture":
+                    capture_control.stop()
+            print("[Cleanup] Capture stopped")
+    except Exception as e:
+        print(f"[Cleanup] Error stopping capture: {e}")
+    
+    # Stop streamer if exists
+    try:
+        if 'streamer' in globals() and streamer:
+            streamer.stop()
+            print("[Cleanup] Streamer stopped")
+    except Exception as e:
+        print(f"[Cleanup] Error stopping streamer: {e}")
+    
+    # Clear all queues to unblock threads
+    queues = [raw_q, proc_q, depth_q]
+    if 'sbs_q' in globals():
+        queues.append(sbs_q)
+    
+    for q in queues:
+        while not q.empty():
+            try:
+                q.get_nowait()
+            except:
+                pass
+    
+    print("[Cleanup] All resources cleaned up")
+
+def signal_handler(signum, frame):
+    """Handle Ctrl+C and other termination signals"""
+    print(f"\n[Signal] Received signal {signum}, shutting down...")
+    shutdown_event.set()
+    cleanup_all_resources()
+    sys.exit(0)
+
+# Register signal handlers
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+if OS_NAME != "Windows":
+    signal.signal(signal.SIGQUIT, signal_handler)
+
+def rtmp_stream():
+    try:
+        # Start RTMP server
+        rtmp_server = subprocess.Popen([
+            './rtmp/mediamtx/mediamtx.exe',
+            './rtmp/mediamtx/mediamtx.yml'
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # Initialize ffmpeg
+        ffmpeg = subprocess.Popen([
+            './rtmp/ffmpeg/bin/ffmpeg.exe',
+            '-filter_complex',
+            "gfxcapture=window_title='(?i)Stereo Viewer':max_framerate=60,hwdownload,format=bgra,format=yuv420p",
+            '-f', 'dshow',
+            '-rtbufsize', '1024M',
+            '-i', f'audio={STEREOMIX_DEVICE}',
+            '-vcodec', 'libx264',
+            '-preset', 'ultrafast',
+            '-tune', 'zerolatency',
+            '-acodec', 'aac',
+            '-ar', '44100',
+            '-b:a', '128k',
+            '-f', 'flv',
+            f'rtmp://localhost:1935/{STREAM_KEY}'
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Store process references globally
+        global_processes['rtmp_server'] = rtmp_server
+        global_processes['ffmpeg'] = ffmpeg
+        print(f"[MJPEGStreamer] serving on http://{LOCAL_IP}:8888/{STREAM_KEY}/")
+        print("[RTMP] RTMP stream started")
+        
+        # Wait for shutdown event
+        while not shutdown_event.is_set():
+            time.sleep(0.1)
+        
+        # Cleanup when shutdown is signaled
+        print("[RTMP] Shutting down RTMP stream...")
+        ffmpeg.terminate()
+        rtmp_server.terminate()
+        ffmpeg.wait(timeout=5)
+        rtmp_server.wait(timeout=5)
+        
+    except subprocess.TimeoutExpired:
+        print("[RTMP] Timeout expired, force killing processes...")
+        if 'ffmpeg' in locals():
+            ffmpeg.kill()
+        if 'rtmp_server' in locals():
+            rtmp_server.kill()
+    except Exception as e:
+        print(f"[RTMP] Error: {e}")
+        if 'ffmpeg' in locals():
+            ffmpeg.terminate()
+        if 'rtmp_server' in locals():
+            rtmp_server.terminate()
+    finally:
+        print("[RTMP] RTMP stream stopped")
 
 def main(mode="Viewer"):
+    # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
-
+    
     frame_count = 0
     start_time = time.perf_counter()
     last_time = time.perf_counter()
     current_fps = None
     total_frames = 0
-
     streamer, window = None, None
-
+    
     try:
         if mode == "Viewer":
             from viewer import StereoWindow
-
+            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS)
+            
             def depth_loop():
-                while True:
+                while not shutdown_event.is_set():
                     try:
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        if shutdown_event.is_set():
+                            break
+                        depth = predict_depth(frame_rgb)
+                        depth_q.put((frame_rgb, depth))
                     except queue.Empty:
                         continue
-                    depth = predict_depth(frame_rgb)
-                    depth_q.put((frame_rgb, depth))
-
+            
             threading.Thread(target=depth_loop, daemon=True).start()
-            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS)
-            print(f"[Main] Viewer Started")
-            while not glfw.window_should_close(window.window):
+            
+            if USE_RTMP and OS_NAME == "Windows":
+                from utils import set_window_to_bottom
+                rtmp_thread = threading.Thread(target=rtmp_stream, daemon=True)
+                rtmp_thread.start()
+                
+                def bottom_loop():
+                    while True:
+                        set_window_to_bottom(window.window)
+                        time.sleep(0.1)
+                        
+                threading.Thread(target=bottom_loop, daemon=True).start()
+            else:
+                print(f"[Main] Viewer Started")
+            
+            while (not glfw.window_should_close(window.window) and 
+                   not shutdown_event.is_set()):
                 try:
                     rgb, depth = depth_q.get_nowait()
                     window.update_frame(rgb, depth)
@@ -112,62 +281,72 @@ def main(mode="Viewer"):
                             current_fps = frame_count / (current_time - last_time)
                             frame_count = 0
                             last_time = current_time
-                            glfw.set_window_title(window.window, f"Stereo Viewer | FPS: {current_fps:.1f} | Depth: {window.depth_ratio:.1f}")
+                            glfw.set_window_title(window.window, f"Stereo Viewer | {current_fps:.1f} FPS")
                 except queue.Empty:
                     pass
-
+                
                 window.render()
                 glfw.swap_buffers(window.window)
                 glfw.poll_events()
-
+            
             glfw.terminate()
-
+            
         else:
             from depth import make_sbs, DEVICE_INFO
             BOOST = (not "DirectML" in DEVICE_INFO) or DML_BOOST
             from streamer import MJPEGStreamer
+            
             if not BOOST:
                 def make_output(rgb, depth):
                     return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
             else:
                 sbs_q = queue.Queue(maxsize=1)
+                
                 def make_output(rgb, depth):
                     return (rgb, depth)
                 
                 def sbs_loop():
-                    while True:
+                    while not shutdown_event.is_set():
                         try:
                             rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+                            if shutdown_event.is_set():
+                                break
+                            sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
+                            sbs_q.put(sbs)
                         except queue.Empty:
                             continue
-                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
-                        sbs_q.put(sbs)
-
+            
             def depth_loop():
-                while True:
+                while not shutdown_event.is_set():
                     try:
                         frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        if shutdown_event.is_set():
+                            break
+                        depth, rgb = predict_depth(frame_rgb, return_tuple=True)
+                        depth_q.put(make_output(rgb, depth))
                     except queue.Empty:
                         continue
-                    depth, rgb = predict_depth(frame_rgb, return_tuple=True)
-                    depth_q.put(make_output(rgb, depth))
-                    
-
+            
             threading.Thread(target=depth_loop, daemon=True).start()
+            
             if BOOST:
                 threading.Thread(target=sbs_loop, daemon=True).start()
             
             streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
             streamer.start()
+            
             print(f"[Main] Streamer Started")
             
-            while True:
+            while not shutdown_event.is_set():
                 try:
-                    if not BOOST: # Fix for unstable dml runtime error
+                    if not BOOST:
+                        # Fix for unstable dml runtime error
                         sbs = depth_q.get()
                     else:
                         sbs = sbs_q.get()
+                    
                     streamer.set_frame(sbs)
+                    
                     if SHOW_FPS:
                         frame_count += 1
                         current_time = time.perf_counter()
@@ -176,30 +355,28 @@ def main(mode="Viewer"):
                             frame_count = 0
                             last_time = current_time
                             print(f"FPS: {current_fps:.2f}")
+                            
                 except queue.Empty:
                     continue
-
+                except Exception as e:
+                    if not shutdown_event.is_set():
+                        print(f"Streamer error: {e}")
+                    break
+                    
     except KeyboardInterrupt:
-        print("\n[Main] Shutting down…")
-
+        print("\n[Main] Keyboard interrupt received, shutting down...")
     except Exception as e:
-        print(e)
+        print(f"[Main] Error: {e}")
     finally:
-        if streamer:
-            streamer.stop()
-        if window:
-            glfw.terminate()
-        try:
-            cap.stop()
-        except AttributeError:
-            # stop for WindowsCapture
-            if OS_NAME == "Windows" and CAPTURE_MODE == "WindowsCapture":
-                capture_control.stop()
-        print(f"[Main] {mode} Stopped")
-        # if SHOW_FPS:
-        #     total_time = time.perf_counter() - start_time
-        #     avg_fps = frame_count / total_time if total_time > 0 else 0
-        #     print(f"Average FPS: {avg_fps:.2f}")
+        # Ensure cleanup happens
+        shutdown_event.set()
+        cleanup_all_resources()
+        
+        if SHOW_FPS:
+            total_time = time.perf_counter() - start_time
+            avg_fps = total_frames / total_time if total_time > 0 else 0
+            print(f"Average FPS: {avg_fps:.2f}")
+        print(f"[Main] Stopped")
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)

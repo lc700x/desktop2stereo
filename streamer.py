@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
-from utils import get_local_ip
+from utils import LOCAL_IP
 
 # Path to favicon file
 ICON_PATH = "icon2.ico"
@@ -185,7 +185,7 @@ class MJPEGStreamer:
         self.encoder_thread = threading.Thread(target=self._encoder_loop, daemon=True)
 
     def start(self):
-        print(f"[MJPEGStreamer] serving on http://{get_local_ip()}:{self.server.server_address[1]}/")
+        print(f"[MJPEGStreamer] serving on http://{LOCAL_IP}:{self.server.server_address[1]}/")
         self.server_thread.start()
         self.encoder_thread.start()
 

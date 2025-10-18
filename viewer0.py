@@ -6,7 +6,8 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9
+from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX
+# 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
 
@@ -54,13 +55,14 @@ def add_logo(window):
         glfw_img = crop_icon(glfw_img)
         glfw.set_window_icon(window, 1, [glfw_img])
 
-
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
     
-    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True):
+    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT):
         # Initialize with default values
-        self.window_size = (1280, 720)
+        self.use_3d = use_3d
+        if not self.use_3d:
+            self.window_size = (1280, 720)
         self.title = "Stereo SBS Viewer"
         self.ipd_uv = ipd
         self.depth_strength = 0.1
@@ -74,8 +76,11 @@ class StereoWindow:
         self._texture_size = None
         self.monitor_index = 0
         self.fill_16_9 = fill_16_9
+        self.frame_size = (1280, 720) 
+        self.aspect = self.frame_size[0] / self.frame_size[1]
+        self.fix_aspect = fix_aspect
         self.show_fps = show_fps
-        self.frame_size = (1280, 720)
+        
         
         # FPS tracking variables
         self.frame_count = 0
@@ -116,8 +121,24 @@ class StereoWindow:
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.RESIZABLE, True)
         
+        if self.use_3d:
+            glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
+            glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
+            glfw.window_hint(glfw.DECORATED, glfw.FALSE)  # No window decorations
+            glfw.window_hint(glfw.FLOATING, glfw.TRUE)    # Always on top
+            # Get primary monitor resolution
+            monitors = glfw.get_monitors()
+            monitor = monitors[MONITOR_INDEX-1]
+            vidmode = glfw.get_video_mode(monitor)
+            self.window_size = (vidmode.size.width, vidmode.size.height)
+            
         # Create window
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
+        
+        # Hide window for 3D monitor, but cannot be captured by other apps as well
+        if self.use_3d and OS_NAME == "Windows":
+            hide_window_from_capture(self.window)
+        
         if not self.window:
             glfw.terminate()
             raise RuntimeError("Could not create window")
@@ -127,7 +148,7 @@ class StereoWindow:
         
         # Set up OpenGL context
         glfw.make_context_current(self.window)
-        glfw.swap_interval(1)  # VSync off for maximum performance
+        glfw.swap_interval(1)  # VSync on
         self.ctx = moderngl.create_context()
         
         # Precompile shaders and create VAO
@@ -242,11 +263,7 @@ class StereoWindow:
         return overlay_arr
 
     def _add_overlay(self, rgb_frame):
-        """Add FPS and depth ratio overlay to the frame with minimal allocations.
-        This function will only regenerate the small overlay image when necessary
-        (text changed or throttle interval elapsed). The overlay is alpha-blended
-        into the existing numpy frame in-place where possible.
-        """
+        """Add FPS and depth ratio overlay to the frame with minimal allocations."""
         # If nothing to show or no font available, do nothing fast
         if not (self.show_fps or self.show_depth_ratio) or self.font is None:
             return rgb_frame
@@ -337,10 +354,13 @@ class StereoWindow:
             mon_x, mon_y = glfw.get_monitor_pos(monitor)
             vidmode = glfw.get_video_mode(monitor)
             mon_w, mon_h = vidmode.size.width, vidmode.size.height
-
-            x = mon_x + (mon_w - self.window_size[0]) // 2
-            y = mon_y + (mon_h - self.window_size[1]) // 2
-            glfw.set_window_pos(self.window, x, y)
+            if self.use_3d:
+                glfw.set_window_size(self.window, mon_w, mon_h)
+                glfw.set_window_pos(self.window, mon_x, mon_y)
+            else:
+                x = mon_x + (mon_w - self.window_size[0]) // 2
+                y = mon_y + (mon_h - self.window_size[1]) // 2
+                glfw.set_window_pos(self.window, x, y)
             self.monitor_index = monitor_index
 
     def get_current_monitor(self):
@@ -380,15 +400,38 @@ class StereoWindow:
             self._last_window_position = glfw.get_window_pos(self.window)
             self._last_window_size = glfw.get_window_size(self.window)
 
+            # Get monitor info
             mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
             vidmode = glfw.get_video_mode(current_monitor)
             full_w, full_h = vidmode.size.width, vidmode.size.height
 
+            # Make the window undecorated and floating
             glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
-            glfw.set_window_size(self.window, full_w, full_h)
-            glfw.set_window_pos(self.window, mon_x, mon_y)
+            if self.fix_aspect:
+                monitor_aspect = full_w / full_h
+                if monitor_aspect > self.aspect:
+                    # Monitor is wider than target aspect
+                    new_h = full_h
+                    new_w = int(new_h * self.aspect)
 
+                else:
+                    # Screen is taller — fit by width
+                    new_w = full_w
+                    new_h = int(full_w / self.aspect)
+
+                glfw.set_window_size(self.window, new_w, new_h)
+
+                # Center window on screen
+                center_x = mon_x + (full_w - new_w) // 2
+                center_y = mon_y + (full_h - new_h) // 2
+                if self.display_mode == "Full-SBS":
+                    # Center window on screen
+                    center_y = mon_y + (full_h - new_h//2) // 2
+                glfw.set_window_pos(self.window, center_x, center_y)
+            else:
+                glfw.set_window_size(self.window, full_w, full_h)
+                glfw.set_window_pos(self.window, mon_x, mon_y)
             self._fullscreen = True
         else:
             # Exit fullscreen
@@ -435,6 +478,14 @@ class StereoWindow:
                 self.show_fps = not self.show_fps
                 # Force overlay regen when toggling show_fps
                 self._overlay_cache['last_update'] = 0.0
+            elif key == glfw.KEY_A:  # Toggle fill 16:0 with A key
+                self.fill_16_9 = not self.fill_16_9
+                # Force overlay regen to show aspect ratio status
+                self._overlay_cache['last_update'] = 0.0
+            elif key == glfw.KEY_L:  # Toggle viewer aspect ratio lock with F key
+                self.fix_aspect = not self.fix_aspect
+                # Force overlay regen to show aspect ratio status
+                self._overlay_cache['last_update'] = 0.0
 
     def update_frame(self, rgb, depth):
         """Optimized texture updates with minimal allocations"""
@@ -470,8 +521,7 @@ class StereoWindow:
             
             self._texture_size = (w, h)
 
-        # Upload texture data with minimal copies
-        # ensure rgb data is uint8 before writing
+        # Upload texture data
         if rgb_with_overlay.dtype != np.uint8:
             rgb_u8 = np.clip(rgb_with_overlay * 255.0, 0, 255).astype('uint8')
         else:
@@ -481,7 +531,7 @@ class StereoWindow:
         self.depth_tex.write((self.depth_ratio * depth).astype('float32', copy=False).tobytes())
 
     def _compute_render_size(self, max_w, max_h, src_w, src_h):
-        """Optimized render size calculation"""
+        """Calculate render size maintaining aspect ratio"""
         if src_w == 0 or src_h == 0:
             return 0, 0
         scale = min(max_w / src_w, max_h / src_h)
@@ -498,14 +548,15 @@ class StereoWindow:
         # Get window dimensions once
         win_w, win_h = glfw.get_framebuffer_size(self.window)
         tex_w, tex_h = self._texture_size
-        
+        if self.fix_aspect:
+            if self.display_mode == "Full-SBS":
+                glfw.set_window_aspect_ratio(self.window, 2*tex_w, tex_h)
+            else:
+                glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
         # Clear screen once
         self.ctx.clear(0.1, 0.1, 0.1)
         
         if self.fill_16_9:
-        
-        
-            
             # Bind textures once
             self.color_tex.use(location=0)
             self.depth_tex.use(location=1)
@@ -600,7 +651,10 @@ class StereoWindow:
                 disp_w, disp_h = 2 * tex_w, tex_h  # default full SBS
 
             target_aspect = disp_h / disp_w
-            window_aspect = win_h / win_w
+            try:
+                window_aspect = win_h / win_w
+            except ZeroDivisionError:
+                window_aspect = 9/16
 
             # Scale to fit window, preserving aspect ratio
             if window_aspect <= target_aspect:

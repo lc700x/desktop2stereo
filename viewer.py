@@ -6,7 +6,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX
+from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, USE_RTMP
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
@@ -58,12 +58,12 @@ def add_logo(window):
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
     
-    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT):
+    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT, use_rtmp=USE_RTMP):
         # Initialize with default values
         self.use_3d = use_3d
         if not self.use_3d:
             self.window_size = (1280, 720)
-        self.title = "Stereo SBS Viewer"
+        self.title = "Stereo Viewer"
         self.ipd_uv = ipd
         self.depth_strength = 0.1
         self._last_window_position = None
@@ -80,7 +80,7 @@ class StereoWindow:
         self.aspect = self.frame_size[0] / self.frame_size[1]
         self.fix_aspect = fix_aspect
         self.show_fps = show_fps
-        
+        self.use_rtmp = use_rtmp
         
         # FPS tracking variables
         self.frame_count = 0
@@ -122,15 +122,17 @@ class StereoWindow:
         glfw.window_hint(glfw.RESIZABLE, True)
         
         if self.use_3d:
-            glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
             glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
-            glfw.window_hint(glfw.DECORATED, glfw.FALSE)  # No window decorations
             glfw.window_hint(glfw.FLOATING, glfw.TRUE)    # Always on top
             # Get primary monitor resolution
             monitors = glfw.get_monitors()
             monitor = monitors[MONITOR_INDEX-1]
             vidmode = glfw.get_video_mode(monitor)
             self.window_size = (vidmode.size.width, vidmode.size.height)
+        elif self.use_rtmp:
+            glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
+            glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
+            glfw.window_hint(glfw.DECORATED, glfw.FALSE)  # No window decorations
             
         # Create window
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
@@ -145,7 +147,7 @@ class StereoWindow:
         
         add_logo(self.window)
         self.position_on_monitor(0)
-        
+
         # Set up OpenGL context
         glfw.make_context_current(self.window)
         glfw.swap_interval(1)  # VSync on
@@ -274,6 +276,14 @@ class StereoWindow:
 
         h, w, _ = rgb_frame.shape
         self.frame_size = (w, h)
+        
+        # freeze window size for rtmp streaming
+        if self.use_rtmp:
+            if self.display_mode == "Full-SBS":
+                target_w = 2 * target_w
+            glfw.set_window_size(self.window, w, h)
+            glfw.set_window_pos(self.window, 0, 0)
+            
 
         # Update FPS counters but do not regenerate overlay every frame
         current_time = time.perf_counter()
@@ -452,16 +462,19 @@ class StereoWindow:
             self._fullscreen = False
     
     def on_key_event(self, window, key, scancode, action, mods):
-        """Optimized key event handling"""
+        """Optimized key event handling, disable some keys for rtmp and 3d monitor"""
         if action == glfw.PRESS:
             if key == glfw.KEY_ENTER or key == glfw.KEY_SPACE:
-                self.toggle_fullscreen()
+                if not USE_RTMP and not USE_3D_MONITOR:
+                    self.toggle_fullscreen()
+            elif key == glfw.KEY_RIGHT:
+                if not USE_RTMP:
+                    self.move_to_adjacent_monitor(+1)
+            elif key == glfw.KEY_LEFT:
+                if not USE_RTMP:
+                    self.move_to_adjacent_monitor(-1)
             elif key == glfw.KEY_ESCAPE:
                 glfw.set_window_should_close(window, True)
-            elif key == glfw.KEY_RIGHT:
-                self.move_to_adjacent_monitor(+1)
-            elif key == glfw.KEY_LEFT:
-                self.move_to_adjacent_monitor(-1)
             elif key == glfw.KEY_DOWN:
                 self.depth_ratio = max(0, self.depth_ratio - 0.5)
                 self.last_depth_change_time = time.perf_counter()
@@ -482,7 +495,7 @@ class StereoWindow:
                 self.fill_16_9 = not self.fill_16_9
                 # Force overlay regen to show aspect ratio status
                 self._overlay_cache['last_update'] = 0.0
-            elif key == glfw.KEY_L:  # Toggle viewer aspect ratio lock with F key
+            elif key == glfw.KEY_L:  # Toggle viewer aspect ratio lock with L key
                 self.fix_aspect = not self.fix_aspect
                 # Force overlay regen to show aspect ratio status
                 self._overlay_cache['last_update'] = 0.0
