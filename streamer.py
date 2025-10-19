@@ -248,11 +248,14 @@ class MJPEGStreamer:
 
             # Encode frame with original quality
             bgr = np.ascontiguousarray(raw[..., ::-1])
-            success, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
-            if success:
-                with self.lock:
-                    self.encoded_frame = buf.tobytes()
-                    self.new_encoded_event.set()
+            try:
+                success, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+                if success:
+                    with self.lock:
+                        self.encoded_frame = buf.tobytes()
+                        self.new_encoded_event.set()
+            except:
+                pass
 
     def _generate(self):
         # Modified: Reduced wait timeout for lower latency, no quality/scale adjustments to preserve original quality

@@ -7,8 +7,9 @@ import signal
 import sys
 import subprocess
 import cv2
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, USE_RTMP, STREAM_KEY, LOCAL_IP, shutdown_event
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, LOCAL_IP, shutdown_event
 from depth import process, predict_depth
+import numpy as np
 
 # Global process references
 global_processes = {
@@ -110,15 +111,6 @@ def cleanup_all_resources():
             finally:
                 global_processes[proc_name] = None
     
-    # GLFW cleanup
-    try:
-        import glfw
-        if glfw.get_current_context():
-            glfw.terminate()
-        print("[Cleanup] GLFW terminated")
-    except Exception as e:
-        print(f"[Cleanup] Error terminating GLFW: {e}")
-    
     # Stop capture
     try:
         if 'cap' in globals():
@@ -167,6 +159,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 if OS_NAME != "Windows":
     signal.signal(signal.SIGQUIT, signal_handler)
 
+# ffmpeg based rtmp streamer
 def rtmp_stream():
     try:
         # Start RTMP server
@@ -252,30 +245,43 @@ def main(mode="Viewer"):
             
             threading.Thread(target=depth_loop, daemon=True).start()
             # build ffmpeg command pointing to your mediamtx and include audio device
-            frame_rgb = proc_q.get()
-            w, h = frame_rgb.shape[1], frame_rgb.shape[0]
-            if DISPLAY_MODE == "FUll-SBS":
-                w = 2 * h
-            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS, frame_size = (w,h))
-            
-            if USE_RTMP and OS_NAME == "Windows":
+            if STREAM_MODE:
+                frame_rgb = proc_q.get()
+                w, h = frame_rgb.shape[1], frame_rgb.shape[0]
+                if DISPLAY_MODE == "FUll-SBS":
+                    w = 2 * w
+                window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS, stream_mode=STREAM_MODE, frame_size = (w,h))
+            else:
+                # For local viewer only
+                window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS)
+            if STREAM_MODE == "RTMP" and OS_NAME == "Windows":
                 from utils import set_window_to_bottom
                 rtmp_thread = threading.Thread(target=rtmp_stream, daemon=True)
                 rtmp_thread.start()
+                
                 def bottom_loop():
                     while True:
                         set_window_to_bottom(window.window)
                         time.sleep(0.01)
                         
                 threading.Thread(target=bottom_loop, daemon=True).start()
+                print(f"[Main] RTMP Streamer Started")
+            elif STREAM_MODE == "MJPEG":
+                from streamer import MJPEGStreamer
+                streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
+                streamer.start()
+                print(f"[Main] MJPEG Streamer Started")
             else:
-                print(f"[Main] Viewer Started")
+                print(f"[Main] Local Viewer Started")
             
             while (not glfw.window_should_close(window.window) and 
                    not shutdown_event.is_set()):
                 try:
                     rgb, depth = depth_q.get_nowait()
                     window.update_frame(rgb, depth)
+                    if STREAM_MODE == "MJPEG":
+                        frame = window.capture_glfw_image()
+                        streamer.set_frame(frame)
                     if SHOW_FPS:
                         frame_count += 1
                         total_frames += 1
@@ -284,6 +290,8 @@ def main(mode="Viewer"):
                             current_fps = frame_count / (current_time - last_time)
                             frame_count = 0
                             last_time = current_time
+                            if STREAM_MODE == "MJPEG":
+                                print(f"FPS: {current_fps:.1f}")
                             glfw.set_window_title(window.window, f"Stereo Viewer | {current_fps:.1f} FPS")
                 except queue.Empty:
                     pass
@@ -338,7 +346,7 @@ def main(mode="Viewer"):
             streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
             streamer.start()
             
-            print(f"[Main] Streamer Started")
+            print(f"[Main] Legacy Streamer Started")
             
             while not shutdown_event.is_set():
                 try:
@@ -357,7 +365,7 @@ def main(mode="Viewer"):
                             current_fps = frame_count / (current_time - last_time)
                             frame_count = 0
                             last_time = current_time
-                            print(f"FPS: {current_fps:.2f}")
+                            print(f"FPS: {current_fps:.1f}")
                             
                 except queue.Empty:
                     continue

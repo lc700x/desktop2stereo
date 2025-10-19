@@ -146,26 +146,28 @@ DEFAULTS = {
     "Depth Model": DEFAULT_MODEL_LIST[2],
     "Depth Strength": 2.0,
     "Depth Resolution": 336,
-    "Anti-aliasing": 2,
-    "Foreground Scale": 1.0,
+    "Anti-aliasing": 1,
+    "Foreground Scale": 2.0,
     "IPD": 0.064,
     "Display Mode": "Half-SBS",
     "FP16": True,
     "torch.compile": False,
     "TensorRT": False,
     "Recompile TensorRT": False,
-    "Unlock Thread (Streamer)": False,
+    "Unlock Thread (Legacy Streamer)": False,
     "Recompile TensorRT": False,
     "Download Path": "models",
     "HF Endpoint": "https://hf-mirror.com",
     "Device": 0,
     "Language": "EN",
-    "Run Mode": "Viewer",
-    "Streamer Host": None,
+    "Run Mode": "Local Viewer",
+    "Legacy Streamer Host": None,
     "Streamer Port": DEFAULT_PORT,
     "Stream Quality": 100,
+    "Stream Key": "live",
+    "Stereo Mix Device": None,
     "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
-    "Fill 16:9": False,  # force 16:9 output
+    "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False # keep the viewer window aspect ratio not change
 }
 
@@ -187,7 +189,7 @@ UI_TEXTS = {
         "FP16": "FP16",
         "Inference Optimizer:": "Inference Optimizer:",
         "Recompile TensorRT": "Recompile TensorRT",
-        "Unlock Thread (Streamer)": "Unlock Thread (Streamer)",
+        "Unlock Thread (Legacy Streamer)": "Unlock Thread (Legacy Streamer)",
         "Download Path:": "Download Path:",
         "Browse...": "Browse...",
         "Stop": "Stop",
@@ -211,8 +213,12 @@ UI_TEXTS = {
         "No windows found": "No windows found",
         "Selected window:": "Selected window:",
         "Run Mode:": "Run Mode:",
-        "Viewer": "Viewer",
-        "Streamer": "Streamer",
+        "Local Viewer": "Local Viewer",
+        "Legacy Streamer": "Legacy Streamer",
+        "MJPEG Streamer": "MJPEG Streamer",
+        "RTMP Streamer": "RTMP Streamer",
+        "Stream Key": "Stream Key",
+        "Stereo Mix Device": "Stereo Mix Device",
         "3D Monitor": "3D Monitor",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
@@ -254,7 +260,7 @@ UI_TEXTS = {
         "FP16": "半精度浮点 (F16)",
         "Inference Optimizer:": "推理优化器:",
         "Recompile TensorRT": "重新编译TensorRT",
-        "Unlock Thread (Streamer)": "解锁线程 (推流模式)",
+        "Unlock Thread (Legacy Streamer)": "解锁线程 (旧网络推流)",
         "Download Path:": "下载路径:",
         "Browse...": "浏览...",
         "Stop": "停止",
@@ -278,8 +284,12 @@ UI_TEXTS = {
         "No windows found": "未找到窗口",
         "Selected window:": "已选择窗口:",
         "Run Mode:": "运行模式:",
-        "Viewer": "本地查看",
-        "Streamer": "网络推流",
+        "Local Viewer": "本地查看",
+        "Legacy Streamer": "旧网络推流",
+        "MJPEG Streamer": "MJPEG推流",
+        "RTMP Streamer": "RTMP推流",
+        "Stream Key": "推流密钥",
+        "Stereo Mix Device": "混音设备",
         "3D Monitor": "3D显示器",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
@@ -316,6 +326,7 @@ class ConfigGUI(tk.Tk):
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
         self.selected_window_name = ""
         self._window_objects = []  # Store window objects for reference
+        self.audio_devices = []  # Will be populated with available audio devices
         self.cfg = {}  # Store the loaded configuration
         try:
             icon_img = Image.open("icon.ico")
@@ -326,8 +337,8 @@ class ConfigGUI(tk.Tk):
         except Exception as e:
             print(f"Warning: Could not load icon.ico - {e}")
 
-        # internal run mode key: 'Viewer' or 'Streamer' or '3D Monitor'
-        self.run_mode_key = DEFAULTS.get("Run Mode", "Viewer")
+        # internal run mode key: 'Viewer' or 'Legacy Streamer' or '3D Monitor'
+        self.run_mode_key = DEFAULTS.get("Run Mode", "Local Viewer")
         
         # internal capture mode key: 'Monitor' or 'Window'
         self.capture_mode_key = DEFAULTS.get("Capture Mode", "Monitor")
@@ -335,6 +346,7 @@ class ConfigGUI(tk.Tk):
         self.create_widgets()
         self.monitor_label_to_index = self.populate_monitors()
         self.device_label_to_index = self.populate_devices()
+        self.populate_audio_devices()  # Populate audio devices on startup
 
         if os.path.exists("settings.yaml"):
             try:
@@ -411,7 +423,7 @@ class ConfigGUI(tk.Tk):
         # Capture Mode (Monitor / Window)
         self.capture_mode_var_label = tk.StringVar()
         self.capture_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.capture_mode_var_label, state="readonly", width=8)
-        self.capture_mode_cb.grid(row=3, column=0, sticky="ew", **self.pad)
+        self.capture_mode_cb.grid(row=4, column=0, sticky="ew", **self.pad)
         self.capture_mode_cb.bind("<<ComboboxSelected>>", self.on_capture_mode_change)
         
         # Monitor Index (only shown when capture mode is Monitor)
@@ -423,7 +435,7 @@ class ConfigGUI(tk.Tk):
         self.window_cb.bind("<<ComboboxSelected>>", self.on_window_selected)
         
         self.btn_refresh = ttk.Button(self.content_frame, text="Refresh", command=self.refresh_monitor_and_window)
-        self.btn_refresh.grid(row=3, column=3, sticky="we", **self.pad)
+        self.btn_refresh.grid(row=4, column=3, sticky="we", **self.pad)
         
         # Language
         self.label_language = ttk.Label(self.content_frame, text="Set Language:")
@@ -435,90 +447,90 @@ class ConfigGUI(tk.Tk):
         
         # Device
         self.label_device = ttk.Label(self.content_frame, text="Device:")
-        self.label_device.grid(row=4, column=0, sticky="w", **self.pad)
+        self.label_device.grid(row=5, column=0, sticky="w", **self.pad)
         self.device_var = tk.StringVar()
         self.device_menu = ttk.OptionMenu(self.content_frame, self.device_var, "")
-        self.device_menu.grid(row=4, column=1, sticky="w", **self.pad)
+        self.device_menu.grid(row=5, column=1, sticky="w", **self.pad)
         
         # FP16 and Show FPS
         self.fp16_var = tk.BooleanVar()
         self.fp16_cb = ttk.Checkbutton(self.content_frame, text="FP16", variable=self.fp16_var)
-        self.fp16_cb.grid(row=4, column=2, sticky="w", **self.pad)
+        self.fp16_cb.grid(row=5, column=2, sticky="w", **self.pad)
         
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
-        self.showfps_cb.grid(row=4, column=3, sticky="w", **self.pad)
+        self.showfps_cb.grid(row=5, column=3, sticky="w", **self.pad)
         
         # Capture Tool
         if OS_NAME == "Windows":
             self.label_capture_tool = ttk.Label(self.content_frame, text="Capture Tool:")
-            self.label_capture_tool.grid(row=5, column=0, sticky="w", **self.pad)
+            self.label_capture_tool.grid(row=6, column=0, sticky="w", **self.pad)
             self.capture_tool_values = ["WindowsCapture", "DXCamera"]
             self.capture_tool_cb = ttk.Combobox(self.content_frame, values=self.capture_tool_values, state="readonly")
-            self.capture_tool_cb.grid(row=5, column=1, sticky="ew", **self.pad)
+            self.capture_tool_cb.grid(row=6, column=1, sticky="ew", **self.pad)
         else:
             # Hide capture tool selection on non-Windows
             self.capture_tool_cb = None
             
         # FPS
         self.label_fps = ttk.Label(self.content_frame, text="FPS:")
-        self.label_fps.grid(row=5, column=2, sticky="w", **self.pad)
+        self.label_fps.grid(row=6, column=2, sticky="w", **self.pad)
         self.fps_values = ["30", "60", "75", "90", "120"]
         self.fps_cb = ttk.Combobox(self.content_frame, values=self.fps_values, state="normal")
-        self.fps_cb.grid(row=5, column=3, sticky="ew", **self.pad)
+        self.fps_cb.grid(row=6, column=3, sticky="ew", **self.pad)
         
         # Output Resolution
         self.label_res = ttk.Label(self.content_frame, text="Output Resolution:")
-        self.label_res.grid(row=6, column=0, sticky="w", **self.pad)
+        self.label_res.grid(row=7, column=0, sticky="w", **self.pad)
         self.res_values = ["480", "720", "1080", "1440", "2160"]
         self.res_cb = ttk.Combobox(self.content_frame, values=self.res_values, state="normal")
-        self.res_cb.grid(row=6, column=1, sticky="ew", **self.pad)
+        self.res_cb.grid(row=7, column=1, sticky="ew", **self.pad)
         
         # Fill 16:9 checkbox
         self.fill_16_9_var = tk.BooleanVar()
         self.fill_16_9_cb = ttk.Checkbutton(self.content_frame, text="Fill 16:9", variable=self.fill_16_9_var)
-        self.fill_16_9_cb.grid(row=6, column=2, sticky="w", **self.pad)
+        self.fill_16_9_cb.grid(row=7, column=2, sticky="w", **self.pad)
         
         # Fix Viewer Aspect checkbox
-        self.fixed_viwer_aspect_var = tk.BooleanVar()
-        self.fixed_viwer_aspect_cb = ttk.Checkbutton(self.content_frame, text="Fix Viewer Aspect", variable=self.fixed_viwer_aspect_var)
+        self.fix_viewer_aspect_var = tk.BooleanVar()
+        self.fixed_viwer_aspect_cb = ttk.Checkbutton(self.content_frame, text="Fix Viewer Aspect", variable=self.fix_viewer_aspect_var)
         
         # Depth Resolution and Depth Strength
         self.label_depth_res = ttk.Label(self.content_frame, text="Depth Resolution:")
-        self.label_depth_res.grid(row=7, column=0, sticky="w", **self.pad)
+        self.label_depth_res.grid(row=8, column=0, sticky="w", **self.pad)
         self.depth_res_cb = ttk.Combobox(self.content_frame, state="normal")
-        self.depth_res_cb.grid(row=7, column=1, sticky="ew", **self.pad)
+        self.depth_res_cb.grid(row=8, column=1, sticky="ew", **self.pad)
         
         self.label_depth_strength = ttk.Label(self.content_frame, text="Depth Strength:")
-        self.label_depth_strength.grid(row=7, column=2, sticky="w", **self.pad)
+        self.label_depth_strength.grid(row=8, column=2, sticky="w", **self.pad)
         self.depth_strength_values = [f"{i/2.0:.1f}" for i in range(21)]  # 0-10
         self.depth_strength_cb = ttk.Combobox(self.content_frame, values=self.depth_strength_values, state="normal")
-        self.depth_strength_cb.grid(row=7, column=3, sticky="ew", **self.pad)
+        self.depth_strength_cb.grid(row=8, column=3, sticky="ew", **self.pad)
         
         # Anti-aliasing
         self.label_antialiasing = ttk.Label(self.content_frame, text="Anti-aliasing:")
-        self.label_antialiasing.grid(row=8, column=0, sticky="w", **self.pad)
+        self.label_antialiasing.grid(row=9, column=0, sticky="w", **self.pad)
         self.antialiasing_values = [str(i) for i in range(11)]  # 0-10
         self.antialiasing_cb = ttk.Combobox(self.content_frame, values=self.antialiasing_values, state="normal")
-        self.antialiasing_cb.grid(row=8, column=1, sticky="ew", **self.pad)
+        self.antialiasing_cb.grid(row=9, column=1, sticky="ew", **self.pad)
         
         # Edge Dilation
         self.label_foreground_scale = ttk.Label(self.content_frame, text="Foreground Scale:")
-        self.label_foreground_scale.grid(row=8, column=2, sticky="w", **self.pad)
+        self.label_foreground_scale.grid(row=9, column=2, sticky="w", **self.pad)
         self.foreground_scale_values = [f"{i/2.0:.1f}" for i in range(-10, 10)] # -5 (squeeze depth scale) to 5 (extend depth scale)
         self.foreground_scale_cb = ttk.Combobox(self.content_frame, values=self.foreground_scale_values, state="normal")
-        self.foreground_scale_cb.grid(row=8, column=3, sticky="ew", **self.pad)
+        self.foreground_scale_cb.grid(row=9, column=3, sticky="ew", **self.pad)
 
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
-        self.label_display_mode.grid(row=9, column=0, sticky="w", **self.pad)
+        self.label_display_mode.grid(row=10, column=0, sticky="w", **self.pad)
         self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB"]
         self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
-        self.display_mode_cb.grid(row=9, column=1, sticky="ew", **self.pad)
+        self.display_mode_cb.grid(row=10, column=1, sticky="ew", **self.pad)
         
         # IPD
         self.label_ipd = ttk.Label(self.content_frame, text="IPD (m):")
-        self.label_ipd.grid(row=9, column=2, sticky="w", **self.pad)
+        self.label_ipd.grid(row=10, column=2, sticky="w", **self.pad)
         self.ipd_var = tk.StringVar()
         self.ipd_spin = ttk.Spinbox(
             self.content_frame,
@@ -528,23 +540,23 @@ class ConfigGUI(tk.Tk):
             textvariable=self.ipd_var,
             state="normal"
         )
-        self.ipd_spin.grid(row=9, column=3, sticky="ew", **self.pad)
+        self.ipd_spin.grid(row=10, column=3, sticky="ew", **self.pad)
         
         # Download path
         self.label_download = ttk.Label(self.content_frame, text="Download Path:")
-        self.label_download.grid(row=10, column=0, sticky="w", **self.pad)
+        self.label_download.grid(row=11, column=0, sticky="w", **self.pad)
         self.download_var = tk.StringVar()
         self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
-        self.download_entry.grid(row=10, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.download_entry.grid(row=11, column=1, columnspan=2, sticky="ew", **self.pad)
         self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
-        self.btn_browse.grid(row=10, column=3, sticky="ew", **self.pad)
+        self.btn_browse.grid(row=11, column=3, sticky="ew", **self.pad)
         
         # Depth Model
         self.label_depth_model = ttk.Label(self.content_frame, text="Depth Model:")
-        self.label_depth_model.grid(row=11, column=0, sticky="w", **self.pad)
+        self.label_depth_model.grid(row=12, column=0, sticky="w", **self.pad)
         self.depth_model_var = tk.StringVar()
         self.depth_model_cb = ttk.Combobox(self.content_frame, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
-        self.depth_model_cb.grid(row=11, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.depth_model_cb.grid(row=12, column=1, columnspan=2, sticky="ew", **self.pad)
         self.depth_model_cb.bind("<<ComboboxSelected>>", self.on_depth_model_change)
 
                 
@@ -553,35 +565,35 @@ class ConfigGUI(tk.Tk):
         self.use_tensorrt = tk.BooleanVar()
         self.unlock_streamer_thread = tk.BooleanVar()
         self.label_inference_optimizer = ttk.Label(self.content_frame, text="Inference Optimizer:")
-        self.label_inference_optimizer.grid(row=12, column=0, sticky="w", **self.pad)
+        self.label_inference_optimizer.grid(row=13, column=0, sticky="w", **self.pad)
 
         # Torch Compile
         self.check_torch_compile = ttk.Checkbutton(self.content_frame, text="torch.compile", variable=self.use_torch_compile)
-        self.check_torch_compile.grid(row=12, column=1, sticky="w", **self.pad)
+        self.check_torch_compile.grid(row=13, column=1, sticky="w", **self.pad)
 
         # TensorRT
         self.check_tensorrt = ttk.Checkbutton(self.content_frame, text="TensorRT", variable=self.use_tensorrt)
-        self.check_tensorrt.grid(row=12, column=2, sticky="w", **self.pad)
+        self.check_tensorrt.grid(row=13, column=2, sticky="w", **self.pad)
 
-        # Unlock Thread (Streamer)
-        self.check_unlock_streamer_thread = ttk.Checkbutton(self.content_frame, text="Unlock Thread (Streamer)", variable=self.unlock_streamer_thread)
-        self.check_unlock_streamer_thread.grid(row=12, column=1, sticky="w", **self.pad)
+        # Unlock Thread (Legacy Streamer)
+        self.check_unlock_streamer_thread = ttk.Checkbutton(self.content_frame, text="Unlock Thread (Legacy Streamer)", variable=self.unlock_streamer_thread)
+        self.check_unlock_streamer_thread.grid(row=13, column=1, sticky="w", **self.pad)
         self.use_tensorrt.trace_add("write", self.update_recompile_trt_visibility)
         
         # Recompile TensorRT (only visible when TensorRT is selected)
         self.recompile_trt_var = tk.BooleanVar()
         self.check_recompile_trt = ttk.Checkbutton(self.content_frame, text="Recompile TensorRT", variable=self.recompile_trt_var)
-        self.check_recompile_trt.grid(row=12, column=3, sticky="w", **self.pad)
+        self.check_recompile_trt.grid(row=13, column=3, sticky="w", **self.pad)
         
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
-        self.label_hf_endpoint.grid(row=13, column=0, sticky="w", **self.pad)
+        self.label_hf_endpoint.grid(row=14, column=0, sticky="w", **self.pad)
         self.hf_endpoint_var = tk.StringVar()
         self.hf_endpoint_cb = ttk.Combobox(self.content_frame, textvariable=self.hf_endpoint_var, state="normal")
         self.hf_endpoint_cb["values"] = ["https://huggingface.co", "https://hf-mirror.com"]
-        self.hf_endpoint_cb.grid(row=13, column=1, sticky="ew", **self.pad)
+        self.hf_endpoint_cb.grid(row=14, column=1, sticky="ew", **self.pad)
         
-        # Streamer Host and Port (only visible when run mode is streamer)
+        # Legacy Streamer Host and Port (only visible when run mode is streamer)
         self.label_streamer_host = ttk.Label(self.content_frame, text="Streamer URL:")
         self.streamer_host_var = tk.StringVar()
         self.streamer_host_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_host_var, state="readonly", foreground="#3E83F7")
@@ -595,6 +607,16 @@ class ConfigGUI(tk.Tk):
         self.stream_quality_values = [str(i) for i in range(100, 49, -5)]  # 0-100 in steps of -5
         self.stream_quality_cb = ttk.Combobox(self.content_frame, values=self.stream_quality_values, state="normal")
         
+        # RTMP Streamer specific controls (initially hidden)
+        self.rtmp_stream_key_var = tk.StringVar()
+        self.label_rtmp_stream_key = ttk.Label(self.content_frame, text="Stream Key:")
+        self.rtmp_stream_key_entry = ttk.Entry(self.content_frame, textvariable=self.rtmp_stream_key_var)
+        
+        # StereoMix Devices
+        self.audio_device_var = tk.StringVar()
+        self.label_audio_device = ttk.Label(self.content_frame, text="Stereo Mix Device:")
+        self.audio_device_cb = ttk.Combobox(self.content_frame, textvariable=self.audio_device_var, state="readonly")
+        
         # URL Action Buttons
         self.btn_copy_url = ttk.Button(self.content_frame, text="Copy URL", command=self.copy_url_to_clipboard)
         self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
@@ -604,16 +626,16 @@ class ConfigGUI(tk.Tk):
 
         # Buttons (moved down a bit to make room)
         self.btn_reset = ttk.Button(self.content_frame, text="Reset", command=self.reset_to_defaults)
-        self.btn_reset.grid(row=11, column=3, sticky="ew", **self.pad)
+        self.btn_reset.grid(row=12, column=3, sticky="ew", **self.pad)
         
         self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
-        self.btn_stop.grid(row=13, column=2, sticky="ew", **self.pad)
+        self.btn_stop.grid(row=14, column=2, sticky="ew", **self.pad)
         
         self.btn_run = ttk.Button(self.content_frame, text="Run", command=self.save_settings)
-        self.btn_run.grid(row=13, column=3, sticky="ew", **self.pad)
+        self.btn_run.grid(row=14, column=3, sticky="ew", **self.pad)
         
         # Column weights inside content frame
-        for col in range(4):
+        for col in range(5):
             self.content_frame.columnconfigure(col, weight=1)
         
         # Status bar at bottom
@@ -621,6 +643,102 @@ class ConfigGUI(tk.Tk):
         self.status_label.grid(row=1, column=0, sticky="we")  # no padding
         # Bind device change event
         self.device_var.trace_add("write", self.on_device_change)
+    
+    def auto_select_stereo_mix(self):
+        """Automatically select Stereo Mix device if available"""
+        if not hasattr(self, 'audio_devices') or not self.audio_devices:
+            return
+            
+        stereo_mix_names = [
+            "stereo mix", "stereo", "mix", "what you hear", "output", 
+            "loopback", "system audio", "wave out mix", "mixed output",
+            "立体声混音", "立体声", "混音", "混合输出", "系统音频",
+            "您听到的声音", "输出", "环路", "波形输出混合",
+            "ステレオ ミックス", "ステレオ", "ミックス", "混合", "システムオーディオ",
+            "mezcla estéreo", "estéreo", "mezcla", "salida", "audio del sistema",
+            "mixage stéréo", "stéréo", "mixage", "sortie", "audio système",
+            "stereo mix", "stereo", "mischung", "ausgabe", "systemaudio"
+        ]
+        
+        for device in self.audio_devices:
+            device_lower = device.lower()
+            for mix_name in stereo_mix_names:
+                if mix_name in device_lower:
+                    self.audio_device_var.set(device)
+                    return
+        
+        # If no Stereo Mix found, use first available device
+        if self.audio_devices and self.audio_devices[0] not in ["No audio devices available", "PyAudio not available"]:
+            self.audio_device_var.set(self.audio_devices[0])
+            
+    def populate_audio_devices(self):
+        """Populate audio devices list for RTMP streaming and auto-select Stereo Mix"""
+        try:
+            import pyaudio
+            p = pyaudio.PyAudio()
+            self.audio_devices = []
+            
+            # Common names for Stereo Mix in different languages
+            stereo_mix_names = [
+                # English
+                "stereo mix", "stereo", "mix", "what you hear", "output", 
+                "loopback", "system audio", "wave out mix", "mixed output",
+                # Chinese
+                "立体声混音", "立体声", "混音", "混合输出", "系统音频",
+                "您听到的声音", "输出", "环路", "波形输出混合",
+                # Japanese
+                "ステレオ ミックス", "ステレオ", "ミックス", "混合", "システムオーディオ",
+                # Spanish
+                "mezcla estéreo", "estéreo", "mezcla", "salida", "audio del sistema",
+                # French
+                "mixage stéréo", "stéréo", "mixage", "sortie", "audio système",
+                # German
+                "stereo mix", "stereo", "mischung", "ausgabe", "systemaudio"
+            ]
+            
+            stereo_mix_device = None
+            
+            for i in range(p.get_device_count()):
+                device_info = p.get_device_info_by_index(i)
+                device_name = device_info.get('name', '').lower()
+                
+                # Only include devices that support input
+                if device_info.get('maxInputChannels', 0) > 0:
+                    self.audio_devices.append(device_info.get('name', f"Device {i}"))
+                    
+                    # Check if this is a stereo mix device
+                    for mix_name in stereo_mix_names:
+                        if mix_name in device_name:
+                            stereo_mix_device = device_info.get('name', f"Device {i}")
+                            break
+                    if stereo_mix_device:
+                        break
+            
+            p.terminate()
+            
+            # Update combobox if it exists
+            if hasattr(self, 'audio_device_cb'):
+                self.audio_device_cb['values'] = self.audio_devices
+                
+                # Auto-select Stereo Mix if found, otherwise use first available device
+                if stereo_mix_device and stereo_mix_device in self.audio_devices:
+                    self.audio_device_var.set(stereo_mix_device)
+                elif self.audio_devices:
+                    self.audio_device_var.set(self.audio_devices[0])
+                else:
+                    self.audio_devices = ["No audio devices available"]
+                    self.audio_device_var.set("No audio devices available")
+                    
+        except ImportError:
+            print("PyAudio not available - audio device selection disabled")
+            self.audio_devices = ["PyAudio not available"]
+            if hasattr(self, 'audio_device_var'):
+                self.audio_device_var.set("PyAudio not available")
+        except Exception as e:
+            print(f"Error getting audio devices: {e}")
+            self.audio_devices = [f"Error: {str(e)}"]
+            if hasattr(self, 'audio_device_var'):
+                self.audio_device_var.set(f"Error: {str(e)}")
     
     def update_recompile_trt_visibility(self, *args):
         """Show/hide TensorRT recompile option based on optimizer selection"""
@@ -630,7 +748,7 @@ class ConfigGUI(tk.Tk):
             self.check_recompile_trt.grid_remove()
             
     def on_device_change(self, *args):
-        """Update UI visibility based on the selected device (e.g., show Streamer Boost only for DirectML)."""
+        """Update UI visibility based on the selected device (e.g., show Legacy Streamer Boost only for DirectML)."""
         device_label = self.device_var.get()
 
         # Determine device type
@@ -641,10 +759,10 @@ class ConfigGUI(tk.Tk):
         else:
             device_type = "Other"
 
-        # Show / Hide "Streamer Boost (DirectML)" only for DirectML devices
+        # Show / Hide "Legacy Streamer Boost (DirectML)" only for DirectML devices
         if device_type == "DirectML":
             self.label_inference_optimizer.grid()
-            self.check_unlock_streamer_thread.grid()  # Show Streamer Boost checkbox
+            self.check_unlock_streamer_thread.grid()  # Show Legacy Streamer Boost checkbox
             self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
             self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
             self.check_recompile_trt.grid_remove()  # Hide "Recompile TensorRT" for DirectML
@@ -659,7 +777,7 @@ class ConfigGUI(tk.Tk):
                 self.check_tensorrt.grid()
         else:
             self.label_inference_optimizer.grid_remove()  # Hide Inference Optimizer label
-            self.check_unlock_streamer_thread.grid_remove()  # Show Streamer Boost checkbox
+            self.check_unlock_streamer_thread.grid_remove()  # Show Legacy Streamer Boost checkbox
             self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
             self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
             self.check_recompile_trt.grid_remove()  # Hide "Recompile TensorRT" for DirectML
@@ -725,7 +843,11 @@ class ConfigGUI(tk.Tk):
             self.refresh_window_list()
         else:
             self.populate_monitors()
-        self.update_host_url() # refresh URL
+        if self.run_mode_key == "RTMP Streamer":
+            self.populate_audio_devices()
+            self.auto_select_stereo_mix()
+        else:
+            self.update_host_url() # refresh URL
     
     def update_host_url(self, *args):
         """Update the host URL when port changes and validate the port number"""
@@ -812,12 +934,12 @@ class ConfigGUI(tk.Tk):
         # Update the internal capture_mode_key based on the selected label
         if label == monitor_label:
             self.capture_mode_key = "Monitor"
-            self.monitor_menu.grid(row=3, column=1, columnspan=2, sticky="w", **self.pad)
+            self.monitor_menu.grid(row=4, column=1, columnspan=2, sticky="w", **self.pad)
             self.window_cb.grid_remove()
         else:  # Window
             self.capture_mode_key = "Window"
             self.monitor_menu.grid_remove()
-            self.window_cb.grid(row=3, column=1, columnspan=2, sticky="ew", **self.pad)
+            self.window_cb.grid(row=4, column=1, columnspan=2, sticky="ew", **self.pad)
             # Refresh window list automatically when switching to Window mode
             self.refresh_window_list()
 
@@ -845,25 +967,31 @@ class ConfigGUI(tk.Tk):
         self.label_language.config(text=texts["Set Language:"])
         # Update run mode labels & combobox values
         self.label_run_mode.config(text=texts.get("Run Mode:", "Run Mode:"))
-        localized_run_vals = [texts.get("Viewer", "Viewer"), texts.get("Streamer", "Streamer")]
+        localized_run_vals = [texts.get("Local Viewer", "Local Viewer"), texts.get("MJPEG Streamer", "MJPEG Streamer"), texts.get("Legacy Streamer", "Legacy Streamer") ]
         if OS_NAME == "Windows":
+            localized_run_vals.append(texts.get("RTMP Streamer", "RTMP Streamer"))
             localized_run_vals.append(texts.get("3D Monitor", "3D Monitor"))
+            self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
         self.run_mode_cb["values"] = localized_run_vals
         # Add Inference Optimizer text update
         self.label_inference_optimizer.config(text=texts.get("Inference Optimizer:", "Inference Optimizer:"))
         self.check_recompile_trt.config(text=texts.get("Recompile TensorRT", "Recompile TensorRT"))
-        self.check_unlock_streamer_thread.config(text=texts.get("Unlock Thread (Streamer)", "Unlock Thread (Streamer)"))
+        self.check_unlock_streamer_thread.config(text=texts.get("Unlock Thread (Legacy Streamer)", "Unlock Thread (Legacy Streamer)"))
         # Select the appropriate label
-        if self.run_mode_key == "Viewer":
+        if self.run_mode_key == "Local Viewer":
             self.run_mode_var_label.set(localized_run_vals[0])
             self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
-        elif self.run_mode_key == "Streamer":
+        elif self.run_mode_key == "MJPEG Streamer":
             self.run_mode_var_label.set(localized_run_vals[1])
-        else:  # 3D Monitor
+        elif self.run_mode_key == "Legacy Streamer":
             self.run_mode_var_label.set(localized_run_vals[2])
-            self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
         if OS_NAME == "Windows":
-            self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
+            if self.run_mode_key == "RTMP Streamer":
+                self.run_mode_var_label.set(localized_run_vals[3])
+            elif self.run_mode_key == "3D Monitor":
+                self.run_mode_var_label.set(localized_run_vals[4])
+                self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
+            
         self.fill_16_9_cb.config(text=texts.get("Fill 16:9", "Fill 16:9"))
             
         # Update capture mode combobox values
@@ -879,13 +1007,17 @@ class ConfigGUI(tk.Tk):
         # Trigger the capture mode change handler to update UI
         self.on_capture_mode_change()
 
-        # Streamer host/port labels
+        # Legacy Streamer host/port labels
         self.label_streamer_host.config(text=texts.get("Streamer URL", "Streamer URL"))
         self.label_streamer_port.config(text=texts.get("Streamer Port:", "Streamer Port:"))
         self.label_stream_quality.config(text=UI_TEXTS[self.language]["Stream Quality:"])
         self.btn_copy_url.config(text=UI_TEXTS[self.language]["Copy URL"])
         self.btn_open_browser.config(text=UI_TEXTS[self.language]["Open Browser"])
 
+        # Update RTMP-specific labels
+        self.label_rtmp_stream_key.config(text="Stream Key:")
+        self.label_audio_device.config(text="Stereo Mix Device:")
+        
         # language combobox values
         self.language_cb["values"] = list(UI_TEXTS.keys())
         
@@ -915,39 +1047,98 @@ class ConfigGUI(tk.Tk):
         """Toggle visibility of streamer-specific controls when run mode changes."""
         label = self.run_mode_var_label.get()
         texts = UI_TEXTS[self.language]
-        streamer_label = texts.get("Streamer", "Streamer")
-        viewer_label = texts.get("Viewer", "Viewer")
         
-        if label == streamer_label:
-            self.run_mode_key = "Streamer"
-            if not self.streamer_port_var.get():
-                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
-            # populate host with detected local IP if empty
-            self.streamer_host_var.set(f"http://{get_local_ip()}:{self.streamer_port_var.get()}")
-            # grid the controls
-            self.label_streamer_host.grid(row=1, column=0, sticky="w", padx=8, pady=6)
-            self.streamer_host_entry.grid(row=1, column=1, sticky="ew", padx=8, pady=6)
-            self.label_streamer_port.grid(row=2, column=0, sticky="w", padx=8, pady=6)
-            self.streamer_port_entry.grid(row=2, column=1, sticky="ew", padx=8, pady=6)
-            self.label_stream_quality.grid(row=2, column=2, sticky="w", **self.pad)
-            self.stream_quality_cb.grid(row=2, column=3, sticky="ew", **self.pad)
-            self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
-            self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
-            self.fixed_viwer_aspect_cb.grid_remove()
-            
-        else:
-            self.run_mode_key = "Viewer" if label == viewer_label else "3D Monitor"
-            # hide streamer controls for 3D Monitor mode
-            self.fixed_viwer_aspect_cb.grid(row=6, column=3, sticky="w", **self.pad)
-            self.label_streamer_host.grid_remove()
-            self.streamer_host_entry.grid_remove()
-            self.label_streamer_port.grid_remove()
-            self.streamer_port_entry.grid_remove()
-            self.label_stream_quality.grid_remove()
-            self.stream_quality_cb.grid_remove()
-            self.btn_copy_url.grid_remove()
-            self.btn_open_browser.grid_remove()
-            
+        streamer_label = texts.get("Legacy Streamer", "Legacy Streamer")
+        viewer_label = texts.get("Local Viewer", "Local Viewer")
+        mjpeg_label = texts.get("MJPEG Streamer", "MJPEG Streamer")
+        rtmp_label = texts.get("RTMP Streamer", "RTMP Streamer")
+        monitor3d_label = texts.get("3D Monitor", "3D Monitor")
+        
+        # Hide all streamer-specific controls first
+        self.hide_all_streamer_controls()
+        
+        if label == mjpeg_label:
+            self.run_mode_key = "MJPEG Streamer"
+            self.show_mjpeg_controls()
+        elif label == streamer_label:
+            self.run_mode_key = "Legacy Streamer"
+            self.show_legacy_streamer_controls()
+        elif label == rtmp_label:
+            self.run_mode_key = "RTMP Streamer"
+            self.show_rtmp_controls()
+        elif label == viewer_label:
+            self.run_mode_key = "Local Viewer"
+            self.show_viewer_controls()
+        elif label == monitor3d_label:
+            self.run_mode_key = "3D Monitor"
+            self.show_viewer_controls()
+    
+    def hide_all_streamer_controls(self):
+        """Hide all streamer-specific controls"""
+        controls_to_hide = [
+            self.label_streamer_host, self.streamer_host_entry,
+            self.label_streamer_port, self.streamer_port_entry,
+            self.label_stream_quality, self.stream_quality_cb,
+            self.btn_copy_url, self.btn_open_browser,
+            self.label_rtmp_stream_key, self.rtmp_stream_key_entry,
+            self.label_audio_device, self.audio_device_cb
+        ]
+        
+        for control in controls_to_hide:
+            if hasattr(control, 'grid_remove'):
+                control.grid_remove()
+            elif hasattr(control, 'grid_forget'):
+                control.grid_forget()
+
+    def show_mjpeg_controls(self):
+        """Show controls for MJPEG Streamer"""
+        if not self.streamer_port_var.get():
+            self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
+        
+        self.streamer_host_var.set(f"http://{get_local_ip()}:{self.streamer_port_var.get()}")
+        
+        # Grid the common streamer controls
+        self.label_streamer_host.grid(row=1, column=0, sticky="w", **self.pad)
+        self.streamer_host_entry.grid(row=1, column=1, sticky="ew", **self.pad)
+        self.label_streamer_port.grid(row=2, column=0, sticky="w", **self.pad)
+        self.streamer_port_entry.grid(row=2, column=1, sticky="ew", **self.pad)
+        self.label_stream_quality.grid(row=2, column=2, sticky="w", **self.pad)
+        self.stream_quality_cb.grid(row=2, column=3, sticky="ew", **self.pad)
+        self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
+        self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
+        
+        self.fixed_viwer_aspect_cb.grid_remove()
+
+    def show_legacy_streamer_controls(self):
+        """Show controls for Legacy Streamer"""
+        self.show_mjpeg_controls()  # Same controls as MJPEG
+
+    def show_rtmp_controls(self):
+        """Show controls for RTMP Streamer"""
+        self.streamer_host_var.set(f"http://{get_local_ip()}:8888/live")
+        
+        # Grid the common streamer controls
+        self.label_streamer_host.grid(row=1, column=0, sticky="w", **self.pad)
+        self.streamer_host_entry.grid(row=1, column=1, sticky="ew", **self.pad)
+        self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
+        self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
+        
+        # Grid RTMP-specific controls
+        self.label_rtmp_stream_key.grid(row=3, column=0, sticky="w", **self.pad)
+        self.rtmp_stream_key_entry.grid(row=3, column=1, sticky="ew", **self.pad)
+        
+        self.label_audio_device.grid(row=3, column=2, sticky="w", **self.pad)
+        self.audio_device_cb.grid(row=3, column=3, sticky="ew", **self.pad)
+        
+        # Populate audio devices if not already done
+        if not self.audio_device_cb['values']:
+            self.populate_audio_devices()
+        
+        self.fixed_viwer_aspect_cb.grid_remove()
+
+    def show_viewer_controls(self):
+        """Show controls for Local Viewer and 3D Monitor"""
+        self.fixed_viwer_aspect_cb.grid(row=7, column=3, sticky="w", **self.pad)
     def browse_download(self):
         path = filedialog.askdirectory(initialdir=self.download_var.get() or ".")
         if path:
@@ -1099,20 +1290,30 @@ class ConfigGUI(tk.Tk):
 
         # Run mode + streamer settings
         if keep_optional:
-            run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Viewer"))
+            run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer"))
             if run_mode == "3D Monitor" and OS_NAME != "Windows":
-                run_mode = "Viewer"  # Fall back to Viewer on non-Windows
+                run_mode = "Local Viewer"  # Fall back to Viewer on non-Windows
             self.run_mode_key = run_mode
         port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", DEFAULT_PORT))
         self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
         self.streamer_port_var.set(str(port))
         self.stream_quality_cb.set(str(cfg.get("Stream Quality", DEFAULTS["Stream Quality"])))
+        
+        # RTMP option
+        self.rtmp_stream_key_var.set(cfg.get("Stream Key", ""))
+        saved_audio_device = cfg.get("Stereo Mix Device", "")
+        if saved_audio_device and saved_audio_device in self.audio_devices:
+            self.audio_device_var.set(saved_audio_device)
+        else:
+            # Try to find and select Stereo Mix automatically
+            self.auto_select_stereo_mix()
+        
         # Capture option
         self.capture_tool_cb.set(cfg.get("Capture Tool", DEFAULTS["Capture Tool"]))
         self.fill_16_9_var.set(cfg.get("Fill 16:9", DEFAULTS["Fill 16:9"]))
         
         # Fixed Viewer Ratio
-        self.fixed_viwer_aspect_var.set(cfg.get("Fix Viewer Aspect", DEFAULTS["Fix Viewer Aspect"]))
+        self.fix_viewer_aspect_var.set(cfg.get("Fix Viewer Aspect", DEFAULTS["Fix Viewer Aspect"]))
         
         # Capture mode
         capture_mode = cfg.get("Capture Mode", DEFAULTS.get("Capture Mode", "Monitor"))
@@ -1125,7 +1326,7 @@ class ConfigGUI(tk.Tk):
         # Check if saved optimizer is valid for current device
         self.use_torch_compile.set(cfg.get("torch.compile", False))
         self.use_tensorrt.set(cfg.get("TensorRT", False))
-        self.unlock_streamer_thread.set(cfg.get("Unlock Thread (Streamer)", False))
+        self.unlock_streamer_thread.set(cfg.get("Unlock Thread (Legacy Streamer)", False))
         
         # Trigger device change to update optimizer options
         self.recompile_trt_var.set(cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"]))
@@ -1240,10 +1441,12 @@ class ConfigGUI(tk.Tk):
             "torch.compile": self.use_torch_compile.get(),
             "TensorRT": self.use_tensorrt.get(),
             "Recompile TensorRT": self.recompile_trt_var.get(),
-            "Unlock Thread (Streamer)": self.unlock_streamer_thread.get(),
+            "Unlock Thread (Legacy Streamer)": self.unlock_streamer_thread.get(),
             "Capture Tool": self.capture_tool_cb.get(),
             "Fill 16:9": self.fill_16_9_var.get(),
-            "Fix Viewer Aspect": self.fixed_viwer_aspect_var.get()
+            "Fix Viewer Aspect": self.fix_viewer_aspect_var.get(),
+            "Stream Key": self.rtmp_stream_key_var.get(),
+            "Stereo Mix Device": self.audio_device_var.get(),
         }
         
         success = self.save_yaml("settings.yaml", cfg)

@@ -4,50 +4,25 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-from utils import VERSION, OS_NAME, DEFAULT_MODEL_LIST, crop_icon, get_local_ip
+from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, crop_icon, get_local_ip, shutdown_event
+
+# Get model lists
+DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
 
 # Get window lists
 if OS_NAME == "Windows":
     try:
         import win32gui
-        import ctypes
-        from ctypes import wintypes
     except ImportError:
         win32gui = None
 
     def list_windows():
         windows = []
-
-        # Setup for DWM call
-        DWMWA_EXTENDED_FRAME_BOUNDS = 9
-        dwmapi = ctypes.WinDLL("dwmapi")
-        rect_type = wintypes.RECT
-
-        def get_window_rect(hwnd):
-            rect = rect_type()
-            try:
-                # Try extended frame bounds (no shadow/borders)
-                res = dwmapi.DwmGetWindowAttribute(
-                    hwnd,
-                    DWMWA_EXTENDED_FRAME_BOUNDS,
-                    ctypes.byref(rect),
-                    ctypes.sizeof(rect),
-                )
-                if res == 0:  # S_OK
-                    return rect.left, rect.top, rect.right, rect.bottom
-            except Exception:
-                pass
-            # fallback
-            return win32gui.GetWindowRect(hwnd)
-
         def callback(hwnd, _):
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd)
                 if title:
-                    x, y, r, b = get_window_rect(hwnd)
-                    w, h = r - x, b - y
-                    if w > 0 and h > 0:
-                        windows.append((title, w, h, x, y, hwnd))
+                    windows.append((title, hwnd))
             return True
 
         win32gui.EnumWindows(callback, None)
@@ -62,7 +37,7 @@ elif OS_NAME == "Darwin":
     except ImportError:
         CGWindowListCopyWindowInfo = None
 
-    def list_windows(min_width=20, min_height=20):
+    def list_windows():
         windows = []
         options = kCGWindowListOptionOnScreenOnly
         window_info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
@@ -82,9 +57,6 @@ elif OS_NAME == "Darwin":
             title = win.get("kCGWindowName", "") or ""
             owner = win.get("kCGWindowOwnerName", "")
             layer = win.get("kCGWindowLayer", 0)
-            bounds = win.get("kCGWindowBounds", {})
-            w, h = int(bounds.get("Width", 0)), int(bounds.get("Height", 0))
-            x, y = int(bounds.get("X", 0)), int(bounds.get("Y", 0))
 
             # Filtering rules
             if not title.strip():
@@ -93,10 +65,8 @@ elif OS_NAME == "Darwin":
                 continue
             if layer != 0:  # skip menu bar, overlays, etc.
                 continue
-            if w < min_width or h < min_height:
-                continue
 
-            windows.append((title.strip(), w, h, x, y, win["kCGWindowNumber"]))
+            windows.append((title.strip(), win["kCGWindowNumber"]))
 
         return windows
 else:
@@ -104,19 +74,21 @@ else:
     def list_windows():
         windows = []
         try:
-            result = subprocess.check_output(["wmctrl", "-lG"]).decode("utf-8").splitlines()
+            result = subprocess.check_output(["wmctrl", "-l"]).decode("utf-8").splitlines()
             for line in result:
-                parts = line.split(None, 6)
-                if len(parts) >= 7:
-                    win_id, x, y, w, h, _, title = parts
-                    w, h, x, y = int(w), int(h), int(x), int(y)
-                    if title.strip() and w > 0 and h > 0:
-                        windows.append((title.strip(), w, h, x, y, win_id))
+                parts = line.split(None, 3)
+                if len(parts) >= 4:
+                    _, _, _, title = parts
+                    if title.strip():
+                        windows.append((title.strip(), None))
         except Exception as e:
             print("Linux window listing error:", e)
         return windows
+
 # List all available devices
+
 def get_devices():
+    is_rocm = False
     """
     Returns a list of dictionaries [{dev: torch.device, info: str}] for all available devices.
     """
@@ -135,7 +107,10 @@ def get_devices():
         import torch
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
-                devices[count] = {"name": f"CUDA {i}: {torch.cuda.get_device_name(i)}", "device": torch.device(f"cuda:{i}")}
+                name = torch.cuda.get_device_name(i)
+                if "AMD" in name:
+                    is_rocm = True
+                devices[count] = {"name": f"CUDA {i}: {name}", "device": torch.device(f"cuda:{i}")}
                 count += 1
         if torch.backends.mps.is_available():
             devices[count]= {"name": "MPS: Apple Silicon", "device": torch.device("mps")}
@@ -144,15 +119,16 @@ def get_devices():
     except ImportError:
         raise ImportError("PyTorch Not Found! Make sure you have deployed the Python environment in '.env'.")
 
-    return devices
+    return devices, is_rocm
 
-DEVICES = get_devices()
+DEVICES, IS_ROCM = get_devices()
+# print("ROCM: ", IS_ROCM)
 
 try:
     import mss
 except Exception:
     mss = None
-
+"Foreground Scale"
 try:
     import yaml
     HAVE_YAML = True
@@ -163,24 +139,34 @@ DEFAULTS = {
     "Capture Mode": "Monitor",  # "Monitor" or "Window"
     "Monitor Index": 1,
     "Window Title": "",
-    "Capture Coordinates": None,  # (left, top, width, height)
     "Output Resolution": 1080,
     "FPS": 60,
     "Show FPS": True,
     "Model List": DEFAULT_MODEL_LIST,
     "Depth Model": DEFAULT_MODEL_LIST[2],
-    "Depth Strength": 1.0,
-    "Depth Resolution": 384,
+    "Depth Strength": 2.0,
+    "Depth Resolution": 336,
+    "Anti-aliasing": 2,
+    "Foreground Scale": 1.0,
     "IPD": 0.064,
     "Display Mode": "Half-SBS",
     "FP16": True,
+    "torch.compile": False,
+    "TensorRT": False,
+    "Recompile TensorRT": False,
+    "Unlock Thread (Streamer)": False,
+    "Recompile TensorRT": False,
     "Download Path": "models",
     "HF Endpoint": "https://hf-mirror.com",
     "Device": 0,
     "Language": "EN",
     "Run Mode": "Viewer",
     "Streamer Host": None,
-    "Streamer Port": 1400,
+    "Streamer Port": DEFAULT_PORT,
+    "Stream Quality": 100,
+    "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
+    "Fill 16:9": False,  # force 16:9 output
+    "Fix Viewer Aspect": False # keep the viewer window aspect ratio not change
 }
 
 UI_TEXTS = {
@@ -196,7 +182,12 @@ UI_TEXTS = {
         "Depth Model:": "Depth Model:",
         "Depth Strength:": "Depth Strength:",
         "Depth Resolution:": "Depth Resolution:",
+        "Anti-aliasing:": "Anti-aliasing:",
+        "Foreground Scale:": "Foreground Scale:",
         "FP16": "FP16",
+        "Inference Optimizer:": "Inference Optimizer:",
+        "Recompile TensorRT": "Recompile TensorRT",
+        "Unlock Thread (Streamer)": "Unlock Thread (Streamer)",
         "Download Path:": "Download Path:",
         "Browse...": "Browse...",
         "Stop": "Stop",
@@ -222,11 +213,29 @@ UI_TEXTS = {
         "Run Mode:": "Run Mode:",
         "Viewer": "Viewer",
         "Streamer": "Streamer",
+        "3D Monitor": "3D Monitor",
         "Streamer Port:": "Streamer Port:",
-        "Streamer URL:": "Streamer URL",
-        "Host:": "Host:",
+        "Streamer URL": "Streamer URL:",
+        "Copy URL": "Copy URL",
+        "Open Browser": "Open Browser",
+        "Stream Quality:": "Stream Quality:",
+        "Host": "Host:",
         "Invalid port number (1-65535)": "Invalid port number (must be between 1-65535)",
         "Invalid port number": "Port must be a number",
+        "Please select a window before running in Window capture mode": "Please select a window before running in Window capture mode",
+        "The selected window no longer exists. Please refresh and select a valid window.": "The selected window no longer exists. Please refresh and select a valid window.",
+        "Error refreshing window list:": "Error refreshing window list:",
+        "Failed to stop process on exit:": "Failed to stop process on exit:",
+        "Failed to stop process:": "Failed to stop process:",
+        "Failed to run process:": "Failed to run process:",
+        "Failed to load settings.yaml:": "Failed to load settings.yaml:",
+        "Failed to copy URL": "Failed to copy URL",
+        "Failed to open browser": "Failed to open browser",
+        "Copied URL": "Copied URL",
+        "Opening URL in browser": "Opening URL in browser",
+        "Capture Tool:": "Capture Tool:",
+        "Fill 16:9": "Fill 16:9",
+        "Fix Viewer Aspect": "Fix Viewer Aspect"
     },
     "CN": {
         "Monitor": "显示器",
@@ -240,7 +249,12 @@ UI_TEXTS = {
         "Depth Model:": "深度模型:",
         "Depth Strength:": "深度强度:",
         "Depth Resolution:": "深度分辨率:",
+        "Anti-aliasing:": "抗锯齿:",
+        "Foreground Scale:": "前景缩放:",
         "FP16": "半精度浮点 (F16)",
+        "Inference Optimizer:": "推理优化器:",
+        "Recompile TensorRT": "重新编译TensorRT",
+        "Unlock Thread (Streamer)": "解锁线程 (推流模式)",
         "Download Path:": "下载路径:",
         "Browse...": "浏览...",
         "Stop": "停止",
@@ -266,26 +280,43 @@ UI_TEXTS = {
         "Run Mode:": "运行模式:",
         "Viewer": "本地查看",
         "Streamer": "网络推流",
+        "3D Monitor": "3D显示器",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
+        "Copy URL": "复制网址",
+        "Open Browser": "打开浏览器",
+        "Stream Quality:": "推流质量:",
         "Host": "主机:",
         "Invalid port number (1-65535)": "端口号无效 (必须介于1-65535之间)",
         "Invalid port number": "端口必须是数字",
+        "Please select a window before running in Window capture mode": "请在窗口捕获模式下选择一个窗口再运行",
+        "The selected window no longer exists. Please refresh and select a valid window.": "所选窗口已不存在。请刷新并选择一个有效的窗口。",
+        "Error refreshing window list:": "刷新窗口列表时出错：",
+        "Failed to stop process on exit:": "退出时停止进程失败：",
+        "Failed to stop process:": "停止进程失败：",
+        "Failed to run process:": "运行进程失败：",
+        "Failed to load settings.yaml:": "加载 settings.yaml 失败：",
+        "Failed to copy URL": "复制网址失败",
+        "Failed to open browser": "打开浏览器失败",
+        "Copied URL": "已复制网址",
+        "Opening URL in browser": "正在浏览器中打开网址",
+        "Capture Tool:": "捕获工具:",  
+        "Fill 16:9": "填充16:9",
+        "Fix Viewer Aspect": "固定窗口比例"
     }
 }
-
 class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.pad = {"padx": 8, "pady": 6}
-        self.title(f"Desktop2Stereo v{VERSION} GUI")
+        self.title(f"Desktop2Stereo v{VERSION}")
         self.minsize(800, 420)  # Increased height for new controls
         self.resizable(True, False)
         self.language = "EN"
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
-        self.selected_window_coords = None
+        self.selected_window_name = ""
         self._window_objects = []  # Store window objects for reference
-
+        self.cfg = {}  # Store the loaded configuration
         try:
             icon_img = Image.open("icon.ico")
             if OS_NAME == "Windows":
@@ -295,7 +326,7 @@ class ConfigGUI(tk.Tk):
         except Exception as e:
             print(f"Warning: Could not load icon.ico - {e}")
 
-        # internal run mode key: 'Viewer' or 'Streamer'
+        # internal run mode key: 'Viewer' or 'Streamer' or '3D Monitor'
         self.run_mode_key = DEFAULTS.get("Run Mode", "Viewer")
         
         # internal capture mode key: 'Monitor' or 'Window'
@@ -307,15 +338,14 @@ class ConfigGUI(tk.Tk):
 
         if os.path.exists("settings.yaml"):
             try:
-                cfg = self.read_yaml("settings.yaml")
-                self.language = cfg.get("Language", DEFAULTS["Language"])
-                if "Model List" in cfg and isinstance(cfg["Model List"], list) and cfg["Model List"]:
-                    self.loaded_model_list = cfg["Model List"]
-                self.apply_config(cfg)
+                self.cfg = self.read_yaml("settings.yaml")
+                self.language = self.cfg.get("Language", DEFAULTS["Language"])
+                self.loaded_model_list = DEFAULT_MODEL_LIST
+                self.apply_config(self.cfg)
                 self.update_language_texts()
                 self.update_status(UI_TEXTS[self.language]["Loaded settings.yaml at startup"])
             except Exception as e:
-                print(f"Failed to load settings.yaml: {e}")
+                messagebox.showerror(UI_TEXTS[self.language]["Error"], f"{UI_TEXTS[self.language]['Failed to load settings.yaml:']} {e}")
                 self.load_defaults()
                 self.update_language_texts()
         else:
@@ -331,19 +361,26 @@ class ConfigGUI(tk.Tk):
         # Stop running process if any
         if self.process and self.process.poll() is None:
             try:
-                self.process.terminate()
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+                # Use platform-appropriate termination method
+                if OS_NAME == 'Windows':  # Windows
+                    subprocess.call(['taskkill', '/F', '/T', '/PID', str(self.process.pid)])
+                else:  # Unix/macOS
+                    import signal
+                    os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
             except Exception as e:
-                messagebox.showerror(
-                    UI_TEXTS[self.language]["Error"],
-                    f"Failed to stop process on exit: {e}"
-                )
+                try:
+                    # Fallback to simpler termination method
+                    self.process.terminate()
+                    self.process.wait(timeout=2)
+                except:
+                    try:
+                        self.process.kill()
+                    except:
+                        pass
             finally:
                 self.process = None
 
-        # Cancel any scheduled after() callbacks (like _monitor_process)
+        # Cancel any scheduled after() callbacks
         try:
             if hasattr(self, "_after_id") and self._after_id:
                 self.after_cancel(self._after_id)
@@ -363,25 +400,30 @@ class ConfigGUI(tk.Tk):
         self.rowconfigure(1, weight=0)   # status bar fixed
         self.columnconfigure(0, weight=1)
         
+        # Run Mode (viewer / streamer / 3D Monitor)
+        self.label_run_mode = ttk.Label(self.content_frame, text="Run Mode:")
+        self.label_run_mode.grid(row=0, column=0, sticky="w", **self.pad)
+        self.run_mode_var_label = tk.StringVar()
+        self.run_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.run_mode_var_label, state="readonly")
+        self.run_mode_cb.grid(row=0, column=1, sticky="ew", **self.pad)
+        self.run_mode_cb.bind("<<ComboboxSelected>>", self.on_run_mode_change)
+        
         # Capture Mode (Monitor / Window)
         self.capture_mode_var_label = tk.StringVar()
         self.capture_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.capture_mode_var_label, state="readonly", width=8)
-        self.capture_mode_cb.grid(row=2, column=0, sticky="ew", **self.pad)
+        self.capture_mode_cb.grid(row=3, column=0, sticky="ew", **self.pad)
         self.capture_mode_cb.bind("<<ComboboxSelected>>", self.on_capture_mode_change)
         
         # Monitor Index (only shown when capture mode is Monitor)
-
         self.monitor_var = tk.StringVar()
         self.monitor_menu = ttk.OptionMenu(self.content_frame, self.monitor_var, "")
 
-
         self.window_var = tk.StringVar()
         self.window_cb = ttk.Combobox(self.content_frame, textvariable=self.window_var,state="readonly")
-        # self.window_cb.grid(row=0, column=0, sticky="ew", **self.pad)
         self.window_cb.bind("<<ComboboxSelected>>", self.on_window_selected)
         
         self.btn_refresh = ttk.Button(self.content_frame, text="Refresh", command=self.refresh_monitor_and_window)
-        self.btn_refresh.grid(row=2, column=3, sticky="we", **self.pad)
+        self.btn_refresh.grid(row=3, column=3, sticky="we", **self.pad)
         
         # Language
         self.label_language = ttk.Label(self.content_frame, text="Set Language:")
@@ -393,91 +435,151 @@ class ConfigGUI(tk.Tk):
         
         # Device
         self.label_device = ttk.Label(self.content_frame, text="Device:")
-        self.label_device.grid(row=3, column=0, sticky="w", **self.pad)
+        self.label_device.grid(row=4, column=0, sticky="w", **self.pad)
         self.device_var = tk.StringVar()
         self.device_menu = ttk.OptionMenu(self.content_frame, self.device_var, "")
-        self.device_menu.grid(row=3, column=1, sticky="w", **self.pad)
+        self.device_menu.grid(row=4, column=1, sticky="w", **self.pad)
         
         # FP16 and Show FPS
         self.fp16_var = tk.BooleanVar()
         self.fp16_cb = ttk.Checkbutton(self.content_frame, text="FP16", variable=self.fp16_var)
-        self.fp16_cb.grid(row=3, column=2, sticky="w", **self.pad)
+        self.fp16_cb.grid(row=4, column=2, sticky="w", **self.pad)
         
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
-        self.showfps_cb.grid(row=3, column=3, sticky="w", **self.pad)
+        self.showfps_cb.grid(row=4, column=3, sticky="w", **self.pad)
+        
+        # Capture Tool
+        if OS_NAME == "Windows":
+            self.label_capture_tool = ttk.Label(self.content_frame, text="Capture Tool:")
+            self.label_capture_tool.grid(row=5, column=0, sticky="w", **self.pad)
+            self.capture_tool_values = ["WindowsCapture", "DXCamera"]
+            self.capture_tool_cb = ttk.Combobox(self.content_frame, values=self.capture_tool_values, state="readonly")
+            self.capture_tool_cb.grid(row=5, column=1, sticky="ew", **self.pad)
+        else:
+            # Hide capture tool selection on non-Windows
+            self.capture_tool_cb = None
+            
+        # FPS
+        self.label_fps = ttk.Label(self.content_frame, text="FPS:")
+        self.label_fps.grid(row=5, column=2, sticky="w", **self.pad)
+        self.fps_values = ["30", "60", "75", "90", "120"]
+        self.fps_cb = ttk.Combobox(self.content_frame, values=self.fps_values, state="normal")
+        self.fps_cb.grid(row=5, column=3, sticky="ew", **self.pad)
         
         # Output Resolution
         self.label_res = ttk.Label(self.content_frame, text="Output Resolution:")
-        self.label_res.grid(row=4, column=0, sticky="w", **self.pad)
+        self.label_res.grid(row=6, column=0, sticky="w", **self.pad)
         self.res_values = ["480", "720", "1080", "1440", "2160"]
         self.res_cb = ttk.Combobox(self.content_frame, values=self.res_values, state="normal")
-        self.res_cb.grid(row=4, column=1, sticky="ew", **self.pad)
+        self.res_cb.grid(row=6, column=1, sticky="ew", **self.pad)
         
-        # FPS
-        self.label_fps = ttk.Label(self.content_frame, text="FPS:")
-        self.label_fps.grid(row=4, column=2, sticky="w", **self.pad)
-        self.fps_values = ["30", "60", "75", "90", "120"]
-        self.fps_cb = ttk.Combobox(self.content_frame, values=self.fps_values, state="normal")
-        self.fps_cb.grid(row=4, column=3, sticky="ew", **self.pad)
+        # Fill 16:9 checkbox
+        self.fill_16_9_var = tk.BooleanVar()
+        self.fill_16_9_cb = ttk.Checkbutton(self.content_frame, text="Fill 16:9", variable=self.fill_16_9_var)
+        self.fill_16_9_cb.grid(row=6, column=2, sticky="w", **self.pad)
         
-        # Download path
-        self.label_download = ttk.Label(self.content_frame, text="Download Path:")
-        self.label_download.grid(row=7, column=0, sticky="w", **self.pad)
-        self.download_var = tk.StringVar()
-        self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
-        self.download_entry.grid(row=7, column=1, columnspan=2, sticky="ew", **self.pad)
-        self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
-        self.btn_browse.grid(row=7, column=3, sticky="ew", **self.pad)
+        # Fix Viewer Aspect checkbox
+        self.fixed_viwer_aspect_var = tk.BooleanVar()
+        self.fixed_viwer_aspect_cb = ttk.Checkbutton(self.content_frame, text="Fix Viewer Aspect", variable=self.fixed_viwer_aspect_var)
         
         # Depth Resolution and Depth Strength
         self.label_depth_res = ttk.Label(self.content_frame, text="Depth Resolution:")
-        self.label_depth_res.grid(row=5, column=0, sticky="w", **self.pad)
-        self.depth_res_values = ["48", "96", "192", "384", "576", "768", "960", "1152", "1344", "1536"]
-        self.depth_res_cb = ttk.Combobox(self.content_frame, values=self.depth_res_values, state="normal")
-        self.depth_res_cb.grid(row=5, column=1, sticky="ew", **self.pad)
+        self.label_depth_res.grid(row=7, column=0, sticky="w", **self.pad)
+        self.depth_res_cb = ttk.Combobox(self.content_frame, state="normal")
+        self.depth_res_cb.grid(row=7, column=1, sticky="ew", **self.pad)
         
         self.label_depth_strength = ttk.Label(self.content_frame, text="Depth Strength:")
-        self.label_depth_strength.grid(row=5, column=2, sticky="w", **self.pad)
-        self.depth_strength_values = ["1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0", "4.5", "5.0"]
+        self.label_depth_strength.grid(row=7, column=2, sticky="w", **self.pad)
+        self.depth_strength_values = [f"{i/2.0:.1f}" for i in range(21)]  # 0-10
         self.depth_strength_cb = ttk.Combobox(self.content_frame, values=self.depth_strength_values, state="normal")
-        self.depth_strength_cb.grid(row=5, column=3, sticky="ew", **self.pad)
+        self.depth_strength_cb.grid(row=7, column=3, sticky="ew", **self.pad)
         
+        # Anti-aliasing
+        self.label_antialiasing = ttk.Label(self.content_frame, text="Anti-aliasing:")
+        self.label_antialiasing.grid(row=8, column=0, sticky="w", **self.pad)
+        self.antialiasing_values = [str(i) for i in range(11)]  # 0-10
+        self.antialiasing_cb = ttk.Combobox(self.content_frame, values=self.antialiasing_values, state="normal")
+        self.antialiasing_cb.grid(row=8, column=1, sticky="ew", **self.pad)
+        
+        # Edge Dilation
+        self.label_foreground_scale = ttk.Label(self.content_frame, text="Foreground Scale:")
+        self.label_foreground_scale.grid(row=8, column=2, sticky="w", **self.pad)
+        self.foreground_scale_values = [f"{i/2.0:.1f}" for i in range(-10, 10)] # -5 (squeeze depth scale) to 5 (extend depth scale)
+        self.foreground_scale_cb = ttk.Combobox(self.content_frame, values=self.foreground_scale_values, state="normal")
+        self.foreground_scale_cb.grid(row=8, column=3, sticky="ew", **self.pad)
+
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
-        self.label_display_mode.grid(row=6, column=0, sticky="w", **self.pad)
+        self.label_display_mode.grid(row=9, column=0, sticky="w", **self.pad)
         self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB"]
         self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
-        self.display_mode_cb.grid(row=6, column=1, sticky="ew", **self.pad)
+        self.display_mode_cb.grid(row=9, column=1, sticky="ew", **self.pad)
         
         # IPD
         self.label_ipd = ttk.Label(self.content_frame, text="IPD (m):")
-        self.label_ipd.grid(row=6, column=2, sticky="w", **self.pad)
+        self.label_ipd.grid(row=9, column=2, sticky="w", **self.pad)
         self.ipd_var = tk.StringVar()
-        self.ipd_entry = ttk.Entry(self.content_frame, textvariable=self.ipd_var)
-        self.ipd_entry.grid(row=6, column=3, sticky="ew", **self.pad)
+        self.ipd_spin = ttk.Spinbox(
+            self.content_frame,
+            from_=0.050,  # Minimum value
+            to=0.076,    # Maximum value
+            increment=0.002,  # Step size
+            textvariable=self.ipd_var,
+            state="normal"
+        )
+        self.ipd_spin.grid(row=9, column=3, sticky="ew", **self.pad)
+        
+        # Download path
+        self.label_download = ttk.Label(self.content_frame, text="Download Path:")
+        self.label_download.grid(row=10, column=0, sticky="w", **self.pad)
+        self.download_var = tk.StringVar()
+        self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
+        self.download_entry.grid(row=10, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
+        self.btn_browse.grid(row=10, column=3, sticky="ew", **self.pad)
         
         # Depth Model
         self.label_depth_model = ttk.Label(self.content_frame, text="Depth Model:")
-        self.label_depth_model.grid(row=8, column=0, sticky="w", **self.pad)
+        self.label_depth_model.grid(row=11, column=0, sticky="w", **self.pad)
         self.depth_model_var = tk.StringVar()
         self.depth_model_cb = ttk.Combobox(self.content_frame, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
-        self.depth_model_cb.grid(row=8, column=1, columnspan=2, sticky="ew", **self.pad)
-        
-        # Run Mode (viewer / streamer)
-        self.label_run_mode = ttk.Label(self.content_frame, text="Run Mode:")
-        self.label_run_mode.grid(row=0, column=0, sticky="w", **self.pad)
-        self.run_mode_var_label = tk.StringVar()
-        self.run_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.run_mode_var_label, state="readonly")
-        self.run_mode_cb.grid(row=0, column=1, sticky="ew", **self.pad)
-        self.run_mode_cb.bind("<<ComboboxSelected>>", self.on_run_mode_change)
+        self.depth_model_cb.grid(row=11, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.depth_model_cb.bind("<<ComboboxSelected>>", self.on_depth_model_change)
 
+                
+        # Add Inference Optimizer dropdown after Device selection
+        self.use_torch_compile = tk.BooleanVar()
+        self.use_tensorrt = tk.BooleanVar()
+        self.unlock_streamer_thread = tk.BooleanVar()
+        self.label_inference_optimizer = ttk.Label(self.content_frame, text="Inference Optimizer:")
+        self.label_inference_optimizer.grid(row=12, column=0, sticky="w", **self.pad)
+
+        # Torch Compile
+        self.check_torch_compile = ttk.Checkbutton(self.content_frame, text="torch.compile", variable=self.use_torch_compile)
+        self.check_torch_compile.grid(row=12, column=1, sticky="w", **self.pad)
+
+        # TensorRT
+        self.check_tensorrt = ttk.Checkbutton(self.content_frame, text="TensorRT", variable=self.use_tensorrt)
+        self.check_tensorrt.grid(row=12, column=2, sticky="w", **self.pad)
+
+        # Unlock Thread (Streamer)
+        self.check_unlock_streamer_thread = ttk.Checkbutton(self.content_frame, text="Unlock Thread (Streamer)", variable=self.unlock_streamer_thread)
+        self.check_unlock_streamer_thread.grid(row=12, column=1, sticky="w", **self.pad)
+        self.use_tensorrt.trace_add("write", self.update_recompile_trt_visibility)
+        
+        # Recompile TensorRT (only visible when TensorRT is selected)
+        self.recompile_trt_var = tk.BooleanVar()
+        self.check_recompile_trt = ttk.Checkbutton(self.content_frame, text="Recompile TensorRT", variable=self.recompile_trt_var)
+        self.check_recompile_trt.grid(row=12, column=3, sticky="w", **self.pad)
+        
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
-        self.label_hf_endpoint.grid(row=9, column=0, sticky="w", **self.pad)
+        self.label_hf_endpoint.grid(row=13, column=0, sticky="w", **self.pad)
         self.hf_endpoint_var = tk.StringVar()
-        self.hf_endpoint_entry = ttk.Entry(self.content_frame, textvariable=self.hf_endpoint_var)
-        self.hf_endpoint_entry.grid(row=9, column=1, sticky="ew", **self.pad)
+        self.hf_endpoint_cb = ttk.Combobox(self.content_frame, textvariable=self.hf_endpoint_var, state="normal")
+        self.hf_endpoint_cb["values"] = ["https://huggingface.co", "https://hf-mirror.com"]
+        self.hf_endpoint_cb.grid(row=13, column=1, sticky="ew", **self.pad)
         
         # Streamer Host and Port (only visible when run mode is streamer)
         self.label_streamer_host = ttk.Label(self.content_frame, text="Streamer URL:")
@@ -487,16 +589,28 @@ class ConfigGUI(tk.Tk):
         self.streamer_port_var = tk.StringVar()
         self.streamer_port_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_port_var)
         self.streamer_port_var.trace_add("write", self.update_host_url)
+        
+        # Stream Quality
+        self.label_stream_quality = ttk.Label(self.content_frame, text="Stream Quality:")
+        self.stream_quality_values = [str(i) for i in range(100, 49, -5)]  # 0-100 in steps of -5
+        self.stream_quality_cb = ttk.Combobox(self.content_frame, values=self.stream_quality_values, state="normal")
+        
+        # URL Action Buttons
+        self.btn_copy_url = ttk.Button(self.content_frame, text="Copy URL", command=self.copy_url_to_clipboard)
+        self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
+        
+        self.btn_open_browser = ttk.Button(self.content_frame, text="Open Browser", command=self.open_url_in_browser)
+        self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
 
         # Buttons (moved down a bit to make room)
         self.btn_reset = ttk.Button(self.content_frame, text="Reset", command=self.reset_to_defaults)
-        self.btn_reset.grid(row=8, column=3, sticky="ew", **self.pad)
+        self.btn_reset.grid(row=11, column=3, sticky="ew", **self.pad)
         
         self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
-        self.btn_stop.grid(row=9, column=2, sticky="ew", **self.pad)
+        self.btn_stop.grid(row=13, column=2, sticky="ew", **self.pad)
         
         self.btn_run = ttk.Button(self.content_frame, text="Run", command=self.save_settings)
-        self.btn_run.grid(row=9, column=3, sticky="ew", **self.pad)
+        self.btn_run.grid(row=13, column=3, sticky="ew", **self.pad)
         
         # Column weights inside content frame
         for col in range(4):
@@ -505,9 +619,64 @@ class ConfigGUI(tk.Tk):
         # Status bar at bottom
         self.status_label = tk.Label(self, text="", anchor="w", relief="sunken", padx=20, pady=4)
         self.status_label.grid(row=1, column=0, sticky="we")  # no padding
+        # Bind device change event
+        self.device_var.trace_add("write", self.on_device_change)
+    
+    def update_recompile_trt_visibility(self, *args):
+        """Show/hide TensorRT recompile option based on optimizer selection"""
+        if self.use_tensorrt.get():
+            self.check_recompile_trt.grid()
+        else:
+            self.check_recompile_trt.grid_remove()
+            
+    def on_device_change(self, *args):
+        """Update UI visibility based on the selected device (e.g., show Streamer Boost only for DirectML)."""
+        device_label = self.device_var.get()
+
+        # Determine device type
+        if "CUDA" in device_label:
+            device_type = "CUDA"
+        elif "DirectML" in device_label:
+            device_type = "DirectML"
+        else:
+            device_type = "Other"
+
+        # Show / Hide "Streamer Boost (DirectML)" only for DirectML devices
+        if device_type == "DirectML":
+            self.label_inference_optimizer.grid()
+            self.check_unlock_streamer_thread.grid()  # Show Streamer Boost checkbox
+            self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
+            self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
+            self.check_recompile_trt.grid_remove()  # Hide "Recompile TensorRT" for DirectML
+        elif device_type == "CUDA":
+            self.label_inference_optimizer.grid()
+            self.check_unlock_streamer_thread.grid_remove()  # Hide it for non-DirectML
+            self.check_torch_compile.grid()  # Show torch.compile for non-DirectML
+            self.check_tensorrt.grid()
+            if IS_ROCM:
+                self.check_tensorrt.grid_remove()  # Show TensorRT for non-DirectML
+            else:
+                self.check_tensorrt.grid()
+        else:
+            self.label_inference_optimizer.grid_remove()  # Hide Inference Optimizer label
+            self.check_unlock_streamer_thread.grid_remove()  # Show Streamer Boost checkbox
+            self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
+            self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
+            self.check_recompile_trt.grid_remove()  # Hide "Recompile TensorRT" for DirectML
+
+        # Control visibility of "Recompile TensorRT" based on whether TensorRT is selected
+        def update_recompile_trt_visibility(*_):
+            if self.use_tensorrt.get():  # If TensorRT is checked
+                self.check_recompile_trt.grid()  # Show "Recompile TensorRT" checkbox
+            else:
+                self.check_recompile_trt.grid_remove()  # Hide it
+
+        # Trace changes on the TensorRT checkbox to update visibility of "Recompile TensorRT"
+        self.use_tensorrt.trace_add("write", update_recompile_trt_visibility)
+                
     
     def refresh_window_list(self):
-        """Refresh the list of available windows with optimized performance"""
+        """Refresh the list of available windows"""
         try:
             windows = list_windows()
 
@@ -521,22 +690,35 @@ class ConfigGUI(tk.Tk):
             window_list = []
             self._window_objects = []
 
-            for title, w, h, x, y, handle in windows:
-                size_str = f"{w}x{h}"
-                window_list.append(f"{title} [{size_str}]")
-                # Store as tuple
-                self._window_objects.append((title, w, h, x, y, handle))
+            for title, handle in windows:
+                window_list.append(title)
+                self._window_objects.append((title, handle))
 
             self.window_cb["values"] = window_list
-            if window_list:
+            
+            # Try to select the saved window by name
+            if self.selected_window_name:
+                find_window = False
+                for i, (title, _) in enumerate(self._window_objects):
+                    if title == self.selected_window_name:
+                        self.window_cb.current(i)
+                        self.update_status(
+                            f"{UI_TEXTS[self.language]['Selected window:']} {title}"
+                        )
+                        find_window = True
+                        break
+                if not find_window:
+                    self.window_var.set(DEFAULTS["Window Title"])
+            elif window_list:
                 self.window_cb.current(0)
                 self.on_window_selected()
 
         except Exception as e:
             messagebox.showerror(
                 UI_TEXTS[self.language]["Error"],
-                f"Error refreshing window list: {str(e)}"
+                f"{UI_TEXTS[self.language]['Error refreshing window list:']} {str(e)}"
             )
+
     def refresh_monitor_and_window(self):
         """Allow user to get latest monitor/window list"""
         if self.capture_mode_key == "Window":
@@ -559,15 +741,46 @@ class ConfigGUI(tk.Tk):
                         UI_TEXTS[self.language].get("Invalid port number (1-65535)", "Invalid port number (must be between 1-65535)")
                     )
                     # Reset to default port if invalid
-                    self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+                    self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
             except ValueError:
                 messagebox.showerror(
                     UI_TEXTS[self.language]["Error"],
                     UI_TEXTS[self.language].get("Invalid port number", "Port must be a number")
                 )
                 # Reset to default port if invalid
-                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
+                
+    def copy_url_to_clipboard(self):
+        """Copy the streamer URL to clipboard"""
+        current_status = self.status_label.cget("text")  # Save current status
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(self.streamer_host_var.get())
+            self.update_status(f"{UI_TEXTS[self.language]['Copied URL']}: {self.streamer_host_var.get()}")
+            # Revert to original status after 2 seconds
+            self.after(2000, lambda: self.update_status(current_status))
+        except Exception as e:
+            messagebox.showerror(
+                UI_TEXTS[self.language]["Error"], 
+                f"{UI_TEXTS[self.language]['Failed to copy URL']}: {e}"
+            )
 
+    def open_url_in_browser(self):
+        """Open the streamer URL in default browser"""
+        current_status = self.status_label.cget("text")  # Save current status
+        url = self.streamer_host_var.get()
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            self.update_status(f"{UI_TEXTS[self.language]['Opening URL in browser']}: {url}")
+            # Revert to original status after 2 seconds
+            self.after(2000, lambda: self.update_status(current_status))
+        except Exception as e:
+            messagebox.showerror(
+                UI_TEXTS[self.language]["Error"], 
+                f"{UI_TEXTS[self.language]['Failed to open browser']}: {e}"
+            )
+    
     def on_window_selected(self, event=None):
         """Handle window selection from the combobox"""
         if not hasattr(self, "_window_objects") or not self._window_objects:
@@ -578,17 +791,16 @@ class ConfigGUI(tk.Tk):
             return
 
         selected_index = None
-        for i, (title, w, h, x, y, handle) in enumerate(self._window_objects):
-            size = f"{w}x{h}" if w and h else "Unknown size"
-            if selected_text == f"{title} [{size}]":
+        for i, (title, handle) in enumerate(self._window_objects):
+            if selected_text == title:
                 selected_index = i
                 break
 
         if selected_index is not None:
-            title, w, h, x, y, handle = self._window_objects[selected_index]
-            self.selected_window_coords = (int(x), int(y), int(w), int(h))
+            title, handle = self._window_objects[selected_index]
+            self.selected_window_name = title
             self.update_status(
-                f"{UI_TEXTS[self.language]['Selected window:']} {title} ({w}x{h})"
+                f"{UI_TEXTS[self.language]['Selected window:']} {title}"
             )
 
     def on_capture_mode_change(self, *args):
@@ -600,12 +812,12 @@ class ConfigGUI(tk.Tk):
         # Update the internal capture_mode_key based on the selected label
         if label == monitor_label:
             self.capture_mode_key = "Monitor"
-            self.monitor_menu.grid(row=2, column=1, columnspan=2, sticky="w", **self.pad)
+            self.monitor_menu.grid(row=3, column=1, columnspan=2, sticky="w", **self.pad)
             self.window_cb.grid_remove()
         else:  # Window
             self.capture_mode_key = "Window"
             self.monitor_menu.grid_remove()
-            self.window_cb.grid(row=2, column=1, columnspan=2, sticky="ew", **self.pad)
+            self.window_cb.grid(row=3, column=1, columnspan=2, sticky="ew", **self.pad)
             # Refresh window list automatically when switching to Window mode
             self.refresh_window_list()
 
@@ -620,6 +832,8 @@ class ConfigGUI(tk.Tk):
         self.label_depth_model.config(text=texts["Depth Model:"])
         self.label_depth_res.config(text=texts["Depth Resolution:"])
         self.label_depth_strength.config(text=texts["Depth Strength:"])
+        self.label_antialiasing.config(text=UI_TEXTS[self.language]["Anti-aliasing:"])
+        self.label_foreground_scale.config(text=UI_TEXTS[self.language]["Foreground Scale:"])
         self.fp16_cb.config(text=texts["FP16"])
         self.label_download.config(text=texts["Download Path:"])
         self.label_hf_endpoint.config(text=texts["HF Endpoint:"])
@@ -632,14 +846,25 @@ class ConfigGUI(tk.Tk):
         # Update run mode labels & combobox values
         self.label_run_mode.config(text=texts.get("Run Mode:", "Run Mode:"))
         localized_run_vals = [texts.get("Viewer", "Viewer"), texts.get("Streamer", "Streamer")]
+        if OS_NAME == "Windows":
+            localized_run_vals.append(texts.get("3D Monitor", "3D Monitor"))
         self.run_mode_cb["values"] = localized_run_vals
-        
-
+        # Add Inference Optimizer text update
+        self.label_inference_optimizer.config(text=texts.get("Inference Optimizer:", "Inference Optimizer:"))
+        self.check_recompile_trt.config(text=texts.get("Recompile TensorRT", "Recompile TensorRT"))
+        self.check_unlock_streamer_thread.config(text=texts.get("Unlock Thread (Streamer)", "Unlock Thread (Streamer)"))
         # Select the appropriate label
         if self.run_mode_key == "Viewer":
             self.run_mode_var_label.set(localized_run_vals[0])
-        else:
+            self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
+        elif self.run_mode_key == "Streamer":
             self.run_mode_var_label.set(localized_run_vals[1])
+        else:  # 3D Monitor
+            self.run_mode_var_label.set(localized_run_vals[2])
+            self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
+        if OS_NAME == "Windows":
+            self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
+        self.fill_16_9_cb.config(text=texts.get("Fill 16:9", "Fill 16:9"))
             
         # Update capture mode combobox values
         localized_capture_vals = [texts.get("Monitor", "Monitor"), texts.get("Window", "Window")]
@@ -657,6 +882,9 @@ class ConfigGUI(tk.Tk):
         # Streamer host/port labels
         self.label_streamer_host.config(text=texts.get("Streamer URL", "Streamer URL"))
         self.label_streamer_port.config(text=texts.get("Streamer Port:", "Streamer Port:"))
+        self.label_stream_quality.config(text=UI_TEXTS[self.language]["Stream Quality:"])
+        self.btn_copy_url.config(text=UI_TEXTS[self.language]["Copy URL"])
+        self.btn_open_browser.config(text=UI_TEXTS[self.language]["Open Browser"])
 
         # language combobox values
         self.language_cb["values"] = list(UI_TEXTS.keys())
@@ -666,8 +894,8 @@ class ConfigGUI(tk.Tk):
             current_text = self.status_label.cget("text")
             mapping = {
                 "Loaded settings.yaml at startup": texts["Loaded settings.yaml at startup"],
-                "Running": texts["Running"],
-                "Stopped": texts["Stopped"],
+                "Running...": texts["Running"],
+                "Stopped.": texts["Stopped"],
                 "Settings saved to settings.yaml, starting...": texts["Countdown"],
                 "启动时已加载 settings.yaml": texts["Loaded settings.yaml at startup"],
                 "运行中...": texts["Running"],
@@ -688,25 +916,38 @@ class ConfigGUI(tk.Tk):
         label = self.run_mode_var_label.get()
         texts = UI_TEXTS[self.language]
         streamer_label = texts.get("Streamer", "Streamer")
+        viewer_label = texts.get("Viewer", "Viewer")
+        
         if label == streamer_label:
             self.run_mode_key = "Streamer"
             if not self.streamer_port_var.get():
-                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", 1400)))
+                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
             # populate host with detected local IP if empty
             self.streamer_host_var.set(f"http://{get_local_ip()}:{self.streamer_port_var.get()}")
             # grid the controls
             self.label_streamer_host.grid(row=1, column=0, sticky="w", padx=8, pady=6)
             self.streamer_host_entry.grid(row=1, column=1, sticky="ew", padx=8, pady=6)
-            self.label_streamer_port.grid(row=1, column=2, sticky="w", padx=8, pady=6)
-            self.streamer_port_entry.grid(row=1, column=3, sticky="ew", padx=8, pady=6)
+            self.label_streamer_port.grid(row=2, column=0, sticky="w", padx=8, pady=6)
+            self.streamer_port_entry.grid(row=2, column=1, sticky="ew", padx=8, pady=6)
+            self.label_stream_quality.grid(row=2, column=2, sticky="w", **self.pad)
+            self.stream_quality_cb.grid(row=2, column=3, sticky="ew", **self.pad)
+            self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
+            self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
+            self.fixed_viwer_aspect_cb.grid_remove()
+            
         else:
-            self.run_mode_key = "Viewer"
-            # hide streamer controls
+            self.run_mode_key = "Viewer" if label == viewer_label else "3D Monitor"
+            # hide streamer controls for 3D Monitor mode
+            self.fixed_viwer_aspect_cb.grid(row=6, column=3, sticky="w", **self.pad)
             self.label_streamer_host.grid_remove()
             self.streamer_host_entry.grid_remove()
             self.label_streamer_port.grid_remove()
             self.streamer_port_entry.grid_remove()
-
+            self.label_stream_quality.grid_remove()
+            self.stream_quality_cb.grid_remove()
+            self.btn_copy_url.grid_remove()
+            self.btn_open_browser.grid_remove()
+            
     def browse_download(self):
         path = filedialog.askdirectory(initialdir=self.download_var.get() or ".")
         if path:
@@ -778,19 +1019,24 @@ class ConfigGUI(tk.Tk):
         return self.monitor_label_to_index
 
     def read_yaml(self, path):
-        with open(path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        except UnicodeDecodeError:
+            # Fallback to try other common encodings if UTF-8 fails
+            try:
+                with open(path, "r", encoding="gbk") as f:
+                    return yaml.safe_load(f) or {}
+            except Exception as e:
+                messagebox.showerror(UI_TEXTS[self.language]["Error"], f"{UI_TEXTS[self.language]['Failed to load settings.yaml:']} {e}")
+                return {}
 
     def save_yaml(self, path, cfg):
         if not HAVE_YAML:
             messagebox.showerror(UI_TEXTS[self.language]["Error"],
                                 UI_TEXTS[self.language]["PyYAML not installed, cannot save YAML file."])
             return False
-        try:
-            # Convert any tuples to lists before saving
-            if isinstance(cfg.get("Capture Coordinates"), tuple):
-                cfg["Capture Coordinates"] = list(cfg["Capture Coordinates"])
-                
+        try:                
             with open(path, "w", encoding="utf-8") as f:
                 yaml.dump(cfg, f, allow_unicode=True, sort_keys=False)
             return True
@@ -800,9 +1046,7 @@ class ConfigGUI(tk.Tk):
             return False
 
     def apply_config(self, cfg, keep_optional=True):
-        # Convert any lists to tuples for Capture Coordinates
-        if isinstance(cfg.get("Capture Coordinates"), list):
-            cfg["Capture Coordinates"] = tuple(cfg["Capture Coordinates"])
+        self.cfg = cfg  # Store the config for later use
         
         # Monitor settings
         monitor_idx = cfg.get("Monitor Index", DEFAULTS["Monitor Index"])
@@ -813,51 +1057,63 @@ class ConfigGUI(tk.Tk):
             self.monitor_var.set(next(iter(self.monitor_label_to_index)))
 
         # Window settings
-        self.window_var.set(cfg.get("Window Title", DEFAULTS["Window Title"]))
-        self.selected_window_coords = cfg.get("Capture Coordinates", DEFAULTS["Capture Coordinates"])
+        self.selected_window_name = cfg.get(DEFAULTS["Window Title"])
+        self.window_var.set(self.selected_window_name)
 
-        if not keep_optional:  # no update for device
+        if keep_optional:  # no update for device
             device_idx = cfg.get("Device", DEFAULTS["Device"])
             label_for_device_idx = next((lbl for lbl, i in self.device_label_to_index.items() if i == device_idx), None)
             if label_for_device_idx:
                 self.device_var.set(label_for_device_idx)
             elif self.device_label_to_index:
                 self.device_var.set(next(iter(self.device_label_to_index)))
-
+            self.showfps_var.set(cfg.get("Show FPS", DEFAULTS["Show FPS"]))
         self.fps_cb.set(str(cfg.get("FPS", DEFAULTS["FPS"])))
-        self.showfps_var.set(cfg.get("Show FPS", DEFAULTS["Show FPS"]))
         self.res_cb.set(str(cfg.get("Output Resolution", DEFAULTS["Output Resolution"])))
         self.ipd_var.set(str(cfg.get("IPD", DEFAULTS["IPD"])))
 
-        model_list = cfg.get("Model List", DEFAULTS["Model List"])
-        if not model_list:
-            model_list = DEFAULT_MODEL_LIST
+        model_list = DEFAULT_MODEL_LIST
+            
         self.depth_model_cb["values"] = model_list
-        selected_model = cfg.get("Depth Model", model_list[0] if model_list else DEFAULTS["Depth Model"])
-        if selected_model not in model_list:
-            selected_model = model_list[0]
+        selected_model = cfg.get("Depth Model", DEFAULTS["Depth Model"])
+        
+        if selected_model not in self.depth_model_cb["values"]:
+            selected_model = self.depth_model_cb["values"][0] if self.depth_model_cb["values"] else DEFAULTS["Depth Model"]
+        
         self.depth_model_var.set(selected_model)
-
+        self.update_depth_resolution_options(selected_model)
         self.depth_res_cb.set(cfg.get("Depth Resolution", DEFAULTS["Depth Resolution"]))
-        self.display_mode_cb.set(cfg.get("Display Mode", DEFAULTS["Display Mode"]))
         self.depth_strength_cb.set(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
+        self.display_mode_cb.set(cfg.get("Display Mode", DEFAULTS["Display Mode"]))
+        self.antialiasing_cb.set(str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"])))
+        self.foreground_scale_cb.set(str(cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"])))
         self.fp16_var.set(cfg.get("FP16", DEFAULTS["FP16"]))
         self.download_var.set(cfg.get("Download Path", DEFAULTS["Download Path"]))
-        self.hf_endpoint_var.set(cfg.get("HF Endpoint", DEFAULTS["HF Endpoint"]))
-        if not keep_optional:  # no update for language
+        hf_endpoint = cfg.get("HF Endpoint", DEFAULTS["HF Endpoint"])
+        self.hf_endpoint_var.set(hf_endpoint)
+        # If the endpoint is not in the predefined list, add it
+        if hf_endpoint not in self.hf_endpoint_cb["values"]:
+            self.hf_endpoint_cb["values"] = list(self.hf_endpoint_cb["values"]) + [hf_endpoint]
+        if keep_optional:  # no update for language
             self.language_var.set(cfg.get("Language", DEFAULTS["Language"]))
 
         # Run mode + streamer settings
-        run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Viewer"))
-        self.run_mode_key = run_mode
-        host = cfg.get("Streamer Host") or DEFAULTS.get("Streamer Host")
-        port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", 1400))
-        if host:
-            self.streamer_host_var.set(f"http://{host}:{port}")
-        else:
-            # default local ip
-            self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
+        if keep_optional:
+            run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Viewer"))
+            if run_mode == "3D Monitor" and OS_NAME != "Windows":
+                run_mode = "Viewer"  # Fall back to Viewer on non-Windows
+            self.run_mode_key = run_mode
+        port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", DEFAULT_PORT))
+        self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
         self.streamer_port_var.set(str(port))
+        self.stream_quality_cb.set(str(cfg.get("Stream Quality", DEFAULTS["Stream Quality"])))
+        # Capture option
+        self.capture_tool_cb.set(cfg.get("Capture Tool", DEFAULTS["Capture Tool"]))
+        self.fill_16_9_var.set(cfg.get("Fill 16:9", DEFAULTS["Fill 16:9"]))
+        
+        # Fixed Viewer Ratio
+        self.fixed_viwer_aspect_var.set(cfg.get("Fix Viewer Aspect", DEFAULTS["Fix Viewer Aspect"]))
+        
         # Capture mode
         capture_mode = cfg.get("Capture Mode", DEFAULTS.get("Capture Mode", "Monitor"))
         self.capture_mode_key = capture_mode
@@ -865,12 +1121,64 @@ class ConfigGUI(tk.Tk):
         self.update_language_texts()
         self.on_run_mode_change()
         self.on_capture_mode_change()
+    
+        # Check if saved optimizer is valid for current device
+        self.use_torch_compile.set(cfg.get("torch.compile", False))
+        self.use_tensorrt.set(cfg.get("TensorRT", False))
+        self.unlock_streamer_thread.set(cfg.get("Unlock Thread (Streamer)", False))
+        
+        # Trigger device change to update optimizer options
+        self.recompile_trt_var.set(cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"]))
+        
+        # Trigger device change to update optimizer options
+        self.on_device_change()
 
-    def load_defaults(self):
-        self.apply_config(DEFAULTS)
+    def update_depth_resolution_options(self, model_name):
+        """Update depth resolution options based on selected model"""
+        # Get resolutions for this model
+        resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [336])  # Default to 384 if not found
+        
+        # Update combobox values
+        self.depth_res_cb["values"] = [str(res) for res in resolutions]
+        
+        # Try to maintain current selection if possible
+        current_val = self.depth_res_cb.get()
+        if current_val not in self.depth_res_cb["values"]:
+            # Try to find closest resolution
+            try:
+                current_num = int(current_val)
+                closest = min(resolutions, key=lambda x: abs(x - current_num))
+                self.depth_res_cb.set(str(closest))
+            except (ValueError, TypeError):
+                # Default to first resolution if we can't convert
+                self.depth_res_cb.set(str(resolutions[0]))
+
+    def on_depth_model_change(self, event=None):
+        """Handle depth model selection changes"""
+        selected_model = self.depth_model_var.get()
+        self.update_depth_resolution_options(selected_model)
+
+    def load_defaults(self):   
+        # Apply all defaults
+        self.apply_config(DEFAULTS, keep_optional=False)
 
     def reset_to_defaults(self):
+        """Reset to defaults while maintaining model-resolution relationships"""
+        # Store current values that we might want to preserve
+        current_language = self.language
+        current_device = self.device_var.get()
+        
+        # Load the hard defaults
         self.load_defaults()
+        
+        # Restore language and device if needed
+        if current_language in UI_TEXTS:
+            self.language = current_language
+            self.language_var.set(current_language)
+            self.update_language_texts()
+        
+        if current_device in self.device_label_to_index.values():
+            self.device_var.set(current_device)
     
     def update_status(self, msg: str):
         """Update status bar text."""
@@ -879,25 +1187,47 @@ class ConfigGUI(tk.Tk):
     def save_settings(self):
         # Validate port
         try:
-            port_val = int(self.streamer_port_var.get()) if self.streamer_port_var.get() else DEFAULTS.get("Streamer Port", 1400)
+            port_val = int(self.streamer_port_var.get()) if self.streamer_port_var.get() else DEFAULTS.get("Streamer Port", DEFAULT_PORT)
             if not (1 <= port_val <= 65535):
                 raise ValueError("Port out of range")
         except Exception:
             messagebox.showerror(UI_TEXTS[self.language]["Error"], f"Invalid port: {self.streamer_port_var.get()}")
             return
 
+        # Check if window title exists when in Window capture mode
+        if self.capture_mode_key == "Window":
+            window_title = self.selected_window_name
+            if not window_title:
+                messagebox.showerror(
+                    UI_TEXTS[self.language]["Error"],
+                    UI_TEXTS[self.language]["Please select a window before running in Window capture mode"]
+                )
+                return
+            
+            # Verify the window still exists
+            windows = list_windows()
+            window_exists = any(title == window_title for title, _ in windows)
+            if not window_exists:
+                messagebox.showerror(
+                    UI_TEXTS[self.language]["Error"],
+                    UI_TEXTS[self.language]["The selected window no longer exists. Please refresh and select a valid window."]
+                )
+                return
+
         cfg = {
             "Capture Mode": self.capture_mode_key,
             "Monitor Index": self.monitor_label_to_index.get(self.monitor_var.get(), DEFAULTS["Monitor Index"]),
-            "Capture Coordinates": self.selected_window_coords,
+            "Window Title": self.selected_window_name if self.capture_mode_key == "Window" else "",
             "FPS": int(self.fps_cb.get()),
             "Show FPS": self.showfps_var.get(),
             "Output Resolution": int(self.res_cb.get()),
             "IPD": float(self.ipd_var.get()),
             "Display Mode": self.display_mode_cb.get(),
-            "Model List": list(self.depth_model_cb["values"]),
+            "Model List": ALL_MODELS,  # Preserve existing model list structure
             "Depth Model": self.depth_model_var.get(),
             "Depth Strength": float(self.depth_strength_cb.get()),
+            "Anti-aliasing": int(self.antialiasing_cb.get()),
+            "Foreground Scale": float(self.foreground_scale_cb.get()),
             "Depth Resolution": int(self.depth_res_cb.get()),
             "FP16": self.fp16_var.get(),
             "Download Path": self.download_var.get(),
@@ -905,8 +1235,17 @@ class ConfigGUI(tk.Tk):
             "Device": self.device_label_to_index.get(self.device_var.get()),
             "Language": self.language,
             "Run Mode": self.run_mode_key,
-            "Streamer Port": port_val,
+            "Streamer Port": int(self.streamer_port_var.get()),
+            "Stream Quality": int(self.stream_quality_cb.get()),
+            "torch.compile": self.use_torch_compile.get(),
+            "TensorRT": self.use_tensorrt.get(),
+            "Recompile TensorRT": self.recompile_trt_var.get(),
+            "Unlock Thread (Streamer)": self.unlock_streamer_thread.get(),
+            "Capture Tool": self.capture_tool_cb.get(),
+            "Fill 16:9": self.fill_16_9_var.get(),
+            "Fix Viewer Aspect": self.fixed_viwer_aspect_var.get()
         }
+        
         success = self.save_yaml("settings.yaml", cfg)
         if success:
             # Show a message with countdown
@@ -938,8 +1277,9 @@ class ConfigGUI(tk.Tk):
             except Exception as e:
                 messagebox.showerror(
                     UI_TEXTS[self.language]["Error"],
-                    f"Failed to run process: {e}"
+                    f"{UI_TEXTS[self.language]['Failed to run process:']} {e}"
                 )
+                print(f"[Main] Stopped")
                 self.update_status(UI_TEXTS[self.language]["Stopped"])
 
     def _monitor_process(self):
@@ -947,30 +1287,53 @@ class ConfigGUI(tk.Tk):
         if self.process and self.process.poll() is not None:
             # Process ended or was killed outside
             self.process = None
+            print(f"[Main] Stopped")
             self.update_status(UI_TEXTS[self.language]["Stopped"])
         else:
             # Keep checking every second
             self.after(1000, self._monitor_process)
                     
     def stop_process(self):
-        if self.process and self.process.poll() is None:  # still running
+        """Fully shutdown all processes using signals"""
+        print("[Stop] Stopping all processes...")
+        
+        # Set shutdown event to signal all threads
+        shutdown_event.set()
+        
+        # Stop main process
+        if self.process and self.process.poll() is None:
             try:
+                print("[Stop] Stopping main process...")
                 self.process.terminate()
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                print("[Stop] Force killing main process...")
                 self.process.kill()
+                self.process.wait()
             except Exception as e:
                 messagebox.showerror(
                     UI_TEXTS[self.language]["Error"],
-                    f"Failed to stop process: {e}"
+                    f"{UI_TEXTS[self.language]['Failed to stop process:']} {e}"
                 )
             finally:
                 self.process = None
-                self.update_status(UI_TEXTS[self.language]["Stopped"])
-                print(f"[Main] {self.run_mode_key} Stopped")
-        else:
-            self.update_status(UI_TEXTS[self.language]["Stopped"])
-            print(f"[Main] {self.run_mode_key} Stopped")
+        
+        # Additional cleanup
+        self.cleanup_resources()
+        
+        print(f"[Main] Stopped")
+        self.update_status(UI_TEXTS[self.language]["Stopped"])
+
+    def cleanup_resources(self):
+        """Clean up all resources from GUI"""
+        # Additional Windows-specific cleanup for FFmpeg
+        if OS_NAME == "Windows":
+            # taskkill if available
+            import subprocess
+            subprocess.run(['taskkill', '/f', '/im', 'ffmpeg.exe'], 
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['taskkill', '/f', '/im', 'mediamtx.exe'], 
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 if __name__ == "__main__":
     app = ConfigGUI()

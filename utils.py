@@ -102,10 +102,21 @@ LOCAL_IP = get_local_ip()
 RUN_MODE = settings["Run Mode"]
 # Add for 3D monitor
 USE_3D_MONITOR = False
-if RUN_MODE == "3D Monitor" and OS_NAME == "Windows":
+STREAM_MODE = None
+# Determin the run mode and stream mode
+if RUN_MODE == "Local Viewer":
+    RUN_MODE = "Viewer"
+elif RUN_MODE == "3D Monitor" and OS_NAME == "Windows":
     RUN_MODE = "Viewer"
     USE_3D_MONITOR = True
-
+elif RUN_MODE == "MJPEG Streamer":
+    RUN_MODE = "Viewer"
+    STREAM_MODE = "MJPEG" 
+elif RUN_MODE == "RTMP Streamer":
+    RUN_MODE = "Viewer"
+    STREAM_MODE = "RTMP"
+else:
+    RUN_MODE = "Streamer"
 MODEL_ID = settings["Depth Model"]
 ALL_MODELS = settings["Model List"]
 CACHE_PATH = settings["Download Path"]
@@ -129,14 +140,12 @@ else:
     AA_STRENTH *= 0.4
 
 # Experimental Settings
-DML_BOOST = settings["Unlock Thread (Streamer)"] # Unlock thread for DirectML streamer
+DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer
 USE_TORCH_COMPILE = settings["torch.compile"] # compile model with torch.compile
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
 CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture
 FILL_16_9 = settings["Fill 16:9"]
 FIX_VIEWER_ASPECT = settings["Fix Viewer Aspect"]
-STEREOMIX_DEVICE = "立体声混音 (Realtek(R) Audio)"
-USE_RTMP = True
-USE_RTMP = True if OS_NAME == "Windows" and USE_RTMP == True else False
+STEREOMIX_DEVICE = settings["Stereo Mix Device"] # RTMP StereoMix Device
 STREAM_KEY = "live"

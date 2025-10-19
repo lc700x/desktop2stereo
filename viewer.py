@@ -4,9 +4,9 @@ import moderngl
 import numpy as np
 import time
 from PIL import Image, ImageDraw, ImageFont
-
+from OpenGL.GL import *
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, USE_RTMP, CAPTURE_MODE
+from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
@@ -58,7 +58,7 @@ def add_logo(window):
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
     
-    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT, use_rtmp=USE_RTMP, frame_size=(1280, 720)):
+    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT, stream_mode=None, frame_size=(1280, 720)):
         # Initialize with default values
         self.use_3d = use_3d
         self.title = "Stereo Viewer"
@@ -77,19 +77,20 @@ class StereoWindow:
         self.aspect = self.frame_size[0] / self.frame_size[1]
         self.fix_aspect = fix_aspect
         self.show_fps = show_fps
-        self.use_rtmp = use_rtmp
-        
-        if not self.use_3d and not self.use_rtmp:
-            self.window_size = (1280, 720)
-        else:
-            self.window_size = self.frame_size
-        
+        self.stream_mode = stream_mode
+        self.window_size = self.frame_size
+
         # FPS tracking variables
         self.frame_count = 0
         self.last_fps_time = time.perf_counter()
         self.actual_fps = 0.0
         self.start_time = time.perf_counter()
         self.total_frames = 0
+        
+        # Add PBO for streamer
+        self._pbo_ids = None
+        self._pbo_index = 0
+        self._pbo_initialized = False
         
         # Depth ratio display variables
         self.last_depth_change_time = 0
@@ -132,10 +133,12 @@ class StereoWindow:
             monitor = monitors[self.monitor_index]
             vidmode = glfw.get_video_mode(monitor)
             self.window_size = (vidmode.size.width, vidmode.size.height)
-        elif self.use_rtmp:
+        elif self.stream_mode == "RTMP":
             glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
             # glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
-            
+        elif self.stream_mode == "MJPEG":
+            glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
+            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)  # clicks pass through
         # Create window
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
         
@@ -148,7 +151,7 @@ class StereoWindow:
             raise RuntimeError("Could not create window")
         
         add_logo(self.window)
-        if self.use_rtmp:
+        if self.stream_mode == "RTMP" or self.use_3d:
             self.position_on_monitor(self.monitor_index)
 
         # Set up OpenGL context
@@ -328,7 +331,7 @@ class StereoWindow:
         self.frame_size = (w, h)
         
         # freeze window size for rtmp streaming
-        if self.use_rtmp:
+        if self.stream_mode == "RTMP":
             if self.display_mode == "Full-SBS":
                 w = 2 * w
             glfw.set_window_size(self.window, w, h)
@@ -420,7 +423,7 @@ class StereoWindow:
                 x = mon_x + (mon_w - self.window_size[0]) // 2
                 y = mon_y + (mon_h - self.window_size[1]) // 2
                 glfw.set_window_pos(self.window, x, y)
-            if self.use_rtmp:
+            if self.stream_mode == "RTMP":
                 if vidmode.size == self.window_size:
                     glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             self.monitor_index = monitor_index
@@ -517,7 +520,7 @@ class StereoWindow:
         """Optimized key event handling, disable some keys for rtmp and 3d monitor"""
         if action == glfw.PRESS:
             if key == glfw.KEY_ENTER or key == glfw.KEY_SPACE:
-                if not USE_RTMP and not USE_3D_MONITOR:
+                if self.stream_mode is None and not self.use_3d:
                     self.toggle_fullscreen()
             elif key == glfw.KEY_RIGHT:
                 self.move_to_adjacent_monitor(+1)
@@ -602,6 +605,53 @@ class StereoWindow:
             max(1, int(round(src_w * scale))),
             max(1, int(round(src_h * scale)))
         )
+        
+    def _init_pbos(self, width, height):
+        """Initialize two PBOs for asynchronous pixel transfers."""
+        if self._pbo_initialized:
+            return
+        self._pbo_ids = glGenBuffers(2)
+        buffer_size = width * height * 3  # RGB8
+        for pbo in self._pbo_ids:
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo)
+            glBufferData(GL_PIXEL_PACK_BUFFER, buffer_size, None, GL_STREAM_READ)
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+        self._pbo_index = 0
+        self._pbo_initialized = True
+        # print(f"[StereoWindow] Initialized {len(self._pbo_ids)} PBOs ({buffer_size/1e6:.2f} MB each)")
+
+    def capture_glfw_image(self):
+        """Asynchronous GPU readback using double-buffered PBOs."""
+        width, height = glfw.get_framebuffer_size(self.window)
+        if not self._pbo_initialized:
+            self._init_pbos(width, height)
+        next_index = (self._pbo_index + 1) % 2
+        glPixelStorei(GL_PACK_ALIGNMENT, 1)
+
+        # Bind current PBO and start async read
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, self._pbo_ids[self._pbo_index])
+        glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
+
+        # Bind previous PBO to map and read CPU data (async from previous frame)
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, self._pbo_ids[next_index])
+        ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY)
+        image = None
+        if ptr:
+            try:
+                # Copy from GPU memory into numpy array
+                buf = (GLubyte * (width * height * 3)).from_address(int(ptr))
+                image = np.frombuffer(buf, dtype=np.uint8).reshape(height, width, 3)
+                image = np.flipud(image.copy())  # Flip vertically; .copy() detaches from mapped memory
+            finally:
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER)
+
+        # Unbind PBO
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+        # Swap PBO indices for next frame
+        self._pbo_index = next_index
+
+        # Note: the very first call will return None (no previous frame ready)
+        return image
 
     def render(self):
         """Optimized rendering with reduced GL calls"""
