@@ -191,7 +191,7 @@ def rtmp_stream():
             '-b:a', '128k',
             '-f', 'flv',
             f'rtmp://localhost:1935/{STREAM_KEY}'
-        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        ], stdout=subprocess.PIPE)
         # Store process references globally
         global_processes['rtmp_server'] = rtmp_server
         global_processes['ffmpeg'] = ffmpeg
@@ -258,11 +258,10 @@ def main(mode="Viewer"):
                 from utils import set_window_to_bottom
                 rtmp_thread = threading.Thread(target=rtmp_stream, daemon=True)
                 rtmp_thread.start()
-                
                 def bottom_loop():
                     while True:
                         set_window_to_bottom(window.window)
-                        time.sleep(0.1)
+                        time.sleep(0.01)
                         
                 threading.Thread(target=bottom_loop, daemon=True).start()
             else:
@@ -365,8 +364,8 @@ def main(mode="Viewer"):
                     
     except KeyboardInterrupt:
         print("\n[Main] Keyboard interrupt received, shutting down...")
-    except Exception as e:
-        print(f"[Main] Error: {e}")
+    # except Exception as e:
+    #     print(f"[Main] Error: {e}")
     finally:
         # Ensure cleanup happens
         shutdown_event.set()

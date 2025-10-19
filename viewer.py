@@ -6,7 +6,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, USE_RTMP
+from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, USE_RTMP, CAPTURE_MODE
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
@@ -74,7 +74,6 @@ class StereoWindow:
         self._modes = ["Full-SBS", "Half-SBS", "TAB"]
         self.display_mode = display_mode
         self._texture_size = None
-        self.monitor_index = 0
         self.fill_16_9 = fill_16_9
         self.frame_size = (1280, 720) 
         self.aspect = self.frame_size[0] / self.frame_size[1]
@@ -115,6 +114,7 @@ class StereoWindow:
         if not glfw.init():
             raise RuntimeError("Could not initialize GLFW")
         
+        self.monitor_index = self.get_glfw_mon_index(MONITOR_INDEX) if CAPTURE_MODE=="Monitor" else 0
         # Configure window
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
@@ -126,13 +126,13 @@ class StereoWindow:
             glfw.window_hint(glfw.FLOATING, glfw.TRUE)    # Always on top
             # Get primary monitor resolution
             monitors = glfw.get_monitors()
-            monitor = monitors[MONITOR_INDEX-1]
+            monitor = monitors[self.monitor_index]
             vidmode = glfw.get_video_mode(monitor)
             self.window_size = (vidmode.size.width, vidmode.size.height)
         elif self.use_rtmp:
             glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
-            glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
-            glfw.window_hint(glfw.DECORATED, glfw.FALSE)  # No window decorations
+            # glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
+            # glfw.window_hint(glfw.DECORATED, glfw.FALSE)  # No window decorations
             
         # Create window
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
@@ -146,7 +146,8 @@ class StereoWindow:
             raise RuntimeError("Could not create window")
         
         add_logo(self.window)
-        self.position_on_monitor(0)
+        if self.use_rtmp:
+            self.position_on_monitor(self.monitor_index)
 
         # Set up OpenGL context
         glfw.make_context_current(self.window)
@@ -171,6 +172,53 @@ class StereoWindow:
         # Load initial font
         self._update_font()
 
+    def get_glfw_mon_index(self, mss_monitor_index=1):
+        """
+        Map an MSS monitor index (1-based) to a GLFW monitor handle.
+
+        MSS provides monitors like:
+            monitors[0] -> all monitors bounding box
+            monitors[1] -> first display
+            monitors[2] -> second display, etc.
+
+        GLFW gives a list of monitor handles that we can position windows on.
+        This function matches them by position and size.
+        """
+        try:
+            import mss
+        except ImportError:
+            print("[StereoWindow] mss not installed; using default monitor.")
+            return 0
+
+        with mss.mss() as sct:
+            mss_monitors = sct.monitors
+
+        # MSS uses index 1-based (0 = virtual bounding box)
+        if mss_monitor_index < 1 or mss_monitor_index >= len(mss_monitors):
+            print(f"[StereoWindow] Invalid MSS monitor index {mss_monitor_index}, defaulting to 1.")
+            mss_monitor_index = 1
+
+        mss_mon = mss_monitors[mss_monitor_index]
+        mss_x, mss_y = mss_mon["left"], mss_mon["top"]
+        mss_w, mss_h = mss_mon["width"], mss_mon["height"]
+
+        glfw_monitors = glfw.get_monitors()
+        if not glfw_monitors:
+            print("[StereoWindow] No GLFW monitors detected.")
+            return 0
+
+        for i, gmon in enumerate(glfw_monitors):
+            gx, gy = glfw.get_monitor_pos(gmon)
+            gvm = glfw.get_video_mode(gmon)
+            gw, gh = gvm.size.width, gvm.size.height
+
+            if abs(gx - mss_x) <= 5 and abs(gy - mss_y) <= 5 and abs(gw - mss_w) <= 5 and abs(gh - mss_h) <= 5:
+                # Found matching GLFW monitor
+                return i
+
+        print("[StereoWindow] No matching GLFW monitor found for MSS index, defaulting to primary.")
+        return 0
+    
     def _on_window_resize(self, window, width, height):
         """Handle window resize events"""
         self.window_size = (width, height)
@@ -280,9 +328,8 @@ class StereoWindow:
         # freeze window size for rtmp streaming
         if self.use_rtmp:
             if self.display_mode == "Full-SBS":
-                target_w = 2 * target_w
+                w = 2 * w
             glfw.set_window_size(self.window, w, h)
-            glfw.set_window_pos(self.window, 0, 0)
             
 
         # Update FPS counters but do not regenerate overlay every frame
@@ -366,6 +413,8 @@ class StereoWindow:
             mon_w, mon_h = vidmode.size.width, vidmode.size.height
             if self.use_3d:
                 glfw.set_window_size(self.window, mon_w, mon_h)
+                glfw.set_window_pos(self.window, mon_x, mon_y)
+            elif self.use_rtmp:
                 glfw.set_window_pos(self.window, mon_x, mon_y)
             else:
                 x = mon_x + (mon_w - self.window_size[0]) // 2
@@ -468,11 +517,9 @@ class StereoWindow:
                 if not USE_RTMP and not USE_3D_MONITOR:
                     self.toggle_fullscreen()
             elif key == glfw.KEY_RIGHT:
-                if not USE_RTMP:
-                    self.move_to_adjacent_monitor(+1)
+                self.move_to_adjacent_monitor(+1)
             elif key == glfw.KEY_LEFT:
-                if not USE_RTMP:
-                    self.move_to_adjacent_monitor(-1)
+                self.move_to_adjacent_monitor(-1)
             elif key == glfw.KEY_ESCAPE:
                 glfw.set_window_should_close(window, True)
             elif key == glfw.KEY_DOWN:
