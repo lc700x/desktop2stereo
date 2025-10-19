@@ -58,11 +58,9 @@ def add_logo(window):
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
     
-    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT, use_rtmp=USE_RTMP):
+    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT, use_rtmp=USE_RTMP, frame_size=(1280, 720)):
         # Initialize with default values
         self.use_3d = use_3d
-        if not self.use_3d:
-            self.window_size = (1280, 720)
         self.title = "Stereo Viewer"
         self.ipd_uv = ipd
         self.depth_strength = 0.1
@@ -75,11 +73,16 @@ class StereoWindow:
         self.display_mode = display_mode
         self._texture_size = None
         self.fill_16_9 = fill_16_9
-        self.frame_size = (1280, 720) 
+        self.frame_size = frame_size
         self.aspect = self.frame_size[0] / self.frame_size[1]
         self.fix_aspect = fix_aspect
         self.show_fps = show_fps
         self.use_rtmp = use_rtmp
+        
+        if not self.use_3d and not self.use_rtmp:
+            self.window_size = (1280, 720)
+        else:
+            self.window_size = self.frame_size
         
         # FPS tracking variables
         self.frame_count = 0
@@ -132,7 +135,6 @@ class StereoWindow:
         elif self.use_rtmp:
             glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
             # glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
-            # glfw.window_hint(glfw.DECORATED, glfw.FALSE)  # No window decorations
             
         # Create window
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
@@ -414,12 +416,13 @@ class StereoWindow:
             if self.use_3d:
                 glfw.set_window_size(self.window, mon_w, mon_h)
                 glfw.set_window_pos(self.window, mon_x, mon_y)
-            elif self.use_rtmp:
-                glfw.set_window_pos(self.window, mon_x, mon_y)
             else:
                 x = mon_x + (mon_w - self.window_size[0]) // 2
                 y = mon_y + (mon_h - self.window_size[1]) // 2
                 glfw.set_window_pos(self.window, x, y)
+            if self.use_rtmp:
+                if vidmode.size == self.window_size:
+                    glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             self.monitor_index = monitor_index
 
     def get_current_monitor(self):

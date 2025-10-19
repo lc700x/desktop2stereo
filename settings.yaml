@@ -408,6 +408,6 @@ torch.compile: false
 TensorRT: false
 Recompile TensorRT: false
 Unlock Thread (Streamer): false
-Capture Tool: DXCamera
+Capture Tool: WindowsCapture
 Fill 16:9: false
 Fix Viewer Aspect: false

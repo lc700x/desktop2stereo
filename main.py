@@ -239,8 +239,6 @@ def main(mode="Viewer"):
     try:
         if mode == "Viewer":
             from viewer import StereoWindow
-            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS)
-            
             def depth_loop():
                 while not shutdown_event.is_set():
                     try:
@@ -253,6 +251,12 @@ def main(mode="Viewer"):
                         continue
             
             threading.Thread(target=depth_loop, daemon=True).start()
+            # build ffmpeg command pointing to your mediamtx and include audio device
+            frame_rgb = proc_q.get()
+            w, h = frame_rgb.shape[1], frame_rgb.shape[0]
+            if DISPLAY_MODE == "FUll-SBS":
+                w = 2 * h
+            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS, frame_size = (w,h))
             
             if USE_RTMP and OS_NAME == "Windows":
                 from utils import set_window_to_bottom

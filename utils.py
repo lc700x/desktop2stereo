@@ -90,9 +90,7 @@ if OS_NAME == "Windows":
         """
         hwnd = glfw.get_win32_window(glfw_window)
         if hwnd:
-            # win32gui.ShowWindow(hwnd, win32con.SW_HIDE)  # Hide the window
-            # win32gui.SetWindowPos(hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
-            win32gui.SetWindowPos(hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+            win32gui.SetWindowPos(hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
 
 # Streamer Settings
 DEFAULT_PORT = 1122
