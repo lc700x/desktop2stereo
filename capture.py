@@ -504,7 +504,7 @@ elif OS_NAME == "Darwin":
 
 
     class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60, window_title=None, capture_mode="Monitor", with_cursor=True):
+        def __init__(self, output_resolution=1080, fps=60, window_title=None, capture_mode="Monitor", monitor_index=1, with_cursor=True):
             self.scaled_height = output_resolution
             self.fps = fps
             self.with_cursor = with_cursor
@@ -514,7 +514,7 @@ elif OS_NAME == "Darwin":
             self.prev_rect = None
 
             if self.capture_mode == "Monitor":
-                mon_index = MONITOR_INDEX
+                mon_index = monitor_index
                 if mon_index >= len(self._mss.monitors):
                     mon_index = 1
                 mon = self._mss.monitors[mon_index]

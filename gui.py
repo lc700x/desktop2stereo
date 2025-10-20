@@ -352,6 +352,7 @@ class ConfigGUI(tk.Tk):
         self.create_widgets()
         self.monitor_label_to_index = self.populate_monitors()
         self.device_label_to_index = self.populate_devices()
+
         self.populate_audio_devices()  # Populate audio devices on startup
 
         if os.path.exists("settings.yaml"):
@@ -468,15 +469,15 @@ class ConfigGUI(tk.Tk):
         self.showfps_cb.grid(row=6, column=3, sticky="w", **self.pad)
         
         # Capture Tool
-        if OS_NAME == "Windows":
-            self.label_capture_tool = ttk.Label(self.content_frame, text="Capture Tool:")
-            self.label_capture_tool.grid(row=7, column=0, sticky="w", **self.pad)
-            self.capture_tool_values = ["WindowsCapture", "DXCamera"]
-            self.capture_tool_cb = ttk.Combobox(self.content_frame, values=self.capture_tool_values, state="readonly")
-            self.capture_tool_cb.grid(row=7, column=1, sticky="ew", **self.pad)
-        else:
-            # Hide capture tool selection on non-Windows
-            self.capture_tool_cb = None
+        
+        self.label_capture_tool = ttk.Label(self.content_frame, text="Capture Tool:")
+        self.label_capture_tool.grid(row=7, column=0, sticky="w", **self.pad)
+        self.capture_tool_values = ["WindowsCapture", "DXCamera"]
+        self.capture_tool_cb = ttk.Combobox(self.content_frame, values=self.capture_tool_values, state="readonly")
+        self.capture_tool_cb.grid(row=7, column=1, sticky="ew", **self.pad)
+        if OS_NAME != "Windows":
+            self.label_capture_tool.grid_remove()
+            self.capture_tool_cb.grid_remove()
             
         # FPS
         self.label_fps = ttk.Label(self.content_frame, text="FPS:")
@@ -703,6 +704,11 @@ class ConfigGUI(tk.Tk):
             
     def populate_audio_devices(self):
         """Populate audio devices list for RTMP streaming and auto-select Stereo Mix"""
+        if OS_NAME != "Windows":  # Skip audio device detection for non-Windows systems
+            self.audio_devices = ["Audio capture not supported on this platform"]
+            self.audio_device_var.set("Audio capture not supported on this platform")
+            return
+            
         try:
             import pyaudio
             p = pyaudio.PyAudio()
@@ -760,7 +766,6 @@ class ConfigGUI(tk.Tk):
                     self.audio_device_var.set("No audio devices available")
                     
         except ImportError:
-            # print("PyAudio not available - audio device selection disabled")
             self.audio_devices = ["PyAudio not available"]
             if hasattr(self, 'audio_device_var'):
                 self.audio_device_var.set("PyAudio not available")
@@ -769,7 +774,6 @@ class ConfigGUI(tk.Tk):
             self.audio_devices = [f"Error: {str(e)}"]
             if hasattr(self, 'audio_device_var'):
                 self.audio_device_var.set(f"Error: {str(e)}")
-    
     def update_recompile_trt_visibility(self, *args):
         """Show/hide TensorRT recompile option based on optimizer selection"""
         if self.use_tensorrt.get():
