@@ -259,7 +259,7 @@ def rtmp_stream():
             '-flags', 'low_delay',
             '-probesize', '32',
             '-analyzeduration', '0',
-            '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':max_framerate={FPS},hwdownload,format=bgra,format=yuv420p[v]",  # Label video output [v]
+            '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':max_framerate={FPS},hwdownload,format=bgra,scale=iw:trunc(ih/2)*2,format=yuv420p[v]",  # Label video output [v], fix odd height
             '-itsoffset', f'{AUDIO_DELAY}',  # Audio delay (applies to next input)
             '-f', 'dshow',
             '-rtbufsize', '256M',
