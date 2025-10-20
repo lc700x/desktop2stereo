@@ -151,8 +151,8 @@ class StereoWindow:
             raise RuntimeError("Could not create window")
         
         add_logo(self.window)
-        if self.stream_mode == "RTMP" or self.use_3d:
-            self.position_on_monitor(self.monitor_index)
+        
+        self.position_on_monitor(self.monitor_index)
 
         # Set up OpenGL context
         glfw.make_context_current(self.window)

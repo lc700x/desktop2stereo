@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 1
+Monitor Index: 2
 Window Title: ''
 FPS: 60
 Show FPS: true
@@ -400,16 +400,16 @@ FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
-Language: EN
-Run Mode: RTMP Streamer
+Language: CN
+Run Mode: Local Viewer
 Streamer Port: 1122
 Stream Quality: 100
 torch.compile: false
 TensorRT: false
 Recompile TensorRT: false
 Unlock Thread (Legacy Streamer): false
-Capture Tool: DXCamera
+Capture Tool: WindowsCapture
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stream Key: live
-Stereo Mix Device: 立体声混音 (Realtek(R) Audio)
+Stereo Mix: 立体声混音 (Realtek(R) Audio)

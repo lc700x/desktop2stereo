@@ -165,7 +165,7 @@ DEFAULTS = {
     "Streamer Port": DEFAULT_PORT,
     "Stream Quality": 100,
     "Stream Key": "live",
-    "Stereo Mix Device": None,
+    "Stereo Mix": None,
     "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False # keep the viewer window aspect ratio not change
@@ -217,8 +217,8 @@ UI_TEXTS = {
         "Legacy Streamer": "Legacy Streamer",
         "MJPEG Streamer": "MJPEG Streamer",
         "RTMP Streamer": "RTMP Streamer",
-        "Stream Key": "Stream Key",
-        "Stereo Mix Device": "Stereo Mix Device",
+        "Stream Key": "Stream Key:",
+        "Stereo Mix": "Stereo Mix:",
         "3D Monitor": "3D Monitor",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
@@ -288,8 +288,8 @@ UI_TEXTS = {
         "Legacy Streamer": "旧网络推流",
         "MJPEG Streamer": "MJPEG推流",
         "RTMP Streamer": "RTMP推流",
-        "Stream Key": "推流密钥",
-        "Stereo Mix Device": "混音设备",
+        "Stream Key": "推流密钥:",
+        "Stereo Mix": "混音设备:",
         "3D Monitor": "3D显示器",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
@@ -614,7 +614,7 @@ class ConfigGUI(tk.Tk):
         
         # StereoMix Devices
         self.audio_device_var = tk.StringVar()
-        self.label_audio_device = ttk.Label(self.content_frame, text="Stereo Mix Device:")
+        self.label_audio_device = ttk.Label(self.content_frame, text="Stereo Mix:")
         self.audio_device_cb = ttk.Combobox(self.content_frame, textvariable=self.audio_device_var, state="readonly")
         
         # URL Action Buttons
@@ -645,7 +645,7 @@ class ConfigGUI(tk.Tk):
         self.device_var.trace_add("write", self.on_device_change)
     
     def auto_select_stereo_mix(self):
-        """Automatically select Stereo Mix device if available"""
+        """Automatically select Stereo Mix if available"""
         if not hasattr(self, 'audio_devices') or not self.audio_devices:
             return
             
@@ -706,7 +706,7 @@ class ConfigGUI(tk.Tk):
                 if device_info.get('maxInputChannels', 0) > 0:
                     self.audio_devices.append(device_info.get('name', f"Device {i}"))
                     
-                    # Check if this is a stereo mix device
+                    # Check if this is a Stereo Mix
                     for mix_name in stereo_mix_names:
                         if mix_name in device_name:
                             stereo_mix_device = device_info.get('name', f"Device {i}")
@@ -730,7 +730,7 @@ class ConfigGUI(tk.Tk):
                     self.audio_device_var.set("No audio devices available")
                     
         except ImportError:
-            print("PyAudio not available - audio device selection disabled")
+            # print("PyAudio not available - audio device selection disabled")
             self.audio_devices = ["PyAudio not available"]
             if hasattr(self, 'audio_device_var'):
                 self.audio_device_var.set("PyAudio not available")
@@ -846,8 +846,16 @@ class ConfigGUI(tk.Tk):
         if self.run_mode_key == "RTMP Streamer":
             self.populate_audio_devices()
             self.auto_select_stereo_mix()
+    
+    def update_rtmp_url(self):
+        """Update the RTMP URL when the stream key changes"""
+        stream_key = self.rtmp_stream_key_var.get()
+        if stream_key:
+            # Construct RTMP URL with the stream key
+            self.streamer_host_var.set(f"http://{get_local_ip()}:8888/{stream_key}")
         else:
-            self.update_host_url() # refresh URL
+            # Default RTMP URL if no stream key is provided
+            self.streamer_host_var.set(f"http://{get_local_ip()}:8888/1122")
     
     def update_host_url(self, *args):
         """Update the host URL when port changes and validate the port number"""
@@ -1015,8 +1023,8 @@ class ConfigGUI(tk.Tk):
         self.btn_open_browser.config(text=UI_TEXTS[self.language]["Open Browser"])
 
         # Update RTMP-specific labels
-        self.label_rtmp_stream_key.config(text="Stream Key:")
-        self.label_audio_device.config(text="Stereo Mix Device:")
+        self.label_rtmp_stream_key.config(text=UI_TEXTS[self.language]["Stream Key"])
+        self.label_audio_device.config(text=UI_TEXTS[self.language]["Stereo Mix"])
         
         # language combobox values
         self.language_cb["values"] = list(UI_TEXTS.keys())
@@ -1115,7 +1123,7 @@ class ConfigGUI(tk.Tk):
 
     def show_rtmp_controls(self):
         """Show controls for RTMP Streamer"""
-        self.streamer_host_var.set(f"http://{get_local_ip()}:8888/live")
+        self.streamer_host_var.set(f"http://{get_local_ip()}:8888/{self.rtmp_stream_key_var.get()}")
         
         # Grid the common streamer controls
         self.label_streamer_host.grid(row=1, column=0, sticky="w", **self.pad)
@@ -1124,17 +1132,18 @@ class ConfigGUI(tk.Tk):
         self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
         
         # Grid RTMP-specific controls
-        self.label_rtmp_stream_key.grid(row=3, column=0, sticky="w", **self.pad)
-        self.rtmp_stream_key_entry.grid(row=3, column=1, sticky="ew", **self.pad)
-        
-        self.label_audio_device.grid(row=3, column=2, sticky="w", **self.pad)
-        self.audio_device_cb.grid(row=3, column=3, sticky="ew", **self.pad)
+        self.label_audio_device.grid(row=3, column=0, sticky="w", **self.pad)
+        self.audio_device_cb.grid(row=3, column=1, sticky="ew", **self.pad)
+        self.label_rtmp_stream_key.grid(row=3, column=2, sticky="w", **self.pad)
+        self.rtmp_stream_key_entry.grid(row=3, column=3, sticky="ew", **self.pad)
         
         # Populate audio devices if not already done
         if not self.audio_device_cb['values']:
             self.populate_audio_devices()
         
         self.fixed_viwer_aspect_cb.grid_remove()
+        
+        self.rtmp_stream_key_var.trace_add("write", lambda *args: self.update_rtmp_url())
 
     def show_viewer_controls(self):
         """Show controls for Local Viewer and 3D Monitor"""
@@ -1301,7 +1310,7 @@ class ConfigGUI(tk.Tk):
         
         # RTMP option
         self.rtmp_stream_key_var.set(cfg.get("Stream Key", ""))
-        saved_audio_device = cfg.get("Stereo Mix Device", "")
+        saved_audio_device = cfg.get("Stereo Mix", "")
         if saved_audio_device and saved_audio_device in self.audio_devices:
             self.audio_device_var.set(saved_audio_device)
         else:
@@ -1446,7 +1455,7 @@ class ConfigGUI(tk.Tk):
             "Fill 16:9": self.fill_16_9_var.get(),
             "Fix Viewer Aspect": self.fix_viewer_aspect_var.get(),
             "Stream Key": self.rtmp_stream_key_var.get(),
-            "Stereo Mix Device": self.audio_device_var.get(),
+            "Stereo Mix": self.audio_device_var.get(),
         }
         
         success = self.save_yaml("settings.yaml", cfg)

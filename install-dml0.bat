@@ -49,7 +49,7 @@ echo - Installing the requirements
 %PYTHON_EXE% -m pip install -r requirements-dml.txt --no-cache-dir
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir
-if %errorlevel% neq 0 (
+%PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir
     echo Failed to install requirements
     pause
     exit /b 1

@@ -7,9 +7,8 @@ import signal
 import sys
 import subprocess
 import cv2
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, LOCAL_IP, shutdown_event
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, LOCAL_IP, AUDIO_DELAY, CRF, shutdown_event
 from depth import process, predict_depth
-import numpy as np
 
 # Global process references
 global_processes = {
@@ -166,29 +165,44 @@ def rtmp_stream():
         rtmp_server = subprocess.Popen([
             './rtmp/mediamtx/mediamtx.exe',
             './rtmp/mediamtx/mediamtx.yml'
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # Initialize ffmpeg
+        ], stdout=subprocess.PIPE)
+
         ffmpeg = subprocess.Popen([
             './rtmp/ffmpeg/bin/ffmpeg.exe',
-            '-filter_complex',
-            "gfxcapture=window_title='(?i)Stereo Viewer':max_framerate=60,hwdownload,format=bgra,format=yuv420p",
+            '-fflags', 'nobuffer',
+            '-flags', 'low_delay',
+            '-probesize', '32',
+            '-analyzeduration', '0',
+            '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':max_framerate={FPS},hwdownload,format=bgra,format=yuv420p[v]",  # Label video output [v]
+            '-itsoffset', f'{AUDIO_DELAY}',  # Audio delay (applies to next input)
             '-f', 'dshow',
-            '-rtbufsize', '1024M',
+            '-rtbufsize', '256M',
             '-i', f'audio={STEREOMIX_DEVICE}',
-            '-vcodec', 'libx264',
+            '-map', '[v]',
+            '-map', '0:a',
+            '-c:v', 'libx264',
             '-preset', 'ultrafast',
             '-tune', 'zerolatency',
-            '-acodec', 'aac',
+            '-bf', '0',
+            '-g', f'{FPS}',
+            '-force_key_frames', f'expr:gte(t,n_forced*1)',  # Force keyframes every second
+            '-r', f'{FPS}',  # Force constant output framerate
+            '-crf', f'{CRF}',
+            '-c:a', 'aac',
             '-ar', '44100',
-            '-b:a', '128k',
+            '-b:a', '64k',
+            '-muxdelay', '0',
+            '-muxpreload', '0',
+            '-flush_packets', '1',
+            '-rtmp_buffer', '0',
             '-f', 'flv',
             f'rtmp://localhost:1935/{STREAM_KEY}'
-        ], stdout=subprocess.PIPE)
+        ], stdout=subprocess.PIPE)  # Change to PIPE to capture logs
+        
         # Store process references globally
         global_processes['rtmp_server'] = rtmp_server
         global_processes['ffmpeg'] = ffmpeg
-        print(f"[MJPEGStreamer] serving on http://{LOCAL_IP}:8888/{STREAM_KEY}/")
+        print(f"[RTMPStreamer] serving on http://{LOCAL_IP}:8888/{STREAM_KEY}/")
         print("[RTMP] RTMP stream started")
         
         # Wait for shutdown event
@@ -248,7 +262,7 @@ def main(mode="Viewer"):
             if STREAM_MODE:
                 frame_rgb = proc_q.get()
                 w, h = frame_rgb.shape[1], frame_rgb.shape[0]
-                if DISPLAY_MODE == "FUll-SBS":
+                if DISPLAY_MODE == "Full-SBS":
                     w = 2 * w
                 window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS, stream_mode=STREAM_MODE, frame_size = (w,h))
             else:
