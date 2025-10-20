@@ -723,7 +723,7 @@ class ConfigGUI(tk.Tk):
         try:
             import pyaudio
             p = pyaudio.PyAudio()
-            self.audio_devices = []
+            devices_found = set()  # use set to avoid duplicates
 
             stereo_mix_names = [
                 # English
@@ -748,18 +748,25 @@ class ConfigGUI(tk.Tk):
                 if device_info.get('maxInputChannels', 0) > 0:
                     for mix_name in stereo_mix_names:
                         if mix_name in device_name:
-                            self.audio_devices.append(device_info.get('name', f"Device {i}"))
-                            break  # stop checking this device once matched
+                            devices_found.add(device_info.get('name', f"Device {i}"))
+                            break
 
                     # Additionally, include "virtual-audio-capturer" if found
                     if "virtual-audio-capturer" in device_name:
-                        self.audio_devices.append(device_info.get('name', f"Device {i}"))
+                        devices_found.add(device_info.get('name', f"Device {i}"))
 
             p.terminate()
 
+            # Convert to list
+            self.audio_devices = list(devices_found)
+
             # If no Stereo Mix–like devices found, ensure Virtual Audio Capturer is available
             if not self.audio_devices:
-                print("[Warning] No Stereo Mix–like devices found, 'virtual-audio-capturer' added. Please make sure you have installed 'Screen Capture Recorder' for audio capture. Download it from: https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest")
+                print(
+                    "[Warning] No Stereo Mix–like devices found, 'virtual-audio-capturer' added.\n"
+                    "Please install 'Screen Capture Recorder' for audio capture:\n"
+                    "https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest"
+                )
                 self.audio_devices = ["virtual-audio-capturer"]
 
             # Update combobox if it exists
@@ -782,6 +789,7 @@ class ConfigGUI(tk.Tk):
             self.audio_devices = [f"Error: {str(e)}"]
             if hasattr(self, 'audio_device_var'):
                 self.audio_device_var.set(f"Error: {str(e)}")
+
 
     
     def update_recompile_trt_visibility(self, *args):
