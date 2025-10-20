@@ -28,34 +28,120 @@ depth_q = queue.Queue(maxsize=1)
 if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
     from windows_capture import WindowsCapture, Frame, InternalCaptureControl
     import ctypes
+    from ctypes import wintypes
+    import threading
+    import time
     
-    # get windows Hi-DPI scale
+    # optional small delay (seconds) after capture event before performing actions
+    CAPTURE_CURSOR_DELAY_S = 0.08
+
+    # Handle Windows Hi-DPI scaling
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI awareness
+    except Exception:
         ctypes.windll.user32.SetProcessDPIAware()
-    
-    cap = WindowsCapture(window_name=WINDOW_TITLE) if CAPTURE_MODE == "Window" else WindowsCapture(monitor_index=MONITOR_INDEX)
-    
+
+    # Windows API Setup
+    user32 = ctypes.windll.user32
+    user32.ShowCursor.argtypes = [wintypes.BOOL]
+    user32.ShowCursor.restype = ctypes.c_int
+    # Add keybd_event for simulating keyboard input
+    user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, wintypes.DWORD, ctypes.c_ulonglong]
+    user32.keybd_event.restype = None
+
+    # Virtual key codes
+    VK_LWIN = 0x5B  # Left Windows key
+    VK_D = 0x44     # 'D' key
+    KEYEVENTF_KEYUP = 0x0002  # Key release flag
+
+    def simulate_win_d():
+        """
+        Simulate pressing Win+D to show desktop, then again to restore windows.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            # First Win+D: Show desktop
+            user32.keybd_event(VK_LWIN, 0, 0, 0)
+            user32.keybd_event(VK_D, 0, 0, 0)
+            time.sleep(0.01)  # Small delay for key press
+            user32.keybd_event(VK_D, 0, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
+            # print("[simulate_win_d] Simulated first Win+D (show desktop)")
+
+            # Second Win+D: Restore windows
+            user32.keybd_event(VK_LWIN, 0, 0, 0)
+            user32.keybd_event(VK_D, 0, 0, 0)
+            time.sleep(0.01)  # Small delay for key press
+            user32.keybd_event(VK_D, 0, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
+            # print("[simulate_win_d] Simulated second Win+D (restore windows)")
+            return True
+        except Exception as e:
+            print(f"[simulate_win_d] Failed to simulate Win+D: {e}")
+            return False
+
+    # Waits for capture_started_event to be set, then simulates Win+D twice
+    capture_started_event = threading.Event()
+
+    def _keyboard():
+        """
+        Wait for capture_started_event, then simulate Win+D to show desktop and restore windows.
+        Exits if shutdown_event is set.
+        """
+        while not shutdown_event.is_set():
+            triggered = capture_started_event.wait(timeout=0.1)
+            if shutdown_event.is_set():
+                break
+            if not triggered:
+                continue
+
+            try:
+                # print("[keyboard] Simulating Win+D to show desktop and restore windows...")
+                success = simulate_win_d()
+
+                if CAPTURE_CURSOR_DELAY_S:
+                    time.sleep(CAPTURE_CURSOR_DELAY_S)
+                
+                # if not success:
+                    # print("[keyboard] Win+D simulation reported failure.")
+            except Exception as e:
+                print(f"[keyboard] Exception during action: {e}")
+            finally:
+                break
+
+        # print("[keyboard] Exiting cursor worker thread.")
+
+    # Start worker thread (daemon so it won't block shutdown)
+    cursor_thread = threading.Thread(target=_keyboard, name="CursorWorker", daemon=True)
+    cursor_thread.start()
+
+    # Initialize capture object and capture loop
+    cap = (
+        WindowsCapture(window_name=WINDOW_TITLE)
+        if CAPTURE_MODE == "Window"
+        else WindowsCapture(monitor_index=MONITOR_INDEX)
+    )
+
     def capture_loop():
         global capture_control
-        
+
         @cap.event
         def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
             if shutdown_event.is_set():
                 return
-            # tick = time.perf_counter()
-            dwmapi = ctypes.WinDLL("dwmapi")
-            dwmapi.DwmFlush()
+            capture_started_event.set()
+            try:
+                dwmapi = ctypes.WinDLL("dwmapi")
+                dwmapi.DwmFlush()
+            except Exception:
+                pass
+
             raw_q.put((frame.frame_buffer, OUTPUT_RESOLUTION))
-            # process_time = time.perf_counter() - tick
-            # wait_time = max(TIME_SLEEP - process_time, 0)
-            # time.sleep(wait_time)
-        
+
         @cap.event
         def on_closed():
-            print("Capture Session Closed")
-        
+            print("[capture_loop] Capture session closed")
+
         cap.start()
 else:
     # DXCamera based wincam
