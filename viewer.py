@@ -4,9 +4,12 @@ import moderngl
 import numpy as np
 import time
 from PIL import Image, ImageDraw, ImageFont
-
+from OpenGL.GL import *
 # Get OS name and settings
-from utils import OS_NAME, crop_icon
+from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE
+# 3D monitor mode to hide viewer
+if OS_NAME == "Windows":
+    from utils import hide_window_from_capture
 
 # Shaders as constants (unchanged)
 VERTEX_SHADER = """
@@ -55,10 +58,10 @@ def add_logo(window):
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
     
-    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", show_fps=True):
+    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT, stream_mode=None, frame_size=(1280, 720)):
         # Initialize with default values
-        self.window_size = (1280, 720)
-        self.title = "Stereo SBS Viewer"
+        self.use_3d = use_3d
+        self.title = "Stereo Viewer"
         self.ipd_uv = ipd
         self.depth_strength = 0.1
         self._last_window_position = None
@@ -69,16 +72,25 @@ class StereoWindow:
         self._modes = ["Full-SBS", "Half-SBS", "TAB"]
         self.display_mode = display_mode
         self._texture_size = None
-        self.monitor_index = 0
+        self.fill_16_9 = fill_16_9
+        self.frame_size = frame_size
+        self.aspect = self.frame_size[0] / self.frame_size[1]
+        self.fix_aspect = fix_aspect
         self.show_fps = show_fps
-        self.frame_size = (1280, 720)
-        
+        self.stream_mode = stream_mode
+        self.window_size = self.frame_size
+
         # FPS tracking variables
         self.frame_count = 0
         self.last_fps_time = time.perf_counter()
         self.actual_fps = 0.0
         self.start_time = time.perf_counter()
         self.total_frames = 0
+        
+        # Add PBO for streamer
+        self._pbo_ids = None
+        self._pbo_index = 0
+        self._pbo_initialized = False
         
         # Depth ratio display variables
         self.last_depth_change_time = 0
@@ -106,24 +118,45 @@ class StereoWindow:
         if not glfw.init():
             raise RuntimeError("Could not initialize GLFW")
         
+        self.monitor_index = self.get_glfw_mon_index(MONITOR_INDEX) if CAPTURE_MODE=="Monitor" else 0
         # Configure window
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.RESIZABLE, True)
         
+        if self.use_3d:
+            glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
+            glfw.window_hint(glfw.FLOATING, glfw.TRUE)    # Always on top
+            # Get primary monitor resolution
+            monitors = glfw.get_monitors()
+            monitor = monitors[self.monitor_index]
+            vidmode = glfw.get_video_mode(monitor)
+            self.window_size = (vidmode.size.width, vidmode.size.height)
+        elif self.stream_mode == "RTMP":
+            glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
+            # glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
+        elif self.stream_mode == "MJPEG":
+            glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
+            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)  # clicks pass through
         # Create window
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
+        
+        # Hide window for 3D monitor, but cannot be captured by other apps as well
+        if self.use_3d and OS_NAME == "Windows":
+            hide_window_from_capture(self.window)
+        
         if not self.window:
             glfw.terminate()
             raise RuntimeError("Could not create window")
         
         add_logo(self.window)
-        self.position_on_monitor(0)
         
+        self.position_on_monitor(self.monitor_index)
+
         # Set up OpenGL context
         glfw.make_context_current(self.window)
-        glfw.swap_interval(0)  # VSync off for maximum performance
+        glfw.swap_interval(1)  # VSync on
         self.ctx = moderngl.create_context()
         
         # Precompile shaders and create VAO
@@ -144,6 +177,53 @@ class StereoWindow:
         # Load initial font
         self._update_font()
 
+    def get_glfw_mon_index(self, mss_monitor_index=1):
+        """
+        Map an MSS monitor index (1-based) to a GLFW monitor handle.
+
+        MSS provides monitors like:
+            monitors[0] -> all monitors bounding box
+            monitors[1] -> first display
+            monitors[2] -> second display, etc.
+
+        GLFW gives a list of monitor handles that we can position windows on.
+        This function matches them by position and size.
+        """
+        try:
+            import mss
+        except ImportError:
+            print("[StereoWindow] mss not installed; using default monitor.")
+            return 0
+
+        with mss.mss() as sct:
+            mss_monitors = sct.monitors
+
+        # MSS uses index 1-based (0 = virtual bounding box)
+        if mss_monitor_index < 1 or mss_monitor_index >= len(mss_monitors):
+            print(f"[StereoWindow] Invalid MSS monitor index {mss_monitor_index}, defaulting to 1.")
+            mss_monitor_index = 1
+
+        mss_mon = mss_monitors[mss_monitor_index]
+        mss_x, mss_y = mss_mon["left"], mss_mon["top"]
+        mss_w, mss_h = mss_mon["width"], mss_mon["height"]
+
+        glfw_monitors = glfw.get_monitors()
+        if not glfw_monitors:
+            print("[StereoWindow] No GLFW monitors detected.")
+            return 0
+
+        for i, gmon in enumerate(glfw_monitors):
+            gx, gy = glfw.get_monitor_pos(gmon)
+            gvm = glfw.get_video_mode(gmon)
+            gw, gh = gvm.size.width, gvm.size.height
+
+            if abs(gx - mss_x) <= 5 and abs(gy - mss_y) <= 5 and abs(gw - mss_w) <= 5 and abs(gh - mss_h) <= 5:
+                # Found matching GLFW monitor
+                return i
+
+        print("[StereoWindow] No matching GLFW monitor found for MSS index, defaulting to primary.")
+        return 0
+    
     def _on_window_resize(self, window, width, height):
         """Handle window resize events"""
         self.window_size = (width, height)
@@ -176,9 +256,9 @@ class StereoWindow:
         """Optimized quad creation with static data"""
         vertices = np.array([
             -1, -1, 0, 0,
-             1, -1, 1, 0,
+            1, -1, 1, 0,
             -1,  1, 0, 1,
-             1,  1, 1, 1,
+            1,  1, 1, 1,
         ], dtype='f4')
         vbo = self.ctx.buffer(vertices)
         return self.ctx.vertex_array(
@@ -238,11 +318,7 @@ class StereoWindow:
         return overlay_arr
 
     def _add_overlay(self, rgb_frame):
-        """Add FPS and depth ratio overlay to the frame with minimal allocations.
-           This function will only regenerate the small overlay image when necessary
-           (text changed or throttle interval elapsed). The overlay is alpha-blended
-           into the existing numpy frame in-place where possible.
-        """
+        """Add FPS and depth ratio overlay to the frame with minimal allocations."""
         # If nothing to show or no font available, do nothing fast
         if not (self.show_fps or self.show_depth_ratio) or self.font is None:
             return rgb_frame
@@ -253,6 +329,13 @@ class StereoWindow:
 
         h, w, _ = rgb_frame.shape
         self.frame_size = (w, h)
+        
+        # freeze window size for rtmp streaming
+        if self.stream_mode == "RTMP":
+            if self.display_mode == "Full-SBS":
+                w = 2 * w
+            glfw.set_window_size(self.window, w, h)
+            
 
         # Update FPS counters but do not regenerate overlay every frame
         current_time = time.perf_counter()
@@ -333,10 +416,16 @@ class StereoWindow:
             mon_x, mon_y = glfw.get_monitor_pos(monitor)
             vidmode = glfw.get_video_mode(monitor)
             mon_w, mon_h = vidmode.size.width, vidmode.size.height
-
-            x = mon_x + (mon_w - self.window_size[0]) // 2
-            y = mon_y + (mon_h - self.window_size[1]) // 2
-            glfw.set_window_pos(self.window, x, y)
+            if self.use_3d:
+                glfw.set_window_size(self.window, mon_w, mon_h)
+                glfw.set_window_pos(self.window, mon_x, mon_y)
+            else:
+                x = mon_x + (mon_w - self.window_size[0]) // 2
+                y = mon_y + (mon_h - self.window_size[1]) // 2
+                glfw.set_window_pos(self.window, x, y)
+            if self.stream_mode == "RTMP":
+                if vidmode.size == self.window_size:
+                    glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             self.monitor_index = monitor_index
 
     def get_current_monitor(self):
@@ -376,15 +465,38 @@ class StereoWindow:
             self._last_window_position = glfw.get_window_pos(self.window)
             self._last_window_size = glfw.get_window_size(self.window)
 
+            # Get monitor info
             mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
             vidmode = glfw.get_video_mode(current_monitor)
             full_w, full_h = vidmode.size.width, vidmode.size.height
 
+            # Make the window undecorated and floating
             glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
-            glfw.set_window_size(self.window, full_w, full_h)
-            glfw.set_window_pos(self.window, mon_x, mon_y)
+            if self.fix_aspect:
+                monitor_aspect = full_w / full_h
+                if monitor_aspect > self.aspect:
+                    # Monitor is wider than target aspect
+                    new_h = full_h
+                    new_w = int(new_h * self.aspect)
 
+                else:
+                    # Screen is taller — fit by width
+                    new_w = full_w
+                    new_h = int(full_w / self.aspect)
+
+                glfw.set_window_size(self.window, new_w, new_h)
+
+                # Center window on screen
+                center_x = mon_x + (full_w - new_w) // 2
+                center_y = mon_y + (full_h - new_h) // 2
+                if self.display_mode == "Full-SBS":
+                    # Center window on screen
+                    center_y = mon_y + (full_h - new_h//2) // 2
+                glfw.set_window_pos(self.window, center_x, center_y)
+            else:
+                glfw.set_window_size(self.window, full_w, full_h)
+                glfw.set_window_pos(self.window, mon_x, mon_y)
             self._fullscreen = True
         else:
             # Exit fullscreen
@@ -405,16 +517,17 @@ class StereoWindow:
             self._fullscreen = False
     
     def on_key_event(self, window, key, scancode, action, mods):
-        """Optimized key event handling"""
+        """Optimized key event handling, disable some keys for rtmp and 3d monitor"""
         if action == glfw.PRESS:
             if key == glfw.KEY_ENTER or key == glfw.KEY_SPACE:
-                self.toggle_fullscreen()
-            elif key == glfw.KEY_ESCAPE:
-                glfw.set_window_should_close(window, True)
+                if self.stream_mode is None and not self.use_3d:
+                    self.toggle_fullscreen()
             elif key == glfw.KEY_RIGHT:
                 self.move_to_adjacent_monitor(+1)
             elif key == glfw.KEY_LEFT:
                 self.move_to_adjacent_monitor(-1)
+            elif key == glfw.KEY_ESCAPE:
+                glfw.set_window_should_close(window, True)
             elif key == glfw.KEY_DOWN:
                 self.depth_ratio = max(0, self.depth_ratio - 0.5)
                 self.last_depth_change_time = time.perf_counter()
@@ -430,6 +543,14 @@ class StereoWindow:
             elif key == glfw.KEY_F:  # Add FPS toggle with F key
                 self.show_fps = not self.show_fps
                 # Force overlay regen when toggling show_fps
+                self._overlay_cache['last_update'] = 0.0
+            elif key == glfw.KEY_A:  # Toggle fill 16:0 with A key
+                self.fill_16_9 = not self.fill_16_9
+                # Force overlay regen to show aspect ratio status
+                self._overlay_cache['last_update'] = 0.0
+            elif key == glfw.KEY_L:  # Toggle viewer aspect ratio lock with L key
+                self.fix_aspect = not self.fix_aspect
+                # Force overlay regen to show aspect ratio status
                 self._overlay_cache['last_update'] = 0.0
 
     def update_frame(self, rgb, depth):
@@ -466,8 +587,7 @@ class StereoWindow:
             
             self._texture_size = (w, h)
 
-        # Upload texture data with minimal copies
-        # ensure rgb data is uint8 before writing
+        # Upload texture data
         if rgb_with_overlay.dtype != np.uint8:
             rgb_u8 = np.clip(rgb_with_overlay * 255.0, 0, 255).astype('uint8')
         else:
@@ -477,7 +597,7 @@ class StereoWindow:
         self.depth_tex.write((self.depth_ratio * depth).astype('float32', copy=False).tobytes())
 
     def _compute_render_size(self, max_w, max_h, src_w, src_h):
-        """Optimized render size calculation"""
+        """Calculate render size maintaining aspect ratio"""
         if src_w == 0 or src_h == 0:
             return 0, 0
         scale = min(max_w / src_w, max_h / src_h)
@@ -485,97 +605,217 @@ class StereoWindow:
             max(1, int(round(src_w * scale))),
             max(1, int(round(src_h * scale)))
         )
+        
+    def _init_pbos(self, width, height):
+        """Initialize two PBOs for asynchronous pixel transfers."""
+        if self._pbo_initialized:
+            return
+        self._pbo_ids = glGenBuffers(2)
+        buffer_size = width * height * 3  # RGB8
+        for pbo in self._pbo_ids:
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo)
+            glBufferData(GL_PIXEL_PACK_BUFFER, buffer_size, None, GL_STREAM_READ)
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+        self._pbo_index = 0
+        self._pbo_initialized = True
+        # print(f"[StereoWindow] Initialized {len(self._pbo_ids)} PBOs ({buffer_size/1e6:.2f} MB each)")
+
+    def capture_glfw_image(self):
+        """Asynchronous GPU readback using double-buffered PBOs."""
+        width, height = glfw.get_framebuffer_size(self.window)
+        if not self._pbo_initialized:
+            self._init_pbos(width, height)
+        next_index = (self._pbo_index + 1) % 2
+        glPixelStorei(GL_PACK_ALIGNMENT, 1)
+
+        # Bind current PBO and start async read
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, self._pbo_ids[self._pbo_index])
+        glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
+
+        # Bind previous PBO to map and read CPU data (async from previous frame)
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, self._pbo_ids[next_index])
+        ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY)
+        image = None
+        if ptr:
+            try:
+                # Copy from GPU memory into numpy array
+                buf = (GLubyte * (width * height * 3)).from_address(int(ptr))
+                image = np.frombuffer(buf, dtype=np.uint8).reshape(height, width, 3)
+                image = np.flipud(image.copy())  # Flip vertically; .copy() detaches from mapped memory
+            finally:
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER)
+
+        # Unbind PBO
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+        # Swap PBO indices for next frame
+        self._pbo_index = next_index
+
+        # Note: the very first call will return None (no previous frame ready)
+        return image
 
     def render(self):
         """Optimized rendering with reduced GL calls"""
         if not self.color_tex or not self.depth_tex:
             return
-            
+
         # Get window dimensions once
         win_w, win_h = glfw.get_framebuffer_size(self.window)
         tex_w, tex_h = self._texture_size
-        
+        if self.fix_aspect:
+            if self.display_mode == "Full-SBS":
+                glfw.set_window_aspect_ratio(self.window, 2*tex_w, tex_h)
+            else:
+                glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
         # Clear screen once
         self.ctx.clear(0.1, 0.1, 0.1)
         
-        # Bind textures once
-        self.color_tex.use(location=0)
-        self.depth_tex.use(location=1)
+        if self.fill_16_9:
+            # Bind textures once
+            self.color_tex.use(location=0)
+            self.depth_tex.use(location=1)
+            
+            # Set common uniform values
+            self.prog['u_depth_strength'].value = self.depth_strength
+            
+            if self.display_mode == "Full-SBS":
+                # Full Side-by-Side mode
+                src_w, src_h = tex_w, tex_h
+                max_w, max_h = win_w / 2.0, win_h
+                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+                center_y = win_h / 2.0
+                
+                # Left view
+                self.ctx.viewport = (
+                    int(win_w / 4.0 - render_w / 2),
+                    int(center_y - render_h / 2),
+                    render_w, render_h
+                )
+                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                
+                # Right view
+                self.ctx.viewport = (
+                    int(3 * win_w / 4.0 - render_w / 2),
+                    int(center_y - render_h / 2),
+                    render_w, render_h
+                )
+                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+            elif self.display_mode == "Half-SBS":
+                # Half Side-by-Side mode
+                src_w, src_h = tex_w / 2.0, tex_h
+                max_w, max_h = win_w / 2.0, win_h
+                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+                center_y = win_h / 2.0
+                
+                # Left view
+                self.ctx.viewport = (
+                    int(win_w / 4.0 - render_w / 2),
+                    int(center_y - render_h / 2),
+                    render_w, render_h
+                )
+                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                
+                # Right view
+                self.ctx.viewport = (
+                    int(3 * win_w / 4.0 - render_w / 2),
+                    int(center_y - render_h / 2),
+                    render_w, render_h
+                )
+                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+            elif self.display_mode == "TAB":
+                # Top-and-Bottom mode
+                src_w, src_h = tex_w, tex_h / 2.0
+                max_w, max_h = win_w, win_h / 2.0
+                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+                
+                # Top view
+                self.ctx.viewport = (
+                    int(win_w / 2.0 - render_w / 2),
+                    int(win_h / 4.0 - render_h / 2),
+                    render_w, render_h
+                )
+                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+                
+                # Bottom view
+                self.ctx.viewport = (
+                    int(win_w / 2.0 - render_w / 2),
+                    int(3 * win_h / 4.0 - render_h / 2),
+                    render_w, render_h
+                )
+                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
         
-        # Set common uniform values
-        self.prog['u_depth_strength'].value = self.depth_strength
-        
-        if self.display_mode == "Full-SBS":
-            # Full Side-by-Side mode
-            src_w, src_h = tex_w, tex_h
-            max_w, max_h = win_w / 2.0, win_h
-            render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-            center_y = win_h / 2.0
-            
-            # Left view
-            self.ctx.viewport = (
-                int(win_w / 4.0 - render_w / 2),
-                int(center_y - render_h / 2),
-                render_w, render_h
-            )
-            self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-            
-            # Right view
-            self.ctx.viewport = (
-                int(3 * win_w / 4.0 - render_w / 2),
-                int(center_y - render_h / 2),
-                render_w, render_h
-            )
-            self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+        else:
+            # Determine effective stereo frame size by display mode
+            if self.display_mode == "Full-SBS":
+                disp_w, disp_h = 2 * tex_w, tex_h
+            elif self.display_mode == "Half-SBS":
+                disp_w, disp_h = tex_w, tex_h
+            elif self.display_mode == "TAB":
+                disp_w, disp_h = tex_w, tex_h
+            else:
+                disp_w, disp_h = 2 * tex_w, tex_h  # default full SBS
 
-        elif self.display_mode == "Half-SBS":
-            # Half Side-by-Side mode
-            src_w, src_h = tex_w / 2.0, tex_h
-            max_w, max_h = win_w / 2.0, win_h
-            render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-            center_y = win_h / 2.0
-            
-            # Left view
-            self.ctx.viewport = (
-                int(win_w / 4.0 - render_w / 2),
-                int(center_y - render_h / 2),
-                render_w, render_h
-            )
-            self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-            
-            # Right view
-            self.ctx.viewport = (
-                int(3 * win_w / 4.0 - render_w / 2),
-                int(center_y - render_h / 2),
-                render_w, render_h
-            )
-            self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+            target_aspect = disp_h / disp_w
+            try:
+                window_aspect = win_h / win_w
+            except ZeroDivisionError:
+                window_aspect = 9/16
 
-        elif self.display_mode == "TAB":
-            # Top-and-Bottom mode
-            src_w, src_h = tex_w, tex_h / 2.0
-            max_w, max_h = win_w, win_h / 2.0
-            render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-            
-            # Top view
-            self.ctx.viewport = (
-                int(win_w / 2.0 - render_w / 2),
-                int(win_h / 4.0 - render_h / 2),
-                render_w, render_h
-            )
-            self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-            
-            # Bottom view
-            self.ctx.viewport = (
-                int(win_w / 2.0 - render_w / 2),
-                int(3 * win_h / 4.0 - render_h / 2),
-                render_w, render_h
-            )
-            self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+            # Scale to fit window, preserving aspect ratio
+            if window_aspect <= target_aspect:
+                # Window is wider than content
+                view_h = win_h
+                view_w = int(view_h / target_aspect)
+            else:
+                # Window is taller than content
+                view_w = win_w
+                view_h = int(view_w * target_aspect)
 
-            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+            offset_x = (win_w - view_w) // 2
+            offset_y = (win_h - view_h) // 2
+
+            self.color_tex.use(location=0)
+            self.depth_tex.use(location=1)
+
+            if self.display_mode == "Full-SBS":
+                # Left eye
+                self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
+                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                self.prog['u_depth_strength'].value = self.depth_strength
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                # Right eye
+                self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+            elif self.display_mode == "Half-SBS":
+                # Same as FULL but both squeezed into width
+                self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
+                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                self.prog['u_depth_strength'].value = self.depth_strength
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+            elif self.display_mode == "TAB":
+                # Top eye
+                self.ctx.viewport = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
+                self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                self.prog['u_depth_strength'].value = self.depth_strength
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                # Bottom eye
+                self.ctx.viewport = (offset_x, offset_y, view_w, view_h // 2)
+                self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)

@@ -1,13 +1,52 @@
 # depth.py
 import torch
 torch.set_num_threads(1)
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT
 import os, warnings
+
+# Initialize DirectML Device
+def get_device(index=0):
+    try:
+        try:
+            import torch_directml
+            if torch_directml.is_available():
+                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
+        except ImportError:
+            pass
+        if torch.backends.mps.is_available() and index==0:
+            return torch.device("mps"), "Using Apple Silicon (MPS) device"
+        if torch.cuda.is_available():
+            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+        else:
+            return torch.device("cpu"), "Using CPU device"
+    except:
+        return torch.device("cpu"), "Using CPU device"
+    
+DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
+print(DEVICE_INFO)
+print(f"Model: {MODEL_ID}")
+
+# Optimization for CUDA
+if "CUDA" in DEVICE_INFO:
+    torch.backends.cudnn.benchmark = True
+    if not FP16:
+        # Enable TF32 for matrix multiplications
+        torch.backends.cuda.matmul.allow_tf32 = True
+        # Enable TF32 for cuDNN (convolution operations)
+        torch.backends.cudnn.allow_tf32 = True
+        # Enable TF32 matrix multiplication for better performance
+        torch.set_float32_matmul_precision('high')
+    else:
+        torch.set_autocast_enabled(True)
+    # Enable math attention
+    torch.backends.cuda.enable_flash_sdp(True)
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    torch.backends.cuda.enable_math_sdp(True)
 
 if USE_TORCH_COMPILE and torch.cuda.is_available():
     warnings.filterwarnings(
@@ -45,30 +84,14 @@ font_dict = {
     ".": ["000","000","000","000","010"],  # for decimal point
     " ": ["000","000","000","000","000"],
 }
-# Initialize DirectML Device
-def get_device(index=0):
-    try:
-        try:
-            import torch_directml
-            if torch_directml.is_available():
-                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
-        except ImportError:
-            pass
-        if torch.backends.mps.is_available() and index==0:
-            return torch.device("mps"), "Using Apple Silicon (MPS) device"
-        if torch.cuda.is_available():
-            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
-        else:
-            return torch.device("cpu"), "Using CPU device"
-    except:
-        return torch.device("cpu"), "Using CPU device"
-    
+
 # Post-processing functions
 def apply_stretch(x: torch.Tensor, low: float = 2.0, high: float = 98.0) -> torch.Tensor:
     """
     Percentile-based clipping + normalization.
     Fully DirectML compatible (no torch.clamp).
     """
+    x = x.to(DTYPE)
     if x.numel() < 2:
         return x
 
@@ -136,9 +159,6 @@ def apply_foreground_scale(depth: torch.Tensor, scale: float) -> torch.Tensor:
     Returns:
         torch.Tensor: scaled depth map of same shape as input
     """
-    if not torch.is_floating_point(depth):
-        depth = depth.float()
-
     if scale > 0:
         # Exaggerate separation: foreground closer, background further
         return torch.pow(depth, 1.0 + scale)
@@ -199,7 +219,7 @@ def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
     # convert to torch tensor on CPU (uint8) then float on device to avoid double copy
     t_cpu = torch.from_numpy(np_img)  # shape H,W,C dtype=uint8
     # move to device and convert in one step
-    t = t_cpu.permute(2, 0, 1).contiguous().unsqueeze(0).to(device=DEVICE, dtype=MODEL_DTYPE, non_blocking=True)
+    t = t_cpu.permute(2, 0, 1).contiguous().unsqueeze(0).to(device=DEVICE, dtype=MODEL_DTYPE)
     t = t / 255.0
     return t
 
@@ -244,19 +264,6 @@ def apply_piecewise(
     # Select branch without indexing
     out = torch.where(depth >= split, near_val, far_val)
     return out
-
-DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
-
-if torch.cuda.is_available():
-    torch.backends.cudnn.benchmark = True
-    if not FP16:
-        # Enable TF32 for matrix multiplications
-        torch.backends.cuda.matmul.allow_tf32 = True
-        # Enable TF32 for cuDNN (convolution operations)
-        torch.backends.cudnn.allow_tf32 = True
-
-print(DEVICE_INFO)
-print(f"Model: {MODEL_ID}")
 
 # Load Video Depth Anything Model
 def get_video_depth_anything_model(model_id=MODEL_ID):
@@ -353,7 +360,7 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
     """
     Export the depth estimation model to ONNX format with dynamic axes.
     """
-    dummy_input = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=DEVICE, dtype=dtype)
+    dummy_input = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=device, dtype=dtype)
     
     input_names = ["pixel_values"]
     output_names = ["predicted_depth"]
@@ -491,6 +498,9 @@ class DepthModelWrapper:
             self.backend = "PyTorch"
             self.model = self._load_pytorch_model()
         
+        if hasattr(self.model, 'to'):
+            self.model.to(DTYPE)
+        
         print(f"Using backend: {self.backend}")
     
     def _load_pytorch_model(self):
@@ -541,13 +551,22 @@ class DepthModelWrapper:
     
     def __call__(self, tensor):
         """Run inference using the active backend."""
-        with torch.no_grad():
-            if self.backend == "PyTorch":
-                if "Video-Depth-Anything" in MODEL_ID:
-                    return self.model(pixel_values=tensor)
-                return self.model(pixel_values=tensor).predicted_depth
-            else:
-                return self.model(tensor)
+        if "CUDA" in DEVICE_INFO:
+            with torch.amp.autocast('cuda'):
+                if self.backend == "PyTorch":
+                    if "Video-Depth-Anything" in MODEL_ID:
+                        return self.model(pixel_values=tensor)
+                    return self.model(pixel_values=tensor).predicted_depth
+                else:
+                    return self.model(tensor)
+        else:
+            with torch.no_grad():
+                if self.backend == "PyTorch":
+                    if "Video-Depth-Anything" in MODEL_ID:
+                        return self.model(pixel_values=tensor)
+                    return self.model(pixel_values=tensor).predicted_depth
+                else:
+                    return self.model(tensor)
 
 # Initialize model wrapper
 model_wraper = DepthModelWrapper(
@@ -572,12 +591,19 @@ if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
 
 # Initialize with dummy input for warmup
 def warmup_model(model_wraper, steps: int = 3):
-    with torch.no_grad():
-        for i in range(steps):
-            dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
-                                device=DEVICE, dtype=MODEL_DTYPE)
-            model_wraper(dummy)
-    # print(f"Warmup complete with {steps} iterations.")
+    if "CUDA" in DEVICE_INFO:
+        with torch.amp.autocast('cuda'):
+            for i in range(steps):
+                dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
+                                    device=DEVICE, dtype=MODEL_DTYPE)
+                model_wraper(dummy)
+    else:
+        with torch.no_grad():
+            for i in range(steps):
+                dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
+                                    device=DEVICE, dtype=MODEL_DTYPE)
+                model_wraper(dummy)
+        # print(f"Warmup complete with {steps} iterations.")
 
 warmup_model(model_wraper, steps=3)
 
@@ -613,7 +639,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     """
     h, w = image_rgb.shape[:2]
     if return_tuple:
-        tensor = torch.from_numpy(image_rgb).to(DEVICE, dtype=DTYPE)
+        tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=MODEL_DTYPE, non_blocking=True)
         rgb_c = tensor.permute(2,0,1).contiguous()  # [C,H,W]
         tensor = rgb_c.unsqueeze(0) / 255.0
         tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=True)
@@ -633,11 +659,12 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     if 'Video-Depth-Anything' in MODEL_ID:
         depth = model_wraper(tensor)
     else:
-        with torch.no_grad():
-            depth = model_wraper(tensor)
-    
-    # Interpolate output to original size
-    depth = F.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=True)
+        if "CUDA" in DEVICE_INFO:
+            with torch.amp.autocast('cuda'):
+                depth = model_wraper(tensor)
+        else:
+            with torch.no_grad():
+                depth = model_wraper(tensor)
     
     # Robust normalize and Post depth processing
     depth = apply_stretch(depth, 5, 95)
@@ -657,11 +684,14 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     # Optional temporal stabilization (EMA)
     if use_temporal_smooth:
         depth = depth_stabilizer(depth)
-    
+        
+     # Interpolate output to original size
+    depth = F.interpolate(depth.unsqueeze(0).unsqueeze(0), size=(h, w), mode='bilinear', align_corners=True)
+    depth = depth.squeeze(0)
     if return_tuple:
         return depth, rgb_c
     else:
-        return depth   
+        return depth  
     
 def build_font(device="cpu", dtype=torch.float32):
     chars = sorted(font_dict.keys())
@@ -715,14 +745,12 @@ def overlay_fps(rgb: torch.Tensor, fps: float, color=(0.0, 255.0, 0.0)) -> torch
     return rgb * (1.0 - alpha) + overlay_color * alpha
 
 # generate left and right eye view for streamer 
-import torch
-import torch.nn.functional as F
-
 def make_sbs_core(rgb: torch.Tensor,
                   depth: torch.Tensor,
                   ipd_uv=0.064,
                   depth_ratio=1.0,
                   display_mode="Half-SBS",
+                  fill_16_9=FILL_16_9,
                   device=DEVICE) -> torch.Tensor:
     """
     Core tensor operations for side-by-side stereo.
@@ -751,24 +779,24 @@ def make_sbs_core(rgb: torch.Tensor,
         grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
         grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
 
-        sampled_left = F.grid_sample(img, grid_left, mode="bilinear",
+        left = F.grid_sample(img, grid_left, mode="bilinear",
                                      padding_mode="border", align_corners=True)[0]
-        sampled_right = F.grid_sample(img, grid_right, mode="bilinear",
+        right = F.grid_sample(img, grid_right, mode="bilinear",
                                       padding_mode="border", align_corners=True)[0]
 
     # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
     else:
-        base = torch.arange(W, device=device).view(1, -1).expand(H, -1).float()
+        base = torch.arange(W, device=device).view(1, -1).expand(H, -1)
         coords_left = (base + shifts).clamp(0, W - 1).long()   # [H,W]
         coords_right = (base - shifts).clamp(0, W - 1).long()  # [H,W]
 
         # Left eye
         gather_idx_left = coords_left.unsqueeze(0).expand(C, H, W).unsqueeze(0)  # [1,C,H,W]
-        sampled_left = torch.gather(img.expand(1, C, H, W), 3, gather_idx_left)[0]  # [C,H,W]
+        left = torch.gather(img.expand(1, C, H, W), 3, gather_idx_left)[0]  # [C,H,W]
 
         # Right eye
         gather_idx_right = coords_right.unsqueeze(0).expand(C, H, W).unsqueeze(0)
-        sampled_right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
+        right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
 
     # Aspect pad helper
     def pad_to_aspect_tensor(tensor, target_ratio=(16, 9)):
@@ -787,8 +815,9 @@ def make_sbs_core(rgb: torch.Tensor,
             return F.pad(tensor, (pad_left, new_w - w - pad_left, 0, 0))
 
     # Aspect pad & arrange SBS/TAB
-    left = pad_to_aspect_tensor(sampled_left)
-    right = pad_to_aspect_tensor(sampled_right)
+    if fill_16_9:
+        left = pad_to_aspect_tensor(left)
+        right = pad_to_aspect_tensor(right)
 
     if display_mode == "TAB":
         out = torch.cat([left, right], dim=1)
@@ -807,7 +836,17 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
     """
     if depth.dim() == 3 and depth.shape[0] == 1:
         depth = depth[0]
-    rgb = rgb_c.to(device=DEVICE, dtype=MODEL_DTYPE)
+        
+    # Handle input type conversion
+    if isinstance(rgb_c, np.ndarray):
+        # Convert numpy array to tensor with matching device/dtype
+        rgb = torch.from_numpy(rgb_c).to(device=depth.device, dtype=depth.dtype)
+        # Convert from HWC to CHW format
+        if rgb.ndim == 3 and rgb.shape[2] == 3:
+            rgb = rgb.permute(2, 0, 1)
+    else:
+        # Ensure tensor is on correct device and dtype
+        rgb = rgb_c.to(device=depth.device, dtype=depth.dtype)
 
     # Optional FPS overlay can stay in Python side (avoids torch.compile recompiles)
     if fps is not None:

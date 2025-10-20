@@ -47,6 +47,8 @@ fi
 # Install requirements
 echo
 echo "- Installing the requirements"
+sudo apt-get install python3-tk wmctrl mesa-utils
+$PYTHON_EXE -m pip install python_xlib --no-cache-dir
 $PYTHON_EXE -m pip install -r requirements-rocm.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 $PYTHON_EXE -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if [ $? -ne 0 ]; then

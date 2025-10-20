@@ -49,6 +49,7 @@ echo - Installing the requirements
 %PYTHON_EXE% -m pip install -r requirements-dml.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (
     echo Failed to install requirements
     pause

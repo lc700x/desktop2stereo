@@ -47,6 +47,8 @@ fi
 # Install requirements
 echo
 echo "- Installing the requirements"
+sudo apt-get install python3-tk wmctrl mesa-utils
+$PYTHON_EXE -m pip install python_xlib --no-cache-dir
 $PYTHON_EXE -m pip install -r requirements-cuda.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 $PYTHON_EXE -m pip install "triton<3.4" --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 $PYTHON_EXE -m pip install tensorrt_cu12==10.13.3.9 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/

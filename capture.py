@@ -1,168 +1,200 @@
 import numpy as np
 import mss
-from utils import OS_NAME, CAPTURE_MODE, MONITOR_INDEX, WINDOW_TITLE
+from utils import OS_NAME, CAPTURE_TOOL
 
 if OS_NAME == "Windows":
-    import win32gui
     from ctypes import windll
-    from wincam import DXCamera
-
     # Enable DPI awareness to improve capture quality on high-resolution displays
     try:
         windll.user32.SetProcessDPIAware()
     except Exception:
         pass  # Silently ignore failure to set DPI awareness
+    if CAPTURE_TOOL == "DXCamera":
+        import win32gui
+        from wincam import DXCamera
 
-    def get_window_client_bounds(hwnd):
-        """
-        Retrieve the client area of a window in screen coordinates.
-
-        Args:
-            hwnd (int): The window handle.
-
-        Returns:
-            tuple: (left, top, width, height) in screen pixel coordinates.
-
-        Raises:
-            Exception: If the window handle is invalid or the window cannot be found.
-        """
-        rc = win32gui.GetClientRect(hwnd)
-        if rc is None:
-            raise Exception(f"Window not found {hwnd}")
-
-        left, top, right, bottom = rc
-        w = right - left
-        h = bottom - top
-        left, top = win32gui.ClientToScreen(hwnd, (left, top))
-        return left, top, w, h
-
-    class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX):
+        def get_window_client_bounds(hwnd):
             """
-            Initialize the desktop frame grabber for either a window or a monitor.
+            Retrieve the client area of a window in screen coordinates.
 
             Args:
-                output_resolution (int): Output image height (used for scaling).
-                fps (int): Frames per second for the capture device.
-                window_title (str): Title of the application window to capture.
-                capture_mode (str): 'Window' to capture an app window, 'Monitor' to capture a screen.
-                monitor_index (int): Index of the monitor to use when capture_mode is 'Monitor'.
-            """
-            self.scaled_height = output_resolution
-            self.fps = fps
-            self._mss = mss.mss()  # Multi-screen capture utility
-            self.capture_mode = capture_mode
-            self.camera = None  # DXCamera object for hardware-accelerated capture
-            self.prev_rect = None  # Previously captured window bounds to avoid redundant updates
-            self.window_title = window_title
+                hwnd (int): The window handle.
 
-            if self.capture_mode == "Monitor":
-                # Capture a specific monitor directly using MSS
-                mon = self._mss.monitors[monitor_index]
-                self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
-                self.camera = DXCamera(self.left, self.top, self.width, self.height, fps=self.fps)
+            Returns:
+                tuple: (left, top, width, height) in screen pixel coordinates.
+
+            Raises:
+                Exception: If the window handle is invalid or the window cannot be found.
+            """
+            rc = win32gui.GetClientRect(hwnd)
+            if rc is None:
+                raise Exception(f"Window not found {hwnd}")
+
+            left, top, right, bottom = rc
+            w = right - left
+            h = bottom - top
+            left, top = win32gui.ClientToScreen(hwnd, (left, top))
+            return left, top, w, h
+
+        class DesktopGrabber:
+            def __init__(self, output_resolution=1080, fps=60, window_title=None, capture_mode="Monitor", monitor_index=1):
+                """
+                Initialize the desktop frame grabber for either a window or a monitor.
+
+                Args:
+                    output_resolution (int): Output image height (used for scaling).
+                    fps (int): Frames per second for the capture device.
+                    window_title (str): Title of the application window to capture.
+                    capture_mode (str): 'Window' to capture an app window, 'Monitor' to capture a screen.
+                    monitor_index (int): Index of the monitor to use when capture_mode is 'Monitor'.
+                """
+                self.scaled_height = output_resolution
+                self.fps = fps
+                self._mss = mss.mss()  # Multi-screen capture utility
+                self.capture_mode = capture_mode
+                self.camera = None  # DXCamera object for hardware-accelerated capture
+                self.prev_rect = None  # Previously captured window bounds to avoid redundant updates
+                self.window_title = window_title
+
+                if self.capture_mode == "Monitor":
+                    # Capture a specific monitor directly using MSS
+                    mon = self._mss.monitors[monitor_index]
+                    self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
+                    self.camera = DXCamera(self.left, self.top, self.width, self.height, fps=self.fps)
+                    try:
+                        self.camera.__enter__()  # Start the camera if it supports context management
+                    except AttributeError:
+                        pass
+                else:
+                    # Capture a specific window by title
+                    self.hwnd = win32gui.FindWindow(None, self.window_title)
+                    if not self.hwnd:
+                        raise RuntimeError(f"Window '{self.window_title}' not found")
+
+            def _monitor_contains(self, mon, rect):
+                """
+                Check whether a rectangle is completely inside a monitor's bounds.
+
+                Args:
+                    mon (dict): Monitor information from MSS (with left, top, width, height).
+                    rect (tuple): Rectangle as (left, top, width, height).
+
+                Returns:
+                    bool: True if the rectangle is fully contained in the monitor.
+                """
+                left, top, w, h = rect
+                right, bottom = left + w, top + h
+                mon_left, mon_top = mon['left'], mon['top']
+                mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
+                return left >= mon_left and top >= mon_top and right <= mon_right and bottom <= mon_bottom
+
+            def _monitor_intersection_area(self, mon, rect):
+                """
+                Compute the area of overlap between a rectangle and a monitor.
+
+                Args:
+                    mon (dict): Monitor dictionary.
+                    rect (tuple): Rectangle as (left, top, width, height).
+
+                Returns:
+                    int: The overlapping area (width * height).
+                """
+                left, top, w, h = rect
+                right, bottom = left + w, top + h
+                mon_left, mon_top = mon['left'], mon['top']
+                mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
+                inter_w = max(0, min(mon_right, right) - max(mon_left, left))
+                inter_h = max(0, min(mon_bottom, bottom) - max(mon_top, top))
+                return inter_w * inter_h
+
+            def _choose_monitor_and_rect(self, rect):
+                """
+                Select the most appropriate monitor to display the window and adjust its bounds
+                to fit within that monitor.
+
+                Args:
+                    rect (tuple): The window bounds as (left, top, width, height).
+
+                Returns:
+                    tuple: (monitor_info, adjusted_rect) where adjusted_rect is clamped to the monitor.
+                """
+                left, top, w, h = rect
+                right, bottom = left + w, top + h
+
+                # Check if the window is fully inside any secondary monitor (index >= 1)
+                for mon in self._mss.monitors[1:]:
+                    if self._monitor_contains(mon, rect):
+                        return mon, rect
+
+                # If not fully inside any, find the monitor with the largest overlapping area
+                best_mon, best_area = None, -1
+                for mon in self._mss.monitors[1:]:
+                    area = self._monitor_intersection_area(mon, rect)
+                    if area > best_area:
+                        best_area = area
+                        best_mon = mon
+
+                # Fallback to the first non-primary monitor if no significant overlap
+                if best_mon is None or best_area <= 0:
+                    best_mon = self._mss.monitors[1]
+
+                # Clamp the rectangle to the chosen monitor's screen space
+                mon_left, mon_top = best_mon['left'], best_mon['top']
+                mon_right, mon_bottom = mon_left + best_mon['width'], mon_top + best_mon['height']
+                new_left = max(left, mon_left)
+                new_top = max(top, mon_top)
+                new_right = min(right, mon_right)
+                new_bottom = min(bottom, mon_bottom)
+                new_w = max(0, new_right - new_left)
+                new_h = max(0, new_bottom - new_top)
+
+                # If clamping results in an empty area, default to the full monitor
+                if new_w == 0 or new_h == 0:
+                    return best_mon, (mon_left, mon_top, best_mon['width'], best_mon['height'])
+
+                return best_mon, (new_left, new_top, new_w, new_h)
+
+            def _ensure_camera_matches_window(self):
+                """
+                Ensure the DXCamera is correctly configured to the current window position and size.
+                Reinitializes the camera if the window has moved, resized, or is newly detected.
+                """
                 try:
-                    self.camera.__enter__()  # Start the camera if it supports context management
-                except AttributeError:
-                    pass
-            else:
-                # Capture a specific window by title
-                self.hwnd = win32gui.FindWindow(None, self.window_title)
-                if not self.hwnd:
-                    raise RuntimeError(f"Window '{self.window_title}' not found")
+                    bounds = get_window_client_bounds(self.hwnd)
+                    if bounds is None:
+                        # Window is not valid (minimized, closed, etc.)
+                        if self.camera:
+                            try:
+                                self.camera.__exit__(None, None, None)
+                            except AttributeError:
+                                pass
+                            self.camera = None
+                        self.prev_rect = None
+                        return
 
-        def _monitor_contains(self, mon, rect):
-            """
-            Check whether a rectangle is completely inside a monitor's bounds.
+                    if bounds == self.prev_rect:
+                        # No change in window bounds, no need to update camera
+                        return
 
-            Args:
-                mon (dict): Monitor information from MSS (with left, top, width, height).
-                rect (tuple): Rectangle as (left, top, width, height).
+                    self.prev_rect = bounds  # Cache the latest valid bounds
 
-            Returns:
-                bool: True if the rectangle is fully contained in the monitor.
-            """
-            left, top, w, h = rect
-            right, bottom = left + w, top + h
-            mon_left, mon_top = mon['left'], mon['top']
-            mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
-            return left >= mon_left and top >= mon_top and right <= mon_right and bottom <= mon_bottom
+                    # Determine the best monitor to contain this window and adjust bounds
+                    _, rect = self._choose_monitor_and_rect(bounds)
 
-        def _monitor_intersection_area(self, mon, rect):
-            """
-            Compute the area of overlap between a rectangle and a monitor.
+                    # Recreate the camera if needed
+                    if self.camera:
+                        try:
+                            self.camera.__exit__(None, None, None)
+                        except AttributeError:
+                            pass
+                    self.camera = DXCamera(*rect, fps=self.fps)
+                    try:
+                        self.camera.__enter__()
+                    except AttributeError:
+                        pass
 
-            Args:
-                mon (dict): Monitor dictionary.
-                rect (tuple): Rectangle as (left, top, width, height).
-
-            Returns:
-                int: The overlapping area (width * height).
-            """
-            left, top, w, h = rect
-            right, bottom = left + w, top + h
-            mon_left, mon_top = mon['left'], mon['top']
-            mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
-            inter_w = max(0, min(mon_right, right) - max(mon_left, left))
-            inter_h = max(0, min(mon_bottom, bottom) - max(mon_top, top))
-            return inter_w * inter_h
-
-        def _choose_monitor_and_rect(self, rect):
-            """
-            Select the most appropriate monitor to display the window and adjust its bounds
-            to fit within that monitor.
-
-            Args:
-                rect (tuple): The window bounds as (left, top, width, height).
-
-            Returns:
-                tuple: (monitor_info, adjusted_rect) where adjusted_rect is clamped to the monitor.
-            """
-            left, top, w, h = rect
-            right, bottom = left + w, top + h
-
-            # Check if the window is fully inside any secondary monitor (index >= 1)
-            for mon in self._mss.monitors[1:]:
-                if self._monitor_contains(mon, rect):
-                    return mon, rect
-
-            # If not fully inside any, find the monitor with the largest overlapping area
-            best_mon, best_area = None, -1
-            for mon in self._mss.monitors[1:]:
-                area = self._monitor_intersection_area(mon, rect)
-                if area > best_area:
-                    best_area = area
-                    best_mon = mon
-
-            # Fallback to the first non-primary monitor if no significant overlap
-            if best_mon is None or best_area <= 0:
-                best_mon = self._mss.monitors[1]
-
-            # Clamp the rectangle to the chosen monitor's screen space
-            mon_left, mon_top = best_mon['left'], best_mon['top']
-            mon_right, mon_bottom = mon_left + best_mon['width'], mon_top + best_mon['height']
-            new_left = max(left, mon_left)
-            new_top = max(top, mon_top)
-            new_right = min(right, mon_right)
-            new_bottom = min(bottom, mon_bottom)
-            new_w = max(0, new_right - new_left)
-            new_h = max(0, new_bottom - new_top)
-
-            # If clamping results in an empty area, default to the full monitor
-            if new_w == 0 or new_h == 0:
-                return best_mon, (mon_left, mon_top, best_mon['width'], best_mon['height'])
-
-            return best_mon, (new_left, new_top, new_w, new_h)
-
-        def _ensure_camera_matches_window(self):
-            """
-            Ensure the DXCamera is correctly configured to the current window position and size.
-            Reinitializes the camera if the window has moved, resized, or is newly detected.
-            """
-            try:
-                bounds = get_window_client_bounds(self.hwnd)
-                if bounds is None:
-                    # Window is not valid (minimized, closed, etc.)
+                except Exception:
+                    # On any error, reset the camera to avoid crashes
                     if self.camera:
                         try:
                             self.camera.__exit__(None, None, None)
@@ -170,61 +202,111 @@ if OS_NAME == "Windows":
                             pass
                         self.camera = None
                     self.prev_rect = None
-                    return
 
-                if bounds == self.prev_rect:
-                    # No change in window bounds, no need to update camera
-                    return
+            def grab(self):
+                """
+                Capture a single frame from the current source (window or monitor).
 
-                self.prev_rect = bounds  # Cache the latest valid bounds
+                Returns:
+                    tuple: (image_array, scaled_height) where image_array is the captured frame.
+                """
+                if self.capture_mode != "Monitor":
+                    self._ensure_camera_matches_window()  # Ensure camera is up to date for window capture
+                img_array, _ = self.camera.get_rgb_frame()
+                return img_array, self.scaled_height
 
-                # Determine the best monitor to contain this window and adjust bounds
-                _, rect = self._choose_monitor_and_rect(bounds)
-
-                # Recreate the camera if needed
-                if self.camera:
-                    try:
-                        self.camera.__exit__(None, None, None)
-                    except AttributeError:
-                        pass
-                self.camera = DXCamera(*rect, fps=self.fps)
-                try:
-                    self.camera.__enter__()
-                except AttributeError:
-                    pass
-
-            except Exception:
-                # On any error, reset the camera to avoid crashes
+            def stop(self):
+                """
+                Clean up and release the capture device.
+                """
                 if self.camera:
                     try:
                         self.camera.__exit__(None, None, None)
                     except AttributeError:
                         pass
                     self.camera = None
-                self.prev_rect = None
+                    
+    elif CAPTURE_TOOL == "WindowsCapture":
+        import time, threading
+        import cv2
+        from windows_capture import WindowsCapture, Frame, InternalCaptureControl
+        class DesktopGrabber:
+            def __init__(self, output_resolution=1080, fps=60, window_title=None, 
+                        capture_mode="Monitor", monitor_index=1):
+                self.scaled_height = output_resolution
+                self.fps = fps
+                self.capture_mode = capture_mode
+                self.window_title = window_title
+                
+                self.latest_frame = None
+                self._lock = threading.Lock()
+                self.fps_values = []
+                self.stop_event = threading.Event()
+                self.frame_event = threading.Event()
+                self.sleep_time = 1/self.fps
 
-        def grab(self):
-            """
-            Capture a single frame from the current source (window or monitor).
+                if self.capture_mode != "Window":
+                    self.capture = WindowsCapture(monitor_index=monitor_index)
+                else:
+                    # Create capture object
+                    self.capture = WindowsCapture(window_name=self.window_title)
 
-            Returns:
-                tuple: (image_array, scaled_height) where image_array is the captured frame.
-            """
-            if self.capture_mode != "Monitor":
-                self._ensure_camera_matches_window()  # Ensure camera is up to date for window capture
-            img_array, _ = self.camera.get_rgb_frame()
-            return img_array, self.scaled_height
+                    if not self.window_title:
+                        raise ValueError("No window title specified for window capture")
 
-        def close(self):
-            """
-            Clean up and release the capture device.
-            """
-            if self.camera:
+
+                # Register callback for frames
+                @self.capture.event
+                def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
+                    with self._lock:
+                        tick = time.perf_counter()
+                        source_frame = frame.frame_buffer
+                        # Convert BGRA to RGB
+                        self.frame_event.set()
+                        self.latest_frame = source_frame
+                        process_time = time.perf_counter() - tick
+                        wait_time = max(self.sleep_time - process_time, 0)
+                        time.sleep(wait_time)
+                        
+
+                    if self.stop_event.is_set():
+                        capture_control.stop()
+
+                @self.capture.event
+                def on_closed():
+                    print("Capture session closed")
+                    self.stop_event.set()
+
+                # Start capture in background thread
+                self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+                self._thread.start()
+
+                # Wait until first frame arrives
+                if not self.frame_event.wait(timeout=10.0):
+                    raise TimeoutError("Failed to receive first frame within timeout period")
+
+            def _capture_loop(self):
+                """Capture event loop"""
                 try:
-                    self.camera.__exit__(None, None, None)
-                except AttributeError:
-                    pass
-                self.camera = None
+                    self.capture.start()
+                finally:
+                    self.frame_event.set()
+                    time.sleep(0.1)
+
+            def grab(self):
+                with self._lock:
+                    if self.latest_frame is None:
+                        return None, self.scaled_height
+                    img_array = self.latest_frame
+                    img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGRA2RGB)
+                return img_rgb, self.scaled_height
+            
+            def stop(self):
+                """Stop capture gracefully."""
+                self.stop_event.set()
+                self._thread.join(timeout=2.0)
+            
+
 
 elif OS_NAME == "Darwin":
     import io, cv2
@@ -246,11 +328,11 @@ elif OS_NAME == "Darwin":
                 if bounds:
                     return int(bounds.get("X",0)), int(bounds.get("Y",0)), int(bounds.get("Width",0)), int(bounds.get("Height",0))
         return None
-
+    
     # Cursor loader with caching & precomputation
     def get_cursor_image_and_hotspot():
         """
-        Retrieve current system cursor image (BGRA uint8 numpy) and hotspot, but also
+        Retrieve current system cursor image (BGRA uint8 numpy) and hotspot, also
         return precomputed helpers for fast per-frame overlay:
         - cursor_bgra: original BGRA uint8 (H,W,4)
         - hotspot: (x,y) in pixels
@@ -267,46 +349,36 @@ elif OS_NAME == "Darwin":
             if ns_image is None:
                 return None, None, None, None
 
-            # hotspot in points -> pixels
+            # Get hotspot in pixels
             hot_pt = cursor.hotSpot()
-            hotspot_x = hot_pt.x
-            hotspot_y = hot_pt.y 
+            hotspot = (hot_pt.x, hot_pt.y)
 
-            tiff = ns_image.TIFFRepresentation()
-            if tiff is None:
+            # Get TIFF representation
+            tiff_data = ns_image.TIFFRepresentation()
+            if tiff_data is None:
                 return None, None, None, None
-            bitmap = NSBitmapImageRep.imageRepWithData_(tiff)
+
+            bitmap = NSBitmapImageRep.imageRepWithData_(tiff_data)
             if bitmap is None:
                 return None, None, None, None
 
+            # Convert to PNG bytes for PIL
             png_data = bitmap.representationUsingType_properties_(NSPNGFileType, None)
             if png_data is None:
                 return None, None, None, None
-            # Get current cursor
-            
-            cursor = NSCursor.currentSystemCursor()
-            image = cursor.image()
-            bitmap_rep = NSBitmapImageRep.imageRepWithData_(image.TIFFRepresentation())
-            png_data = bitmap_rep.representationUsingType_properties_(NSPNGFileType, None)
-            buffer = io.BytesIO(png_data)
-            img_array = Image.open(buffer)
-            rgba = np.array(img_array)
+
+            # Load image once
+            img = Image.open(io.BytesIO(png_data)).convert("RGBA")
+            rgba = np.array(img)  # H x W x 4
+
+            # Convert to BGRA for OpenCV
             bgra = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)
 
-            buf = io.BytesIO(png_data)
-            pil_img = Image.open(buf).convert("RGBA")
-            rgba = np.array(pil_img)  # H x W x 4 (RGBA)
+            # Compute alpha and premultiplied BGR
+            alpha = bgra[:, :, 3].astype(np.float32) / 255.0
+            premultiplied_bgr = bgra[:, :, :3].astype(np.float32) * alpha[:, :, None]
 
-            # Convert to BGRA uint8 (same memory layout as OpenCV expects)
-            bgra = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)  # uint8
-
-            # Precompute alpha (float32 [0..1]) and premultiplied BGR (float32)
-            alpha = (bgra[:, :, 3].astype(np.float32) / 255.0)  # H x W float32
-            # convert BGR channels to float32 and premultiply by alpha: (B,G,R) * alpha
-            bgr = bgra[:, :, :3].astype(np.float32)
-            premultiplied = bgr * alpha[:, :, None]  # H x W x 3 float32
-
-            return bgra, (hotspot_x, hotspot_y), alpha, premultiplied
+            return bgra, hotspot, alpha, premultiplied_bgr
 
         except Exception:
             return None, None, None, None
@@ -318,24 +390,38 @@ elif OS_NAME == "Darwin":
         return loc.x, loc.y
 
     # Fast overlay using cached premultiplied data
-    def overlay_cursor_on_frame(frame_bgr, cursor_bgra, hotspot, cursor_pos, alpha_f32=None, premultiplied_bgr_f32=None):
+    def overlay_cursor_on_frame(frame_bgr, cursor_bgra, hotspot, cursor_pos,
+                                alpha_f32=None, premultiplied_bgr_f32=None):
         """
-        Fast overlay of cursor_bgra onto frame_bgr.
+        Fast overlay of cursor_bgra onto frame_bgr (modified in-place).
 
-        frame_bgr: HxW x 3 uint8, modified in place and returned
-        cursor_bgra: full cursor BGRA uint8 array (or None)
-        hotspot: (hot_x, hot_y) in pixels
-        cursor_pos: (x, y) in frame coordinates
-        alpha_f32, premultiplied_bgr_f32: optional precomputed arrays returned by get_cursor_image_and_hotspot
+        Parameters
+        ----------
+        frame_bgr : (H,W,3) uint8
+            Destination frame (modified in place).
+        cursor_bgra : (h,w,4) uint8 or None
+            Cursor image in BGRA, or None to draw fallback dot.
+        hotspot : (hot_x, hot_y)
+            Cursor hotspot in pixels.
+        cursor_pos : (x, y)
+            Cursor center position in frame coordinates.
+        alpha_f32 : (h,w) float32, optional
+            Precomputed alpha in [0..1].
+        premultiplied_bgr_f32 : (h,w,3) float32, optional
+            Precomputed (BGR * alpha).
+
+        Returns
+        -------
+        frame_bgr : same object, with cursor blended in.
         """
-        h_frame, w_frame = frame_bgr.shape[:2]
-        x_cv, y_cv = cursor_pos
-
+        # Fast fallback if no cursor
         if cursor_bgra is None:
-            # fallback dot (very cheap)
-            cv2.circle(frame_bgr, (x_cv, y_cv), 8, (0, 0, 255), -1)
+            x_cv, y_cv = cursor_pos
+            cv2.circle(frame_bgr, (int(round(x_cv)), int(round(y_cv))), 8, (0, 0, 255), -1)
             return frame_bgr
 
+        h_frame, w_frame = frame_bgr.shape[:2]
+        x_cv, y_cv = cursor_pos
         cur_h, cur_w = cursor_bgra.shape[:2]
         hot_x, hot_y = hotspot
 
@@ -349,59 +435,76 @@ elif OS_NAME == "Darwin":
         y1 = min(top_left_y + cur_h, h_frame)
 
         if x0 >= x1 or y0 >= y1:
+            # fully outside
             return frame_bgr
 
-        # source rectangle inside the cursor image
         src_x0 = x0 - top_left_x
         src_y0 = y0 - top_left_y
         src_x1 = src_x0 + (x1 - x0)
         src_y1 = src_y0 + (y1 - y0)
 
-        dst_region = frame_bgr[y0:y1, x0:x1]  # view (H_roi, W_roi, 3), uint8
+        dst_region = frame_bgr[y0:y1, x0:x1]                         # uint8 view
 
-        # If precomputed premultiplied is available, use it; otherwise make minimal local copies
+        # Use precomputed arrays if available (avoid recompute)
         if premultiplied_bgr_f32 is not None and alpha_f32 is not None:
             src_premult = premultiplied_bgr_f32[src_y0:src_y1, src_x0:src_x1]  # float32
-            alpha_roi = alpha_f32[src_y0:src_y1, src_x0:src_x1]  # float32
+            alpha_roi = alpha_f32[src_y0:src_y1, src_x0:src_x1]               # float32
+            src_region = None
         else:
-            # Minimal local computation if not precomputed (still faster than repeated heavy numpy casts)
-            src_region = cursor_bgra[src_y0:src_y1, src_x0:src_x1]  # uint8 BGRA
-            alpha_roi = src_region[:, :, 3].astype(np.float32) / 255.0
-            src_premult = src_region[:, :, :3].astype(np.float32) * alpha_roi[:, :, None]
+            src_region = cursor_bgra[src_y0:src_y1, src_x0:src_x1]   # uint8 BGRA
+            # compute alpha and premultiplied only for roi
+            alpha_roi = src_region[:, :, 3].astype(np.float32, copy=False) / 255.0
+            src_premult = src_region[:, :, :3].astype(np.float32, copy=False) * alpha_roi[..., None]
 
-        # Fast path: if alpha is binary (only 0 or 1), we can avoid blending cost -> use copy / mask
-        # Check quickly by testing min/max of alpha_roi with small thresholds
+        # quick checks
         a_min = float(alpha_roi.min())
         a_max = float(alpha_roi.max())
-        if a_min >= 0.999:  # fully opaque -> direct copy
-            dst_region[:, :, :] = src_premult.astype(np.uint8)
+
+        if a_max <= 1e-6:
+            # fully transparent ROI -> nothing to do
             return frame_bgr
-        elif a_max <= 1e-6:  # fully transparent -> nothing to do
+
+        if a_min >= 0.999:
+            # fully opaque ROI -> direct copy (fastest path)
+            if src_region is not None:
+                dst_region[:, :, :] = src_region[:, :, :3]   # uint8 copy
+            else:
+                # premultiplied may be float; round to uint8
+                np.copyto(dst_region, np.clip(src_premult + 0.5, 0, 255).astype(np.uint8))
             return frame_bgr
 
-        # General alpha blend using OpenCV native operations (float32)
-        # dst_scaled = dst * (1 - alpha)
-        dst_f32 = dst_region.astype(np.float32)
+        # General blending:
+        # res = src_premult + dst * (1 - alpha)
+        # Avoid cv2.merge; use broadcasting
+        dst_f32 = dst_region.astype(np.float32, copy=False)
 
-        # Build one_minus_alpha 3-channel float32 by merging
-        one_minus_alpha = (1.0 - alpha_roi).astype(np.float32)
-        one_minus_alpha_3 = cv2.merge([one_minus_alpha, one_minus_alpha, one_minus_alpha])  # float32
+        one_minus = (1.0 - alpha_roi)[..., None]   # shape HxWx1 float32
+        # compute dst * (1-alpha) in-place into a temporary f32 array
+        res_f32 = dst_f32 * one_minus             # broadcasting, new array
+        # Add src_premult (float32) into res_f32
+        np.add(res_f32, src_premult, out=res_f32)
 
-        # Multiply in C (fast)
-        dst_scaled = np.empty_like(dst_f32)
-        cv2.multiply(dst_f32, one_minus_alpha_3, dst_scaled)  # dst * (1-alpha)
+        # clip + cast back to uint8
+        np.clip(res_f32, 0, 255, out=res_f32)
+        res_uint8 = res_f32.astype(np.uint8, copy=False)
 
-        # result = src_premult + dst_scaled
-        res_f32 = dst_scaled
-        cv2.add(src_premult, dst_scaled, res_f32)  # in-place add into res_f32
+        # For pixels that are effectively opaque, ensure exact copy (avoid rounding differences)
+        if a_max >= 0.999 or np.any(alpha_roi >= 0.999):
+            # mask of opaque pixels
+            mask_opaque = (alpha_roi >= 0.999)
+            if mask_opaque.any():
+                if src_region is not None:
+                    res_uint8[mask_opaque] = src_region[:, :, :3][mask_opaque]
+                else:
+                    res_uint8[mask_opaque] = np.clip(src_premult + 0.5, 0, 255).astype(np.uint8)[mask_opaque]
 
-        # Write result back to frame (convert to uint8)
-        # Use round and clip via convertScaleAbs can be used, but we'll cast safely
-        np.copyto(dst_region, np.clip(res_f32, 0, 255).astype(np.uint8))
+        # write back
+        np.copyto(dst_region, res_uint8)
         return frame_bgr
 
+
     class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, with_cursor=True):
+        def __init__(self, output_resolution=1080, fps=60, window_title=None, capture_mode="Monitor", monitor_index=1, with_cursor=True):
             self.scaled_height = output_resolution
             self.fps = fps
             self.with_cursor = with_cursor
@@ -411,7 +514,7 @@ elif OS_NAME == "Darwin":
             self.prev_rect = None
 
             if self.capture_mode == "Monitor":
-                mon_index = MONITOR_INDEX
+                mon_index = monitor_index
                 if mon_index >= len(self._mss.monitors):
                     mon_index = 1
                 mon = self._mss.monitors[mon_index]
@@ -465,24 +568,46 @@ elif OS_NAME == "Darwin":
                     cursor_y = (y - self.top) * system_scale
                     # Only overlay if cursor is within this frame
                 
-                    cursor_bgra, hotspot, alpha_f32, premultiplied = get_cursor_image_and_hotspot()
-                    scale_factor = 16 // system_scale
-                    if cursor_bgra.shape[0] > scale_factor and cursor_bgra.shape[1] > scale_factor:
-                        h, w = cursor_bgra.shape[:2]
-                        new_w, new_h = int(w / scale_factor), int(h / scale_factor)
-                        # resize BGRA; keep alpha channel scaled properly
-                        cursor_bgra = cv2.resize(cursor_bgra, (new_w, new_h), interpolation=cv2.INTER_AREA)
-                        # recompute alpha & premultiplied after resize
-                        alpha_f32 = (cursor_bgra[:, :, 3].astype(np.float32) / 255.0)
-                        premultiplied = cursor_bgra[:, :, :3].astype(np.float32) * alpha_f32[:, :, None]
+                    if 0 <= x - self.left <= self.width and 0 <= y - self.top <= self.height:
 
-                        self.cursor_bgra = cursor_bgra
+                        cursor_x = (x - self.left) * system_scale
+                        cursor_y = (y - self.top) * system_scale
+
+                        # Cache cursor image processing to avoid recomputation every frame
+                        cursor_bgra, hotspot, alpha_f32, premultiplied = get_cursor_image_and_hotspot()
+                        scale_factor = 16 // max(1, int(system_scale))
+
+                        # initialize cache storage if missing
+                        if not hasattr(self, "_cursor_cache"):
+                            self._cursor_cache = {}
+
+                        # key to uniquely identify cached result
+                        cache_key = (id(cursor_bgra), cursor_bgra.shape, scale_factor)
+
+                        if cache_key not in self._cursor_cache:
+                            # perform expensive resize & alpha computations once per cache_key
+                            h, w = cursor_bgra.shape[:2]
+                            if h > scale_factor and w > scale_factor:
+                                new_w, new_h = w // scale_factor, h // scale_factor
+                                resized_bgra = cv2.resize(cursor_bgra, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                            else:
+                                resized_bgra = cursor_bgra
+
+                            alpha_f32 = (resized_bgra[:, :, 3].astype(np.float32) / 255.0)
+                            premultiplied = resized_bgra[:, :, :3].astype(np.float32) * alpha_f32[:, :, None]
+
+                            self._cursor_cache[cache_key] = (resized_bgra, hotspot, alpha_f32, premultiplied)
+
+                        else:
+                            resized_bgra, hotspot, alpha_f32, premultiplied = self._cursor_cache[cache_key]
+
+                        # assign for compatibility with your original code
+                        self.cursor_bgra = resized_bgra
                         self.cursor_hotspot = hotspot
                         self.cursor_alpha = alpha_f32
                         self.cursor_premultiplied = premultiplied
-                        
+
                         if self.with_cursor and self.cursor_bgra is not None:
-                            # overlay in-place using optimized routine
                             frame_bgr = overlay_cursor_on_frame(
                                 frame_bgr,
                                 self.cursor_bgra,
@@ -498,72 +623,178 @@ elif OS_NAME == "Darwin":
                 self.cursor_premultiplied = None
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             return frame_rgb, self.scaled_height
+        
+        def stop(self):
+            """Stop the capture and clean up resources."""
+            if hasattr(self, '_mss'):
+                try:
+                    self._mss.close()
+                except:
+                    pass
+            # Clear cursor cache
+            if hasattr(self, '_cursor_cache'):
+                self._cursor_cache.clear()
 
 
 elif OS_NAME.startswith("Linux"):
-    from Xlib import display
+    # linux must on Xorg mode
+    from Xlib import display, X
     import cv2
-
-    def get_window_client_bounds_linux(window_title):
+    
+    def get_window_coords(title):
         d = display.Display()
         root = d.screen().root
-        def search(w):
+        
+        # Get all windows
+        window_ids = root.get_full_property(
+            d.intern_atom('_NET_CLIENT_LIST'),
+            X.AnyPropertyType
+        ).value
+        
+        # Pre-intern atoms for common properties
+        net_wm_name = d.intern_atom('_NET_WM_NAME')
+        utf8_string = d.intern_atom('UTF8_STRING')
+        
+        for window_id in window_ids:
+            window = d.create_resource_object('window', window_id)
+            
+            # Try multiple ways to get the window name
+            name = None
             try:
-                name = w.get_wm_name()
+                # Try _NET_WM_NAME first (UTF-8)
+                name_prop = window.get_full_property(net_wm_name, utf8_string)
+                if name_prop:
+                    name = name_prop.value.decode('utf-8')
+                else:
+                    # Fall back to WM_NAME
+                    name = window.get_wm_name()
+                    if isinstance(name, bytes):
+                        name = name.decode('utf-8', errors='replace')
             except:
-                return None
-            if name == window_title:
-                geom = w.get_geometry()
-                abs_pos = w.translate_coords(root, 0, 0)
-                return abs_pos.x, abs_pos.y, geom.width, geom.height
-            try:
-                for c in w.query_tree().children:
-                    r = search(c)
-                    if r:
-                        return r
-            except:
-                pass
-            return None
-        return search(root)
+                continue
+            if name and title in name:
+                # Get absolute coordinates (accounting for window decorations)
+                geom = window.get_geometry()
+                pos = geom.root.translate_coords(window_id, 0, 0)
+                return (pos.x, pos.y, geom.width, geom.height)
+        return None
 
     class DesktopGrabber:
-        def __init__(self, output_resolution=1080, fps=60, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE):
+        def __init__(self, output_resolution=1080, fps=60, window_title=None, capture_mode="Monitor", monitor_index=1):
             self.scaled_height = output_resolution
             self.fps = fps
             self.window_title = window_title
             self.capture_mode = capture_mode
-            self._mss = mss.mss()
+            self._mss = mss.mss(with_cursor=True)
             self.prev_rect = None
+            self.monitor_index = monitor_index
 
             if self.capture_mode == "Monitor":
-                mon_index = MONITOR_INDEX
-                if mon_index >= len(self._mss.monitors):
-                    mon_index = 1
-                mon = self._mss.monitors[mon_index]
+                # Initialize with the selected monitor
+                if self.monitor_index >= len(self._mss.monitors):
+                    self.monitor_index = 1
+                mon = self._mss.monitors[self.monitor_index]
                 self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
             else:
-                bounds = get_window_client_bounds_linux(self.window_title)
+                # Initialize with window coordinates
+                bounds = get_window_coords(self.window_title)
                 if bounds is None:
                     raise RuntimeError(f"Window '{self.window_title}' not found")
                 self.left, self.top, self.width, self.height = bounds
 
             self.scaled_width = round(self.width * self.scaled_height / self.height)
 
+        def _monitor_contains(self, mon, rect):
+            """
+            Check whether a rectangle is completely inside a monitor's bounds.
+            """
+            left, top, w, h = rect
+            right, bottom = left + w, top + h
+            mon_left, mon_top = mon['left'], mon['top']
+            mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
+            return left >= mon_left and top >= mon_top and right <= mon_right and bottom <= mon_bottom
+
+        def _monitor_intersection_area(self, mon, rect):
+            """
+            Compute the area of overlap between a rectangle and a monitor.
+            """
+            left, top, w, h = rect
+            right, bottom = left + w, top + h
+            mon_left, mon_top = mon['left'], mon['top']
+            mon_right, mon_bottom = mon_left + mon['width'], mon_top + mon['height']
+            inter_w = max(0, min(mon_right, right) - max(mon_left, left))
+            inter_h = max(0, min(mon_bottom, bottom) - max(mon_top, top))
+            return inter_w * inter_h
+
+        def _choose_monitor_and_rect(self, rect):
+            """
+            Select the best monitor for the window and clamp the rectangle to fit.
+            """
+            left, top, w, h = rect
+            right, bottom = left + w, top + h
+
+            # Check if the window is fully inside any secondary monitor (index >= 1)
+            for mon in self._mss.monitors[1:]:
+                if self._monitor_contains(mon, rect):
+                    return mon, rect
+
+            # Find monitor with largest overlapping area
+            best_mon, best_area = None, -1
+            for mon in self._mss.monitors[1:]:
+                area = self._monitor_intersection_area(mon, rect)
+                if area > best_area:
+                    best_area = area
+                    best_mon = mon
+
+            # Fallback to first non-primary monitor if no overlap
+            if best_mon is None or best_area <= 0:
+                best_mon = self._mss.monitors[1]
+
+            # Clamp rectangle to monitor bounds
+            mon_left, mon_top = best_mon['left'], best_mon['top']
+            mon_right, mon_bottom = mon_left + best_mon['width'], mon_top + best_mon['height']
+            new_left = max(left, mon_left)
+            new_top = max(top, mon_top)
+            new_right = min(right, mon_right)
+            new_bottom = min(bottom, mon_bottom)
+            new_w = max(0, new_right - new_left)
+            new_h = max(0, new_bottom - new_top)
+
+            # Default to full monitor if clamping results in empty area
+            if new_w == 0 or new_h == 0:
+                return best_mon, (mon_left, mon_top, best_mon['width'], best_mon['height'])
+
+            return best_mon, (new_left, new_top, new_w, new_h)
+
         def _ensure_rect(self):
             if self.capture_mode != "Monitor":
-                bounds = get_window_client_bounds_linux(self.window_title)
+                bounds = get_window_coords(self.window_title)
                 if bounds is None:
-                    return
+                    return False
                 if bounds == self.prev_rect:
-                    return
+                    return True
                 self.prev_rect = bounds
-                self.left, self.top, self.width, self.height = bounds
+                
+                # Apply monitor clamping logic
+                _, clamped_rect = self._choose_monitor_and_rect(bounds)
+                self.left, self.top, self.width, self.height = clamped_rect
                 self.scaled_width = round(self.width * self.scaled_height / self.height)
+            return True
 
         def grab(self):
-            self._ensure_rect()
+            if not self._ensure_rect():
+                return None, self.scaled_height
+                
             monitor = {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
             shot = self._mss.grab(monitor)
             arr = np.asarray(shot)
             frame_rgb = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
-            return frame_rgb, (self.scaled_height, self.scaled_width)
+            return frame_rgb, self.scaled_height
+
+        def stop(self):
+            """Stop the capture and clean up resources."""
+            if hasattr(self, '_mss'):
+                try:
+                    self._mss.close()
+                except:
+                    pass

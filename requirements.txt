@@ -10,3 +10,7 @@ mss==10.0.0
 imageio==2.37.0
 easydict==1.13
 einops==0.8.1
+
+# for rtmp and new streaming
+PyAudio==0.2.14
+PyOpenGL==3.1.10
