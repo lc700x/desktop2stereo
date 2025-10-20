@@ -149,5 +149,5 @@ FILL_16_9 = settings["Fill 16:9"]
 FIX_VIEWER_ASPECT = settings["Fix Viewer Aspect"]
 STEREOMIX_DEVICE = settings["Stereo Mix"] # RTMP StereoMix Device
 STREAM_KEY = settings["Stream Key"]
-AUDIO_DELAY = 0.1
-CRF = 20
+AUDIO_DELAY = settings["Audio Delay"]
+CRF = settings["CRF"]

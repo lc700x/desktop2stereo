@@ -273,7 +273,7 @@ def rtmp_stream():
             '-g', f'{FPS}',
             '-force_key_frames', f'expr:gte(t,n_forced*1)',  # Force keyframes every second
             '-r', f'{FPS}',  # Force constant output framerate
-            '-crf', f'{CRF}',
+            '-crf', f'{CRF}', # 
             '-c:a', 'aac',
             '-ar', '44100',
             '-b:a', '64k',

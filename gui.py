@@ -166,6 +166,8 @@ DEFAULTS = {
     "Stream Quality": 100,
     "Stream Key": "live",
     "Stereo Mix": None,
+    "CRF": 20,
+    "Audio Delay": -0.15,
     "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False # keep the viewer window aspect ratio not change
@@ -219,6 +221,8 @@ UI_TEXTS = {
         "RTMP Streamer": "RTMP Streamer",
         "Stream Key": "Stream Key:",
         "Stereo Mix": "Stereo Mix:",
+        "CRF": "CRF:",
+        "Audio Delay": "Audio Delay (s):",
         "3D Monitor": "3D Monitor",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
@@ -290,6 +294,8 @@ UI_TEXTS = {
         "RTMP Streamer": "RTMP推流",
         "Stream Key": "推流密钥:",
         "Stereo Mix": "混音设备:",
+        "CRF": "恒定质量:",
+        "Audio Delay": "音频延迟 (秒):",
         "3D Monitor": "3D显示器",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
@@ -423,7 +429,7 @@ class ConfigGUI(tk.Tk):
         # Capture Mode (Monitor / Window)
         self.capture_mode_var_label = tk.StringVar()
         self.capture_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.capture_mode_var_label, state="readonly", width=8)
-        self.capture_mode_cb.grid(row=4, column=0, sticky="ew", **self.pad)
+        self.capture_mode_cb.grid(row=5, column=0, sticky="ew", **self.pad)
         self.capture_mode_cb.bind("<<ComboboxSelected>>", self.on_capture_mode_change)
         
         # Monitor Index (only shown when capture mode is Monitor)
@@ -435,7 +441,7 @@ class ConfigGUI(tk.Tk):
         self.window_cb.bind("<<ComboboxSelected>>", self.on_window_selected)
         
         self.btn_refresh = ttk.Button(self.content_frame, text="Refresh", command=self.refresh_monitor_and_window)
-        self.btn_refresh.grid(row=4, column=3, sticky="we", **self.pad)
+        self.btn_refresh.grid(row=5, column=3, sticky="we", **self.pad)
         
         # Language
         self.label_language = ttk.Label(self.content_frame, text="Set Language:")
@@ -447,49 +453,49 @@ class ConfigGUI(tk.Tk):
         
         # Device
         self.label_device = ttk.Label(self.content_frame, text="Device:")
-        self.label_device.grid(row=5, column=0, sticky="w", **self.pad)
+        self.label_device.grid(row=6, column=0, sticky="w", **self.pad)
         self.device_var = tk.StringVar()
         self.device_menu = ttk.OptionMenu(self.content_frame, self.device_var, "")
-        self.device_menu.grid(row=5, column=1, sticky="w", **self.pad)
+        self.device_menu.grid(row=6, column=1, sticky="w", **self.pad)
         
         # FP16 and Show FPS
         self.fp16_var = tk.BooleanVar()
         self.fp16_cb = ttk.Checkbutton(self.content_frame, text="FP16", variable=self.fp16_var)
-        self.fp16_cb.grid(row=5, column=2, sticky="w", **self.pad)
+        self.fp16_cb.grid(row=6, column=2, sticky="w", **self.pad)
         
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
-        self.showfps_cb.grid(row=5, column=3, sticky="w", **self.pad)
+        self.showfps_cb.grid(row=6, column=3, sticky="w", **self.pad)
         
         # Capture Tool
         if OS_NAME == "Windows":
             self.label_capture_tool = ttk.Label(self.content_frame, text="Capture Tool:")
-            self.label_capture_tool.grid(row=6, column=0, sticky="w", **self.pad)
+            self.label_capture_tool.grid(row=7, column=0, sticky="w", **self.pad)
             self.capture_tool_values = ["WindowsCapture", "DXCamera"]
             self.capture_tool_cb = ttk.Combobox(self.content_frame, values=self.capture_tool_values, state="readonly")
-            self.capture_tool_cb.grid(row=6, column=1, sticky="ew", **self.pad)
+            self.capture_tool_cb.grid(row=7, column=1, sticky="ew", **self.pad)
         else:
             # Hide capture tool selection on non-Windows
             self.capture_tool_cb = None
             
         # FPS
         self.label_fps = ttk.Label(self.content_frame, text="FPS:")
-        self.label_fps.grid(row=6, column=2, sticky="w", **self.pad)
+        self.label_fps.grid(row=7, column=2, sticky="w", **self.pad)
         self.fps_values = ["30", "60", "75", "90", "120"]
         self.fps_cb = ttk.Combobox(self.content_frame, values=self.fps_values, state="normal")
-        self.fps_cb.grid(row=6, column=3, sticky="ew", **self.pad)
+        self.fps_cb.grid(row=7, column=3, sticky="ew", **self.pad)
         
         # Output Resolution
         self.label_res = ttk.Label(self.content_frame, text="Output Resolution:")
-        self.label_res.grid(row=7, column=0, sticky="w", **self.pad)
+        self.label_res.grid(row=8, column=0, sticky="w", **self.pad)
         self.res_values = ["480", "720", "1080", "1440", "2160"]
         self.res_cb = ttk.Combobox(self.content_frame, values=self.res_values, state="normal")
-        self.res_cb.grid(row=7, column=1, sticky="ew", **self.pad)
+        self.res_cb.grid(row=8, column=1, sticky="ew", **self.pad)
         
         # Fill 16:9 checkbox
         self.fill_16_9_var = tk.BooleanVar()
         self.fill_16_9_cb = ttk.Checkbutton(self.content_frame, text="Fill 16:9", variable=self.fill_16_9_var)
-        self.fill_16_9_cb.grid(row=7, column=2, sticky="w", **self.pad)
+        self.fill_16_9_cb.grid(row=8, column=2, sticky="w", **self.pad)
         
         # Fix Viewer Aspect checkbox
         self.fix_viewer_aspect_var = tk.BooleanVar()
@@ -497,40 +503,40 @@ class ConfigGUI(tk.Tk):
         
         # Depth Resolution and Depth Strength
         self.label_depth_res = ttk.Label(self.content_frame, text="Depth Resolution:")
-        self.label_depth_res.grid(row=8, column=0, sticky="w", **self.pad)
+        self.label_depth_res.grid(row=9, column=0, sticky="w", **self.pad)
         self.depth_res_cb = ttk.Combobox(self.content_frame, state="normal")
-        self.depth_res_cb.grid(row=8, column=1, sticky="ew", **self.pad)
+        self.depth_res_cb.grid(row=9, column=1, sticky="ew", **self.pad)
         
         self.label_depth_strength = ttk.Label(self.content_frame, text="Depth Strength:")
-        self.label_depth_strength.grid(row=8, column=2, sticky="w", **self.pad)
+        self.label_depth_strength.grid(row=9, column=2, sticky="w", **self.pad)
         self.depth_strength_values = [f"{i/2.0:.1f}" for i in range(21)]  # 0-10
         self.depth_strength_cb = ttk.Combobox(self.content_frame, values=self.depth_strength_values, state="normal")
-        self.depth_strength_cb.grid(row=8, column=3, sticky="ew", **self.pad)
+        self.depth_strength_cb.grid(row=9, column=3, sticky="ew", **self.pad)
         
         # Anti-aliasing
         self.label_antialiasing = ttk.Label(self.content_frame, text="Anti-aliasing:")
-        self.label_antialiasing.grid(row=9, column=0, sticky="w", **self.pad)
+        self.label_antialiasing.grid(row=10, column=0, sticky="w", **self.pad)
         self.antialiasing_values = [str(i) for i in range(11)]  # 0-10
         self.antialiasing_cb = ttk.Combobox(self.content_frame, values=self.antialiasing_values, state="normal")
-        self.antialiasing_cb.grid(row=9, column=1, sticky="ew", **self.pad)
+        self.antialiasing_cb.grid(row=10, column=1, sticky="ew", **self.pad)
         
         # Edge Dilation
         self.label_foreground_scale = ttk.Label(self.content_frame, text="Foreground Scale:")
-        self.label_foreground_scale.grid(row=9, column=2, sticky="w", **self.pad)
+        self.label_foreground_scale.grid(row=10, column=2, sticky="w", **self.pad)
         self.foreground_scale_values = [f"{i/2.0:.1f}" for i in range(-10, 10)] # -5 (squeeze depth scale) to 5 (extend depth scale)
         self.foreground_scale_cb = ttk.Combobox(self.content_frame, values=self.foreground_scale_values, state="normal")
-        self.foreground_scale_cb.grid(row=9, column=3, sticky="ew", **self.pad)
+        self.foreground_scale_cb.grid(row=10, column=3, sticky="ew", **self.pad)
 
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
-        self.label_display_mode.grid(row=10, column=0, sticky="w", **self.pad)
+        self.label_display_mode.grid(row=11, column=0, sticky="w", **self.pad)
         self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB"]
         self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
-        self.display_mode_cb.grid(row=10, column=1, sticky="ew", **self.pad)
+        self.display_mode_cb.grid(row=11, column=1, sticky="ew", **self.pad)
         
         # IPD
         self.label_ipd = ttk.Label(self.content_frame, text="IPD (m):")
-        self.label_ipd.grid(row=10, column=2, sticky="w", **self.pad)
+        self.label_ipd.grid(row=11, column=2, sticky="w", **self.pad)
         self.ipd_var = tk.StringVar()
         self.ipd_spin = ttk.Spinbox(
             self.content_frame,
@@ -540,23 +546,23 @@ class ConfigGUI(tk.Tk):
             textvariable=self.ipd_var,
             state="normal"
         )
-        self.ipd_spin.grid(row=10, column=3, sticky="ew", **self.pad)
+        self.ipd_spin.grid(row=11, column=3, sticky="ew", **self.pad)
         
         # Download path
         self.label_download = ttk.Label(self.content_frame, text="Download Path:")
-        self.label_download.grid(row=11, column=0, sticky="w", **self.pad)
+        self.label_download.grid(row=12, column=0, sticky="w", **self.pad)
         self.download_var = tk.StringVar()
         self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
-        self.download_entry.grid(row=11, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.download_entry.grid(row=12, column=1, columnspan=2, sticky="ew", **self.pad)
         self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
-        self.btn_browse.grid(row=11, column=3, sticky="ew", **self.pad)
+        self.btn_browse.grid(row=12, column=3, sticky="ew", **self.pad)
         
         # Depth Model
         self.label_depth_model = ttk.Label(self.content_frame, text="Depth Model:")
-        self.label_depth_model.grid(row=12, column=0, sticky="w", **self.pad)
+        self.label_depth_model.grid(row=13, column=0, sticky="w", **self.pad)
         self.depth_model_var = tk.StringVar()
         self.depth_model_cb = ttk.Combobox(self.content_frame, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
-        self.depth_model_cb.grid(row=12, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.depth_model_cb.grid(row=13, column=1, columnspan=2, sticky="ew", **self.pad)
         self.depth_model_cb.bind("<<ComboboxSelected>>", self.on_depth_model_change)
 
                 
@@ -565,33 +571,33 @@ class ConfigGUI(tk.Tk):
         self.use_tensorrt = tk.BooleanVar()
         self.unlock_streamer_thread = tk.BooleanVar()
         self.label_inference_optimizer = ttk.Label(self.content_frame, text="Inference Optimizer:")
-        self.label_inference_optimizer.grid(row=13, column=0, sticky="w", **self.pad)
+        self.label_inference_optimizer.grid(row=14, column=0, sticky="w", **self.pad)
 
         # Torch Compile
         self.check_torch_compile = ttk.Checkbutton(self.content_frame, text="torch.compile", variable=self.use_torch_compile)
-        self.check_torch_compile.grid(row=13, column=1, sticky="w", **self.pad)
+        self.check_torch_compile.grid(row=14, column=1, sticky="w", **self.pad)
 
         # TensorRT
         self.check_tensorrt = ttk.Checkbutton(self.content_frame, text="TensorRT", variable=self.use_tensorrt)
-        self.check_tensorrt.grid(row=13, column=2, sticky="w", **self.pad)
+        self.check_tensorrt.grid(row=14, column=2, sticky="w", **self.pad)
 
         # Unlock Thread (Legacy Streamer)
         self.check_unlock_streamer_thread = ttk.Checkbutton(self.content_frame, text="Unlock Thread (Legacy Streamer)", variable=self.unlock_streamer_thread)
-        self.check_unlock_streamer_thread.grid(row=13, column=1, sticky="w", **self.pad)
+        self.check_unlock_streamer_thread.grid(row=14, column=1, sticky="w", **self.pad)
         self.use_tensorrt.trace_add("write", self.update_recompile_trt_visibility)
         
         # Recompile TensorRT (only visible when TensorRT is selected)
         self.recompile_trt_var = tk.BooleanVar()
         self.check_recompile_trt = ttk.Checkbutton(self.content_frame, text="Recompile TensorRT", variable=self.recompile_trt_var)
-        self.check_recompile_trt.grid(row=13, column=3, sticky="w", **self.pad)
+        self.check_recompile_trt.grid(row=14, column=3, sticky="w", **self.pad)
         
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
-        self.label_hf_endpoint.grid(row=14, column=0, sticky="w", **self.pad)
+        self.label_hf_endpoint.grid(row=15, column=0, sticky="w", **self.pad)
         self.hf_endpoint_var = tk.StringVar()
         self.hf_endpoint_cb = ttk.Combobox(self.content_frame, textvariable=self.hf_endpoint_var, state="normal")
         self.hf_endpoint_cb["values"] = ["https://huggingface.co", "https://hf-mirror.com"]
-        self.hf_endpoint_cb.grid(row=14, column=1, sticky="ew", **self.pad)
+        self.hf_endpoint_cb.grid(row=15, column=1, sticky="ew", **self.pad)
         
         # Legacy Streamer Host and Port (only visible when run mode is streamer)
         self.label_streamer_host = ttk.Label(self.content_frame, text="Streamer URL:")
@@ -617,6 +623,30 @@ class ConfigGUI(tk.Tk):
         self.label_audio_device = ttk.Label(self.content_frame, text="Stereo Mix:")
         self.audio_device_cb = ttk.Combobox(self.content_frame, textvariable=self.audio_device_var, state="readonly")
         
+        # CRF (only for RTMP Streamer)
+        self.label_crf = ttk.Label(self.content_frame, text="CRF:")
+        self.crf_var = tk.StringVar()
+        self.crf_spin = ttk.Spinbox(
+            self.content_frame,
+            from_=16,
+            to=27,
+            increment=1,
+            textvariable=self.crf_var,
+            state="normal"
+        )
+        
+        # Audio Delay (only for RTMP Streamer)  
+        self.label_audio_delay = ttk.Label(self.content_frame, text="Audio Delay (s):")
+        self.audio_delay_var = tk.StringVar()
+        self.audio_delay_spin = ttk.Spinbox(
+            self.content_frame,
+            from_=-2.0,
+            to=2.0,
+            increment=0.05,
+            textvariable=self.audio_delay_var,
+            state="normal"
+        )
+        
         # URL Action Buttons
         self.btn_copy_url = ttk.Button(self.content_frame, text="Copy URL", command=self.copy_url_to_clipboard)
         self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
@@ -626,13 +656,13 @@ class ConfigGUI(tk.Tk):
 
         # Buttons (moved down a bit to make room)
         self.btn_reset = ttk.Button(self.content_frame, text="Reset", command=self.reset_to_defaults)
-        self.btn_reset.grid(row=12, column=3, sticky="ew", **self.pad)
+        self.btn_reset.grid(row=13, column=3, sticky="ew", **self.pad)
         
         self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
-        self.btn_stop.grid(row=14, column=2, sticky="ew", **self.pad)
+        self.btn_stop.grid(row=15, column=2, sticky="ew", **self.pad)
         
         self.btn_run = ttk.Button(self.content_frame, text="Run", command=self.save_settings)
-        self.btn_run.grid(row=14, column=3, sticky="ew", **self.pad)
+        self.btn_run.grid(row=15, column=3, sticky="ew", **self.pad)
         
         # Column weights inside content frame
         for col in range(5):
@@ -942,12 +972,12 @@ class ConfigGUI(tk.Tk):
         # Update the internal capture_mode_key based on the selected label
         if label == monitor_label:
             self.capture_mode_key = "Monitor"
-            self.monitor_menu.grid(row=4, column=1, columnspan=2, sticky="w", **self.pad)
+            self.monitor_menu.grid(row=5, column=1, columnspan=2, sticky="w", **self.pad)
             self.window_cb.grid_remove()
         else:  # Window
             self.capture_mode_key = "Window"
             self.monitor_menu.grid_remove()
-            self.window_cb.grid(row=4, column=1, columnspan=2, sticky="ew", **self.pad)
+            self.window_cb.grid(row=5, column=1, columnspan=2, sticky="ew", **self.pad)
             # Refresh window list automatically when switching to Window mode
             self.refresh_window_list()
 
@@ -1025,6 +1055,8 @@ class ConfigGUI(tk.Tk):
         # Update RTMP-specific labels
         self.label_rtmp_stream_key.config(text=UI_TEXTS[self.language]["Stream Key"])
         self.label_audio_device.config(text=UI_TEXTS[self.language]["Stereo Mix"])
+        self.label_crf.config(text=texts.get("CRF", "CRF"))
+        self.label_audio_delay.config(text=texts.get("Audio Delay", "Audio Delay"))
         
         # language combobox values
         self.language_cb["values"] = list(UI_TEXTS.keys())
@@ -1089,7 +1121,9 @@ class ConfigGUI(tk.Tk):
             self.label_stream_quality, self.stream_quality_cb,
             self.btn_copy_url, self.btn_open_browser,
             self.label_rtmp_stream_key, self.rtmp_stream_key_entry,
-            self.label_audio_device, self.audio_device_cb
+            self.label_audio_device, self.audio_device_cb,
+            self.label_crf, self.crf_spin,
+            self.label_audio_delay, self.audio_delay_spin
         ]
         
         for control in controls_to_hide:
@@ -1132,10 +1166,16 @@ class ConfigGUI(tk.Tk):
         self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
         
         # Grid RTMP-specific controls
-        self.label_audio_device.grid(row=3, column=0, sticky="w", **self.pad)
-        self.audio_device_cb.grid(row=3, column=1, sticky="ew", **self.pad)
-        self.label_rtmp_stream_key.grid(row=3, column=2, sticky="w", **self.pad)
-        self.rtmp_stream_key_entry.grid(row=3, column=3, sticky="ew", **self.pad)
+        self.label_audio_device.grid(row=4, column=0, sticky="w", **self.pad)
+        self.audio_device_cb.grid(row=4, column=1, sticky="ew", **self.pad)
+        self.label_rtmp_stream_key.grid(row=3, column=0, sticky="w", **self.pad)
+        self.rtmp_stream_key_entry.grid(row=3, column=1, sticky="ew", **self.pad)
+        
+        # New: Grid CRF and Audio Delay controls
+        self.label_crf.grid(row=3, column=2, sticky="w", **self.pad)
+        self.crf_spin.grid(row=3, column=3, sticky="ew", **self.pad)
+        self.label_audio_delay.grid(row=4, column=2, sticky="w", **self.pad)
+        self.audio_delay_spin.grid(row=4, column=3, sticky="ew", **self.pad)
         
         # Populate audio devices if not already done
         if not self.audio_device_cb['values']:
@@ -1147,7 +1187,7 @@ class ConfigGUI(tk.Tk):
 
     def show_viewer_controls(self):
         """Show controls for Local Viewer and 3D Monitor"""
-        self.fixed_viwer_aspect_cb.grid(row=7, column=3, sticky="w", **self.pad)
+        self.fixed_viwer_aspect_cb.grid(row=8, column=3, sticky="w", **self.pad)
     def browse_download(self):
         path = filedialog.askdirectory(initialdir=self.download_var.get() or ".")
         if path:
@@ -1316,6 +1356,8 @@ class ConfigGUI(tk.Tk):
         else:
             # Try to find and select Stereo Mix automatically
             self.auto_select_stereo_mix()
+        self.crf_var.set(str(cfg.get("CRF", DEFAULTS["CRF"])))
+        self.audio_delay_var.set(str(cfg.get("Audio Delay", DEFAULTS["Audio Delay"])))
         
         # Capture option
         self.capture_tool_cb.set(cfg.get("Capture Tool", DEFAULTS["Capture Tool"]))
@@ -1456,6 +1498,8 @@ class ConfigGUI(tk.Tk):
             "Fix Viewer Aspect": self.fix_viewer_aspect_var.get(),
             "Stream Key": self.rtmp_stream_key_var.get(),
             "Stereo Mix": self.audio_device_var.get(),
+            "CRF": int(self.crf_var.get()),
+            "Audio Delay": float(self.audio_delay_var.get()),
         }
         
         success = self.save_yaml("settings.yaml", cfg)
