@@ -676,95 +676,103 @@ class ConfigGUI(tk.Tk):
         self.device_var.trace_add("write", self.on_device_change)
     
     def auto_select_stereo_mix(self):
-        """Automatically select Stereo Mix if available"""
+        """Automatically select Stereo Mix, Loopback, System Audio, or Virtual Audio Capturer"""
         if not hasattr(self, 'audio_devices') or not self.audio_devices:
             return
-            
+
         stereo_mix_names = [
-            "stereo mix", "stereo", "mix", "what you hear", "output", 
-            "loopback", "system audio", "wave out mix", "mixed output",
-            "立体声混音", "立体声", "混音", "混合输出", "系统音频",
-            "您听到的声音", "输出", "环路", "波形输出混合",
-            "ステレオ ミックス", "ステレオ", "ミックス", "混合", "システムオーディオ",
-            "mezcla estéreo", "estéreo", "mezcla", "salida", "audio del sistema",
-            "mixage stéréo", "stéréo", "mixage", "sortie", "audio système",
-            "stereo mix", "stereo", "mischung", "ausgabe", "systemaudio"
+            # English
+            "stereo mix", "what you hear", "loopback", "system audio", "wave out mix", "mixed output",
+            # Chinese
+            "立体声混音", "您听到的声音", "环路", "系统音频", "波形输出混合", "混合输出",
+            # Japanese
+            "ステレオ ミックス", "ステレオミックス", "ループバック", "システムオーディオ", "ミックス出力",
+            # Spanish
+            "mezcla estéreo", "lo que escuchas", "bucle", "audio del sistema", "salida mixta",
+            # French
+            "mixage stéréo", "bouclage", "audio système", "sortie mixte",
+            # German
+            "stereomix", "was du hörst", "loopback", "systemaudio", "gemischte ausgabe"
         ]
-        
+
+        # Try to auto-select the first matching stereo mix–like device
         for device in self.audio_devices:
             device_lower = device.lower()
             for mix_name in stereo_mix_names:
                 if mix_name in device_lower:
                     self.audio_device_var.set(device)
                     return
-        
-        # If no Stereo Mix found, use first available device
-        if self.audio_devices and self.audio_devices[0] not in ["No audio devices available", "PyAudio not available"]:
-            self.audio_device_var.set(self.audio_devices[0])
-            
+
+        # If no stereo mix found but virtual audio capturer exists, select it
+        for device in self.audio_devices:
+            if "virtual-audio-capturer" in device.lower():
+                self.audio_device_var.set(device)
+                return
+
+        # Otherwise, show message
+        self.audio_device_var.set("No Stereo Mix device found")
+
+
     def populate_audio_devices(self):
-        """Populate audio devices list for RTMP streaming and auto-select Stereo Mix"""
-        if OS_NAME != "Windows":  # Skip audio device detection for non-Windows systems
+        """Populate list with only Stereo Mix / Loopback / System Audio–type devices, or Virtual Audio Capturer"""
+        if OS_NAME != "Windows":
             self.audio_devices = ["Audio capture not supported on this platform"]
             self.audio_device_var.set("Audio capture not supported on this platform")
             return
-            
+
         try:
             import pyaudio
             p = pyaudio.PyAudio()
             self.audio_devices = []
-            
-            # Common names for Stereo Mix in different languages
+
             stereo_mix_names = [
                 # English
-                "stereo mix", "stereo", "mix", "what you hear", "output", 
-                "loopback", "system audio", "wave out mix", "mixed output",
+                "stereo mix", "what you hear", "loopback", "system audio", "wave out mix", "mixed output",
                 # Chinese
-                "立体声混音", "立体声", "混音", "混合输出", "系统音频",
-                "您听到的声音", "输出", "环路", "波形输出混合",
+                "立体声混音", "您听到的声音", "环路", "系统音频", "波形输出混合", "混合输出",
                 # Japanese
-                "ステレオ ミックス", "ステレオ", "ミックス", "混合", "システムオーディオ",
+                "ステレオ ミックス", "ステレオミックス", "ループバック", "システムオーディオ", "ミックス出力",
                 # Spanish
-                "mezcla estéreo", "estéreo", "mezcla", "salida", "audio del sistema",
+                "mezcla estéreo", "lo que escuchas", "bucle", "audio del sistema", "salida mixta",
                 # French
-                "mixage stéréo", "stéréo", "mixage", "sortie", "audio système",
+                "mixage stéréo", "bouclage", "audio système", "sortie mixte",
                 # German
-                "stereo mix", "stereo", "mischung", "ausgabe", "systemaudio"
+                "stereomix", "was du hörst", "loopback", "systemaudio", "gemischte ausgabe"
             ]
-            
-            stereo_mix_device = None
-            
+
             for i in range(p.get_device_count()):
                 device_info = p.get_device_info_by_index(i)
                 device_name = device_info.get('name', '').lower()
-                
-                # Only include devices that support input
+
+                # Include only devices that support input AND match Stereo Mix keywords
                 if device_info.get('maxInputChannels', 0) > 0:
-                    self.audio_devices.append(device_info.get('name', f"Device {i}"))
-                    
-                    # Check if this is a Stereo Mix
                     for mix_name in stereo_mix_names:
                         if mix_name in device_name:
-                            stereo_mix_device = device_info.get('name', f"Device {i}")
-                            break
-                    if stereo_mix_device:
-                        break
-            
+                            self.audio_devices.append(device_info.get('name', f"Device {i}"))
+                            break  # stop checking this device once matched
+
+                    # Additionally, include "virtual-audio-capturer" if found
+                    if "virtual-audio-capturer" in device_name:
+                        self.audio_devices.append(device_info.get('name', f"Device {i}"))
+
             p.terminate()
-            
+
+            # If no Stereo Mix–like devices found, ensure Virtual Audio Capturer is available
+            if not self.audio_devices:
+                print("[Warning] No Stereo Mix–like devices found, 'virtual-audio-capturer' added. Please make sure you have installed 'Screen Capture Recorder' for audio capture. Download it from: https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest")
+                self.audio_devices = ["virtual-audio-capturer"]
+
             # Update combobox if it exists
             if hasattr(self, 'audio_device_cb'):
                 self.audio_device_cb['values'] = self.audio_devices
-                
-                # Auto-select Stereo Mix if found, otherwise use first available device
-                if stereo_mix_device and stereo_mix_device in self.audio_devices:
-                    self.audio_device_var.set(stereo_mix_device)
-                elif self.audio_devices:
-                    self.audio_device_var.set(self.audio_devices[0])
-                else:
-                    self.audio_devices = ["No audio devices available"]
-                    self.audio_device_var.set("No audio devices available")
-                    
+
+            # Auto-select first valid option
+            if self.audio_devices:
+                self.audio_device_var.set(self.audio_devices[0])
+            else:
+                self.audio_devices = ["No Stereo Mix device found"]
+                self.audio_device_var.set("No Stereo Mix device found")
+
         except ImportError:
             self.audio_devices = ["PyAudio not available"]
             if hasattr(self, 'audio_device_var'):
@@ -774,6 +782,8 @@ class ConfigGUI(tk.Tk):
             self.audio_devices = [f"Error: {str(e)}"]
             if hasattr(self, 'audio_device_var'):
                 self.audio_device_var.set(f"Error: {str(e)}")
+
+    
     def update_recompile_trt_visibility(self, *args):
         """Show/hide TensorRT recompile option based on optimizer selection"""
         if self.use_tensorrt.get():
