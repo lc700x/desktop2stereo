@@ -1,8 +1,11 @@
-import yaml
+import yaml, threading
 import os, platform, socket
 
 # App Version
-VERSION = "2.3.4"
+VERSION = "2.3.5"
+
+# Global shutdown event
+shutdown_event = threading.Event()
 
 def read_yaml(path):
     try:
@@ -41,7 +44,7 @@ settings = read_yaml("settings.yaml")
 OS_NAME = platform.system()
 
 # Ignore wanning for MPS
-if  OS_NAME == "Darwin":
+if OS_NAME == "Darwin":
     import os, warnings
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
     warnings.filterwarnings(
@@ -56,12 +59,38 @@ if settings["HF Endpoint"]:
     os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 if OS_NAME == "Windows":
-    import ctypes
+    import ctypes, win32gui, win32con
     # get windows Hi-DPI scale
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except:
         ctypes.windll.user32.SetProcessDPIAware()
+
+    import glfw
+    from ctypes import wintypes
+    
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    def hide_window_from_capture(glfw_window):
+        """Set display affinity to exclude window from screen capture (Windows only)."""
+        WDA_EXCLUDEFROMCAPTURE = 0x00000011
+        hwnd = glfw.get_win32_window(glfw_window)
+        SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
+        SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+        SetWindowDisplayAffinity.restype = wintypes.BOOL
+
+        result = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+        if result:
+            print("StereoWindow is now hidden from screen capture.")
+        else:
+            print(f"Failed to set display affinity. Error code: {ctypes.get_last_error()}")
+
+    def set_window_to_bottom(glfw_window):
+        """
+        Finds a window by its title and sets its Z-order to the bottom.
+        """
+        hwnd = glfw.get_win32_window(glfw_window)
+        if hwnd:
+            win32gui.SetWindowPos(hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
 
 # Streamer Settings
 DEFAULT_PORT = 1122
@@ -71,6 +100,23 @@ LOCAL_IP = get_local_ip()
 
 # Get settings
 RUN_MODE = settings["Run Mode"]
+# Add for 3D monitor
+USE_3D_MONITOR = False
+STREAM_MODE = None
+# Determin the run mode and stream mode
+if RUN_MODE == "Local Viewer":
+    RUN_MODE = "Viewer"
+elif RUN_MODE == "3D Monitor" and OS_NAME == "Windows":
+    RUN_MODE = "Viewer"
+    USE_3D_MONITOR = True
+elif RUN_MODE == "MJPEG Streamer":
+    RUN_MODE = "Viewer"
+    STREAM_MODE = "MJPEG" 
+elif RUN_MODE == "RTMP Streamer":
+    RUN_MODE = "Viewer"
+    STREAM_MODE = "RTMP"
+else:
+    RUN_MODE = "Streamer"
 MODEL_ID = settings["Depth Model"]
 ALL_MODELS = settings["Model List"]
 CACHE_PATH = settings["Download Path"]
@@ -78,24 +124,30 @@ DEPTH_RESOLUTION = settings["Depth Resolution"]
 DEVICE_ID = settings["Device"]
 FP16 = settings["FP16"]
 MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
-SHOW_FPS, FPS, DEPTH_STRENTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
+SHOW_FPS, FPS, DEPTH_STRENGTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 IPD = settings["IPD"]
 CAPTURE_MODE = settings["Capture Mode"]
 WINDOW_TITLE = settings["Window Title"]
 
 # Image Processing Parameters
-# FOREGROUND_SCALE = settings["Foreground Scale"] # 0-10
-FOREGROUND_SCALE = 1
+FOREGROUND_SCALE = settings["Foreground Scale"] # 0-10
 AA_STRENTH = settings["Anti-aliasing"] # 0-10
  
 # Adjust anti-aliasing and dept dilution value for Mac
 if OS_NAME != "Darwin":
-    AA_STRENTH *= 40 # 0-100
+    AA_STRENTH *= 4 # 0-100
 else:
-    AA_STRENTH *= 4
+    AA_STRENTH *= 0.4
 
 # Experimental Settings
-DML_STREAM_STABLE = settings["Unlock Thread (Streamer)"] # Unlock thread for DirectML streamer
+DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer
 USE_TORCH_COMPILE = settings["torch.compile"] # compile model with torch.compile
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
+CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture
+FILL_16_9 = settings["Fill 16:9"]
+FIX_VIEWER_ASPECT = settings["Fix Viewer Aspect"]
+STEREOMIX_DEVICE = settings["Stereo Mix"] # RTMP StereoMix Device
+STREAM_KEY = settings["Stream Key"]
+AUDIO_DELAY = settings["Audio Delay"]
+CRF = settings["CRF"]

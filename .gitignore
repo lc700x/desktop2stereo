@@ -11,10 +11,8 @@ views
 *.zip
 models/models--*
 *.pdf
-profile.svg
+*.svg
 *test*
-hls
-cats.jpg
-cats.png
-dogs.jpg
+*.png
+*.jpg
 assets
