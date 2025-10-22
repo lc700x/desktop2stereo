@@ -622,7 +622,7 @@ class ConfigGUI(tk.Tk):
         # StereoMix Devices
         self.audio_device_var = tk.StringVar()
         self.label_audio_device = ttk.Label(self.content_frame, text="Stereo Mix:")
-        self.audio_device_cb = ttk.Combobox(self.content_frame, textvariable=self.audio_device_var, state="readonly")
+        self.audio_device_cb = ttk.Combobox(self.content_frame, textvariable=self.audio_device_var, state="normal")
         
         # CRF (only for RTMP Streamer)
         self.label_crf = ttk.Label(self.content_frame, text="CRF:")
