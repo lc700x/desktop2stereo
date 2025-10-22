@@ -147,7 +147,7 @@ DEFAULTS = {
     "Depth Strength": 2.0,
     "Depth Resolution": 336,
     "Anti-aliasing": 1,
-    "Foreground Scale": 2.0,
+    "Foreground Scale": 1.0,
     "IPD": 0.064,
     "Display Mode": "Half-SBS",
     "FP16": True,
@@ -326,8 +326,8 @@ class ConfigGUI(tk.Tk):
         super().__init__()
         self.pad = {"padx": 8, "pady": 6}
         self.title(f"Desktop2Stereo v{VERSION}")
-        self.minsize(800, 420)  # Increased height for new controls
-        self.resizable(True, False)
+        self.minsize(800, 600)  # Increased height for new controls
+        self.resizable(True, True)
         self.language = "EN"
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
         self.selected_window_name = ""
@@ -524,7 +524,7 @@ class ConfigGUI(tk.Tk):
         # Edge Dilation
         self.label_foreground_scale = ttk.Label(self.content_frame, text="Foreground Scale:")
         self.label_foreground_scale.grid(row=10, column=2, sticky="w", **self.pad)
-        self.foreground_scale_values = [f"{i/2.0:.1f}" for i in range(-10, 10)] # -5 (squeeze depth scale) to 5 (extend depth scale)
+        self.foreground_scale_values = [f"{i/2.0:.1f}" for i in range(-10, 11)] # -5 (squeeze depth scale) to 5 (extend depth scale)
         self.foreground_scale_cb = ttk.Combobox(self.content_frame, values=self.foreground_scale_values, state="normal")
         self.foreground_scale_cb.grid(row=10, column=3, sticky="ew", **self.pad)
 

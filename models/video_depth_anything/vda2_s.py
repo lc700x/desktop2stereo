@@ -24,6 +24,9 @@ from .dinov2 import DINOv2
 from .dpt_temporal import DPTHeadTemporal
 from .util.transform import Resize, NormalizeImage, PrepareForNet
 
+# check CUDA
+if torch.cuda.is_available():
+    CUDA = True
 
 # infer settings, do not change
 INFER_LEN = 32
@@ -108,7 +111,7 @@ class VideoDepthAnything(nn.Module):
     #         cur_input = torch.cat(cur_list, dim=1).to(device, dtype=dtype)
 
     #         with torch.no_grad():
-    #         # with torch.autocast(device_type=device, enabled=(not fp32)):
+    #         # with torch.amp.autocast('cuda'):
     #             cur_feature = self.forward_features(cur_input)
     #             x_shape = cur_input.shape
     #             depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
@@ -130,7 +133,7 @@ class VideoDepthAnything(nn.Module):
     #         cur_input = torch.from_numpy(self.transform({'image': frame.astype(np.float32) / 255.0})['image']).unsqueeze(0).unsqueeze(0).to(device, dtype=dtype)
 
     #         with torch.no_grad():
-    #         # with torch.autocast(device_type=device, enabled=(not fp32)):
+    #         # with torch.amp.autocast('cuda'):
     #             cur_feature = self.forward_features(cur_input)
     #             x_shape = cur_input.shape
 
@@ -144,7 +147,7 @@ class VideoDepthAnything(nn.Module):
 
     #         # infer depth
     #         with torch.no_grad():
-    #         # with torch.autocast(device_type=device, enabled=(not fp32)):
+    #         # with torch.amp.autocast('cuda'):
     #             depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
 
     #         # depth = depth.to(cur_input.dtype)
@@ -173,7 +176,7 @@ class VideoDepthAnything(nn.Module):
             # Insert newest at the end
             old[:, -new.shape[1]:] = new
     
-    def forward(self, pixel_values):
+    def forward(self, pixel_values, device='cuda', fp32=False):
         self.id += 1
         cur_input = pixel_values.unsqueeze(0)
 
@@ -181,11 +184,17 @@ class VideoDepthAnything(nn.Module):
             # Inference the first frame
             cur_list = [cur_input]
 
-            with torch.no_grad():
-            # with torch.autocast(device_type=device, enabled=(not fp32)):
-                cur_feature = self.forward_features(cur_input)
-                x_shape = cur_input.shape
-                self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
+            if not CUDA:
+                with torch.no_grad():
+                    cur_feature = self.forward_features(cur_input)
+                    x_shape = cur_input.shape
+                    self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
+            else:
+                with torch.amp.autocast('cuda'):
+                    with torch.no_grad():
+                        cur_feature = self.forward_features(cur_input)
+                        x_shape = cur_input.shape
+                        self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
         
             
             # Build pre-concatenated cache
@@ -197,10 +206,15 @@ class VideoDepthAnything(nn.Module):
             self.frame_id_list.extend([0] * (INFER_LEN  - 1))
             self.transform = True
         else:
-            with torch.no_grad():
-            # with torch.autocast(device_type=device, enabled=(not fp32)):
-                cur_feature = self.forward_features(cur_input)
-                x_shape = cur_input.shape
+            if not CUDA:
+                with torch.no_grad():
+                    cur_feature = self.forward_features(cur_input)
+                    x_shape = cur_input.shape
+            else:
+                with torch.amp.autocast('cuda'):
+                    with torch.no_grad():
+                        cur_feature = self.forward_features(cur_input)
+                        x_shape = cur_input.shape
             '''
             cur_id = self.frame_id_list[0:2] + self.frame_id_list[-INFER_LEN+3:]
             print(f"cur_id: {cur_id}")
@@ -208,9 +222,13 @@ class VideoDepthAnything(nn.Module):
             cur_cache = self.hidden_cache
 
             # infer depth
-            with torch.no_grad():
-            # with torch.autocast(device_type=device, enabled=(not fp32)):
-                self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
+            if not CUDA:
+                with torch.no_grad():
+                    self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
+            else:
+                with torch.amp.autocast('cuda'):
+                    with torch.no_grad():
+                        self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
 
             self.update_cache(new_cache)
             # Sliding window housekeeping

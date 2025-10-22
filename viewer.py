@@ -32,15 +32,16 @@ FRAGMENT_SHADER = """
     uniform sampler2D tex_depth;
     uniform float u_eye_offset;
     uniform float u_depth_strength;
+    uniform float u_convergence;  // defines the depth value with zero shift
 
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
         float depth = texture(tex_depth, flipped_uv).r;
 
-        // Invert depth so near=1 shifts more, far=0 shifts less
+        // Nonlinear depth emphasis (tunable curve)
         float depth_inv = 1.0 - depth;
-
-        vec2 offset_uv = flipped_uv - vec2(u_eye_offset * depth_inv * u_depth_strength, 0.0);
+        float shift = (depth_inv - u_convergence);
+        vec2 offset_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength, 0.0);
         offset_uv = clamp(offset_uv, 0.0, 1.0);
 
         frag_color = texture(tex_color, offset_uv);
@@ -103,6 +104,7 @@ class StereoWindow:
         self.current_font_size = self.base_font_size
         self.text_padding = 10
         self.text_spacing = 5
+        self.convergence = 0.5
 
         # Overlay cache & throttle
         self.overlay_update_interval = 0.25  # seconds, throttle overlay regeneration
@@ -128,6 +130,7 @@ class StereoWindow:
         if self.use_3d:
             glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
             glfw.window_hint(glfw.FLOATING, glfw.TRUE)    # Always on top
+            glfw.window_hint(glfw.DECORATED, glfw.FALSE) # remove window decoration
             # Get primary monitor resolution
             monitors = glfw.get_monitors()
             monitor = monitors[self.monitor_index]
@@ -164,6 +167,7 @@ class StereoWindow:
             vertex_shader=VERTEX_SHADER,
             fragment_shader=FRAGMENT_SHADER
         )
+        self.prog['u_convergence'].value = self.convergence  # e.g. self.convergence = 0.5
         self.quad_vao = self._create_quad_vao()
         
         # Initialize textures as None
