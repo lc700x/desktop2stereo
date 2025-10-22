@@ -25,8 +25,8 @@ from .dpt_temporal import DPTHeadTemporal
 from .util.transform import Resize, NormalizeImage, PrepareForNet
 
 # check CUDA
-if torch.cuda.is_available():
-    CUDA = True
+CUDA = True if torch.cuda.is_available() else False
+
 
 # infer settings, do not change
 INFER_LEN = 32

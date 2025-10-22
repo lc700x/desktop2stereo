@@ -644,15 +644,12 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     scale = DEPTH_RESOLUTION / min(h, w)
     target_h, target_w = int(h * scale), int(w * scale)
     # Ensure dimensions are divisible by 14 (ViT patch size)
-    if "anything" in MODEL_ID:
+    if "anything" in MODEL_ID.lower():
         target_h = (target_h // 14) * 14
         target_w = (target_w // 14) * 14
     # fix for Video-Depth-Anything
     if 'Video-Depth-Anything' in MODEL_ID:
-        calc_w = max(target_w,target_h)
-        target_size = (calc_w, calc_w)
-    else:
-        target_size = (target_w, target_h)
+        target_h, target_w = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
     
     if return_tuple:
         # Convert to tensor and prepare rgb_c
@@ -660,11 +657,11 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         rgb_c = tensor.permute(2, 0, 1).contiguous()  # [C,H,W]
         tensor = rgb_c.unsqueeze(0) / 255.0
         # Resize using bilinear interpolation
-        tensor = F.interpolate(tensor, size=target_size, mode='bilinear', align_corners=False)
+        tensor = F.interpolate(tensor, size=(target_h, target_w), mode='bilinear', align_corners=False)
     else:
         # Resize on CPU with bilinear interpolation
-        if (h, w) != target_size:
-            input_rgb = cv2.resize(image_rgb, target_size, interpolation=cv2.INTER_CUBIC)
+        if (h, w) != (target_h, target_w):
+            input_rgb = cv2.resize(image_rgb, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
         else:
             input_rgb = image_rgb
         # Convert to tensor
