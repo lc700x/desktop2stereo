@@ -103,7 +103,7 @@ class DPTHeadTemporal(DPTHead):
                 out, (int(patch_h * 14), int(patch_w * 14)), mode="bilinear", align_corners=True
             )
             ori_type = out.dtype
-            with torch.autocast(device_type="cuda", enabled=False):
+            with torch.autocast(device_type="cuda"):
                 out = self.scratch.output_conv2(out)
 
             output = out.to(ori_type) 
@@ -117,7 +117,7 @@ class DPTHeadTemporal(DPTHead):
                     out, (int(patch_h * 14), int(patch_w * 14)), mode="bilinear", align_corners=True
                 )
                 ori_type = out.dtype
-                with torch.autocast(device_type="cuda", enabled=False):
+                with torch.autocast(device_type="cuda"):
                     out = self.scratch.output_conv2(out)
                 ret.append(out.to(ori_type))
             output = torch.cat(ret, dim=0)

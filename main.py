@@ -51,41 +51,39 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
 
     # Virtual key codes
     VK_LWIN = 0x5B  # Left Windows key
-    VK_D = 0x44     # 'D' key
-    KEYEVENTF_KEYUP = 0x0002  # Key release flag
+    VK_TAB = 0x09   # Tab key
+    KEYEVENTF_KEYUP = 0x0002
 
-    def simulate_win_d():
+    def simulate_win_tab():
         """
-        Simulate pressing Win+D to show desktop, then again to restore windows.
+        Simulate pressing Win+Tab to open Task View, then again to close it.
         Returns True if successful, False otherwise.
         """
         try:
-            # First Win+D: Show desktop
+            # First Win+Tab: Open Task View
             user32.keybd_event(VK_LWIN, 0, 0, 0)
-            user32.keybd_event(VK_D, 0, 0, 0)
+            user32.keybd_event(VK_TAB, 0, 0, 0)
             time.sleep(0.01)  # Small delay for key press
-            user32.keybd_event(VK_D, 0, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)
             user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
-            # print("[simulate_win_d] Simulated first Win+D (show desktop)")
-
-            # Second Win+D: Restore windows
+            time.sleep(0.5)  # Delay to allow Task View to open
+            # Second Win+Tab: Close Task View
             user32.keybd_event(VK_LWIN, 0, 0, 0)
-            user32.keybd_event(VK_D, 0, 0, 0)
+            user32.keybd_event(VK_TAB, 0, 0, 0)
             time.sleep(0.01)  # Small delay for key press
-            user32.keybd_event(VK_D, 0, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)
             user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
-            # print("[simulate_win_d] Simulated second Win+D (restore windows)")
             return True
         except Exception as e:
-            print(f"[simulate_win_d] Failed to simulate Win+D: {e}")
+            print(f"[simulate_win_tab] Failed to simulate Win+Tab: {e}")
             return False
 
-    # Waits for capture_started_event to be set, then simulates Win+D twice
+    # Waits for capture_started_event to be set, then simulates Win+Tab twice
     capture_started_event = threading.Event()
 
     def _keyboard():
         """
-        Wait for capture_started_event, then simulate Win+D to show desktop and restore windows.
+        Wait for capture_started_event, then simulate Win+Tab to show desktop and restore windows.
         Exits if shutdown_event is set.
         """
         while not shutdown_event.is_set():
@@ -96,14 +94,14 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
                 continue
 
             try:
-                # print("[keyboard] Simulating Win+D to show desktop and restore windows...")
-                success = simulate_win_d()
+                # print("[keyboard] Simulating Win+Tab to show desktop and restore windows...")
+                success = simulate_win_tab()
 
                 if CAPTURE_CURSOR_DELAY_S:
                     time.sleep(CAPTURE_CURSOR_DELAY_S)
                 
                 # if not success:
-                    # print("[keyboard] Win+D simulation reported failure.")
+                    # print("[keyboard] Win+Tab simulation reported failure.")
             except Exception as e:
                 print(f"[keyboard] Exception during action: {e}")
             finally:
@@ -112,8 +110,8 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
         # print("[keyboard] Exiting cursor worker thread.")
 
     # Start worker thread (daemon so it won't block shutdown)
-    cursor_thread = threading.Thread(target=_keyboard, name="CursorWorker", daemon=True)
-    cursor_thread.start()
+    win_tab_thread = threading.Thread(target=_keyboard, name="CursorWorker", daemon=True)
+    win_tab_thread.start()
 
     # Initialize capture object and capture loop
     cap = (
@@ -273,7 +271,7 @@ def rtmp_stream():
             '-g', f'{FPS}',
             '-force_key_frames', f'expr:gte(t,n_forced*1)',  # Force keyframes every second
             '-r', f'{FPS}',  # Force constant output framerate
-            '-crf', f'{CRF}', # 
+            '-crf', f'{CRF}', # 18-24 smaller better quality
             '-c:a', 'aac',
             '-ar', '44100',
             '-b:a', '64k',
