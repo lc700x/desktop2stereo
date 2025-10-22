@@ -394,7 +394,7 @@ Model List:
 Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 1
-Foreground Scale: 2.0
+Foreground Scale: 1.0
 Depth Resolution: 336
 FP16: true
 Download Path: models

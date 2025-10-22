@@ -331,10 +331,10 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         # Set dynamic shapes profile
         profile = builder.create_optimization_profile()
         input_name = network.get_input(0).name
-        # input_shape = network.get_input(0).shape
-        min_shape = (1, 3, DEPTH_RESOLUTION//2, DEPTH_RESOLUTION//2)
-        opt_shape = (1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION)
-        max_shape = (1, 3, DEPTH_RESOLUTION*2, DEPTH_RESOLUTION*2)
+        # Updated shape ranges to better match typical input sizes
+        min_shape = (1, 3, 224, 224)  # 224 = 14 * 16
+        opt_shape = (1, 3, (DEPTH_RESOLUTION//14)*14, (DEPTH_RESOLUTION//14)*14)
+        max_shape = (1, 3, 3920, 3920)  # 896 = 14 * 64
         
         profile.set_shape(input_name, min_shape, opt_shape, max_shape)
         config.add_optimization_profile(profile)
@@ -637,20 +637,35 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     """
     Returns depth in [0,1], 1=near, 0=far. Optionally returns (depth, rgb_c).
     """
+    # Get input dimensions
     h, w = image_rgb.shape[:2]
+    
+    # Compute target size: shortest edge to DEPTH_RESOLUTION, preserve aspect ratio
+    scale = DEPTH_RESOLUTION / min(h, w)
+    target_h, target_w = int(h * scale), int(w * scale)
+    # Ensure dimensions are divisible by 14 (ViT patch size)
+    if "anything" in MODEL_ID.lower():
+        target_h = (target_h // 14) * 14
+        target_w = (target_w // 14) * 14
+    # fix for Video-Depth-Anything
+    if 'Video-Depth-Anything' in MODEL_ID:
+        target_h, target_w = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
+    
     if return_tuple:
+        # Convert to tensor and prepare rgb_c
         tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=MODEL_DTYPE, non_blocking=True)
-        rgb_c = tensor.permute(2,0,1).contiguous()  # [C,H,W]
+        rgb_c = tensor.permute(2, 0, 1).contiguous()  # [C,H,W]
         tensor = rgb_c.unsqueeze(0) / 255.0
-        tensor = F.interpolate(tensor, (DEPTH_RESOLUTION, DEPTH_RESOLUTION), mode='bilinear', align_corners=True)
+        # Resize using bilinear interpolation
+        tensor = F.interpolate(tensor, size=(target_h, target_w), mode='bilinear', align_corners=False)
     else:
-        # Resize input on CPU to model resolution for efficiency
-        target_size = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
-        if (h, w) != target_size:
-            interpolation = cv2.INTER_AREA if max(h, w) > DEPTH_RESOLUTION else cv2.INTER_LINEAR
-            input_rgb = cv2.resize(image_rgb, target_size, interpolation=interpolation)
-        
-        tensor = torch.from_numpy(input_rgb).permute(2,0,1).contiguous().unsqueeze(0).to(DEVICE, dtype=DTYPE) / 255.0
+        # Resize on CPU with bilinear interpolation
+        if (h, w) != (target_h, target_w):
+            input_rgb = cv2.resize(image_rgb, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+        else:
+            input_rgb = image_rgb
+        # Convert to tensor
+        tensor = torch.from_numpy(input_rgb).permute(2, 0, 1).contiguous().unsqueeze(0).to(DEVICE, dtype=DTYPE) / 255.0
     
     tensor = ((tensor - MEAN) / STD).contiguous()
     tensor = tensor.to(dtype=MODEL_DTYPE)
@@ -674,8 +689,8 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         depth = 1.0 - depth
         
     # post processing
-    depth = apply_sigmoid(depth, k=4, midpoint=0.618)
-    depth = apply_piecewise(depth, split=0.618, near_gamma=1.2, far_gamma=0.6)
+    # depth = apply_sigmoid(depth, k=1, midpoint=0.618)
+    depth = apply_piecewise(depth, split=0.5, near_gamma=1.2, far_gamma=0.6)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
     depth = normalize_tensor(depth)
     # Mild AA to reduce jaggies
