@@ -223,7 +223,7 @@ def cleanup_all_resources():
     for q in queues:
         while not q.empty():
             try:
-                q.get_nowait()
+                q.get(timeout=TIME_SLEEP)
             except:
                 pass
     
@@ -375,7 +375,7 @@ def main(mode="Viewer"):
             while (not glfw.window_should_close(window.window) and 
                    not shutdown_event.is_set()):
                 try:
-                    rgb, depth = depth_q.get_nowait()
+                    rgb, depth = depth_q.get(timeout=TIME_SLEEP)
                     window.update_frame(rgb, depth)
                     if STREAM_MODE == "MJPEG":
                         frame = window.capture_glfw_image()
