@@ -122,7 +122,7 @@ ALL_MODELS = settings["Model List"]
 CACHE_PATH = settings["Download Path"]
 DEPTH_RESOLUTION = settings["Depth Resolution"]
 DEVICE_ID = settings["Device"]
-FP16 = settings["FP16"]
+FP16 = False if OS_NAME == "Darwin" else settings["FP16"]
 MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
 SHOW_FPS, FPS, DEPTH_STRENGTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 IPD = settings["IPD"]
@@ -134,10 +134,7 @@ FOREGROUND_SCALE = settings["Foreground Scale"] # 0-10
 AA_STRENTH = settings["Anti-aliasing"] # 0-10
  
 # Adjust anti-aliasing and dept dilution value for Mac
-if OS_NAME != "Darwin":
-    AA_STRENTH *= 4 # 0-100
-else:
-    AA_STRENTH *= 0.4
+AA_STRENTH *= 4 # 0-100
 
 # Experimental Settings
 DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer

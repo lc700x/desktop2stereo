@@ -326,7 +326,7 @@ class ConfigGUI(tk.Tk):
         super().__init__()
         self.pad = {"padx": 8, "pady": 6}
         self.title(f"Desktop2Stereo v{VERSION}")
-        self.minsize(800, 600)  # Increased height for new controls
+        self.minsize(800, 480)  # Increased height for new controls
         self.resizable(True, True)
         self.language = "EN"
         self.loaded_model_list = DEFAULT_MODEL_LIST.copy()
@@ -462,11 +462,18 @@ class ConfigGUI(tk.Tk):
         # FP16 and Show FPS
         self.fp16_var = tk.BooleanVar()
         self.fp16_cb = ttk.Checkbutton(self.content_frame, text="FP16", variable=self.fp16_var)
-        self.fp16_cb.grid(row=6, column=2, sticky="w", **self.pad)
+        # Hide FP16 for Mac OS (Darwin)
+        if OS_NAME != "Darwin":
+            self.fp16_cb.grid(row=6, column=2, sticky="w", **self.pad)
+        else:
+            self.fp16_cb.grid_remove()
         
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
-        self.showfps_cb.grid(row=6, column=3, sticky="w", **self.pad)
+        if OS_NAME != "Windows":
+            self.showfps_cb.grid(row=7, column=3, sticky="w", **self.pad)
+        else:
+            self.showfps_cb.grid(row=6, column=3, sticky="w", **self.pad)
         
         # Capture Tool
         
@@ -481,10 +488,14 @@ class ConfigGUI(tk.Tk):
             
         # FPS
         self.label_fps = ttk.Label(self.content_frame, text="FPS:")
-        self.label_fps.grid(row=7, column=2, sticky="w", **self.pad)
         self.fps_values = ["30", "60", "75", "90", "120"]
         self.fps_cb = ttk.Combobox(self.content_frame, values=self.fps_values, state="normal")
-        self.fps_cb.grid(row=7, column=3, sticky="ew", **self.pad)
+        if OS_NAME != "Windows":
+            self.label_fps.grid(row=7, column=0, sticky="w", **self.pad)
+            self.fps_cb.grid(row=7, column=1, sticky="ew", **self.pad)
+        else:
+            self.label_fps.grid(row=7, column=2, sticky="w", **self.pad)
+            self.fps_cb.grid(row=7, column=3, sticky="ew", **self.pad)
         
         # Output Resolution
         self.label_res = ttk.Label(self.content_frame, text="Output Resolution:")

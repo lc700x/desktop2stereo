@@ -682,7 +682,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
                 depth = model_wraper(tensor)
     
     # Robust normalize and Post depth processing
-    depth = apply_stretch(depth, 5, 95)
+    depth = apply_stretch(depth, 2, 98)
     
     # invert for metric models
     if 'Metric' in MODEL_ID:
@@ -701,7 +701,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         depth = depth_stabilizer(depth)
         
      # Interpolate output to original size
-    depth = F.interpolate(depth.unsqueeze(0).unsqueeze(0), size=(h, w), mode='bilinear', align_corners=True)
+    depth = F.interpolate(depth.unsqueeze(0).unsqueeze(0), size=(h, w), mode='bilinear', align_corners=False)
     depth = depth.squeeze(0)
     if return_tuple:
         return depth, rgb_c
@@ -795,9 +795,9 @@ def make_sbs_core(rgb: torch.Tensor,
         grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
 
         left = F.grid_sample(img, grid_left, mode="bilinear",
-                                     padding_mode="border", align_corners=True)[0]
+                                     padding_mode="border", align_corners=False)[0]
         right = F.grid_sample(img, grid_right, mode="bilinear",
-                                      padding_mode="border", align_corners=True)[0]
+                                      padding_mode="border", align_corners=False)[0]
 
     # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
     else:
