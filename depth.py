@@ -376,7 +376,7 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
         input_names=input_names,
         output_names=output_names,
         dynamic_axes=dynamic_axes,
-        opset_version=17,
+        opset_version=16,
         do_constant_folding=True,
         export_params=True,
         verbose=False
