@@ -279,7 +279,17 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
         ]
         
     elif os == "Darwin":
-        scale_factor = cap.get_scale()
+        
+        from AppKit import NSScreen
+        from capture import get_window_client_bounds_mac
+
+        def get_scale(monitor_index):
+            """Get the Retina scale factor for a specific monitor"""
+            screens = NSScreen.screens()
+            if monitor_index < len(screens):
+                return screens[monitor_index].backingScaleFactor()
+            return 2.0  # Default to 2x for Retina displays
+        
         def get_monitor_index_for_glfw(window):
             window_x, window_y = glfw.get_window_pos(window)
             monitors = glfw.get_monitors()
@@ -315,12 +325,19 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
             return None
         
         monitor_index = get_monitor_index_for_glfw(window)
+        monitors = glfw.get_monitors()
+        monitor = monitors[monitor_index]
+        scale_factor = get_scale(monitor_index)
         screen_name = f"Capture screen {monitor_index}"
         screen_index = get_device_index(screen_name, "video")
-        audio_index = get_device_index("BlackHole 2ch", "audio")
+        audio_index = get_device_index(STEREOMIX_DEVICE, "audio")
         width, height = glfw.get_window_size(window)
-        x, y = glfw.get_window_pos(window)
+        win_x, win_y = glfw.get_window_pos(window)
+        mon_x, mon_y = glfw.get_monitor_pos(monitor)
+        x = win_x - mon_x
+        y = win_y - mon_y
         width, height, x, y = width * scale_factor, height*scale_factor, x * scale_factor, y * scale_factor
+        # print(width, height, x, y)
         server_cmd = ['./rtmp/mac/mediamtx', './rtmp/mac/mediamtx.yml']
         ffmpeg_cmd = [
             "./rtmp/mac/ffmpeg",
@@ -367,7 +384,7 @@ def rtmp_stream(window):
         print(f"[RTMPStreamer] [RTMP] serving on rtmp://{LOCAL_IP}:1935/{STREAM_KEY}/")
         print(f"[RTSPStreamer] [RTSP] serving on rtsp://{LOCAL_IP}:8554/{STREAM_KEY}/")
         print(f"[RTMPStreamer] [HLS] serving on http://{LOCAL_IP}:8888/{STREAM_KEY}/")
-        print(f"[RTMPStreamer] [HLS] for VLC serving on http://{LOCAL_IP}:8888/{STREAM_KEY}/index.m3u8")
+        print(f"[RTMPStreamer] [HLS M3U8] serving on http://{LOCAL_IP}:8888/{STREAM_KEY}/index.m3u8")
         print(f"[RTMPStreamer] [WebRTC] serving on http://{LOCAL_IP}:8889/{STREAM_KEY}/")
         print("[RTMP] RTMP stream started")
         

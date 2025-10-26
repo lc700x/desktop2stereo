@@ -4,7 +4,7 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, crop_icon, get_local_ip, shutdown_event
+from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, crop_icon, get_local_ip, shutdown_event
 
 # Get model lists
 DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
@@ -344,7 +344,7 @@ class ConfigGUI(tk.Tk):
             print(f"Warning: Could not load icon.ico - {e}")
 
         # internal run mode key: 'Viewer' or 'Legacy Streamer' or '3D Monitor'
-        self.run_mode_key = DEFAULTS.get("Run Mode", "Local Viewer")
+        self.run_mode_key = self.cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer"))
         
         # internal capture mode key: 'Monitor' or 'Window'
         self.capture_mode_key = DEFAULTS.get("Capture Mode", "Monitor")
@@ -691,25 +691,10 @@ class ConfigGUI(tk.Tk):
         if not hasattr(self, 'audio_devices') or not self.audio_devices:
             return
 
-        stereo_mix_names = [
-            # English
-            "stereo mix", "what you hear", "loopback", "system audio", "wave out mix", "mixed output",
-            # Chinese
-            "立体声混音", "您听到的声音", "环路", "系统音频", "波形输出混合", "混合输出",
-            # Japanese
-            "ステレオ ミックス", "ステレオミックス", "ループバック", "システムオーディオ", "ミックス出力",
-            # Spanish
-            "mezcla estéreo", "lo que escuchas", "bucle", "audio del sistema", "salida mixta",
-            # French
-            "mixage stéréo", "bouclage", "audio système", "sortie mixte",
-            # German
-            "stereomix", "was du hörst", "loopback", "systemaudio", "gemischte ausgabe"
-        ]
-
         # Try to auto-select the first matching stereo mix–like device
         for device in self.audio_devices:
             device_lower = device.lower()
-            for mix_name in stereo_mix_names:
+            for mix_name in STEREO_MIX_NAMES:
                 if mix_name in device_lower:
                     self.audio_device_var.set(device)
                     return
@@ -723,41 +708,24 @@ class ConfigGUI(tk.Tk):
         # Otherwise, show message
         self.audio_device_var.set("No Stereo Mix device found")
 
-
     def populate_audio_devices(self):
         """Populate list with only Stereo Mix / Loopback / System Audio–type devices, or Virtual Audio Capturer"""
-        if OS_NAME != "Windows":
-            self.audio_devices = ["Audio capture not supported on this platform"]
-            self.audio_device_var.set("Audio capture not supported on this platform")
-            return
-
         try:
             import pyaudio
             p = pyaudio.PyAudio()
             devices_found = set()  # use set to avoid duplicates
 
-            stereo_mix_names = [
-                # English
-                "stereo mix", "what you hear", "loopback", "system audio", "wave out mix", "mixed output",
-                # Chinese
-                "立体声混音", "您听到的声音", "环路", "系统音频", "波形输出混合", "混合输出",
-                # Japanese
-                "ステレオ ミックス", "ステレオミックス", "ループバック", "システムオーディオ", "ミックス出力",
-                # Spanish
-                "mezcla estéreo", "lo que escuchas", "bucle", "audio del sistema", "salida mixta",
-                # French
-                "mixage stéréo", "bouclage", "audio système", "sortie mixte",
-                # German
-                "stereomix", "was du hörst", "loopback", "systemaudio", "gemischte ausgabe"
-            ]
-
             for i in range(p.get_device_count()):
                 device_info = p.get_device_info_by_index(i)
                 device_name = device_info.get('name', '').lower()
+                max_input_channels = device_info.get('maxInputChannels', 0)
 
-                # Include only devices that support input AND match Stereo Mix keywords
-                if device_info.get('maxInputChannels', 0) > 0:
-                    for mix_name in stereo_mix_names:
+                # macOS specific: also check for output devices that can be used as input
+                max_output_channels = device_info.get('maxOutputChannels', 0)
+                
+                # Include devices that support input OR are macOS loopback devices
+                if max_input_channels > 0 or (OS_NAME == "Darwin" and max_output_channels > 0):
+                    for mix_name in STEREO_MIX_NAMES:
                         if mix_name in device_name:
                             devices_found.add(device_info.get('name', f"Device {i}"))
                             break
@@ -771,10 +739,21 @@ class ConfigGUI(tk.Tk):
             # Convert to list
             self.audio_devices = list(devices_found)
 
-            # If no Stereo Mix–like devices found, ensure Virtual Audio Capturer is available
-            if not self.audio_devices:
+            # macOS specific: if no devices found, suggest popular macOS audio tools
+            if OS_NAME == "Darwin" and not self.audio_devices:
                 print(
-                    "[Warning] No Stereo Mix–like devices found, 'virtual-audio-capturer' added.\n"
+                    "[Info] No audio capture devices found on MacOS.\n"
+                    "Recommended tools for audio capture:\n"
+                    "- BlackHole: https://github.com/ExistentialAudio/BlackHole\n"
+                    "- Virtual Desktop Streamer: https://www.vrdesktop.net/\n"
+                    "- Loopback: https://rogueamoeba.com/loopback/ (Commercial)"
+                )
+                self.audio_devices = ["No audio capture devices found"]
+
+            # Windows specific: if no Stereo Mix devices found
+            elif OS_NAME == "Windows" and not self.audio_devices:
+                print(
+                    "[Warning] No Stereo Mix devices found, 'virtual-audio-capturer' added.\n"
                     "Please install 'Screen Capture Recorder' for audio capture:\n"
                     "https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest"
                 )
@@ -785,18 +764,22 @@ class ConfigGUI(tk.Tk):
                 self.audio_device_cb['values'] = self.audio_devices
 
             # Auto-select first valid option
-            if self.audio_devices:
+            if self.audio_devices and self.audio_devices[0] != "No audio capture devices found - install BlackHole or Soundflower":
                 self.audio_device_var.set(self.audio_devices[0])
             else:
                 self.audio_devices = ["No Stereo Mix device found"]
                 self.audio_device_var.set("No Stereo Mix device found")
 
         except ImportError:
-            self.audio_devices = ["PyAudio not available"]
+            if OS_NAME == "Darwin":
+                self.audio_devices = ["PyAudio not available - Install via: pip install pyaudio"]
+            else:
+                self.audio_devices = ["PyAudio not available"]
             if hasattr(self, 'audio_device_var'):
-                self.audio_device_var.set("PyAudio not available")
+                self.audio_device_var.set(self.audio_devices[0])
         except Exception as e:
-            print(f"Error getting audio devices: {e}")
+            error_msg = f"Error getting audio devices: {e}"
+            print(error_msg)
             self.audio_devices = [f"Error: {str(e)}"]
             if hasattr(self, 'audio_device_var'):
                 self.audio_device_var.set(f"Error: {str(e)}")
@@ -1064,6 +1047,9 @@ class ConfigGUI(tk.Tk):
             elif self.run_mode_key == "3D Monitor":
                 self.run_mode_var_label.set(localized_run_vals[4])
                 self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
+        elif OS_NAME == "Darwin":
+            if self.run_mode_key == "RTMP Streamer":
+                self.run_mode_var_label.set(localized_run_vals[3])
             
         self.fill_16_9_cb.config(text=texts.get("Fill 16:9", "Fill 16:9"))
             

@@ -149,6 +149,9 @@ class StereoWindow:
         if self.use_3d and OS_NAME == "Windows":
             hide_window_from_capture(self.window)
         
+        if self.stream_mode == "RTMP" and OS_NAME != "Windows":
+            self.move_to_adjacent_monitor(direction=1)
+        
         if not self.window:
             glfw.terminate()
             raise RuntimeError("Could not create window")
@@ -241,7 +244,7 @@ class StereoWindow:
         self.current_font_size = int(self.base_font_size * scale_factor * 0.8)  # Slightly smaller than linear scale
         
         try:
-            self.font = ImageFont.truetype("arial.ttf", self.current_font_size)
+            self.font = ImageFont.truetype("Verdana.ttf", self.current_font_size)
         except Exception:
             try:
                 # Try default font (Pillow default)
