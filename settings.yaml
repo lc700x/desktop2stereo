@@ -1,9 +1,9 @@
 Capture Mode: Monitor
 Monitor Index: 1
 Window Title: ''
-FPS: 60
-Show FPS: true
-Output Resolution: 1080
+FPS: 30
+Show FPS: false
+Output Resolution: 720
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
@@ -395,13 +395,13 @@ Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 1
 Foreground Scale: 1.0
-Depth Resolution: 336
+Depth Resolution: 196
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Device: 0
 Language: CN
-Run Mode: Local Viewer
+Run Mode: RTMP Streamer
 Streamer Port: 1122
 Stream Quality: 100
 torch.compile: false
@@ -412,6 +412,6 @@ Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stream Key: live
-Stereo Mix: 立体声混音 (Realtek(R) Audio)
+Stereo Mix: Audio capture not supported on this platform
 CRF: 20
 Audio Delay: -0.15

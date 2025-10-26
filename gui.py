@@ -915,10 +915,10 @@ class ConfigGUI(tk.Tk):
         stream_key = self.rtmp_stream_key_var.get()
         if stream_key:
             # Construct RTMP URL with the stream key
-            self.streamer_host_var.set(f"http://{get_local_ip()}:8888/{stream_key}")
+            self.streamer_host_var.set(f"http://{get_local_ip()}:8889/{stream_key}")
         else:
             # Default RTMP URL if no stream key is provided
-            self.streamer_host_var.set(f"http://{get_local_ip()}:8888/1122")
+            self.streamer_host_var.set(f"http://{get_local_ip()}:8889/live")
     
     def update_host_url(self, *args):
         """Update the host URL when port changes and validate the port number"""
@@ -1043,6 +1043,8 @@ class ConfigGUI(tk.Tk):
             localized_run_vals.append(texts.get("RTMP Streamer", "RTMP Streamer"))
             localized_run_vals.append(texts.get("3D Monitor", "3D Monitor"))
             self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
+        elif OS_NAME == "Darwin":
+            localized_run_vals.append(texts.get("RTMP Streamer", "RTMP Streamer"))
         self.run_mode_cb["values"] = localized_run_vals
         # Add Inference Optimizer text update
         self.label_inference_optimizer.config(text=texts.get("Inference Optimizer:", "Inference Optimizer:"))
@@ -1190,7 +1192,7 @@ class ConfigGUI(tk.Tk):
 
     def show_rtmp_controls(self):
         """Show controls for RTMP Streamer"""
-        self.streamer_host_var.set(f"http://{get_local_ip()}:8888/{self.rtmp_stream_key_var.get()}")
+        self.streamer_host_var.set(f"http://{get_local_ip()}:8889/{self.rtmp_stream_key_var.get()}")
         
         # Grid the common streamer controls
         self.label_streamer_host.grid(row=1, column=0, sticky="w", **self.pad)
