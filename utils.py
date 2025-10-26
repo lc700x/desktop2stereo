@@ -2,7 +2,7 @@ import yaml, threading
 import os, platform, socket
 
 # App Version
-VERSION = "2.3.5"
+VERSION = "2.3.6"
 
 # Define StereoMix devices
 STEREO_MIX_NAMES = [

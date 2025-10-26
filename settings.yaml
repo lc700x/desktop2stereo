@@ -2,7 +2,7 @@ Capture Mode: Monitor
 Monitor Index: 1
 Window Title: ''
 FPS: 60
-Show FPS: false
+Show FPS: true
 Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
@@ -401,8 +401,8 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
 Language: CN
-Run Mode: RTMP Streamer
-Stream Protocol: WebRTC
+Run Mode: Local Viewer
+Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
 torch.compile: false
@@ -413,6 +413,6 @@ Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stream Key: live
-Stereo Mix: BlackHole 2ch
+Stereo Mix: 立体声混音 (Realtek(R) Audio)
 CRF: 20
 Audio Delay: -0.15

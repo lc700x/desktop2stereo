@@ -267,13 +267,13 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
             '-force_key_frames', f'expr:gte(t,n_forced*1)',  # Force keyframes every second
             '-r', f'{FPS}',  # Force constant output framerate
             '-crf', f'{CRF}', # 18-24 smaller better quality
-            '-c:a', 'aac',
-            '-ar', '44100',
-            '-b:a', '128k',
+            '-c:a', 'libopus',
+            # '-ar', '44100',
+            # '-b:a', '128k',
             '-muxdelay', '0',
             '-muxpreload', '0',
             '-flush_packets', '1',
-            '-rtmp_buffer', '0',
+            # '-rtmp_buffer', '0',
             '-f', 'flv',
             f'rtmp://localhost:1935/{STREAM_KEY}'
         ]

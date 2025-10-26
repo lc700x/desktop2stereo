@@ -161,7 +161,7 @@ DEFAULTS = {
     "Computing Device": 0,
     "Language": "EN",
     "Run Mode": "Local Viewer",
-    "Stream Protocol": "WebRTC",  # New default
+    "Stream Protocol": "HLS",
     "Legacy Streamer Host": None,
     "Streamer Port": DEFAULT_PORT,
     "Stream Quality": 100,

@@ -100,6 +100,7 @@ class StereoWindow:
         
         # Font and text sizing
         self.font = None
+        self.font_type = "Verdana.ttf" if OS_NAME == "Darwin" else "verdana.ttf"
         self.base_font_size = 60  # Base size for 1280x720 window
         self.current_font_size = self.base_font_size
         self.text_padding = 10
@@ -149,7 +150,7 @@ class StereoWindow:
         if self.use_3d and OS_NAME == "Windows":
             hide_window_from_capture(self.window)
         
-        if self.stream_mode == "RTMP" and OS_NAME != "Windows":
+        if self.stream_mode == "RTMP":
             self.move_to_adjacent_monitor(direction=1)
         
         if not self.window:
@@ -244,7 +245,7 @@ class StereoWindow:
         self.current_font_size = int(self.base_font_size * scale_factor * 0.8)  # Slightly smaller than linear scale
         
         try:
-            self.font = ImageFont.truetype("Verdana.ttf", self.current_font_size)
+            self.font = ImageFont.truetype(self.font_type, self.current_font_size)
         except Exception:
             try:
                 # Try default font (Pillow default)
