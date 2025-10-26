@@ -98,7 +98,7 @@ def get_devices():
         import torch_directml
         if torch_directml.is_available():
             for i in range(torch_directml.device_count()):
-                devices[count] = {"name": f"DirectML{i}: {torch_directml.device_name(i)}", "device": torch_directml.device(i)}
+                devices[count] = {"name": f"DirectML{i}: {torch_directml.device_name(i)}", "Computing Device": torch_directml.device(i)}
                 count += 1
     except ImportError:
         pass
@@ -110,12 +110,12 @@ def get_devices():
                 name = torch.cuda.get_device_name(i)
                 if "AMD" in name:
                     is_rocm = True
-                devices[count] = {"name": f"CUDA {i}: {name}", "device": torch.device(f"cuda:{i}")}
+                devices[count] = {"name": f"CUDA {i}: {name}", "Computing Device": torch.device(f"cuda:{i}")}
                 count += 1
         if torch.backends.mps.is_available():
-            devices[count]= {"name": "MPS: Apple Silicon", "device": torch.device("mps")}
+            devices[count]= {"name": "MPS: Apple Silicon", "Computing Device": torch.device("mps")}
             count += 1
-        devices[count] = {"name": "CPU", "device": torch.device("cpu")}
+        devices[count] = {"name": "CPU", "Computing Device": torch.device("cpu")}
     except ImportError:
         raise ImportError("PyTorch Not Found! Make sure you have deployed the Python environment in '.env'.")
 
@@ -158,9 +158,10 @@ DEFAULTS = {
     "Recompile TensorRT": False,
     "Download Path": "models",
     "HF Endpoint": "https://hf-mirror.com",
-    "Device": 0,
+    "Computing Device": 0,
     "Language": "EN",
     "Run Mode": "Local Viewer",
+    "Stream Protocol": "WebRTC",  # New default
     "Legacy Streamer Host": None,
     "Streamer Port": DEFAULT_PORT,
     "Stream Quality": 100,
@@ -219,6 +220,7 @@ UI_TEXTS = {
         "Legacy Streamer": "Legacy Streamer",
         "MJPEG Streamer": "MJPEG Streamer",
         "RTMP Streamer": "RTMP Streamer",
+        "Stream Protocol:": "Stream Protocol:",
         "Stream Key": "Stream Key:",
         "Stereo Mix": "Stereo Mix:",
         "CRF": "CRF:",
@@ -292,6 +294,7 @@ UI_TEXTS = {
         "Legacy Streamer": "旧网络推流",
         "MJPEG Streamer": "MJPEG推流",
         "RTMP Streamer": "RTMP推流",
+        "Stream Protocol:": "流协议:",
         "Stream Key": "推流密钥:",
         "Stereo Mix": "混音设备:",
         "CRF": "恒定质量:",
@@ -321,6 +324,7 @@ UI_TEXTS = {
         "Fix Viewer Aspect": "固定窗口比例"
     }
 }
+
 class ConfigGUI(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -344,10 +348,13 @@ class ConfigGUI(tk.Tk):
             print(f"Warning: Could not load icon.ico - {e}")
 
         # internal run mode key: 'Viewer' or 'Legacy Streamer' or '3D Monitor'
-        self.run_mode_key = self.cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer"))
+        self.run_mode_key = DEFAULTS.get("Run Mode", "Local Viewer")
         
         # internal capture mode key: 'Monitor' or 'Window'
         self.capture_mode_key = DEFAULTS.get("Capture Mode", "Monitor")
+        
+        # internal stream protocol key
+        self.stream_protocol_key = DEFAULTS.get("Stream Protocol", "RTMP")
 
         self.create_widgets()
         self.monitor_label_to_index = self.populate_monitors()
@@ -427,6 +434,22 @@ class ConfigGUI(tk.Tk):
         self.run_mode_cb.grid(row=0, column=1, sticky="ew", **self.pad)
         self.run_mode_cb.bind("<<ComboboxSelected>>", self.on_run_mode_change)
         
+        # Stream Protocol (RTMP, RTSP, HLS, etc.) - Only shown for RTMP Streamer
+        self.label_stream_protocol = ttk.Label(self.content_frame, text="Stream Protocol:")
+        self.stream_protocol_var = tk.StringVar()
+        self.stream_protocol_cb = ttk.Combobox(self.content_frame, textvariable=self.stream_protocol_var, state="readonly")
+        self.stream_protocol_cb.grid(row=1, column=0, sticky="w", **self.pad)
+        self.stream_protocol_cb.bind("<<ComboboxSelected>>", self.on_stream_protocol_change)
+        
+        # Stream URL (dynamically updated based on protocol)
+        self.label_stream_url = ttk.Label(self.content_frame, text="Stream URL:")
+        self.stream_url_var = tk.StringVar()
+        self.stream_url_entry = ttk.Entry(self.content_frame, textvariable=self.stream_url_var, state="readonly", foreground="#3E83F7")
+        
+        # URL Action Buttons
+        self.btn_copy_url = ttk.Button(self.content_frame, text="Copy URL", command=self.copy_url_to_clipboard)
+        self.btn_open_browser = ttk.Button(self.content_frame, text="Open Browser", command=self.open_url_in_browser)
+        
         # Capture Mode (Monitor / Window)
         self.capture_mode_var_label = tk.StringVar()
         self.capture_mode_cb = ttk.Combobox(self.content_frame, textvariable=self.capture_mode_var_label, state="readonly", width=8)
@@ -471,7 +494,7 @@ class ConfigGUI(tk.Tk):
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
         if OS_NAME != "Windows":
-            self.showfps_cb.grid(row=7, column=3, sticky="w", **self.pad)
+            self.showfps_cb.grid(row=7, column=2, sticky="w", **self.pad)
         else:
             self.showfps_cb.grid(row=6, column=3, sticky="w", **self.pad)
         
@@ -611,14 +634,11 @@ class ConfigGUI(tk.Tk):
         self.hf_endpoint_cb["values"] = ["https://huggingface.co", "https://hf-mirror.com"]
         self.hf_endpoint_cb.grid(row=15, column=1, sticky="ew", **self.pad)
         
-        # Legacy Streamer Host and Port (only visible when run mode is streamer)
-        self.label_streamer_host = ttk.Label(self.content_frame, text="Streamer URL:")
-        self.streamer_host_var = tk.StringVar()
-        self.streamer_host_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_host_var, state="readonly", foreground="#3E83F7")
+        # Streamer Port (only visible when run mode is streamer)
         self.label_streamer_port = ttk.Label(self.content_frame, text="Streamer Port:")
         self.streamer_port_var = tk.StringVar()
         self.streamer_port_entry = ttk.Entry(self.content_frame, textvariable=self.streamer_port_var)
-        self.streamer_port_var.trace_add("write", self.update_host_url)
+        self.streamer_port_var.trace_add("write", self.update_stream_url)
         
         # Stream Quality
         self.label_stream_quality = ttk.Label(self.content_frame, text="Stream Quality:")
@@ -658,13 +678,6 @@ class ConfigGUI(tk.Tk):
             textvariable=self.audio_delay_var,
             state="normal"
         )
-        
-        # URL Action Buttons
-        self.btn_copy_url = ttk.Button(self.content_frame, text="Copy URL", command=self.copy_url_to_clipboard)
-        self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
-        
-        self.btn_open_browser = ttk.Button(self.content_frame, text="Open Browser", command=self.open_url_in_browser)
-        self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
 
         # Buttons (moved down a bit to make room)
         self.btn_reset = ttk.Button(self.content_frame, text="Reset", command=self.reset_to_defaults)
@@ -685,7 +698,45 @@ class ConfigGUI(tk.Tk):
         self.status_label.grid(row=1, column=0, sticky="we")  # no padding
         # Bind device change event
         self.device_var.trace_add("write", self.on_device_change)
+        
+        # Set protocol values
+        self.stream_protocol_cb["values"] = ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]
+        self.stream_protocol_var.set(self.stream_protocol_key)
     
+    def update_stream_url(self, *args):
+        """Update the stream URL based on selected protocol, port, and stream key"""
+        protocol = self.stream_protocol_var.get()
+        port = self.streamer_port_var.get()
+        stream_key = self.rtmp_stream_key_var.get()
+        local_ip = get_local_ip()
+        
+        if not port:
+            port = str(DEFAULTS.get("Streamer Port", DEFAULT_PORT))
+        
+        if not stream_key:
+            stream_key = "live"
+        
+        url_templates = {
+            "RTMP": f"rtmp://{local_ip}:1935/{stream_key}",
+            "RTSP": f"rtsp://{local_ip}:8554/{stream_key}",
+            "HLS": f"http://{local_ip}:8888/{stream_key}/",
+            "HLS M3U8": f"http://{local_ip}:8888/{stream_key}/index.m3u8",
+            "WebRTC": f"http://{local_ip}:8889/{stream_key}/"
+        }
+        
+        self.stream_url_var.set(url_templates.get(protocol, f"http://{local_ip}:{port}/{stream_key}/"))
+        
+        # Hide open browser button for RTMP and RTSP
+        if protocol in ["RTMP", "RTSP"]:
+            self.btn_open_browser.grid_remove()
+        else:
+            self.btn_open_browser.grid()
+
+    def on_stream_protocol_change(self, event=None):
+        """Handle stream protocol selection changes"""
+        self.stream_protocol_key = self.stream_protocol_var.get()
+        self.update_stream_url()
+
     def auto_select_stereo_mix(self):
         """Automatically select Stereo Mix, Loopback, System Audio, or Virtual Audio Capturer"""
         if not hasattr(self, 'audio_devices') or not self.audio_devices:
@@ -750,7 +801,7 @@ class ConfigGUI(tk.Tk):
                 )
                 self.audio_devices = ["No audio capture devices found"]
 
-            # Windows specific: if no Stereo Mix devices found
+            # Windows specific: if no Stereo Mix–like devices found
             elif OS_NAME == "Windows" and not self.audio_devices:
                 print(
                     "[Warning] No Stereo Mix devices found, 'virtual-audio-capturer' added.\n"
@@ -764,7 +815,7 @@ class ConfigGUI(tk.Tk):
                 self.audio_device_cb['values'] = self.audio_devices
 
             # Auto-select first valid option
-            if self.audio_devices and self.audio_devices[0] != "No audio capture devices found - install BlackHole or Soundflower":
+            if self.audio_devices and self.audio_devices[0] != "No audio capture devices found":
                 self.audio_device_var.set(self.audio_devices[0])
             else:
                 self.audio_devices = ["No Stereo Mix device found"]
@@ -783,7 +834,6 @@ class ConfigGUI(tk.Tk):
             self.audio_devices = [f"Error: {str(e)}"]
             if hasattr(self, 'audio_device_var'):
                 self.audio_device_var.set(f"Error: {str(e)}")
-
 
     
     def update_recompile_trt_visibility(self, *args):
@@ -892,47 +942,14 @@ class ConfigGUI(tk.Tk):
         if self.run_mode_key == "RTMP Streamer":
             self.populate_audio_devices()
             self.auto_select_stereo_mix()
-    
-    def update_rtmp_url(self):
-        """Update the RTMP URL when the stream key changes"""
-        stream_key = self.rtmp_stream_key_var.get()
-        if stream_key:
-            # Construct RTMP URL with the stream key
-            self.streamer_host_var.set(f"http://{get_local_ip()}:8889/{stream_key}")
-        else:
-            # Default RTMP URL if no stream key is provided
-            self.streamer_host_var.set(f"http://{get_local_ip()}:8889/live")
-    
-    def update_host_url(self, *args):
-        """Update the host URL when port changes and validate the port number"""
-        port = self.streamer_port_var.get()
-        if port:
-            try:
-                port_num = int(port)
-                if 1 <= port_num <= 65535:
-                    self.streamer_host_var.set(f"http://{get_local_ip()}:{port_num}")
-                else:
-                    messagebox.showerror(
-                        UI_TEXTS[self.language]["Error"],
-                        UI_TEXTS[self.language].get("Invalid port number (1-65535)", "Invalid port number (must be between 1-65535)")
-                    )
-                    # Reset to default port if invalid
-                    self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
-            except ValueError:
-                messagebox.showerror(
-                    UI_TEXTS[self.language]["Error"],
-                    UI_TEXTS[self.language].get("Invalid port number", "Port must be a number")
-                )
-                # Reset to default port if invalid
-                self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
                 
     def copy_url_to_clipboard(self):
         """Copy the streamer URL to clipboard"""
         current_status = self.status_label.cget("text")  # Save current status
         try:
             self.clipboard_clear()
-            self.clipboard_append(self.streamer_host_var.get())
-            self.update_status(f"{UI_TEXTS[self.language]['Copied URL']}: {self.streamer_host_var.get()}")
+            self.clipboard_append(self.stream_url_var.get())
+            self.update_status(f"{UI_TEXTS[self.language]['Copied URL']}: {self.stream_url_var.get()}")
             # Revert to original status after 2 seconds
             self.after(2000, lambda: self.update_status(current_status))
         except Exception as e:
@@ -944,7 +961,7 @@ class ConfigGUI(tk.Tk):
     def open_url_in_browser(self):
         """Open the streamer URL in default browser"""
         current_status = self.status_label.cget("text")  # Save current status
-        url = self.streamer_host_var.get()
+        url = self.stream_url_var.get()
         try:
             import webbrowser
             webbrowser.open(url)
@@ -1066,8 +1083,9 @@ class ConfigGUI(tk.Tk):
         # Trigger the capture mode change handler to update UI
         self.on_capture_mode_change()
 
-        # Legacy Streamer host/port labels
-        self.label_streamer_host.config(text=texts.get("Streamer URL", "Streamer URL"))
+        # Update stream protocol labels
+        self.label_stream_protocol.config(text=texts.get("Stream Protocol:", "Stream Protocol:"))
+        self.label_stream_url.config(text=texts.get("Streamer URL", "Streamer URL"))
         self.label_streamer_port.config(text=texts.get("Streamer Port:", "Streamer Port:"))
         self.label_stream_quality.config(text=UI_TEXTS[self.language]["Stream Quality:"])
         self.btn_copy_url.config(text=UI_TEXTS[self.language]["Copy URL"])
@@ -1137,7 +1155,8 @@ class ConfigGUI(tk.Tk):
     def hide_all_streamer_controls(self):
         """Hide all streamer-specific controls"""
         controls_to_hide = [
-            self.label_streamer_host, self.streamer_host_entry,
+            self.label_stream_protocol, self.stream_protocol_cb,
+            self.label_stream_url, self.stream_url_entry,
             self.label_streamer_port, self.streamer_port_entry,
             self.label_stream_quality, self.stream_quality_cb,
             self.btn_copy_url, self.btn_open_browser,
@@ -1158,17 +1177,18 @@ class ConfigGUI(tk.Tk):
         if not self.streamer_port_var.get():
             self.streamer_port_var.set(str(DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
         
-        self.streamer_host_var.set(f"http://{get_local_ip()}:{self.streamer_port_var.get()}")
+        # Use HTTP URL for MJPEG
+        self.stream_url_var.set(f"http://{get_local_ip()}:{self.streamer_port_var.get()}")
         
         # Grid the common streamer controls
-        self.label_streamer_host.grid(row=1, column=0, sticky="w", **self.pad)
-        self.streamer_host_entry.grid(row=1, column=1, sticky="ew", **self.pad)
+        self.label_stream_url.grid(row=1, column=0, sticky="w", **self.pad)
+        self.stream_url_entry.grid(row=1, column=1, columnspan=1, sticky="ew", **self.pad)
         self.label_streamer_port.grid(row=2, column=0, sticky="w", **self.pad)
         self.streamer_port_entry.grid(row=2, column=1, sticky="ew", **self.pad)
         self.label_stream_quality.grid(row=2, column=2, sticky="w", **self.pad)
         self.stream_quality_cb.grid(row=2, column=3, sticky="ew", **self.pad)
-        self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
-        self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
+        self.btn_copy_url.grid(row=1, column=3, sticky="ew", **self.pad)
+        self.btn_open_browser.grid(row=1, column=2, sticky="ew", **self.pad)
         
         self.fixed_viwer_aspect_cb.grid_remove()
 
@@ -1177,22 +1197,27 @@ class ConfigGUI(tk.Tk):
         self.show_mjpeg_controls()  # Same controls as MJPEG
 
     def show_rtmp_controls(self):
-        """Show controls for RTMP Streamer"""
-        self.streamer_host_var.set(f"http://{get_local_ip()}:8889/{self.rtmp_stream_key_var.get()}")
+        """Show controls for RTMP Streamer with protocol selection"""
+        # Update stream URL first
+        self.update_stream_url()
         
-        # Grid the common streamer controls
-        self.label_streamer_host.grid(row=1, column=0, sticky="w", **self.pad)
-        self.streamer_host_entry.grid(row=1, column=1, sticky="ew", **self.pad)
-        self.btn_copy_url.grid(row=1, column=2, sticky="ew", **self.pad)
+        # Grid protocol selection controls
+        self.label_stream_protocol.grid(row=1, column=0, sticky="w", **self.pad)
+        self.stream_protocol_cb.grid(row=1, column=1, sticky="ew", **self.pad)
+        self.label_stream_url.grid(row=2, column=0, sticky="w", **self.pad)
+        self.stream_url_entry.grid(row=2, column=1, columnspan=2, sticky="ew", **self.pad)
+        
+        # Grid URL action buttons
+        self.btn_copy_url.grid(row=2, column=3, sticky="ew", **self.pad)
         self.btn_open_browser.grid(row=1, column=3, sticky="ew", **self.pad)
         
         # Grid RTMP-specific controls
-        self.label_audio_device.grid(row=4, column=0, sticky="w", **self.pad)
-        self.audio_device_cb.grid(row=4, column=1, sticky="ew", **self.pad)
         self.label_rtmp_stream_key.grid(row=3, column=0, sticky="w", **self.pad)
         self.rtmp_stream_key_entry.grid(row=3, column=1, sticky="ew", **self.pad)
+        self.label_audio_device.grid(row=4, column=0, sticky="w", **self.pad)
+        self.audio_device_cb.grid(row=4, column=1, sticky="ew", **self.pad)
         
-        # New: Grid CRF and Audio Delay controls
+        # Grid quality and codec controls
         self.label_crf.grid(row=3, column=2, sticky="w", **self.pad)
         self.crf_spin.grid(row=3, column=3, sticky="ew", **self.pad)
         self.label_audio_delay.grid(row=4, column=2, sticky="w", **self.pad)
@@ -1204,11 +1229,14 @@ class ConfigGUI(tk.Tk):
         
         self.fixed_viwer_aspect_cb.grid_remove()
         
-        self.rtmp_stream_key_var.trace_add("write", lambda *args: self.update_rtmp_url())
+        # Bind events for dynamic URL updates
+        self.rtmp_stream_key_var.trace_add("write", lambda *args: self.update_stream_url())
+        self.streamer_port_var.trace_add("write", lambda *args: self.update_stream_url())
 
     def show_viewer_controls(self):
         """Show controls for Local Viewer and 3D Monitor"""
         self.fixed_viwer_aspect_cb.grid(row=8, column=3, sticky="w", **self.pad)
+        
     def browse_download(self):
         path = filedialog.askdirectory(initialdir=self.download_var.get() or ".")
         if path:
@@ -1232,7 +1260,7 @@ class ConfigGUI(tk.Tk):
             )
 
         # Set default selection
-        default_idx = DEFAULTS.get("Device", 0)
+        default_idx = DEFAULTS.get("Computing Device", 0)
         default_label = next(
             (lbl for lbl, i in self.device_label_to_index.items() if i == default_idx),
             None
@@ -1318,11 +1346,11 @@ class ConfigGUI(tk.Tk):
             self.monitor_var.set(next(iter(self.monitor_label_to_index)))
 
         # Window settings
-        self.selected_window_name = cfg.get(DEFAULTS["Window Title"])
+        self.selected_window_name = cfg.get("Window Title", DEFAULTS["Window Title"])
         self.window_var.set(self.selected_window_name)
 
         if keep_optional:  # no update for device
-            device_idx = cfg.get("Device", DEFAULTS["Device"])
+            device_idx = cfg.get("Computing Device", DEFAULTS["Computing Device"])
             label_for_device_idx = next((lbl for lbl, i in self.device_label_to_index.items() if i == device_idx), None)
             if label_for_device_idx:
                 self.device_var.set(label_for_device_idx)
@@ -1364,13 +1392,17 @@ class ConfigGUI(tk.Tk):
             if run_mode == "3D Monitor" and OS_NAME != "Windows":
                 run_mode = "Local Viewer"  # Fall back to Viewer on non-Windows
             self.run_mode_key = run_mode
+            
+        # Stream protocol settings
+        self.stream_protocol_key = cfg.get("Stream Protocol", DEFAULTS.get("Stream Protocol", "RTMP"))
+        self.stream_protocol_var.set(self.stream_protocol_key)
+        
         port = cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", DEFAULT_PORT))
-        self.streamer_host_var.set(f"http://{get_local_ip()}:{port}")
         self.streamer_port_var.set(str(port))
         self.stream_quality_cb.set(str(cfg.get("Stream Quality", DEFAULTS["Stream Quality"])))
         
         # RTMP option
-        self.rtmp_stream_key_var.set(cfg.get("Stream Key", ""))
+        self.rtmp_stream_key_var.set(cfg.get("Stream Key", DEFAULTS["Stream Key"]))
         saved_audio_device = cfg.get("Stereo Mix", "")
         if saved_audio_device and saved_audio_device in self.audio_devices:
             self.audio_device_var.set(saved_audio_device)
@@ -1390,6 +1422,10 @@ class ConfigGUI(tk.Tk):
         # Capture mode
         capture_mode = cfg.get("Capture Mode", DEFAULTS.get("Capture Mode", "Monitor"))
         self.capture_mode_key = capture_mode
+        
+        # Update stream URL
+        self.update_stream_url()
+        
         # Update run mode visibility
         self.update_language_texts()
         self.on_run_mode_change()
@@ -1409,7 +1445,7 @@ class ConfigGUI(tk.Tk):
     def update_depth_resolution_options(self, model_name):
         """Update depth resolution options based on selected model"""
         # Get resolutions for this model
-        resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [336])  # Default to 384 if not found
+        resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [336])  # Default to 336 if not found
         
         # Update combobox values
         self.depth_res_cb["values"] = [str(res) for res in resolutions]
@@ -1505,9 +1541,10 @@ class ConfigGUI(tk.Tk):
             "FP16": self.fp16_var.get(),
             "Download Path": self.download_var.get(),
             "HF Endpoint": self.hf_endpoint_var.get(),
-            "Device": self.device_label_to_index.get(self.device_var.get()),
+            "Computing Device": self.device_label_to_index.get(self.device_var.get()),
             "Language": self.language,
             "Run Mode": self.run_mode_key,
+            "Stream Protocol": self.stream_protocol_key,
             "Streamer Port": int(self.streamer_port_var.get()),
             "Stream Quality": int(self.stream_quality_cb.get()),
             "torch.compile": self.use_torch_compile.get(),

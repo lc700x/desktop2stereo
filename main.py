@@ -357,8 +357,8 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
             "-preset", "ultrafast",
             "-crf", str(CRF),
             "-c:a", "libopus",
-            "-ar", "48000",
-            "-b:a", "128k",
+            # "-ar", "48000",
+            # "-b:a", "128k",
             "-f", "rtsp",
             f"rtsp://localhost:8554/{STREAM_KEY}"
         ]
