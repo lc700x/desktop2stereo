@@ -273,7 +273,7 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
             '-muxdelay', '0',
             '-muxpreload', '0',
             '-flush_packets', '1',
-            # '-rtmp_buffer', '0',
+            '-rtmp_buffer', '0',
             '-f', 'flv',
             f'rtmp://localhost:1935/{STREAM_KEY}'
         ]
@@ -548,9 +548,9 @@ def main(mode="Viewer"):
                 try:
                     if not BOOST:
                         # Fix for unstable dml runtime error
-                        sbs = depth_q.get()
+                        sbs = depth_q.get(timeout=TIME_SLEEP)
                     else:
-                        sbs = sbs_q.get()
+                        sbs = sbs_q.get(timeout=TIME_SLEEP)
                     
                     streamer.set_frame(sbs)
                     
