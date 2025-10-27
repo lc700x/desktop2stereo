@@ -161,7 +161,7 @@ DEFAULTS = {
     "Computing Device": 0,
     "Language": "EN",
     "Run Mode": "Local Viewer",
-    "Stream Protocol": "HLS",
+    "Stream Protocol": "WebRTC" if OS_NAME=="Darwin" else "HLS",
     "Legacy Streamer Host": None,
     "Streamer Port": DEFAULT_PORT,
     "Stream Quality": 100,
@@ -762,30 +762,29 @@ class ConfigGUI(tk.Tk):
     def populate_audio_devices(self):
         """Populate list with only Stereo Mix / Loopback / System Audio–type devices, or Virtual Audio Capturer"""
         try:
-            import pyaudio
-            p = pyaudio.PyAudio()
+            import sounddevice as sd
             devices_found = set()  # use set to avoid duplicates
 
-            for i in range(p.get_device_count()):
-                device_info = p.get_device_info_by_index(i)
+            # Get all available audio devices
+            all_devices = sd.query_devices()
+
+            for device_info in all_devices:
                 device_name = device_info.get('name', '').lower()
-                max_input_channels = device_info.get('maxInputChannels', 0)
+                max_input_channels = device_info.get('max_input_channels', 0)
 
                 # macOS specific: also check for output devices that can be used as input
-                max_output_channels = device_info.get('maxOutputChannels', 0)
+                max_output_channels = device_info.get('max_output_channels', 0)
                 
                 # Include devices that support input OR are macOS loopback devices
                 if max_input_channels > 0 or (OS_NAME == "Darwin" and max_output_channels > 0):
                     for mix_name in STEREO_MIX_NAMES:
                         if mix_name in device_name:
-                            devices_found.add(device_info.get('name', f"Device {i}"))
+                            devices_found.add(device_info.get('name'))
                             break
 
                     # Additionally, include "virtual-audio-capturer" if found
                     if "virtual-audio-capturer" in device_name:
-                        devices_found.add(device_info.get('name', f"Device {i}"))
-
-            p.terminate()
+                        devices_found.add(device_info.get('name'))
 
             # Convert to list
             self.audio_devices = list(devices_found)
@@ -823,11 +822,12 @@ class ConfigGUI(tk.Tk):
 
         except ImportError:
             if OS_NAME == "Darwin":
-                self.audio_devices = ["PyAudio not available - Install via: pip install pyaudio"]
+                self.audio_devices = ["sounddevice not available - Install via: pip install sounddevice"]
             else:
-                self.audio_devices = ["PyAudio not available"]
+                self.audio_devices = ["sounddevice not available"]
             if hasattr(self, 'audio_device_var'):
                 self.audio_device_var.set(self.audio_devices[0])
+
         except Exception as e:
             error_msg = f"Error getting audio devices: {e}"
             print(error_msg)
@@ -835,7 +835,6 @@ class ConfigGUI(tk.Tk):
             if hasattr(self, 'audio_device_var'):
                 self.audio_device_var.set(f"Error: {str(e)}")
 
-    
     def update_recompile_trt_visibility(self, *args):
         """Show/hide TensorRT recompile option based on optimizer selection"""
         if self.use_tensorrt.get():

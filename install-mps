@@ -47,24 +47,7 @@ fi
 # Install requirements
 echo
 echo "- Installing the requirements"
-# check homebrew and install portaudio if not installed
-if ! command -v brew &> /dev/null
-then
-    echo "Homebrew is not found in PATH. Please install Homebrew first from https://brew.sh/"
-    read -p "Press enter to exit..."
-    exit 1
-fi
-# check if portaudio is installed
-if ! brew list portaudio &> /dev/null
-then
-    echo "Installing portaudio via Homebrew..."
-    brew install portaudio
-    if [ $? -ne 0 ]; then
-        echo "Failed to install portaudio"
-        read -p "Press enter to exit..."
-        exit 1
-    fi
-fi
+
 $PYTHON_EXE -m pip install -r ./requirements-mps.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 $PYTHON_EXE -m pip install -r ./requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if [ $? -ne 0 ]; then

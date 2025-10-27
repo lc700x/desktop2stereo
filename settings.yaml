@@ -401,7 +401,7 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
 Language: CN
-Run Mode: MJPEG Streamer
+Run Mode: RTMP Streamer
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
@@ -413,6 +413,6 @@ Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stream Key: live
-Stereo Mix: 立体声混音 (Realtek(R) Audio)
+Stereo Mix: BlackHole 2ch
 CRF: 20
 Audio Delay: -0.15
