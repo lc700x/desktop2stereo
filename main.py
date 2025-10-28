@@ -341,7 +341,11 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
         server_cmd = ['./rtmp/mac/mediamtx', './rtmp/mac/mediamtx.yml']
         ffmpeg_cmd = [
             "./rtmp/mac/ffmpeg",
-            "-itsoffset", str(AUDIO_DELAY),
+            '-fflags', 'nobuffer',
+            '-flags', 'low_delay',
+            '-probesize', '32',
+            '-analyzeduration', '0',
+             "-itsoffset", str(AUDIO_DELAY),
             "-f", "avfoundation",
             "-rtbufsize", "256M",
             "-framerate", "59.94",
@@ -350,18 +354,28 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
             f"[0:v]fps={FPS},crop={width}:{height}:{x}:{y},scale=iw:trunc(ih/2)*2,format=uyvy422[v];[0:a]aresample=async=1[a]",
             "-map", "[v]",
             "-map", "[a]",
-            "-c:v", "libx264",
-            "-bf", "0",
-            "-g", str(FPS),
-            "-r", str(FPS),
-            "-preset", "ultrafast",
-            "-crf", str(CRF),
+            # --- Video Encoding ---
+            "-c:v", "h264_videotoolbox",
+            "-profile:v", "high",           # Enables best quality profile
+            "-pix_fmt", "yuv420p",          # Most compatible pixel format
+            "-b:v", "10M",                  # Target bitrate (adjust as needed)
+            "-maxrate", "12M",              # Peak bitrate for VBR
+            "-bufsize", "24M",              # VBV buffer size
+            "-g", str(FPS),                 # GOP length = 1 second
+            "-r", str(FPS),                 # Frame rate
+            "-realtime", "true",            # Optimize for live capture
+            "-color_primaries", "bt709",
+            "-color_trc", "bt709",
+            "-colorspace", "bt709",
+            # --- Audio Encoding ---
             "-c:a", "libopus",
-            # "-ar", "48000",
-            # "-b:a", "128k",
+            "-b:a", "128k",
+            "-ar", "48000",
+            # --- Output ---
             "-f", "rtsp",
             f"rtsp://localhost:8554/{STREAM_KEY}"
         ]
+
     
     elif os == "Linux":
         return None, None # TODO: add ffmpeg for Linux
