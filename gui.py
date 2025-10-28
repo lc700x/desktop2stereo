@@ -32,6 +32,7 @@ elif OS_NAME == "Darwin":
         from Quartz import (
             CGWindowListCopyWindowInfo,
             kCGWindowListOptionOnScreenOnly,
+            kCGWindowListExcludeDesktopElements,
             kCGNullWindowID,
         )
     except ImportError:
@@ -39,9 +40,8 @@ elif OS_NAME == "Darwin":
 
     def list_windows():
         windows = []
-        options = kCGWindowListOptionOnScreenOnly
+        options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
         window_info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
-
         # System UI processes we want to ignore
         blacklist = {
             "Window Server",
@@ -51,23 +51,23 @@ elif OS_NAME == "Darwin":
             "Dock",
             "SystemUIServer",
             "CoreServicesUIAgent",
+            "TextInputMenuAgent",
         }
-
         for win in window_info:
             title = win.get("kCGWindowName", "") or ""
             owner = win.get("kCGWindowOwnerName", "")
             layer = win.get("kCGWindowLayer", 0)
-
+            bounds = win.get("kCGWindowBounds", {})
             # Filtering rules
             if not title.strip():
                 continue
             if owner in blacklist:
                 continue
-            if layer != 0:  # skip menu bar, overlays, etc.
+            if title.strip().lower().startswith("item-"):
                 continue
-
+            if bounds.get("Y", 1) == 0:
+                continue
             windows.append((title.strip(), win["kCGWindowNumber"]))
-
         return windows
 else:
     import subprocess
