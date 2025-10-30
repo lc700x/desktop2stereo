@@ -745,6 +745,7 @@ class ConfigGUI(tk.Tk):
         # Try to auto-select the first matching stereo mix–like device
         for device in self.audio_devices:
             device_lower = device.lower()
+            print(device_lower)
             for mix_name in STEREO_MIX_NAMES:
                 if mix_name in device_lower:
                     self.audio_device_var.set(device)
@@ -761,79 +762,114 @@ class ConfigGUI(tk.Tk):
 
     def populate_audio_devices(self):
         """Populate list with only Stereo Mix / Loopback / System Audio–type devices, or Virtual Audio Capturer"""
-        try:
-            import sounddevice as sd
-            devices_found = set()  # use set to avoid duplicates
+        if OS_NAME != "Linux":
+            try:
+                import sounddevice as sd
+                devices_found = set()  # use set to avoid duplicates
 
-            # Get all available audio devices
-            all_devices = sd.query_devices()
+                # Get all available audio devices
+                all_devices = sd.query_devices()
 
-            for device_info in all_devices:
-                device_name = device_info.get('name', '').lower()
-                max_input_channels = device_info.get('max_input_channels', 0)
+                for device_info in all_devices:
+                    device_name = device_info.get('name', '').lower()
+                    max_input_channels = device_info.get('max_input_channels', 0)
 
-                # macOS specific: also check for output devices that can be used as input
-                max_output_channels = device_info.get('max_output_channels', 0)
-                
-                # Include devices that support input OR are macOS loopback devices
-                if max_input_channels > 0 or (OS_NAME == "Darwin" and max_output_channels > 0):
-                    for mix_name in STEREO_MIX_NAMES:
-                        if mix_name in device_name:
+                    # macOS specific: also check for output devices that can be used as input
+                    max_output_channels = device_info.get('max_output_channels', 0)
+                    
+                    # Include devices that support input OR are macOS loopback devices
+                    if max_input_channels > 0 or max_output_channels > 0:
+                        for mix_name in STEREO_MIX_NAMES:
+                            if mix_name in device_name:
+                                devices_found.add(device_info.get('name'))
+                                break
+
+                        # Additionally, include "virtual-audio-capturer" if found
+                        if "virtual-audio-capturer" in device_name:
                             devices_found.add(device_info.get('name'))
-                            break
 
-                    # Additionally, include "virtual-audio-capturer" if found
-                    if "virtual-audio-capturer" in device_name:
-                        devices_found.add(device_info.get('name'))
+                # Convert to list
+                self.audio_devices = list(devices_found)
 
-            # Convert to list
-            self.audio_devices = list(devices_found)
+                # macOS specific: if no devices found, suggest popular macOS audio tools
+                if OS_NAME == "Darwin" and not self.audio_devices:
+                    print(
+                        "[Info] No audio capture devices found on MacOS.\n"
+                        "Recommended tools for audio capture:\n"
+                        "- BlackHole: https://github.com/ExistentialAudio/BlackHole\n"
+                        "- Virtual Desktop Streamer: https://www.vrdesktop.net/\n"
+                        "- Loopback: https://rogueamoeba.com/loopback/ (Commercial)"
+                    )
+                    self.audio_devices = ["No audio capture devices found"]
 
-            # macOS specific: if no devices found, suggest popular macOS audio tools
-            if OS_NAME == "Darwin" and not self.audio_devices:
-                print(
-                    "[Info] No audio capture devices found on MacOS.\n"
-                    "Recommended tools for audio capture:\n"
-                    "- BlackHole: https://github.com/ExistentialAudio/BlackHole\n"
-                    "- Virtual Desktop Streamer: https://www.vrdesktop.net/\n"
-                    "- Loopback: https://rogueamoeba.com/loopback/ (Commercial)"
-                )
-                self.audio_devices = ["No audio capture devices found"]
+                # Windows specific: if no Stereo Mix–like devices found
+                elif OS_NAME == "Windows" and not self.audio_devices:
+                    print(
+                        "[Warning] No Stereo Mix devices found, 'virtual-audio-capturer' added.\n"
+                        "Please install 'Screen Capture Recorder' for audio capture:\n"
+                        "https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest"
+                    )
+                    self.audio_devices = ["virtual-audio-capturer"]
 
-            # Windows specific: if no Stereo Mix–like devices found
-            elif OS_NAME == "Windows" and not self.audio_devices:
-                print(
-                    "[Warning] No Stereo Mix devices found, 'virtual-audio-capturer' added.\n"
-                    "Please install 'Screen Capture Recorder' for audio capture:\n"
-                    "https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest"
-                )
-                self.audio_devices = ["virtual-audio-capturer"]
+                # Update combobox if it exists
+                if hasattr(self, 'audio_device_cb'):
+                    self.audio_device_cb['values'] = self.audio_devices
 
-            # Update combobox if it exists
-            if hasattr(self, 'audio_device_cb'):
-                self.audio_device_cb['values'] = self.audio_devices
+                # Auto-select first valid option
+                if self.audio_devices and self.audio_devices[0] != "No audio capture devices found":
+                    self.audio_device_var.set(self.audio_devices[0])
+                else:
+                    self.audio_devices = ["No Stereo Mix device found"]
+                    self.audio_device_var.set("No Stereo Mix device found")
 
-            # Auto-select first valid option
-            if self.audio_devices and self.audio_devices[0] != "No audio capture devices found":
-                self.audio_device_var.set(self.audio_devices[0])
-            else:
-                self.audio_devices = ["No Stereo Mix device found"]
-                self.audio_device_var.set("No Stereo Mix device found")
-
-        except ImportError:
-            if OS_NAME == "Darwin":
-                self.audio_devices = ["sounddevice not available - Install via: pip install sounddevice"]
-            else:
+            except ImportError:
                 self.audio_devices = ["sounddevice not available"]
-            if hasattr(self, 'audio_device_var'):
-                self.audio_device_var.set(self.audio_devices[0])
+                if hasattr(self, 'audio_device_var'):
+                    self.audio_device_var.set(self.audio_devices[0])
 
-        except Exception as e:
-            error_msg = f"Error getting audio devices: {e}"
-            print(error_msg)
-            self.audio_devices = [f"Error: {str(e)}"]
-            if hasattr(self, 'audio_device_var'):
-                self.audio_device_var.set(f"Error: {str(e)}")
+            except Exception as e:
+                error_msg = f"Error getting audio devices: {e}"
+                print(error_msg)
+                self.audio_devices = [f"Error: {str(e)}"]
+                if hasattr(self, 'audio_device_var'):
+                    self.audio_device_var.set(f"Error: {str(e)}")
+        else:
+            import re
+            """
+            Populate available PulseAudio sources using `pacmd list-sources`.
+            Returns a list of dicts with 'name' and 'description'.
+            """
+            try:
+                # Run pacmd and get output
+                result = subprocess.run(
+                    ["pacmd", "list-sources"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True
+                )
+                output = result.stdout
+            except subprocess.CalledProcessError as e:
+                print("Error running pacmd:", e)
+                return []
+
+            sources = []
+            # Split the output into sections for each source
+            source_blocks = output.split("index:")
+            for block in source_blocks[1:]:  # skip the first (before first index)
+                # Extract name and description
+                name_match = re.search(r"name:\s*<(.+?)>", block)
+                desc_match = re.search(r"device.description\s*=\s*\"(.+?)\"", block)
+                active_match = re.search(r"(\*?)index:", block)
+
+                if name_match:
+                    source = {
+                        "name": name_match.group(1),
+                        "description": desc_match.group(1) if desc_match else name_match.group(1),
+                        "active": "*" in active_match.group(1) if active_match else False
+                    }
+                    sources.append(source["name"])
+                self.audio_devices = sources
 
     def update_recompile_trt_visibility(self, *args):
         """Show/hide TensorRT recompile option based on optimizer selection"""
@@ -864,12 +900,19 @@ class ConfigGUI(tk.Tk):
         elif device_type == "CUDA":
             self.label_inference_optimizer.grid()
             self.check_unlock_streamer_thread.grid_remove()  # Hide it for non-DirectML
-            self.check_torch_compile.grid()  # Show torch.compile for non-DirectML
-            self.check_tensorrt.grid()
+
+            # Hide TensorRT for ROCm
             if IS_ROCM:
-                self.check_tensorrt.grid_remove()  # Show TensorRT for non-DirectML
+                self.check_tensorrt.grid_remove()  
             else:
                 self.check_tensorrt.grid()
+            
+            # Disable torch.compile for Linux
+            if OS_NAME == "Linux":
+                self.check_torch_compile.grid_remove()
+            else:
+                self.check_torch_compile.grid()
+                
         else:
             self.label_inference_optimizer.grid_remove()  # Hide Inference Optimizer label
             self.check_unlock_streamer_thread.grid_remove()  # Show Legacy Streamer Boost checkbox
@@ -1042,7 +1085,8 @@ class ConfigGUI(tk.Tk):
             localized_run_vals.append(texts.get("RTMP Streamer", "RTMP Streamer"))
             localized_run_vals.append(texts.get("3D Monitor", "3D Monitor"))
             self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
-        elif OS_NAME == "Darwin":
+        # elif OS_NAME == "Darwin":
+        else:
             localized_run_vals.append(texts.get("RTMP Streamer", "RTMP Streamer"))
         self.run_mode_cb["values"] = localized_run_vals
         # Add Inference Optimizer text update
@@ -1063,7 +1107,8 @@ class ConfigGUI(tk.Tk):
             elif self.run_mode_key == "3D Monitor":
                 self.run_mode_var_label.set(localized_run_vals[4])
                 self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
-        elif OS_NAME == "Darwin":
+        # elif OS_NAME == "Darwin":
+        else:
             if self.run_mode_key == "RTMP Streamer":
                 self.run_mode_var_label.set(localized_run_vals[3])
             

@@ -16,6 +16,10 @@ global_processes = {
     'rtmp_server': None
 }
 
+# Track current stream size + restart lock
+current_stream_size = None
+ffmpeg_restart_lock = threading.Lock()
+
 # Use precise frame interval
 TIME_SLEEP = 1.0 / FPS
 
@@ -144,9 +148,9 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
 else:
     # DXCamera based wincam
     from capture import DesktopGrabber
-    cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX)
     
     def capture_loop():
+        cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX)
         while not shutdown_event.is_set():
             try:
                 frame_raw, size = cap.grab()
@@ -155,7 +159,8 @@ else:
                 raw_q.put((frame_raw, size))
             except queue.Empty:
                 continue
-            except Exception:
+            except Exception as e:
+                print(f"[Warning] Error: {e}")
                 continue
 
 def process_loop():
@@ -226,6 +231,10 @@ def cleanup_all_resources():
                 q.get(timeout=TIME_SLEEP)
             except:
                 pass
+
+    # Wait for RTMP thread
+    if 'rtmp_thread' in globals() and rtmp_thread.is_alive():
+        rtmp_thread.join(timeout=3)
     
     print("[Cleanup] All resources cleaned up")
 
@@ -243,8 +252,13 @@ if OS_NAME != "Windows":
     signal.signal(signal.SIGQUIT, signal_handler)
 
 # get ffmpeg command
-def get_rtmp_cmd(os=OS_NAME, window=None):
-    if os == "Windows":
+def get_rtmp_cmd(os_name=OS_NAME, window=None):
+    if not window:
+        raise ValueError("GLFW window required for size-aware streaming")
+
+    width, height = glfw.get_framebuffer_size(window)
+
+    if os_name == "Windows":
         server_cmd = ['./rtmp/mediamtx/mediamtx.exe', './rtmp/mediamtx/mediamtx.yml']
         ffmpeg_cmd = [
             './rtmp/ffmpeg/bin/ffmpeg.exe',
@@ -252,7 +266,7 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
             '-flags', 'low_delay',
             '-probesize', '32',
             '-analyzeduration', '0',
-            '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':max_framerate={FPS},hwdownload,format=bgra,scale=iw:trunc(ih/2)*2,format=yuv420p[v]",  # Label video output [v], fix odd height
+            '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':max_framerate={FPS},hwdownload,format=bgra,scale={width}:trunc({height}/2)*2,format=yuv420p[v]",  # Label video output [v], fix odd height
             '-itsoffset', f'{AUDIO_DELAY}',  # Audio delay (applies to next input)
             '-f', 'dshow',
             '-rtbufsize', '256M',
@@ -278,7 +292,7 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
             f'rtmp://localhost:1935/{STREAM_KEY}'
         ]
         
-    elif os == "Darwin":
+    elif os_name == "Darwin":
         
         from AppKit import NSScreen
         from capture import get_window_client_bounds_mac
@@ -331,12 +345,14 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
         screen_name = f"Capture screen {monitor_index}"
         screen_index = get_device_index(screen_name, "video")
         audio_index = get_device_index(STEREOMIX_DEVICE, "audio")
-        width, height = glfw.get_window_size(window)
         win_x, win_y = glfw.get_window_pos(window)
         mon_x, mon_y = glfw.get_monitor_pos(monitor)
         x = win_x - mon_x
         y = win_y - mon_y
-        width, height, x, y = width * scale_factor, height*scale_factor, x * scale_factor, y * scale_factor
+        x = int(x * scale_factor)
+        y = int(y * scale_factor)
+        width = int(width * scale_factor)
+        height = int(height * scale_factor)
         # print(width, height, x, y)
         server_cmd = ['./rtmp/mac/mediamtx', './rtmp/mac/mediamtx.yml']
         ffmpeg_cmd = [
@@ -354,7 +370,6 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
             f"[0:v]fps={FPS},crop={width}:{height}:{x}:{y},scale=iw:trunc(ih/2)*2,format=uyvy422[v];[0:a]aresample=async=1[a]",
             "-map", "[v]",
             "-map", "[a]",
-            # --- Video Encoding ---
             "-c:v", "h264_videotoolbox",
             "-profile:v", "high",           # Enables best quality profile
             "-pix_fmt", "yuv420p",          # Most compatible pixel format
@@ -367,66 +382,290 @@ def get_rtmp_cmd(os=OS_NAME, window=None):
             "-color_primaries", "bt709",
             "-color_trc", "bt709",
             "-colorspace", "bt709",
-            # --- Audio Encoding ---
             "-c:a", "libopus",
             "-b:a", "128k",
             "-ar", "48000",
-            # --- Output ---
             "-f", "rtsp",
             f"rtsp://localhost:8554/{STREAM_KEY}"
         ]
 
+    elif os_name == "Linux":
+        import re
+        from Xlib import display
+
+        def get_x11_scale_factor():
+            d = display.Display()
+            screen = d.screen()
+            width_px = screen.width_in_pixels
+            height_px = screen.height_in_pixels
+            width_mm = screen.width_in_mms
+            height_mm = screen.height_in_mms
+
+            # Calculate DPI (dots per inch)
+            dpi_x = width_px / (width_mm / 25.4)
+            dpi_y = height_px / (height_mm / 25.4)
+            avg_dpi = (dpi_x + dpi_y) / 2
+
+            # Assume 96 DPI = scale 1.0
+            scale = avg_dpi / 96.0
+            return round(scale, 2)
+        def run(cmd):
+            """Run a shell command and return stdout text."""
+            result = subprocess.run(cmd, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return result.stdout.decode().strip()
+
+        def get_window_geometry(window_id):
+            """Return (x, y, width, height) of the window using xdotool."""
+            output = run(f"xdotool getwindowgeometry --shell {window_id}")
+            geom = {}
+            for line in output.splitlines():
+                if "=" in line:
+                    key, val = line.strip().split("=", 1)
+                    geom[key] = val
+            return int(geom["X"]), int(geom["Y"]), int(geom["WIDTH"]), int(geom["HEIGHT"])
+
+        def drag_window_offscreen(window_id, dx=10000, dy=10000, steps=1, delay=0.01):
+            """
+            Simulate a mouse drag on a window by ID using xdotool.
+            The drag starts from the window's current position and moves smoothly.
+            """
+            # Get actual window geometry
+            x, y, width, height = get_window_geometry(window_id)
+            print(f"Window position: ({x}, {y}), size: {width}x{height}")
+
+            # Activate the window
+            run(f"xdotool windowactivate {window_id}")
+
+            # Move mouse to the title bar (roughly near the top-center of window)
+            title_x = x + 50*get_x11_scale_factor()
+            title_y = y-50*get_x11_scale_factor()
+            run(f"xdotool mousemove {title_x} {title_y}")
+
+            # Press mouse button to start drag  
+            run("xdotool mousedown 1")
+
+            # Perform smooth drag motion
+            step_x = dx / steps
+            step_y = dy / steps
+
+            for _ in range(steps):
+                run(f"xdotool mousemove_relative -- {step_x:.2f} {step_y:.2f}")
+                time.sleep(delay)
+
+            # Release mouse button (drop window)
+            run("xdotool mouseup 1")
+
+
+        def get_display_env(window_id: str) -> str:
+            """
+            Get the DISPLAY environment variable from the process that owns the window.
+            Falls back to ':0.0' if not found or on error.
+            """
+            try:
+                # First, get the PID of the window
+                pid_result = subprocess.run(
+                    ["xprop", "-id", window_id, "_NET_WM_PID"],
+                    capture_output=True, text=True, check=True
+                )
+                
+                # Parse PID from output (e.g., '_NET_WM_PID(CARDINAL) = 1234')
+                for line in pid_result.stdout.splitlines():
+                    if "=" in line:
+                        pid = line.split("=")[-1].strip()
+                        if pid.isdigit():
+                            # Get environment variables from the process
+                            env_result = subprocess.run(
+                                ["cat", f"/proc/{pid}/environ"],
+                                capture_output=True, text=True, check=True
+                            )
+                            
+                            # Parse DISPLAY from environment variables
+                            for env_var in env_result.stdout.split('\x00'):
+                                if env_var.startswith("DISPLAY="):
+                                    return env_var.split("=", 1)[1]
+                                    
+            except (subprocess.CalledProcessError, FileNotFoundError, IndexError, ValueError):
+                pass
+            
+            return ":0.0"
+
+        def get_device_index(target_name, device_type="video"):
+            """Return a device identifier suitable for ffmpeg on Linux.
+            For video: returns a display/input string (we'll use it later as the ffmpeg input).
+            For audio: tries to locate a PulseAudio/ALSA name that matches target_name; returns 'default' if not found.
+            """
+            # AUDIO: try PulseAudio device listing via ffmpeg
+            if device_type == "audio":
+                # Use the ffmpeg binary in your rtmp/linux folder if present; otherwise fallback to system 
+                cmd = ["ffmpeg", "-f", "pulse", "-list_devices", "true", "-i", ""]  # PulseAudio list (printed to stderr)
+                try:
+                    result = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+                    output = result.stderr + result.stdout
+                    # ffmpeg prints devices with lines like: "    name 'alsa_input.pci-0000_00_1b.0.analog-stereo'": device names can appear
+                    # Simpler: find lines containing the target_name or the friendly name
+                    for line in output.splitlines():
+                        if target_name in line:
+                            # extract quoted name if present
+                            m = re.search(r"'([^']+)'", line)
+                            if m:
+                                return m.group(1)
+                            # otherwise attempt to extract a token
+                            tokens = line.strip().split()
+                            if tokens:
+                                return tokens[-1].strip()
+                except Exception:
+                    pass
+
+                # Try listing via pactl as fallback
+                try:
+                    pactl_out = subprocess.check_output(["pactl", "list", "sources"], text=True)
+                    # parse "Name: <name>" and "Description: <desc>"
+                    name = None
+                    for line in pactl_out.splitlines():
+                        line = line.strip()
+                        if line.startswith("Name:"):
+                            name = line.split(":", 1)[1].strip()
+                        if line.startswith("Description:") and target_name in line:
+                            return name or "default"
+                except Exception:
+                    pass
+
+                # fallback
+                return "default"
+            return target_name or ":0.0"
+        
+        def find_window_id_by_title(title_pattern: str) -> str | None:
+            """
+            Returns the hex window id (e.g. '0x4a0000b') of the first window whose
+            title contains *title_pattern* (case-insensitive).  Uses `xwininfo -tree -root`.
+            """
+            try:
+                out = subprocess.check_output(
+                    ["xwininfo", "-root", "-tree"], text=True, stderr=subprocess.DEVNULL
+                )
+                # Example line:
+                #     0x4a0000b "Stereo Viewer - Left Eye": ("Stereo Viewer - Left Eye" ...
+                pat = re.compile(
+                    rf'^\s+(0x[0-9a-fA-F]+)\s.*?"[^"]*{re.escape(title_pattern)}[^"]*"',
+                    re.IGNORECASE,
+                )
+                for line in out.splitlines():
+                    m = pat.match(line)
+                    if m:
+                        return m.group(1)
+            except Exception as e:
+                print(f"[window_id] search failed: {e}")
+            return None
+
+    # Make sure the GLFW window has a recognizable title:
+    glfw_title = glfw.get_window_title(window) or ""
+    search_title = glfw_title if "Stereo Viewer" in glfw_title else "Stereo Viewer"
+
+    window_id = find_window_id_by_title(search_title)
+    display_env = get_display_env(window_id)+".0"
     
-    elif os == "Linux":
-        return None, None # TODO: add ffmpeg for Linux
-    else:
-        return None, None
+    if not window_id:
+        raise RuntimeError(
+            f"Could not locate a window with title containing '{search_title}'. "
+            "Check glfw.set_window_title() or run `xwininfo -tree -root | grep -i stereo`."
+        )
+    print(f"[info] Capturing window id {window_id}")
+    drag_window_offscreen(window_id)
+
+    # audio_index = get_device_index(STEREOMIX_DEVICE, "audio")
+    server_cmd = ["./rtmp/linux/mediamtx", "./rtmp/linux/mediamtx.yml"]
+
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-fflags", "+genpts+nobuffer+flush_packets",
+        "-flags", "low_delay",
+        "-avioflags", "direct",
+        "-probesize", "64",
+        "-analyzeduration", "0",
+        "-itsoffset", str(AUDIO_DELAY),
+        "-f", "x11grab",
+        "-framerate", "60", 
+        "-vsync", "1",
+        "-window_id", window_id,
+        "-use_wallclock_as_timestamps", "1",
+        "-thread_queue_size", "4096",  # Increased for video
+        "-i", display_env,
+        "-f", "pulse",
+        "-thread_queue_size", "1024",  # Increased for audio
+        "-i", STEREOMIX_DEVICE,
+        "-ac", "2",
+        "-filter_complex", f"[0:v]fps={FPS},scale=iw:trunc(ih/2)*2,format=yuv420p,setpts=PTS-STARTPTS[v];[1:a]aresample=async=1:first_pts=0,apad[a]",
+        "-map", "[v]",
+        "-map", "[a]",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-tune", "zerolatency",
+        "-x264-params", f"keyint={FPS}:min-keyint={FPS}:scenecut=0:rc-lookahead=0",
+        "-g", str(FPS),
+        "-r", str(FPS),
+        "-crf", str(CRF),
+        "-bufsize", "20M",
+        "-c:a", "libopus", 
+        "-ar", "48000",
+        "-b:a", "128k",
+        "-application", "lowdelay",
+        "-f", "rtsp",
+        "-rtsp_transport", "tcp",
+        f"rtsp://localhost:8554/{STREAM_KEY}"
+    ]
+
     return server_cmd, ffmpeg_cmd
 
 # ffmpeg based rtmp streamer
 def rtmp_stream(window):
-    try:
-        # Start RTMP server
-        server_cmd, ffmpeg_cmd = get_rtmp_cmd(OS_NAME, window=window)
-        rtmp_server = subprocess.Popen(server_cmd, stdout=subprocess.PIPE)
+    global current_stream_size, global_processes
 
-        ffmpeg = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE)  # Change to PIPE to capture logs
-        
-        # Store process references globally
-        global_processes['rtmp_server'] = rtmp_server
-        global_processes['ffmpeg'] = ffmpeg
-        print(f"[RTMPStreamer] [RTMP] serving on rtmp://{LOCAL_IP}:1935/{STREAM_KEY}/")
-        print(f"[RTSPStreamer] [RTSP] serving on rtsp://{LOCAL_IP}:8554/{STREAM_KEY}/")
-        print(f"[RTMPStreamer] [HLS] serving on http://{LOCAL_IP}:8888/{STREAM_KEY}/")
-        print(f"[RTMPStreamer] [HLS M3U8] serving on http://{LOCAL_IP}:8888/{STREAM_KEY}/index.m3u8")
-        print(f"[RTMPStreamer] [WebRTC] serving on http://{LOCAL_IP}:8889/{STREAM_KEY}/")
-        print("[RTMP] RTMP stream started")
-        
-        # Wait for shutdown event
-        while not shutdown_event.is_set():
-            time.sleep(0.1)
-        
-        # Cleanup when shutdown is signaled
-        print("[RTMP] Shutting down RTMP stream...")
-        ffmpeg.terminate()
-        rtmp_server.terminate()
-        ffmpeg.wait(timeout=5)
-        rtmp_server.wait(timeout=5)
-        
-    except subprocess.TimeoutExpired:
-        print("[RTMP] Timeout expired, force killing processes...")
-        if 'ffmpeg' in locals():
-            ffmpeg.kill()
-        if 'rtmp_server' in locals():
-            rtmp_server.kill()
-    except Exception as e:
-        print(f"[RTMP] Error: {e}")
-        if 'ffmpeg' in locals():
-            ffmpeg.terminate()
-        if 'rtmp_server' in locals():
-            rtmp_server.terminate()
-    finally:
-        print("[RTMP] RTMP stream stopped")
+    while not shutdown_event.is_set():
+        try:
+            width, height = glfw.get_framebuffer_size(window)
+            new_size = (width, height)
+
+            # Debounce: ignore tiny changes
+            if current_stream_size and abs(current_stream_size[0] - new_size[0]) < 8 and abs(current_stream_size[1] - new_size[1]) < 8:
+                time.sleep(0.1)
+                continue
+
+            with ffmpeg_restart_lock:
+                if current_stream_size == new_size:
+                    time.sleep(0.1)
+                    continue
+                current_stream_size = new_size
+
+            # Terminate old processes
+            for name in ['ffmpeg', 'rtmp_server']:
+                proc = global_processes.get(name)
+                if proc and proc.poll() is None:
+                    print(f"[RTMP] Stopping {name} for resize...")
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+
+            # Start new
+            server_cmd, ffmpeg_cmd = get_rtmp_cmd(OS_NAME, window=window)
+            print(f"[RTMP] Restarting stream at {width}x{height}")
+
+            rtmp_server = subprocess.Popen(server_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ffmpeg = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE)
+
+            global_processes['rtmp_server'] = rtmp_server
+            global_processes['ffmpeg'] = ffmpeg
+
+            print(f"[RTMP] Stream active: {width}x{height}")
+
+        except Exception as e:
+            print(f"[RTMP] Error: {e}")
+            time.sleep(1)
+
+        time.sleep(0.2)
+
+    print("[RTMP] Stream thread exited.")
 
 def main(mode="Viewer"):
     # Start capture and processing threads
@@ -473,9 +712,10 @@ def main(mode="Viewer"):
                             set_window_to_bottom(window.window)
                             time.sleep(0.01)
                     threading.Thread(target=bottom_loop, daemon=True).start()
-                rtmp_thread = threading.Thread(target=lambda: rtmp_stream(window.window), daemon=True)
+                global rtmp_thread
+                rtmp_thread = threading.Thread(target=rtmp_stream, args=(window.window,), daemon=True)
                 rtmp_thread.start()
-                print(f"[Main] RTMP Streamer Started")
+                print(f"[Main] RTMP Streamer Started (auto-restart on resize)")
             elif STREAM_MODE == "MJPEG":
                 from streamer import MJPEGStreamer
                 streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)

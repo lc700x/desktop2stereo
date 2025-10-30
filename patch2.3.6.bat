@@ -4,7 +4,7 @@ Set "PYTHON_EXE=.\Python311\python.exe"
 
 
 @REM Update pip
-echo [Desktop2Stereo Patch 2.3.5]
+echo [Desktop2Stereo Patch]
 echo - Updating the pip package
 %PYTHON_EXE% -m pip install --upgrade pip --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (
@@ -16,7 +16,7 @@ if %errorlevel% neq 0 (
 @REM Install new requirements
 echo.
 echo - Installing new requirements
-%PYTHON_EXE% -m pip install windows-capture==1.5.0 sounddevice==0.5.3 PyOpenGL==3.1.10 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (
     echo Failed to install requirements
     pause

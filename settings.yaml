@@ -413,6 +413,6 @@ Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stream Key: live
-Stereo Mix: BlackHole 2ch
+Stereo Mix: alsa_output.pci-0000_11_00.6.iec958-stereo.monitor
 CRF: 20
 Audio Delay: -0.15

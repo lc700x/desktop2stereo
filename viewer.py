@@ -6,7 +6,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 from OpenGL.GL import *
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE
+from utils import OS_NAME, crop_icon, get_font_type, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
@@ -100,7 +100,7 @@ class StereoWindow:
         
         # Font and text sizing
         self.font = None
-        self.font_type = "Verdana.ttf" if OS_NAME == "Darwin" else "verdana.ttf"
+        self.font_type = get_font_type()
         self.base_font_size = 60  # Base size for 1280x720 window
         self.current_font_size = self.base_font_size
         self.text_padding = 10
@@ -428,12 +428,16 @@ class StereoWindow:
                 glfw.set_window_size(self.window, mon_w, mon_h)
                 glfw.set_window_pos(self.window, mon_x, mon_y)
             else:
-                x = mon_x + (mon_w - self.window_size[0]) // 2
-                y = mon_y + (mon_h - self.window_size[1]) // 2
+                if self.stream_mode == "RTMP" and OS_NAME=="Linux":
+                    x = mon_x + mon_w // 2
+                    y = mon_y + mon_h // 2
+                else:
+                    x = mon_x + (mon_w - self.window_size[0]) // 2
+                    y = mon_y + (mon_h - self.window_size[1]) // 2
                 glfw.set_window_pos(self.window, x, y)
-            if self.stream_mode == "RTMP":
-                if vidmode.size == self.window_size:
-                    glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+            # if self.stream_mode == "RTMP":
+                # if vidmode.size == self.window_size:
+                #     glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             self.monitor_index = monitor_index
 
     def get_current_monitor(self):

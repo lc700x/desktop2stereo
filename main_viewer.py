@@ -2,7 +2,7 @@ import threading
 import queue
 import glfw
 import time
-from utils import OUTPUT_RESOLUTION, DISPLAY_MODE, SHOW_FPS, FPS, IPD, DEPTH_STRENGTH
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, LOCAL_IP, AUDIO_DELAY, CRF, shutdown_event
 from capture import DesktopGrabber
 from depth import predict_depth, process
 from viewer import StereoWindow
@@ -27,7 +27,7 @@ def put_latest(q, item):
         time.sleep(TIME_SLEEP)  # Drop frame if race condition occurs
 
 def capture_loop():
-    cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS)
+    cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX)
     while True:
         try:
             frame_raw, size = cap.grab()

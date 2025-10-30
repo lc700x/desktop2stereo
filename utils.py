@@ -3,7 +3,8 @@ import os, platform, socket
 
 # App Version
 VERSION = "2.3.6"
-
+# Get OS name
+OS_NAME = platform.system()
 # Define StereoMix devices
 STEREO_MIX_NAMES = [
 # English
@@ -19,11 +20,27 @@ STEREO_MIX_NAMES = [
 # German
 "stereomix", "was du hörst", "loopback", "systemaudio", "gemischte ausgabe",
 # macOS specific
-"blackhole", "loopback", "aggregate device", "multi-output device", "virtual desktop speakers", "remote sound"
+"blackhole", "loopback", "aggregate device", "multi-output device", "virtual desktop speakers", "remote sound",
+# Linux specific
+"monitor"
 ]
 
 # Global shutdown event
 shutdown_event = threading.Event()
+
+def get_font_type(os=OS_NAME):
+    if os == "Darwin":
+        return "Verdana.ttf"
+    elif os == "Windows": 
+        return "verdana.ttf"
+    elif os == "Linux":
+        try:
+            return "/usr/share/fonts/truetype/freefont/FreeSans.ttf" # fix for Ubuntu
+        except:
+            return "Verdana.ttf"
+    else:
+        return "Verdana.ttf"
+
 
 def read_yaml(path):
     try:
@@ -50,16 +67,14 @@ def get_local_ip():
 
 def crop_icon(icon_img):
     """Crop to make icon larger by cropping for Windows"""
-    icon_img = icon_img.convert("RGBA")
-    bbox = icon_img.getbbox()
-    icon_img = icon_img.crop(bbox)
+    if OS_NAME == "Windows":
+        icon_img = icon_img.convert("RGBA")
+        bbox = icon_img.getbbox()
+        icon_img = icon_img.crop(bbox)
     return icon_img
 
 # load customized settings
 settings = read_yaml("settings.yaml")
-
-# Get OS name
-OS_NAME = platform.system()
 
 # Ignore wanning for MPS
 if OS_NAME == "Darwin":
@@ -156,7 +171,7 @@ AA_STRENTH *= 4 # 0-100
 
 # Experimental Settings
 DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer
-USE_TORCH_COMPILE = settings["torch.compile"] # compile model with torch.compile
+USE_TORCH_COMPILE = settings["torch.compile"] if OS_NAME == "Windows" else False # compile model with torch.compile
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
 CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture

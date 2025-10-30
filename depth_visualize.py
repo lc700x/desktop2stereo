@@ -7,18 +7,19 @@ import numpy as np
 from threading import Lock
 from PIL import Image
 import os
-img  = Image.open("assets/test.png").convert("RGB")
+img  = Image.open("assets/cats.jpg").convert("RGB")
 image_rgb = np.array(img)
 AA_STRENTH = 0.4
 FP16 = False
 DTYPE = torch.float16 if FP16 else torch.float32
 CACHE_PATH = "models"
 DEVICE_ID = 0
-MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
-# MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+# MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
+MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 DEPTH_RESOLUTION = 518
 FOREGROUND_SCALE = 0
 USE_TORCH_COMPILE = False
+USE_TENSORRT = False
 
 # Initialize DirectML Device
 def get_device(index=0):
