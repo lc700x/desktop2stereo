@@ -745,7 +745,7 @@ class ConfigGUI(tk.Tk):
         # Try to auto-select the first matching stereo mix–like device
         for device in self.audio_devices:
             device_lower = device.lower()
-            print(device_lower)
+            # print(device_lower)
             for mix_name in STEREO_MIX_NAMES:
                 if mix_name in device_lower:
                     self.audio_device_var.set(device)

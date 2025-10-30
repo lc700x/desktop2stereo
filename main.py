@@ -557,62 +557,62 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
                 print(f"[window_id] search failed: {e}")
             return None
 
-    # Make sure the GLFW window has a recognizable title:
-    glfw_title = glfw.get_window_title(window) or ""
-    search_title = glfw_title if "Stereo Viewer" in glfw_title else "Stereo Viewer"
+        # Make sure the GLFW window has a recognizable title:
+        glfw_title = glfw.get_window_title(window) or ""
+        search_title = glfw_title if "Stereo Viewer" in glfw_title else "Stereo Viewer"
 
-    window_id = find_window_id_by_title(search_title)
-    display_env = get_display_env(window_id)+".0"
-    
-    if not window_id:
-        raise RuntimeError(
-            f"Could not locate a window with title containing '{search_title}'. "
-            "Check glfw.set_window_title() or run `xwininfo -tree -root | grep -i stereo`."
-        )
-    print(f"[info] Capturing window id {window_id}")
-    drag_window_offscreen(window_id)
+        window_id = find_window_id_by_title(search_title)
+        display_env = get_display_env(window_id)+".0"
+        
+        if not window_id:
+            raise RuntimeError(
+                f"Could not locate a window with title containing '{search_title}'. "
+                "Check glfw.set_window_title() or run `xwininfo -tree -root | grep -i stereo`."
+            )
+        print(f"[info] Capturing window id {window_id}")
+        drag_window_offscreen(window_id)
 
-    # audio_index = get_device_index(STEREOMIX_DEVICE, "audio")
-    server_cmd = ["./rtmp/linux/mediamtx", "./rtmp/linux/mediamtx.yml"]
+        # audio_index = get_device_index(STEREOMIX_DEVICE, "audio")
+        server_cmd = ["./rtmp/linux/mediamtx", "./rtmp/linux/mediamtx.yml"]
 
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-fflags", "+genpts+nobuffer+flush_packets",
-        "-flags", "low_delay",
-        "-avioflags", "direct",
-        "-probesize", "64",
-        "-analyzeduration", "0",
-        "-itsoffset", str(AUDIO_DELAY),
-        "-f", "x11grab",
-        "-framerate", "60", 
-        "-vsync", "1",
-        "-window_id", window_id,
-        "-use_wallclock_as_timestamps", "1",
-        "-thread_queue_size", "4096",  # Increased for video
-        "-i", display_env,
-        "-f", "pulse",
-        "-thread_queue_size", "1024",  # Increased for audio
-        "-i", STEREOMIX_DEVICE,
-        "-ac", "2",
-        "-filter_complex", f"[0:v]fps={FPS},scale=iw:trunc(ih/2)*2,format=yuv420p,setpts=PTS-STARTPTS[v];[1:a]aresample=async=1:first_pts=0,apad[a]",
-        "-map", "[v]",
-        "-map", "[a]",
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-tune", "zerolatency",
-        "-x264-params", f"keyint={FPS}:min-keyint={FPS}:scenecut=0:rc-lookahead=0",
-        "-g", str(FPS),
-        "-r", str(FPS),
-        "-crf", str(CRF),
-        "-bufsize", "20M",
-        "-c:a", "libopus", 
-        "-ar", "48000",
-        "-b:a", "128k",
-        "-application", "lowdelay",
-        "-f", "rtsp",
-        "-rtsp_transport", "tcp",
-        f"rtsp://localhost:8554/{STREAM_KEY}"
-    ]
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-fflags", "+genpts+nobuffer+flush_packets",
+            "-flags", "low_delay",
+            "-avioflags", "direct",
+            "-probesize", "64",
+            "-analyzeduration", "0",
+            "-itsoffset", str(AUDIO_DELAY),
+            "-f", "x11grab",
+            "-framerate", "60", 
+            "-vsync", "1",
+            "-window_id", window_id,
+            "-use_wallclock_as_timestamps", "1",
+            "-thread_queue_size", "4096",  # Increased for video
+            "-i", display_env,
+            "-f", "pulse",
+            "-thread_queue_size", "1024",  # Increased for audio
+            "-i", STEREOMIX_DEVICE,
+            "-ac", "2",
+            "-filter_complex", f"[0:v]fps={FPS},scale=iw:trunc(ih/2)*2,format=yuv420p,setpts=PTS-STARTPTS[v];[1:a]aresample=async=1:first_pts=0,apad[a]",
+            "-map", "[v]",
+            "-map", "[a]",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-x264-params", f"keyint={FPS}:min-keyint={FPS}:scenecut=0:rc-lookahead=0",
+            "-g", str(FPS),
+            "-r", str(FPS),
+            "-crf", str(CRF),
+            "-bufsize", "20M",
+            "-c:a", "libopus", 
+            "-ar", "48000",
+            "-b:a", "128k",
+            "-application", "lowdelay",
+            "-f", "rtsp",
+            "-rtsp_transport", "tcp",
+            f"rtsp://localhost:8554/{STREAM_KEY}"
+        ]
 
     return server_cmd, ffmpeg_cmd
 
