@@ -2,7 +2,7 @@
 [中文版本](./readmeCN.md)   
   
 ![Desktop2Stereo](./assets/Banner.png)   
-A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/Apple Silicon devices on Windows/Mac/Linux OS, powered by Depth Estimation AI Models
+A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/Apple Silicon devices on Windows/Mac/Ubuntu, powered by Depth Estimation AI Models
 ## Alternative Download Link
 [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96)  
 Access code: `1vcn`  
@@ -14,7 +14,7 @@ Access code: `1vcn`
 ## Supported OS  
 1. Windows 10/11 (x64/Arm64)
 2. MacOS 10.16 or later  
-3. Linux OS (beta)  
+3. Ubuntu 22.04 or later  
 ## Preparation and Installation
 ### Windows  
 1. Install latest GPU driver  
@@ -24,16 +24,21 @@ Access code: `1vcn`
 **Qualcomm GPU**: Download latest GPU driver from [Qualcomm® Adreno™ Windows Graphics Drivers for Snapdragon® X Platform](https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver).  
 **Other DirectML devices**: Please install the latest hardware driver accordingly.  
 2. Deploy Desktop2Stereo Environment  
-- Method 1: Use Portable Version **(Recommended)**  
+- **Method 1 (Recommended)**: Use Portable Version   
 Download: [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96) (Access code: `1vcn`)  
-**AMD/Intel/Qualcomm GPU and other DirectML devies**: Download and unzip the `Desktop2Stereo_v2.3.3_AMD_etc_Windows.zip` to local disk.  
-**NVIDIA GPU**: Download and unzip `Desktop2Stereo_v2.3.3_NVIDIA_Windows.zip` to local disk.  
-- Method 2: Manual Deployment  
+**AMD/Intel/Qualcomm GPU and other DirectML devies**: Download and unzip the `Desktop2Stereo_vX.X.X_AMD_etc_Windows.zip` to local disk.  
+**NVIDIA GPU**: Download and unzip `Desktop2Stereo_vX.X.X_NVIDIA_Windows.zip` to local disk.  
+- **Method 2**: Manual Deployment with embeded Python
+    1. Download and unzip `Desktop2Stereo_vX.X.X_Python311_Windows.zip` to local disk.  
+    2. Install Python environment  
+    **AMD/Intel/Qualcomm GPU and other DirectML devies**: Doulbe click `install-dml_standalone.bat`.  
+    **NVIDIA GPU**: Doulbe click `install-cuda_standalone.bat`.
+- Method 3: Manual Deployment with system Python
   1. Install **Python 3.11**  
   Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) and install.  
   2. Download Desktop2Stereo app  
   Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.  
-  3. Install python environment  
+  3. Install Python environment  
   **AMD/Intel/Qualcomm GPU and other DirectML devies**: Doulbe click `install-dml.bat`.  
   **NVIDIA GPU**: Doulbe click `install-cuda.bat`.  
 ### MacOS 
@@ -43,7 +48,7 @@ Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10
 Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.  
 3. Install Python environment  
 Doulbe click `install-mps` executable. (Please allow open in **Privacy and Security Settings**)
-### Linux (Beta)
+### Ubuntu
 1. Install latest GPU driver  
 **AMD GPU**: Download latest GPU driver and ROCm from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). 
 **NVIDIA GPU**: Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.nvidia.com/en-us/geforce/drivers/).
@@ -52,14 +57,18 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
     # Example: Ubuntu
     sudo add-apt-repository ppa:savoury1/python
     sudo apt update
-    sudo apt-get install python3.10
+    sudo apt-get install python3.11 python3.11-venv
     ```
 2. Download Desktop2Stereo app  
    Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.
 3. Install Python environment  
-    **AMD GPU**: Run `install-rocm.bash`: 
+    **AMD GPU**: Run `install-rocm.bash`:   
     ```bash
     bash install-rocm.bash
+    ```
+    Or for 7000/9000/AI Max/etc Series GPUs: [https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)  
+    ```bash
+    bash install-rocm7.bash
     ```
     **NVIDIA GPU**: Run `install-cuda.bash`:  
     ```bash
@@ -68,12 +77,12 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
 ## Desktop2Stereo GUI App
 ![Desktop2Stereo GUI](./assets/GUI.png)
 ### Quick Run Desktop2Stereo
-1. Choose a **Run Mode** in Desktop2Stereo: local `Viewer` or web `Streamer`
-2. Select the **Device**
+1. Choose one of the **Run Mode** in Desktop2Stereo: `Local Viewer`, `MJPEG Streamer`, `RTMP Streamer`, `Legacy Streamer`, `3D Monitor`
+2. Select the **Computing Device**
 3. Select target **Monitor/Window**
-4. Just use the default settnigs and click **Run**.
+4. Just use the default settings and click **Run**.
 ![RUN](./assets/run.png)
-### Local **Viewer** Mode:
+### **Local Viewer** Mode:
 ![Stereo Viewer Window](./assets/Viewer.png)
 1. Set your video/game on the main screen.  
 2. Click the **Stereo Viewer** window, Use `← Left ` or `→ Right` arrow keys to switch the **Stereo Viewer** window to second (virtual) monitor display. 
@@ -81,14 +90,32 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
 4. Now you can use AR/VR to view the SBS or TAB output.   
 - **AR** need to switch to 3D mode to connect as a 3840*1080 (Full Side-by-Side, `FUll-SBS`) display.  
  ![Full-SBS](./assets/FullSBS.png)
-- **VR** need to use 2nd Display/Virtual Display (VDD) with Desktop+[PC VR] or Virtual Desktop[PC/Standalone VR] or OBS + Wolvic Browser [Standalone VR] to comopose the `Half-SBS` (Half Side-by-Side) / `Full-SBS` (Full Side-by-Side) / `TAB` (Top-and-Bottom) display to 3D.   
+- **VR** need to use 2nd Display/Virtual Display (VDD) with Desktop+[Steam VR] or Virtual Desktop[PC/Standalone VR] or OBS + Wolvic Browser [Standalone VR] to comopose the `Half-SBS` (Half Side-by-Side) / `Full-SBS` (Full Side-by-Side) / `TAB` (Top-and-Bottom) display to 3D.   
 - You can use `Tab` key to toggle `Half-SBS`/`Full-SBS`/`TAB`  mode.   
 ![Half-SBS](./assets/HalfSBS.png)    
 ![TAB](./assets/TAB.png)
-1. Real-time modification of **depth strength**.  
+5. Real-time modification of **depth strength**.  
    Use `↑ Up ` or `↓ Down` arrow keys to increase/decrease the depth strength by a step of `0.5`. To reset press `0` key. 
-   The defination of **depth strength** is in the [detailed settings](###detailed-settings) session.    
-2. Press `Esc` to exit the **Stereo Viewer**. 
+   The defination of **depth strength** is in the [detailed settings](###detailed-settings) session.      
+6. Press `Esc` to exit the **Stereo Viewer**. 
+7. Full Stereo Viewer Shortcuts
+    (Need to click the Stereo Viewer window/tab first to use.)
+    | Key           | Action Description                         | Supported Run Mode(s)     |
+    | ------------- | ------------------------------------------ | ------------------------- |
+    | Enter / Space | Toggle fullscreen mode                     | Local Viewer              |
+    | Right   | Move window to adjacent monitor (next)     | Local Viewer / RTMP Streamer / 3D Monitor             |
+    | Left    | Move window to adjacent monitor (previous) | Local Viewer / RTMP Streamer / 3D Monitor              |
+    | Esc        | Close the application window               | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor                       |
+    | Down    | Decrease `depth_ratio` by 0.5 (min 0)      | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor                |
+    | Up      | Increase `depth_ratio` by 0.5 (max 10)     | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor                |
+    | 0      | Reset `depth_ratio` to original value      | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor                |
+    | Tab           | Cycle to the next display mode             | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
+    | F             | Toggle FPS display                         | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor                       |
+    | A             | Toggle “fill 16:9” mode                    | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
+    | L             | Toggle lock Stereo Viewer window aspect ratio lock            | Local Viewer |
+
+
+
 ### Detailed Settings
 All optional settings can be modified on the GUI window and saved to the `settings.yaml`. Each time you click `Run`, the settings will be saved automatically, and clicking `Reset` will restore the default settings.  
 

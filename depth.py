@@ -326,6 +326,8 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         config = builder.create_builder_config()
         if FP16:
             config.set_flag(trt.BuilderFlag.FP16)
+        else:
+            config.set_flag(trt.BuilderFlag.FP32)
         config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1GB
         
         # Set dynamic shapes profile
