@@ -283,7 +283,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             '-crf', f'{CRF}', # 18-24 smaller better quality
             '-c:a', 'libopus',
             # '-ar', '44100',
-            # '-b:a', '128k',
+            '-b:a', '128k',
             '-muxdelay', '0',
             '-muxpreload', '0',
             '-flush_packets', '1',
