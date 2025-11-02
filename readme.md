@@ -87,7 +87,7 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
 2. Select the **Computing Device**  
 3. Select target **Monitor/Window**  
 4. Just use the default settings and click **Run**.  
-![run](./assets/run.png)  
+![run](./assets/Run.png)  
 ### **Local Viewer** Mode
 ![Stereo Viewer Window](./assets/local.png) 
 > [!Tip]  
