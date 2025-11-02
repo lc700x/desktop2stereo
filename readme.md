@@ -113,7 +113,7 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
 ### **RTMP Streamer** mode
 ![RTMP Streamer](./assets/rtmp.png)  
 > [!Tip]  
-> **RTMP Streamer** mode is best for wireless streaming with video and audio together to client devices/apps, like **VLC Player**, **Wolvic Browser**, **Quark Brower**, etc., but it may have a latency of `1~3` seconds.   
+> **RTMP Streamer** mode is best for wireless streaming with video and audio together to client devices/apps by capturing the local **Stereo Viewer** window, like **VLC Player**, **Wolvic Browser**, **Quark Brower**, etc., but it may have a latency of `1~3` seconds.   
 > For VR or Huawei AR: [Wolvic Browser](https://wolvic.com/dl/) is recommanded to open `HLS`/`WebRTC` link.  
 > Other `RTSP`, `RTMP`, `HLS M3U8` protocal may be chosen for VLC [i.e. extend screen mode for AR glasses] / VR-AR Video (DeoVR) Apps on client devices.  
 
@@ -137,8 +137,11 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
     Select the **Stereo Mix** device name ended with `stereo.monitor` i.e. `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`.  
 4. Set a **Stream Key**, default is `live`.  
 5. (Optional) Adjust the **Audio Delay**, `negative` value means play the audio in advance before the video, `positive` value means delay the audio play after the video.  
-6. The other settings are the same as the **Local Viewer**, click `Run` button to run.  
-7. On client device, key in the streaming URL according to the **Stream Protocal**.  
+6. (Optional) It is recommended to use a second (virtual) screen with a resolution equal to or larger than the main screen to place the Stereo Viewer window.
+    > [!Tip]
+    > If using `Full-SBS` output at the same resolution as the main screen, you will need a screen with twice the width of the original screen. For example, if the main screen is `4K (3840x2160)`, the second (virtual) screen needs to be `8K (7680x2160)`.
+7. The other settings are the same as the **Local Viewer**, click `Run` button to run.  
+8. On client device, key in the streaming URL according to the **Stream Protocal**.  
 
 ### **MJPEG Streamer** mode
 ![MJPEG Streamer](./assets/MJPEG.png)  
@@ -187,7 +190,7 @@ In 3D Monitor mode, please use the passthrough cursor on either left or right sc
 All optional settings can be modified on the GUI window and saved to the `settings.yaml`. Each time you click `Run`, the settings will be saved automatically, and clicking `Reset` will restore the default settings.  
 
 1. **Run Mode**  
-    5 Run Modes: `Local Viewer`, `MJPEG Streamer`, `RTMP Streamer`, `Legacy Streamer`, `3D Monitor` (Windows Only).  
+    `5` **Run Mode**s are available: `Local Viewer`, `MJPEG Streamer`, `RTMP Streamer`, `Legacy Streamer`, `3D Monitor` (Windows Only).  
 2. **Set Language**  
     English (`EN`) and Simplified Chinese (`CN`) are supported. 
 3. **Monitor**  or **Window** mode
@@ -206,25 +209,25 @@ All optional settings can be modified on the GUI window and saved to the `settin
 8. **FPS** (frames per second)
     FPS can set as your monitor refresh rate, default input FPS is `60`.   
     It determins the freqency of the screen caputre process and streaming fps for streamer modes (higher FPS does not ensure smoother output, depending on your devices).
-10. **Output Resolution**
+9.  **Output Resolution**
     Default is `1080` (i.e. **1080p**, `1920x1080`) for a smoother experience. `2160` (**4K**, i.e. `3840x2160`) and `1440` (**2K**, i.e. `2560x1440`) resolutions are also available if you have powerful devices. 
     If the input source has smaller resolution than the output, the **Output Resolution** will be applied same as the smaller one. 
     The **Output Resolution** by default keeps the aspect ratio of the input source. 
-11. **Fill 16:9**  
+10. **Fill 16:9**  
     Enabled by default. If the aspect of input source is not `16:9`, the black background will be applied to fill it to `16:9`. 
-12. **Fix Viewer Aspect** (**Local Viewer** mode Only)  
+11. **Fix Viewer Aspect** (**Local Viewer** mode Only)  
     Diabled by default. This option is to lock the window of **Stereo Viewer**, which may be useful for the upscaling and frame generation apps like [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/).   
-13. **Depth Resolution**  
+12. **Depth Resolution**  
     Higher **Depth Resolution** can give better depth details but cause higher GPU usage, which is also related to the model training settings.  
     Default **Depth Resolution** is set to `336` for balanced performance on `Depth-Anything-V2` models. The **Depth Resolution** options varies among different depth models. 
-14. **Depth Strength**  
+13. **Depth Strength**  
     With higher **Depth Strength**, 3D depth effect of the object would be stronger. However, higher value can induce visible artifacts and distortion.
     Default is set to `2.0`. The recomanded depth strength range is `(1, 5)`.  
-15. **Anti-Aliasing**
+14. **Anti-Aliasing**
     This can be effective to reduce jagged edges and artifacts under high **Depth Strength**, default value is set as `1` for most cases. Higher value may reduce the depth details. 
-16. **Foreground Scale**  
+15. **Foreground Scale**  
     Default value is `1.0`. `Positive` value means foreground closer, background further. `Negative` value means foreground flatter, background closer. `0` is no change of foreground and background strength.  
-17. **Display Mode**  
+16. **Display Mode**  
     It determins how the left and right eye scences are arranged in the output. Default is `Half-SBS` for most VR devices, `TAB` is also an alternative; `Full-SBS` is mainly for AR glasses.
     - **Full-SBS** (Full Side-by-Side, `32:9`)  
     Two full-resolution images are placed side by side: one for the left eye, one for the right.  
@@ -238,12 +241,12 @@ All optional settings can be modified on the GUI window and saved to the `settin
     Left and right eye images are stacked vertically: one on top, one on bottom.  
     Each image is compressed vertically to fit the frame.  
     Common in streaming and broadcast formats; quality similar to Half-SBS.  
-18. **IPD** (Interpupillary Distance)  
+17. **IPD** (Interpupillary Distance)  
     IPD is the distance between the centers of your pupils, it affects how your brain interprets stereoscopic 3D. 
     The default IPD is `0.064` in meter (m), which is the average human IPD value. 
-19. **Download Path**  
+18. **Download Path**  
    Default download path is the `models` folder under the working directory.
-20. **Depth Model**
+19. **Depth Model**
     Modify the depth model id from [HuggingFace](https://huggingface.co/), the model id under `depth_model` mostly shall end with `-hf`.  
     Large model can cause higher GPU usage and latency.   
     Default depth model: `depth-anything/Depth-Anything-V2-Small-hf`. 
@@ -295,9 +298,9 @@ All optional settings can be modified on the GUI window and saved to the `settin
     - Intel/zoedepth-nyu  
     - Intel/zoedepth-kitti  
     - apple/DepthPro-hf # Slow, NOT recommand  
-21. **HF Endpoint** (Hugging Face)  
+20. **HF Endpoint** (Hugging Face)  
    [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run. 
-22. **Inference Optimizer** (Windows/Ubuntu Only)
+21. **Inference Optimizer** (Windows/Ubuntu Only)
     These optimizers can typically increase the output FPS by `30%~50%`. However, not all models support **Inference Optimizer**, if the optimization fails, the inference process will fall back to PyTorch. 
     **NVIDIA GPUs**:
     - **torch.compile** (Windows Only): it leverages Triton under the hood to generate optimized kernels automatically, and provides slight to moderate speedups by fusing operations and reducing overhead. 
@@ -415,5 +418,6 @@ All optional settings can be modified on the GUI window and saved to the `settin
 - [NiiightmareXD/windows-capture](https://github.com/NiiightmareXD/windows-capture)
 - [BoboTiG/python-mss](https://github.com/BoboTiG/python-mss)
 - [nagadomi/nunif](https://github.com/nagadomi/nunif)
+- [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)
 - Other related tools and libraries
 - All feedback from the users

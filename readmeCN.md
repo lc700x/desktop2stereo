@@ -121,7 +121,7 @@
 ### **RTMP推流** 模式
 ![RTMP Streamer](./assets/rtmp.png) 
 > [!Tip]
-> **RTMP推流** 模式最适合将视频和音频一起无线流式传输到客户端设备/应用程序，如 **VLC 播放器**, **Wolvic 浏览器**, **夸克浏览器** 等，但可能会有 `1~3` 秒的延迟。
+> **RTMP推流** 模式通过捕获本地的**Stereo Viewer**窗口，最适合将视频和音频一起无线流式传输到客户端设备/应用程序，如 **VLC 播放器**, **Wolvic 浏览器**, **夸克浏览器** 等，但可能会有 `1~3` 秒的延迟。
 > 对于 VR 或华为 AR：推荐使用 [Wolvic 浏览器](https://wolvic.com/dl/) 打开 `HLS`/`WebRTC` 链接。
 > 客户端设备上的其他 `RTSP`, `RTMP`, `HLS M3U8` 协议可能适用于 VLC [例如 AR 眼镜的扩展屏幕模式] / VR-AR 视频 (DeoVR) 应用程序。
 
@@ -144,8 +144,11 @@
         选择 **立体声混音** 设备名称以 `stereo.monitor` 结尾，例如 `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`。
 4.  设置一个 **流密钥**，默认为 `live`。
 5.  (可选) 调整 **音频延迟**，`负值` 表示在视频之前提前播放音频，`正值` 表示在视频之后延迟播放音频。
-6.  其他设置与 **本地查看** 相同，点击 `运行` 按钮运行。
-7.  在客户端设备上，根据 **流协议** 输入推流网址。
+6.  (可选) 建议使用分辨率和主屏幕相同或更大的第二个 (虚拟) 屏幕来放置**Stereo Viewer**窗口。  
+    > [!Tip]
+    > 若使用全宽左右模式 (`Full-SBS`) 输出相同主屏幕的分辨率，您将需要宽度为原始屏幕两倍的屏幕，如主屏幕`4k (3840x2160)`则第二个 (虚拟) 屏幕需要为`8k (7680x2160)`
+7.  其他设置与 **本地查看** 相同，点击 `运行` 按钮运行。
+8.  在客户端设备上，根据 **流协议** 输入推流网址。
 
 ### **MJPEG推流** 模式
 ![MJPEG Streamer](./assets/MJPEG.png)  
@@ -197,7 +200,7 @@
 所有可选设置都可以在 GUI 窗口上修改并保存到 `settings.yaml`。每次点击 `运行` 时，设置将自动保存，点击 `重置` 将恢复默认设置。
 
 1.  **运行模式**
-    5 种运行模式：`本地查看`, `MJPEG推流`, `RTMP推流`, `旧网络推流`, `3D 显示器` (仅限 Windows)。
+    提供 `5` 种运行模式：`本地查看`, `MJPEG推流`, `RTMP推流`, `旧网络推流`, `3D 显示器` (仅限 Windows)。
 2.  **设置语言**
     支持英文 (`EN`) 和简体中文 (`CN`)。
 3.  **显示器** 或 **窗口** 模式
@@ -424,5 +427,6 @@
 - [NiiightmareXD/windows-capture](https://github.com/NiiightmareXD/windows-capture)
 - [BoboTiG/python-mss](https://github.com/BoboTiG/python-mss)
 - [nagadomi/nunif](https://github.com/nagadomi/nunif)
+- [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)
 - 其他相关的工具和库
 - 所有用户的反馈
