@@ -21,7 +21,7 @@ TBD, will release on [BiliBili](https://space.bilibili.com/156928642)
 ### Windows  
 1. Install latest GPU driver  
 **AMD GPU**: Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). 
-**NVIDIA GPU**: Download latest GPU driver from [NVIDA Official GeForce Drivers](https://www.nvidia.com/en-us/geforce/drivers/).  
+**NVIDIA GPU**: Download latest GPU driver from [NVIDIA Official GeForce Drivers](https://www.nvidia.com/en-us/geforce/drivers/).  
 **Intel GPU**: Download latest GPU driver from [Download Intel Drivers and Software](https://www.intel.com/content/www/us/en/download-center/home.html/).  
 **Qualcomm GPU**: Download latest GPU driver from [Qualcomm® Adreno™ Windows Graphics Drivers for Snapdragon® X Platform](https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver).  
 **Other DirectML devices**: Please install the latest hardware driver accordingly.  
@@ -301,7 +301,7 @@ All optional settings can be modified on the GUI window and saved to the `settin
 20. **HF Endpoint** (Hugging Face)  
    [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run. 
 21. **Inference Optimizer** (Windows/Ubuntu Only)
-    These optimizers can typically increase the output FPS by `30%~50%`. However, not all models support **Inference Optimizer**, if the optimization fails, the inference process will fall back to PyTorch. 
+    These optimizers can typically increase the output FPS by `30%~50%`. However, not all models support **Inference Optimizer**, if the optimization fails, the inference process will fall back to PyTorch.  
     **NVIDIA GPUs**:
     - **torch.compile** (Windows Only): it leverages Triton under the hood to generate optimized kernels automatically, and provides slight to moderate speedups by fusing operations and reducing overhead. 
     - **TensorRT** (Windows/Ubuntu): it is NVIDIA’s high-performance deep learning inference SDK. It optimizes trained models for deployment, especially on NVIDIA GPUs, and it provides significant speedups and high inference efficiency.  
