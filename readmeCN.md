@@ -93,7 +93,7 @@
 3.  选择目标 **显示器/窗口**
 4.  直接使用默认设置并点击 **运行**。
 
-![RUN](./assets/run.png)  
+![run](./assets/Run.png)  
 ### **本地查看** 模式
 ![Stereo Viewer Window](./assets/local.png) 
 > [!Tip]
