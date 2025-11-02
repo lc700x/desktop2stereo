@@ -1,7 +1,5 @@
 # Desktop2Stereo：一款将2D桌面转换为3D立体的应用程序
-[English Version](./README.md)
-
-
+[English Version](./README.md)  
 ![Desktop2Stereo](./assets/Banner.png)   
 一款通用的实时2D转3D应用程序，支持Windows/Mac/Ubuntu系统上的AMD/NVIDIA/Intel/Qualcomm GPU/Apple Silicon设备，由深度估计AI模型驱动。
 
@@ -32,16 +30,16 @@
     **Qualcomm GPU**: 从 [Qualcomm® Adreno™ Windows Graphics Drivers for Snapdragon® X Platform](https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver) 下载最新 GPU 驱动程序。
     **其他 DirectML 设备**: 请安装相应的最新硬件驱动程序。
 2.  部署 Desktop2Stereo 环境
-    -   **方法 1 (推荐)**: 使用便携版
+    - **方法 1 (推荐)**: 使用便携版
         下载: [夸克网盘](https://pan.quark.cn/s/9d2bcf039b96) (提取码: `1vcn`)
         **AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 下载并解压 `Desktop2Stereo_vX.X.X_AMD_etc_Windows.zip` 到本地磁盘。
         **NVIDIA GPU**: 下载并解压 `Desktop2Stereo_vX.X.X_NVIDIA_Windows.zip` 到本地磁盘。
-    -   **方法 2**: 使用内嵌 Python 手动部署
+    - **方法 2**: 使用内嵌 Python 手动部署
         1.  下载并解压 `Desktop2Stereo_vX.X.X_Python311_Windows.zip` 到本地磁盘。
         2.  安装 Python 环境
             **AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml_standalone.bat`。
             **NVIDIA GPU**: 双击 `install-cuda_standalone.bat`。
-    -   **方法 3**: 使用系统 Python 手动部署
+    - **方法 3**: 使用系统 Python 手动部署
         1.  安装 **Python 3.11**
             从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) 下载并安装。
         2.  下载 Desktop2Stereo 应用
@@ -92,32 +90,28 @@
 2.  选择 **计算设备**
 3.  选择目标 **显示器/窗口**
 4.  直接使用默认设置并点击 **运行**。
-
 ![run](./assets/Run.png)  
 ### **本地查看** 模式
 ![Stereo Viewer Window](./assets/local.png) 
 > [!Tip]
 > **本地查看** 模式最适合通过 SteamVR/Virtual Desktop/AR 眼镜作为有线显示器进行低延迟使用。
-
 1.  选择运行模式为 **本地查看**。
 2.  通过 **显示器** 或 **窗口** 模式选择捕获目标，您可以使用 `刷新` 按钮更新最新的 **显示器** 或 **窗口** 列表。
 3.  点击 **Stereo Viewer** 窗口，使用 `← 左` 或 `→ 右` 方向键将 **Stereo Viewer** 窗口切换到第二个（虚拟）显示器显示。
 4.  按下 `空格键` 或 `回车键` (或 XBOX 游戏手柄的 `A` 键) 切换全屏模式。
 5.  现在您可以使用 AR/VR 来观看 SBS 或 TAB 输出。
-    -   **AR** 需要切换到 3D 模式以连接为 3840*1080 (全并排, `Full-SBS`) 显示器。
+    - **AR** 需要切换到 3D 模式以连接为 3840*1080 (全并排, `Full-SBS`) 显示器。
     ![Full-SBS](./assets/FullSBS.png)
-    -   **VR** 需要使用第二显示器/虚拟显示器 (VDD)，配合 Desktop+[Steam VR] 或 Virtual Desktop[PC/独立 VR] 或 OBS + Wolvic Browser [独立 VR] 将 `Half-SBS` (半并排) / `Full-SBS` (全并排) / `TAB` (上下) 显示合成 3D 效果。
-    -   您可以使用 `Tab` 键切换 `Half-SBS`/`Full-SBS`/`TAB` 模式。
+    - **VR** 需要使用第二显示器/虚拟显示器 (VDD)，配合 Desktop+[Steam VR] 或 Virtual Desktop[PC/独立 VR] 或 OBS + Wolvic Browser [独立 VR] 将 `Half-SBS` (半并排) / `Full-SBS` (全并排) / `TAB` (上下) 显示合成 3D 效果。
+    - 您可以使用 `Tab` 键切换 `Half-SBS`/`Full-SBS`/`TAB` 模式。
     ![Half-SBS](./assets/HalfSBS.png)    
     ![TAB](./assets/TAB.png)
-    
 6.  实时修改 **深度强度**。
     使用 `↑ 上` 或 `↓ 下` 方向键以 `0.5` 为步长增加/减少深度强度。按 `0` 键重置。
     **深度强度** 的定义在 [详细设置](###详细设置指南) 部分。
 > [!TIP]
 > 如果 `显示 FPS` 为 **开启** 状态，深度值将显示在 FPS 指示器下方。
 7.  按 `Esc` 键退出 **Stereo Viewer**。
-
 ### **RTMP推流** 模式
 ![RTMP Streamer](./assets/rtmp.png) 
 > [!Tip]
@@ -128,11 +122,11 @@
 1.  选择运行模式为 **RTMP推流**。
 2.  选择一个 **流协议**: 推荐从 **Windows/Ubuntu** 使用 `HLS`；从 **MacOS** 使用 `WebRTC`。
 3.  选择一个音频设备
-    -   **Windows**
+    - **Windows**
         选择 **立体声混音** 为 `Stereo Mix (Realtek(R))`，并选择 `Realtek(R) HD Audio` 作为系统声音输出设备。
         ![Windows Sound Output](./assets/audio.png)
         如果您的 Windows 设备没有 `Stereo Mix (Realtek(R))`，请安装 [Screen Capture Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest) 并选择 **立体声混音** 为 `virtual-audio-capturer`。
-    -   **MacOS**
+    - **MacOS**
         安装以下包含音频捕获驱动程序的软件之一：
         a. **BlackHole**: https://existential.audio/blackhole/
         b. **Virtual Desktop Streamer**: https://www.vrdesktop.net/
@@ -140,7 +134,7 @@
         d. 或其他虚拟音频设备
         选择 **立体声混音** 为 `BlackHole 2ch` 或 `Virtual Desktop Speakers` 或 `Loopback Audio` 或其他相应的虚拟音频设备，并选择同名的系统 **输出** 设备。
         ![Mac Sound Output](./assets/audio2.png) 
-    -   **Ubuntu**
+    - **Ubuntu**
         选择 **立体声混音** 设备名称以 `stereo.monitor` 结尾，例如 `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`。
 4.  设置一个 **流密钥**，默认为 `live`。
 5.  (可选) 调整 **音频延迟**，`负值` 表示在视频之前提前播放音频，`正值` 表示在视频之后延迟播放音频。
@@ -149,35 +143,26 @@
 > 若使用全宽左右模式 (`Full-SBS`) 输出相同主屏幕的分辨率，您将需要宽度为原始屏幕两倍的屏幕，如主屏幕`4k (3840x2160)`则第二个 (虚拟) 屏幕需要为`8k (7680x2160)`
 7.  其他设置与 **本地查看** 相同，点击 `运行` 按钮运行。
 8.  在客户端设备上，根据 **流协议** 输入推流网址。
-
 ### **MJPEG推流** 模式
 ![MJPEG Streamer](./assets/MJPEG.png)  
-
 > [!Tip]
 > **MJPEG推流** 模式是以较低延迟仅传输视频到客户端设备/应用程序的无线网络推流模式，如 **Wolvic 浏览器**, **夸克浏览器** 等。
 > 对于 VR 或华为 AR：推荐使用 [Wolvic 浏览器 (基于 Chromium)](https://wolvic.com/dl/) 打开 HTTP MJPEG 链接。
-
 1.  选择运行模式为 **MJPEG推流**
 2.  指定 **流端口**，默认为 `1122`。
 3.  其他设置与 **本地查看** 相同，点击 `运行` 按钮。
 4.  在客户端设备上，输入 **流服务器 URL** 以访问视频。
 5.  对于音频，请使用连接到您的 PC 或 Mac 的 **蓝牙** 或 **耳机**。
-
 ### **旧网络推流** 模式
 ![Legacy Streamer](./assets/legacy.png)
-
 > [!Tip]
 > **旧网络推流** 模式是一种传统的 MJPEG 网络推流模式，使用 PyTorch 方法生成左右眼画面。
 > 主要用法与 **MJPEG推流** 模式相同。
-
 ### **3D 显示器** 模式 (仅限 Windows)
 ![3D Monitor Viewer](./assets/3D.png) 
-
 > [!Tip]
 > **3D 显示器** 模式是一种特殊的 **本地查看** 模式，专用于 3D 显示器，此模式不需要虚拟显示驱动程序。它只能以 **全屏** 方式运行并 **本地** 使用，因为 **Stereo Viewer** 窗口的屏幕捕获属性被全局 `禁用`。
->
-> 在 3D 显示器模式下，请使用左右场景上的穿透光标来控制您的 PC。
-
+> 在 3D 显示器模式下，请使用左右视图上的光标来控制您的 PC。
 ## 完整键盘快捷键
 > [!Tip]
 > 需要先点击 **Stereo Viewer** 窗口/标签页才能使用。
@@ -198,7 +183,6 @@
 
 ## 详细设置指南
 所有可选设置都可以在 GUI 窗口上修改并保存到 `settings.yaml`。每次点击 `运行` 时，设置将自动保存，点击 `重置` 将恢复默认设置。
-
 1.  **运行模式**
     提供 `5` 种运行模式：`本地查看`, `MJPEG推流`, `RTMP推流`, `旧网络推流`, `3D 显示器` (仅限 Windows)。
 2.  **设置语言**
@@ -214,8 +198,8 @@
 6.  **显示 FPS**
     在 **Stereo Viewer** 的标题栏和输出左右眼画面的画面上显示 FPS 指示器。
 7.  **捕获工具** (仅限 Windows)
-    -   **DXCamera**: 基于 [wincam](https://github.com/lovettchris/wincam) 使用 `DXGI Desktop Duplication API`，具有最高的 FPS 但 CPU 温度较高。
-    -   **WindowsCapture**: 基于 [Windows-Capture Python](https://github.com/NiiightmareXD/windows-capture/tree/main/windows-capture-python) 使用 `Graphics Capture API`，FPS 稍低但 CPU 使用率和温度较低。它需要...
+    - **DXCamera**: 基于 [wincam](https://github.com/lovettchris/wincam) 使用 `DXGI Desktop Duplication API`，具有最高的 FPS 但 CPU 温度较高。
+    - **WindowsCapture**: 基于 [Windows-Capture Python](https://github.com/NiiightmareXD/windows-capture/tree/main/windows-capture-python) 使用 `Graphics Capture API`，FPS 稍低但 CPU 使用率和温度较低。它需要...
 8.  **FPS** (每秒帧数)
     FPS 可以设置为您的显示器刷新率，默认输入 FPS 是 `60`。
     它决定了屏幕捕获过程的频率和流服务器模式的流帧率（更高的 FPS 不保证更流畅的输出，取决于您的设备）。
@@ -239,15 +223,15 @@
     默认值为 `1.0`。`正值` 表示前景更近，背景更远。`负值` 表示前景更平，背景更近。`0` 表示前景和背景强度不变。
 16. **显示模式**
     它决定了左右眼画面在输出中的排列方式。默认为大多数 VR 设备使用 `Half-SBS`，`TAB` 也是一种选择；`Full-SBS` 主要用于 AR 眼镜。
-    -   **Full-SBS** (全宽左右, `32:9`)
+    - **Full-SBS** (全宽左右, `32:9`)
         两个全分辨率图像并排放置：一个用于左眼，一个用于右眼。
         需要能够处理双倍宽度输入的显示器。
         提供更高的图像质量，但需要更多带宽和处理能力。
-    -   **Half-SBS** (半宽左右, `16:9`)
+    - **Half-SBS** (半宽左右, `16:9`)
         两个图像并排放置，但每个图像在水平方向上被压缩以适合单个帧。
         更兼容标准显示器和媒体播放器。
         由于每只眼睛的分辨率降低，图像质量略低。
-    -   **TAB** (上下, `16:9`)
+    - **TAB** (上下, `16:9`)
         左右眼图像垂直堆叠：一个在上，一个在下。
         每个图像在垂直方向上被压缩以适合帧。
         流媒体和直播格式中常见；质量与 Half-SBS 相似。
@@ -316,7 +300,7 @@
     - **torch.compile** (仅限 Windows)：底层利用 Triton 自动生成优化的计算内核，通过融合操作和减少开销，提供轻微到中等的加速效果。
     - **TensorRT** (Windows/Ubuntu)：这是 NVIDIA 的高性能深度学习推理 SDK。它对训练好的模型进行优化以便部署，尤其是在 NVIDIA GPU 上，能提供显著的加速效果和极高的推理效率。
     **DirectML** (**AMD GPU** 等):
-    -   **解锁线程 (旧网络推流)**: (Windows/Ubuntu) 为 **旧网络推流** 模式解锁多线程。但是，由于 [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) 库的限制。
+    - **解锁线程 (旧网络推流)**: (Windows/Ubuntu) 为 **旧网络推流** 模式解锁多线程。但是，由于 [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) 库的限制。
 > [!Warning]
 > **解锁线程 (旧网络推流)** 在 Python3.11 下有时会因 `UTF-8 错误` 而失败。您可能需要多次停止和运行以获得成功的网络推流进程。
 
