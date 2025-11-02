@@ -35,7 +35,7 @@ Download: [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96) (Access code: `1
     2. Install Python environment  
     **AMD/Intel/Qualcomm GPU and other DirectML devies**: Doulbe click `install-dml_standalone.bat`.  
     **NVIDIA GPU**: Doulbe click `install-cuda_standalone.bat`.
-- Method 3: Manual Deployment with system Python
+- **Method 3**: Manual Deployment with system Python
   1. Install **Python 3.11**  
   Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) and install.  
   2. Download Desktop2Stereo app  
