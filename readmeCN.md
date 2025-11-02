@@ -1,5 +1,6 @@
 # Desktop2Stereo：一款将2D桌面转换为3D立体的应用程序
 [English Version](./readme.md)  
+
 ![Desktop2Stereo](./assets/Banner.png)   
 一款通用的实时2D转3D应用程序，支持Windows/Mac/Ubuntu系统上的AMD/NVIDIA/Intel/Qualcomm GPU/Apple Silicon设备，由深度估计AI模型驱动。
 
