@@ -35,7 +35,7 @@ Download: [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96) (Access code: `1
     2. Install Python environment  
     **AMD/Intel/Qualcomm GPU and other DirectML devies**: Doulbe click `install-dml_standalone.bat`.  
     **NVIDIA GPU**: Doulbe click `install-cuda_standalone.bat`.
-- Method 3: Manual Deployment with system Python
+- **Method 3**: Manual Deployment with system Python
   1. Install **Python 3.11**  
   Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) and install.  
   2. Download Desktop2Stereo app  
@@ -106,8 +106,8 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
 6. Real-time modification of **depth strength**.  
     Use `↑ Up` or `↓ Down` arrow keys to increase/decrease the depth strength by a step of `0.5`. To reset press `0` key. 
     The defination of **depth strength** is in the [detailed settings](###detailed-settings) session.      
-    > [!TIP]
-    > The Depth value will show below the FPS indicator if `Show FPS` is **ON**
+> [!TIP]  
+> The Depth value will show below the FPS indicator if `Show FPS` is **ON**.  
 7. Press `Esc` to exit the **Stereo Viewer**. 
 
 ### **RTMP Streamer** mode
@@ -138,8 +138,8 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
 4. Set a **Stream Key**, default is `live`.  
 5. (Optional) Adjust the **Audio Delay**, `negative` value means play the audio in advance before the video, `positive` value means delay the audio play after the video.  
 6. (Optional) It is recommended to use a second (virtual) screen with a resolution equal to or larger than the main screen to place the Stereo Viewer window.
-    > [!Tip]
-    > If using `Full-SBS` output at the same resolution as the main screen, you will need a screen with twice the width of the original screen. For example, if the main screen is `4K (3840x2160)`, the second (virtual) screen needs to be `8K (7680x2160)`.
+> [!Tip]  
+> If using `Full-SBS` output at the same resolution as the main screen, you will need a screen with twice the width of the original screen. For example, if the main screen is `4K (3840x2160)`, the second (virtual) screen needs to be `8K (7680x2160)`.
 7. The other settings are the same as the **Local Viewer**, click `Run` button to run.  
 8. On client device, key in the streaming URL according to the **Stream Protocal**.  
 
@@ -308,8 +308,8 @@ All optional settings can be modified on the GUI window and saved to the `settin
 
     **DirectML** (**AMD GPUs**, etc.):  
     - **Unlock Threads (Legacy Streamer)**: (Windows/Ubuntu) unlock the multithreads for **Legacy Streamer** mode. 
-    > [!Warning]
-    > **Unlock Threads (Legacy Streamer)** sometimes fails with `UTF-8 error` under Python3.11 due to the limitations of [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) libraries. You may try stop and run multiple times for a successful streaming process. 
+> [!Warning]  
+> **Unlock Threads (Legacy Streamer)** sometimes fails with `UTF-8 error` under Python3.11 due to the limitations of [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) libraries. You may try stop and run multiple times for a successful streaming process.  
 ## References
 ```BIBTEX
 @article{video_depth_anything,
