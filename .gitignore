@@ -15,7 +15,6 @@ models/.*
 profile.svg
 Python3*
 settings.yaml
-test*
 datasets
 ./*.png
 ./*.jpg
