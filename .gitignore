@@ -1,5 +1,5 @@
-/develop.ipynb
-/deploy.md
+./develop.ipynb
+./deploy.md
 __pycache__
 cache
 /.env*
@@ -10,10 +10,10 @@ views
 .DS*
 *.zip
 models
-*.pdf
-*.svg
+./*.pdf
+./*.svg
 hls
-*.jpg
-*.png
+./*.jpg
+./*.png
 *test*
 rtmp
