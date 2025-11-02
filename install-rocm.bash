@@ -5,7 +5,7 @@ echo "- Setting up the virtual environment"
 
 # Set paths
 VIRTUAL_ENV=".env"
-PYTHON_EXE="python3"
+PYTHON_EXE="python3.11"
 
 # Check if Python is available
 if ! command -v $PYTHON_EXE &> /dev/null
@@ -47,7 +47,7 @@ fi
 # Install requirements
 echo
 echo "- Installing the requirements"
-sudo apt-get install python3-tk wmctrl mesa-utils
+sudo apt-get install python3-tk wmctrl mesa-utils portaudio19-dev ffmpeg xdotool -y
 $PYTHON_EXE -m pip install python_xlib --no-cache-dir
 $PYTHON_EXE -m pip install -r requirements-rocm.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 $PYTHON_EXE -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/

@@ -399,19 +399,20 @@ Depth Resolution: 336
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
-Device: 0
+Computing Device: 0
 Language: CN
-Run Mode: Local Viewer
+Run Mode: RTMP Streamer
+Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
 torch.compile: false
 TensorRT: false
 Recompile TensorRT: false
-Unlock Thread (Legacy Streamer): false
+Unlock Thread (Legacy Streamer): true
 Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stream Key: live
-Stereo Mix: 立体声混音 (Realtek(R) Audio)
+Stereo Mix: alsa_output.pci-0000_11_00.6.iec958-stereo.monitor
 CRF: 20
 Audio Delay: -0.15

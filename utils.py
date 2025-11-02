@@ -2,10 +2,45 @@ import yaml, threading
 import os, platform, socket
 
 # App Version
-VERSION = "2.3.5"
+VERSION = "2.3.6"
+# Get OS name
+OS_NAME = platform.system()
+# Define StereoMix devices
+STEREO_MIX_NAMES = [
+# English
+"stereo mix", "what you hear", "loopback", "system audio", "wave out mix", "mixed output",
+# Chinese
+"立体声混音", "您听到的声音", "环路", "系统音频", "波形输出混合", "混合输出",
+# Japanese
+"ステレオ ミックス", "ステレオミックス", "ループバック", "システムオーディオ", "ミックス出力",
+# Spanish
+"mezcla estéreo", "lo que escuchas", "bucle", "audio del sistema", "salida mixta",
+# French
+"mixage stéréo", "bouclage", "audio système", "sortie mixte",
+# German
+"stereomix", "was du hörst", "loopback", "systemaudio", "gemischte ausgabe",
+# macOS specific
+"blackhole", "loopback", "aggregate device", "multi-output device", "virtual desktop speakers", "remote sound",
+# Linux specific
+"monitor"
+]
 
 # Global shutdown event
 shutdown_event = threading.Event()
+
+def get_font_type(os=OS_NAME):
+    if os == "Darwin":
+        return "Verdana.ttf"
+    elif os == "Windows": 
+        return "verdana.ttf"
+    elif os == "Linux":
+        try:
+            return "/usr/share/fonts/truetype/freefont/FreeSans.ttf" # fix for Ubuntu
+        except:
+            return "Verdana.ttf"
+    else:
+        return "Verdana.ttf"
+
 
 def read_yaml(path):
     try:
@@ -32,16 +67,14 @@ def get_local_ip():
 
 def crop_icon(icon_img):
     """Crop to make icon larger by cropping for Windows"""
-    icon_img = icon_img.convert("RGBA")
-    bbox = icon_img.getbbox()
-    icon_img = icon_img.crop(bbox)
+    if OS_NAME == "Windows":
+        icon_img = icon_img.convert("RGBA")
+        bbox = icon_img.getbbox()
+        icon_img = icon_img.crop(bbox)
     return icon_img
 
 # load customized settings
 settings = read_yaml("settings.yaml")
-
-# Get OS name
-OS_NAME = platform.system()
 
 # Ignore wanning for MPS
 if OS_NAME == "Darwin":
@@ -121,8 +154,8 @@ MODEL_ID = settings["Depth Model"]
 ALL_MODELS = settings["Model List"]
 CACHE_PATH = settings["Download Path"]
 DEPTH_RESOLUTION = settings["Depth Resolution"]
-DEVICE_ID = settings["Device"]
-FP16 = settings["FP16"]
+DEVICE_ID = settings["Computing Device"]
+FP16 = False if OS_NAME == "Darwin" else settings["FP16"]
 MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
 SHOW_FPS, FPS, DEPTH_STRENGTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 IPD = settings["IPD"]
@@ -134,14 +167,11 @@ FOREGROUND_SCALE = settings["Foreground Scale"] # 0-10
 AA_STRENTH = settings["Anti-aliasing"] # 0-10
  
 # Adjust anti-aliasing and dept dilution value for Mac
-if OS_NAME != "Darwin":
-    AA_STRENTH *= 4 # 0-100
-else:
-    AA_STRENTH *= 0.4
+AA_STRENTH *= 4 # 0-100
 
 # Experimental Settings
 DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer
-USE_TORCH_COMPILE = settings["torch.compile"] # compile model with torch.compile
+USE_TORCH_COMPILE = settings["torch.compile"] if OS_NAME == "Windows" else False # compile model with torch.compile
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
 CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture

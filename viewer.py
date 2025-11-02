@@ -6,7 +6,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 from OpenGL.GL import *
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE
+from utils import OS_NAME, crop_icon, get_font_type, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
@@ -100,6 +100,7 @@ class StereoWindow:
         
         # Font and text sizing
         self.font = None
+        self.font_type = get_font_type()
         self.base_font_size = 60  # Base size for 1280x720 window
         self.current_font_size = self.base_font_size
         self.text_padding = 10
@@ -148,6 +149,9 @@ class StereoWindow:
         # Hide window for 3D monitor, but cannot be captured by other apps as well
         if self.use_3d and OS_NAME == "Windows":
             hide_window_from_capture(self.window)
+        
+        if self.stream_mode == "RTMP":
+            self.move_to_adjacent_monitor(direction=1)
         
         if not self.window:
             glfw.terminate()
@@ -241,7 +245,7 @@ class StereoWindow:
         self.current_font_size = int(self.base_font_size * scale_factor * 0.8)  # Slightly smaller than linear scale
         
         try:
-            self.font = ImageFont.truetype("arial.ttf", self.current_font_size)
+            self.font = ImageFont.truetype(self.font_type, self.current_font_size)
         except Exception:
             try:
                 # Try default font (Pillow default)
@@ -424,12 +428,16 @@ class StereoWindow:
                 glfw.set_window_size(self.window, mon_w, mon_h)
                 glfw.set_window_pos(self.window, mon_x, mon_y)
             else:
-                x = mon_x + (mon_w - self.window_size[0]) // 2
-                y = mon_y + (mon_h - self.window_size[1]) // 2
+                if self.stream_mode == "RTMP" and OS_NAME=="Linux":
+                    x = mon_x + mon_w // 2
+                    y = mon_y + mon_h // 2
+                else:
+                    x = mon_x + (mon_w - self.window_size[0]) // 2
+                    y = mon_y + (mon_h - self.window_size[1]) // 2
                 glfw.set_window_pos(self.window, x, y)
-            if self.stream_mode == "RTMP":
-                if vidmode.size == self.window_size:
-                    glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+            # if self.stream_mode == "RTMP":
+                # if vidmode.size == self.window_size:
+                #     glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             self.monitor_index = monitor_index
 
     def get_current_monitor(self):
