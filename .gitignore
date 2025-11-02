@@ -10,6 +10,7 @@ views
 .DS*
 *.zip
 models/models*
+models/.*
 ./*.pdf
 ./*.svg
 hls
