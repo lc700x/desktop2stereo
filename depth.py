@@ -32,7 +32,7 @@ print(DEVICE_INFO)
 print(f"Model: {MODEL_ID}")
 
 # Optimization for CUDA
-if "CUDA" in DEVICE_INFO:
+if "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO:
     torch.backends.cudnn.benchmark = True
     if not FP16:
         # Enable TF32 for matrix multiplications
@@ -43,6 +43,14 @@ if "CUDA" in DEVICE_INFO:
         torch.set_float32_matmul_precision('high')
     else:
         torch.set_autocast_enabled(True)
+    # Enable math attention
+    torch.backends.cuda.enable_flash_sdp(True)
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    torch.backends.cuda.enable_math_sdp(True)
+    
+if "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO:
+    torch.backends.cudnn.enabled = False # Add for AMD ROCm
+    os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Add for AMD ROCm7
     # Enable math attention
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
@@ -294,12 +302,13 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 
     model = VideoDepthAnything(**model_configs[encoder])
     model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True), strict=True)
-    return model.to(DEVICE).eval()
+    return model.to(DEVICE)
 
 # TensorRT Optimization
 def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
     """
     Convert ONNX model to TensorRT engine using TensorRT's Python API only.
+    Supports FP32, FP16, and INT8 precisions based on global flags.
     Returns None if compilation fails.
     """
     try:
@@ -324,13 +333,14 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         
         # Build configuration
         config = builder.create_builder_config()
-        if FP16:
-            config.set_flag(trt.BuilderFlag.FP16)
-        else:
-            config.set_flag(trt.BuilderFlag.FP32)
-        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1GB
         
-        # Set dynamic shapes profile
+        # Set precision flags based on global configuration
+        config.set_flag(trt.BuilderFlag.FP16)
+        
+        # Set workspace memory (essential for all precision modes) [6](@ref)
+        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1 GB Workspace [6](@ref)
+        
+        # Set dynamic shapes profile [6](@ref)
         profile = builder.create_optimization_profile()
         input_name = network.get_input(0).name
         # Updated shape ranges to better match typical input sizes
@@ -340,6 +350,11 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         
         profile.set_shape(input_name, min_shape, opt_shape, max_shape)
         config.add_optimization_profile(profile)
+        
+        # Optional: Enable additional optimizations that work well with FP32 [5](@ref)
+        # These optimizations can improve performance regardless of precision
+        config.set_flag(trt.BuilderFlag.SPARSE_WEIGHTS)  # Enable sparse weights
+        config.set_flag(trt.BuilderFlag.REJECT_EMPTY_ALGORITHMS)  # Reject empty algorithms
         
         # Build engine
         serialized_engine = builder.build_serialized_network(network, config)
@@ -356,7 +371,7 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
     except Exception as e:
         print(f"[Error] TensorRT optimization failed: {str(e)}")
         return None
-
+    
 # Export to ONNX
 def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=DTYPE):
     """
@@ -488,13 +503,11 @@ class DepthModelWrapper:
                     # Fall back to PyTorch if TensorRT fails
                     print("[Error] TensorRT failed, falling back to PyTorch")
                     self.backend = "PyTorch"
-                    self.use_torch_compile = True  # Enable torch.compile for fallback
-                    self.model = self._load_pytorch_model()
+                    self.model = self._load_pytorch_model(enable_trt=False)
             except Exception as e:
                 print(f"[Error] TensorRT initialization failed: {str(e)}, falling back to PyTorch")
                 self.backend = "PyTorch"
-                self.use_torch_compile = True  # Enable torch.compile for fallback
-                self.model = self._load_pytorch_model()
+                self.model = self._load_pytorch_model(enable_trt=False)
         else:
             # Use PyTorch backend for DirectML/MPS/CPU
             self.backend = "PyTorch"
@@ -505,7 +518,7 @@ class DepthModelWrapper:
         
         print(f"Using backend: {self.backend}")
     
-    def _load_pytorch_model(self):
+    def _load_pytorch_model(self, enable_trt=USE_TENSORRT):
         """Load the original PyTorch model."""
         # Load model
         if 'Video-Depth-Anything' in MODEL_ID:
@@ -518,16 +531,16 @@ class DepthModelWrapper:
                 torch_dtype=torch.float16 if FP16 else torch.float32,
                 cache_dir=CACHE_PATH,
                 weights_only=True
-            ).to(DEVICE).eval()
+            ).to(DEVICE)
         
         if FP16:
             model.half()
         
-        if  "CUDA" in self.device_info and self.use_torch_compile and not USE_TENSORRT:
+        if  "CUDA" in self.device_info and self.use_torch_compile and not enable_trt:
             model = torch.compile(model)
             print("Processing torch.compile with Triton, it may take a while...")
         
-        return model
+        return model.eval()
     
     def _load_tensorrt_engine(self):
         """Load or create TensorRT engine."""
@@ -649,8 +662,9 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     if "anything" in MODEL_ID.lower():
         target_h = (target_h // 14) * 14
         target_w = (target_w // 14) * 14
-    # fix for Video-Depth-Anything
-    if 'Video-Depth-Anything' in MODEL_ID:
+        if 'Video-Depth-Anything' in MODEL_ID: # fix for Video-Depth-Anything
+            target_h, target_w = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
+    else:
         target_h, target_w = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
     
     if return_tuple:

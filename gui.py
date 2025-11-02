@@ -264,7 +264,7 @@ UI_TEXTS = {
         "Anti-aliasing:": "抗锯齿:",
         "Foreground Scale:": "前景缩放:",
         "FP16": "半精度浮点 (F16)",
-        "Inference Optimizer:": "推理优化器:",
+        "Inference Optimizer:": "推理优化:",
         "Recompile TensorRT": "重新编译TensorRT",
         "Unlock Thread (Legacy Streamer)": "解锁线程 (旧网络推流)",
         "Download Path:": "下载路径:",
@@ -796,7 +796,7 @@ class ConfigGUI(tk.Tk):
                     print(
                         "[Info] No audio capture devices found on MacOS.\n"
                         "Recommended tools for audio capture:\n"
-                        "- BlackHole: https://github.com/ExistentialAudio/BlackHole\n"
+                        "- BlackHole: https://existential.audio/blackhole/\n"
                         "- Virtual Desktop Streamer: https://www.vrdesktop.net/\n"
                         "- Loopback: https://rogueamoeba.com/loopback/ (Commercial)"
                     )

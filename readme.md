@@ -1,16 +1,18 @@
 # Desktop2Stereo: a 2D Desktop to 3D Stereo App
 [中文版本](./readmeCN.md)   
-  
+
 ![Desktop2Stereo](./assets/Banner.png)   
 A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/Apple Silicon devices on Windows/Mac/Ubuntu, powered by Depth Estimation AI Models
 ## Alternative Download Link
 [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96)  
 Access code: `1vcn`  
+## Video Tutorials  
+TBD, will release on [BiliBili](https://space.bilibili.com/156928642)
 ## Supported Hardware  
 1. AMD GPU  
 2. NVIDIA GPU  
 3. Apple Silicon Chip (M1, M2, M3, M4, ...)  
-4. Other DirectML devices (Intel Arc/Iris GPU, Qualcomm® Adreno GPU, etc. **Windows** only)
+4. Other DirectML devices (Intel Arc/Iris GPU, Qualcomm® Adreno GPU, etc. **Windows** Only)
 ## Supported OS  
 1. Windows 10/11 (x64/Arm64)
 2. MacOS 10.16 or later  
@@ -47,26 +49,31 @@ Download from [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10
 2. Download Desktop2Stereo app  
 Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.  
 3. Install Python environment  
-Doulbe click `install-mps` executable. (Please allow open in **Privacy and Security Settings**)
+Doulbe click `install-mps` executable. (Please allow open in **Privacy and Security Settings**)，if you cannot run the executable, please do the folloing first:
+    ```bash
+    chmod a+x install-mps
+    chmod a+x run_mac
+    chmod a+x update_mac_linux
+    ```
+
 ### Ubuntu
 1. Install latest GPU driver  
 **AMD GPU**: Download latest GPU driver and ROCm from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). 
 **NVIDIA GPU**: Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.nvidia.com/en-us/geforce/drivers/).
 1. Install **Python 3.11**  
     ```bash
-    # Example: Ubuntu
     sudo add-apt-repository ppa:savoury1/python
     sudo apt update
     sudo apt-get install python3.11 python3.11-venv
     ```
 2. Download Desktop2Stereo app  
-   Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.
+   Download the [Desktop2Stereo_vX.X.X.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.
 3. Install Python environment  
     **AMD GPU**: Run `install-rocm.bash`:   
     ```bash
     bash install-rocm.bash
     ```
-    Or for 7000/9000/AI Max/etc Series GPUs: [https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)  
+    (**Optional**) ROCm7 for 7000/9000/AI Max/etc Series GPUs, check comaptibility here: [https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)  
     ```bash
     bash install-rocm7.bash
     ```
@@ -74,113 +81,252 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
     ```bash
     bash install-cuda.bash
     ```
-## Desktop2Stereo GUI App
-![Desktop2Stereo GUI](./assets/GUI.png)
-### Quick Run Desktop2Stereo
-1. Choose one of the **Run Mode** in Desktop2Stereo: `Local Viewer`, `MJPEG Streamer`, `RTMP Streamer`, `Legacy Streamer`, `3D Monitor`
-2. Select the **Computing Device**
-3. Select target **Monitor/Window**
-4. Just use the default settings and click **Run**.
-![RUN](./assets/run.png)
-### **Local Viewer** Mode:
-![Stereo Viewer Window](./assets/Viewer.png)
-1. Set your video/game on the main screen.  
-2. Click the **Stereo Viewer** window, Use `← Left ` or `→ Right` arrow keys to switch the **Stereo Viewer** window to second (virtual) monitor display. 
-3. Press `Space` or `Enter` (or XBOX game controller button `A`) to toggle full screen mode.   
-4. Now you can use AR/VR to view the SBS or TAB output.   
-- **AR** need to switch to 3D mode to connect as a 3840*1080 (Full Side-by-Side, `FUll-SBS`) display.  
- ![Full-SBS](./assets/FullSBS.png)
-- **VR** need to use 2nd Display/Virtual Display (VDD) with Desktop+[Steam VR] or Virtual Desktop[PC/Standalone VR] or OBS + Wolvic Browser [Standalone VR] to comopose the `Half-SBS` (Half Side-by-Side) / `Full-SBS` (Full Side-by-Side) / `TAB` (Top-and-Bottom) display to 3D.   
-- You can use `Tab` key to toggle `Half-SBS`/`Full-SBS`/`TAB`  mode.   
-![Half-SBS](./assets/HalfSBS.png)    
-![TAB](./assets/TAB.png)
-5. Real-time modification of **depth strength**.  
-   Use `↑ Up ` or `↓ Down` arrow keys to increase/decrease the depth strength by a step of `0.5`. To reset press `0` key. 
-   The defination of **depth strength** is in the [detailed settings](###detailed-settings) session.      
-6. Press `Esc` to exit the **Stereo Viewer**. 
-7. Full Stereo Viewer Shortcuts
-    (Need to click the Stereo Viewer window/tab first to use.)
-    | Key           | Action Description                         | Supported Run Mode(s)     |
-    | ------------- | ------------------------------------------ | ------------------------- |
-    | Enter / Space | Toggle fullscreen mode                     | Local Viewer              |
-    | Right   | Move window to adjacent monitor (next)     | Local Viewer / RTMP Streamer / 3D Monitor             |
-    | Left    | Move window to adjacent monitor (previous) | Local Viewer / RTMP Streamer / 3D Monitor              |
-    | Esc        | Close the application window               | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor                       |
-    | Down    | Decrease `depth_ratio` by 0.5 (min 0)      | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor                |
-    | Up      | Increase `depth_ratio` by 0.5 (max 10)     | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor                |
-    | 0      | Reset `depth_ratio` to original value      | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor                |
-    | Tab           | Cycle to the next display mode             | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
-    | F             | Toggle FPS display                         | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor                       |
-    | A             | Toggle “fill 16:9” mode                    | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
-    | L             | Toggle lock Stereo Viewer window aspect ratio lock            | Local Viewer |
+## Run Desktop2Stereo  
+### Quick Run   
+1. Choose one of the **Run Mode** in Desktop2Stereo: `Local Viewer`, `MJPEG Streamer`, `RTMP Streamer`, `Legacy Streamer`, `3D Monitor`  
+2. Select the **Computing Device**  
+3. Select target **Monitor/Window**  
+4. Just use the default settings and click **Run**.  
+![RUN](./assets/run.png)  
+### **Local Viewer** Mode
+![Stereo Viewer Window](./assets/local.png) 
+> [!Tip]  
+> **Local Viewer** mode is best for low-latency usage with SteamVR/Virtual Desktop/AR Glasses as wired display.   
+1. Choose Run Mode as **Local Viewer**.  
+2. Choose capture target by **Monitor** or **Window** mode, you can use `Refresh` button to update to the latest list of **Monitor** or **Window**. 
+3. Click the **Stereo Viewer** window, Use `← Left ` or `→ Right` arrow keys to switch the **Stereo Viewer** window to second (virtual) monitor display. 
+4. Press `Space` or `Enter` (or XBOX game controller button `A`) to toggle full screen mode.   
+5. Now you can use AR/VR to view the SBS or TAB output.   
+   - **AR** need to switch to 3D mode to connect as a 3840*1080 (Full Side-by-Side, `FUll-SBS`) display.  
+    ![Full-SBS](./assets/FullSBS.png)
+   - **VR** need to use 2nd Display/Virtual Display (VDD) with Desktop+[Steam VR] or Virtual Desktop[PC/Standalone VR] or OBS + Wolvic Browser [Standalone VR] to comopose the `Half-SBS` (Half Side-by-Side) / `Full-SBS` (Full Side-by-Side) / `TAB` (Top-and-Bottom) display to 3D.   
+   - You can use `Tab` key to toggle `Half-SBS`/`Full-SBS`/`TAB`  mode.   
+   ![Half-SBS](./assets/HalfSBS.png)    
+   ![TAB](./assets/TAB.png)
+6. Real-time modification of **depth strength**.  
+    Use `↑ Up` or `↓ Down` arrow keys to increase/decrease the depth strength by a step of `0.5`. To reset press `0` key. 
+    The defination of **depth strength** is in the [detailed settings](###detailed-settings) session.      
+    > [!TIP]
+    > The Depth value will show below the FPS indicator if `Show FPS` is **ON**
+7. Press `Esc` to exit the **Stereo Viewer**. 
 
+### **RTMP Streamer** mode
+![RTMP Streamer](./assets/rtmp.png)  
+> [!Tip]  
+> **RTMP Streamer** mode is best for wireless streaming with video and audio together to client devices/apps, like **VLC Player**, **Wolvic Browser**, **Quark Brower**, etc., but it may have a latency of `1~3` seconds.   
+> For VR or Huawei AR: [Wolvic Browser](https://wolvic.com/dl/) is recommanded to open `HLS`/`WebRTC` link.  
+> Other `RTSP`, `RTMP`, `HLS M3U8` protocal may be chosen for VLC [i.e. extend screen mode for AR glasses] / VR-AR Video (DeoVR) Apps on client devices.  
 
+1. Choose run mode as **RTMP Streamer**.  
+2. Choose a **Stream Protocol**:  recommanded `HLS` from **Windows/Ubuntu**; `WebRTC` from **MacOS**.  
+3. Select a audio device
+    - **Windows**
+    Select the **Stereo Mix** as `Stereo Mix (Realtek(R))`, and select `Realtek(R) HD Audio` as the system Sound Output device.  
+    ![Windows Sound Output](./assets/audio.png)
+    If your Windows device does not have the `Stereo Mix (Realtek(R))`, please install the [Screen Capture Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest) and select the **Stereo Mix** as `virtual-audio-capturer`.  
+                        
+    - **MacOS**
+    Install one of the following software containing the audio capture driver:   
+    a. **BlackHole**: https://existential.audio/blackhole/  
+    b. **Virtual Desktop Streamer**: https://www.vrdesktop.net/  
+    c. **Loopback**: https://rogueamoeba.com/loopback/ (Commercial)  
+    d. Or other virual audio devices  
+    Select the **Stereo Mix** as `BlackHole 2ch` or `Virtual Desktop Speakers` or `Loopback Audio` or other virtual audio devices accordingly, and select the system **Output** device with same name.  
+    ![Mac Sound Output](./assets/audio2.png)  
+    - **Ubuntu**
+    Select the **Stereo Mix** device name ended with `stereo.monitor` i.e. `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`.  
+4. Set a **Stream Key**, default is `live`.  
+5. (Optional) Adjust the **Audio Delay**, `negative` value means play the audio in advance before the video, `positive` value means delay the audio play after the video.  
+6. The other settings are the same as the **Local Viewer**, click `Run` button to run.  
+7. On client device, key in the streaming URL according to the **Stream Protocal**.  
 
-### Detailed Settings
+### **MJPEG Streamer** mode
+![MJPEG Streamer](./assets/MJPEG.png)  
+> [!Tip]  
+> **MJPEG Streamer** mode is wireless streaming with video only to client devices/apps with lower latency, like **Wolvic Browser**, **Quark Brower**, etc.    
+> For VR or Huawei AR: [Wolvic Browser (Chromium Based)](https://wolvic.com/dl/) is recommanded to open the HTTP MJPEG link.  
+
+1. Choose run mode as **MJPEG Streamer**   
+2. Assign **Streaming Port**, default is `1122`.   
+3. The other settings are the same as the **Local Viewer**, click `Run` button.  
+4. On client device, key in the **Streamer URL** to access the video.  
+5. For audio, please use **Bluetooth** or **Headphones** connected to your PC or Mac.  
+
+### **Legacy Streamer** mode
+![Legacy Streamer](./assets/legacy.png)  
+> [!Tip]  
+> **Legacy Streamer** mode a legacy MJPEG streaming mode, which uses PyTorch method to generate left and right eye scenes.   
+The main usage is the same as the **MJPEG Streamer** mode.  
+
+### **3D Monitor** mode (Windows Only)
+![3D Monitor Viewer](./assets/3D.png)  
+> [!Tip]  
+> **3D Monitor** mode a special **Local Viewer** mode dedicated for a 3D Monitor, no virtual display driver needed for this mode. It can only run as **fullscreen** and be used **locally** as the screen capture attribute for the **Stereo Viewer** window is `disabled` globally.  
+>  
+In 3D Monitor mode, please use the passthrough cursor on either left or right scene to control your PC. 
+
+## Full Keyboard Shortcuts
+> [!Tip]
+> Need to click the **Stereo Viewer** window/tab first to use.  
+
+| Key        | Action Description                                   | Supported Run Mode(s)                                     |
+|-------------|------------------------------------------------------|------------------------------------------------------------|
+| `Enter` / `Space`   | Toggle full screen          | Local Viewer                  |
+| `← Left`    | Move window to adjacent monitor (previous)           | Local Viewer / RTMP Streamer / 3D Monitor                  |
+| `→ Right`   | Move window to adjacent monitor (next)               | Local Viewer / RTMP Streamer / 3D Monitor                  |
+| `Esc`       | Close the application window                         | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
+| `↑ Up`      | Increase depth strength by 0.5 (max 10)              | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
+| `↓ Down`    | Decrease depth strength by 0.5 (min 0)               | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
+| `0`         | Reset depth strength to original value               | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
+| `Tab`       | Cycle to the next display mode                       | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
+| `F`         | Toggle FPS display                                   | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
+| `A`         | Toggle “fill 16:9” mode                              | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
+| `L`         | Toggle lock Stereo Viewer window aspect ratio lock   | Local Viewer                                               |
+
+## Detailed Settings Guide
 All optional settings can be modified on the GUI window and saved to the `settings.yaml`. Each time you click `Run`, the settings will be saved automatically, and clicking `Reset` will restore the default settings.  
 
-![Settings](./assets/Settings.png)
-1. **Set Language**  
+1. **Run Mode**  
+    5 Run Modes: `Local Viewer`, `MJPEG Streamer`, `RTMP Streamer`, `Legacy Streamer`, `3D Monitor` (Windows Only).  
+2. **Set Language**  
     English (`EN`) and Simplified Chinese (`CN`) are supported. 
-2. **Monitor index**  
-    Default is your Primary Monitor (mostly shall follow the monitor numbers in your system settings).  
-3. **Device**  
-    Default shall be your GPU (`CUDA`/`DirectML`/`MPS`), or `CPU` if you don't have a compatible GPU device.  
-4. **FP16**
+3. **Monitor**  or **Window** mode
+   ![Window Mode](./assets/window.png)
+    Default is your Primary Monitor (mostly shall follow the monitor numbers in your system settings).
+    You can toggle to Window capture mode as well, the optional menus will include all the active window names. 
+4. **Device**  
+    Default shall be your GPU (`CUDA`/`DirectML`/`MPS`), or `CPU` if you don't have a compatible computing device.    
+5. **FP16**
     Recommanded for most computing devices for better performance. If your device does not support `FP16` DataType, disable it. 
-5. **Show FPS** 
-    Show FPS on the topbar of the **Stereo Viewer**.     
-6. **Output Resolution**
-    Default output resolution is `1080` (**1080p**, `1920x1080`) for a smoother experience. `2160` (**4K**, `3840x2160`) and `1440` (**2K**, `2560x1440`) resolutions are also available if you have powerful devices. 
-7. **FPS** (frames per second)
-    FPS can set as your monitor refresh rate, default input FPS is `60`. It determins the freqency of the screen caputre process (higher FPS does not ensure smoother output, depending on your devices).
-8. **Depth Resolution**  
-    Higher depth resolution can give better depth details but cause higher GPU usage, which is also related to the model training settings.  
-    Default depth resolution is set to `384` for balanced performance.  
-9. **Depth Strength**  
-    With higher depth strength, 3D depth effect of the object would be stronger. However, higher value can induce visible artifacts.
-    Default is set to `1.0`. The recomanded depth strength range is `(1, 5)`.  
-10. **IPD** (Interpupillary Distance)  
+6. **Show FPS** 
+    Show FPS on the titlebar of the **Stereo Viewer** and as an on-screen indicator on the output left and right eye scenes.     
+7. **Capture Tool** (Windows Only)
+   - **DXCamera**: Based on [wincam](https://github.com/lovettchris/wincam) using `DXGI Desktop Duplication API`, it has the highest FPS but higher CPU temperature. 
+   - **WindowsCapture**: Based on [Windows-Capture Python](https://github.com/NiiightmareXD/windows-capture/tree/main/windows-capture-python)  using `Graphics Capture API`, it has slightly lower FPS but lower CPU usage and temperature. It needs to 
+8. **FPS** (frames per second)
+    FPS can set as your monitor refresh rate, default input FPS is `60`.   
+    It determins the freqency of the screen caputre process and streaming fps for streamer modes (higher FPS does not ensure smoother output, depending on your devices).
+10. **Output Resolution**
+    Default is `1080` (i.e. **1080p**, `1920x1080`) for a smoother experience. `2160` (**4K**, i.e. `3840x2160`) and `1440` (**2K**, i.e. `2560x1440`) resolutions are also available if you have powerful devices. 
+    If the input source has smaller resolution than the output, the **Output Resolution** will be applied same as the smaller one. 
+    The **Output Resolution** by default keeps the aspect ratio of the input source. 
+11. **Fill 16:9**  
+    Enabled by default. If the aspect of input source is not `16:9`, the black background will be applied to fill it to `16:9`. 
+12. **Fix Viewer Aspect** (**Local Viewer** mode Only)  
+    Diabled by default. This option is to lock the window of **Stereo Viewer**, which may be useful for the upscaling and frame generation apps like [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/).   
+13. **Depth Resolution**  
+    Higher **Depth Resolution** can give better depth details but cause higher GPU usage, which is also related to the model training settings.  
+    Default **Depth Resolution** is set to `336` for balanced performance on `Depth-Anything-V2` models. The **Depth Resolution** options varies among different depth models. 
+14. **Depth Strength**  
+    With higher **Depth Strength**, 3D depth effect of the object would be stronger. However, higher value can induce visible artifacts and distortion.
+    Default is set to `2.0`. The recomanded depth strength range is `(1, 5)`.  
+15. **Anti-Aliasing**
+    This can be effective to reduce jagged edges and artifacts under high **Depth Strength**, default value is set as `1` for most cases. Higher value may reduce the depth details. 
+16. **Foreground Scale**  
+    Default value is `1.0`. `Positive` value means foreground closer, background further. `Negative` value means foreground flatter, background closer. `0` is no change of foreground and background strength.  
+17. **Display Mode**  
+    It determins how the left and right eye scences are arranged in the output. Default is `Half-SBS` for most VR devices, `TAB` is also an alternative; `Full-SBS` is mainly for AR glasses.
+    - **Full-SBS** (Full Side-by-Side, `32:9`)  
+    Two full-resolution images are placed side by side: one for the left eye, one for the right.  
+    Requires a display capable of handling double-width input.  
+    Offers higher image quality but demands more bandwidth and processing.  
+    - **Half-SBS** (Side-by-Side Half, `16:9`)  
+    Two images are placed side by side, but each is compressed horizontally to fit into a single frame.  
+    More compatible with standard displays and media players.  
+    Slightly lower image quality due to reduced resolution per eye.  
+    - **TAB** (Top-and-Bottom, `16:9`)  
+    Left and right eye images are stacked vertically: one on top, one on bottom.  
+    Each image is compressed vertically to fit the frame.  
+    Common in streaming and broadcast formats; quality similar to Half-SBS.  
+18. **IPD** (Interpupillary Distance)  
     IPD is the distance between the centers of your pupils, it affects how your brain interprets stereoscopic 3D. 
     The default IPD is `0.064` in meter (m), which is the average human IPD value. 
-11. **Download Path**  
+19. **Download Path**  
    Default download path is the `models` folder under the working directory.
-12. **Depth Model**
-    Modify the depth model id from [HuggingFace](https://huggingface.co/), the model id under `depth_model` **mostly shall ends** with `-hf`.  
+20. **Depth Model**
+    Modify the depth model id from [HuggingFace](https://huggingface.co/), the model id under `depth_model` mostly shall end with `-hf`.  
     Large model can cause higher GPU usage and latency.   
-    Default depth model: `depth-anything/Depth-Anything-V2-Small-hf`  
-    *Currently supported models*:  
-    ```yaml
-    Model List:
-    - depth-anything/Depth-Anything-V2-Large-hf
-    - depth-anything/Depth-Anything-V2-Base-hf
-    - depth-anything/Depth-Anything-V2-Small-hf
-    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
-    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
-    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
-    - depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
-    - depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
-    - depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
-    - LiheYoung/depth-anything-large-hf
-    - LiheYoung/depth-anything-base-hf
-    - LiheYoung/depth-anything-small-hf
-    - xingyang1/Distill-Any-Depth-Large-hf
-    - xingyang1/Distill-Any-Depth-Small-hf
-    - apple/DepthPro-hf # Depth: 1536
-    - Intel/dpt-large # Slow, NOT recommand
-    ```
-   You can also manually add the hugging face models in the `settings.yaml` which including the following:  
-   `model.safetensors`  
-   `config.json`  
-   `preprocessor_config.json`    
-13. **HF Endpoint** (Hugging Face)  
-   [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run.  
+    Default depth model: `depth-anything/Depth-Anything-V2-Small-hf`. 
+    You can also manually add the hugging face models in the `settings.yaml` which including `model.safetensors`, `config.json`, `preprocessor_config.json` files on [HuggingFace](https://huggingface.co/).     
+    **Currently supported models**:  
+    - depth-anything/Depth-Anything-V2-Large-hf  
+    - depth-anything/Depth-Anything-V2-Base-hf  
+    - depth-anything/Depth-Anything-V2-Small-hf  
+    - depth-anything/Video-Depth-Anything-Large  
+    - depth-anything/Video-Depth-Anything-Base  
+    - depth-anything/Video-Depth-Anything-Small  
+    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf  
+    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf  
+    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf  
+    - depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf  
+    - depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf  
+    - depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf  
+    - depth-anything/Metric-Video-Depth-Anything-Large  
+    - depth-anything/Metric-Video-Depth-Anything-Base  
+    - depth-anything/Metric-Video-Depth-Anything-Small  
+    - depth-anything/prompt-depth-anything-vitl-hf  
+    - depth-anything/prompt-depth-anything-vits-hf  
+    - depth-anything/prompt-depth-anything-vits-transparent-hf  
+    - lc700x/Amodal-Depth-Anything-V2-large-hf  
+    - LiheYoung/depth-anything-large-hf  
+    - LiheYoung/depth-anything-base-hf  
+    - LiheYoung/depth-anything-small-hf  
+    - lc700x/patchfusion-depth-anything-large-hf  
+    - lc700x/patchfusion-depth-anything-base-hf  
+    - lc700x/patchfusion-depth-anything-small-hf  
+    - xingyang1/Distill-Any-Depth-Large-hf  
+    - lc700x/Distill-Any-Depth-Base-hf  
+    - xingyang1/Distill-Any-Depth-Small-hf  
+    - lc700x/dpt-dinov2-giant-kitti-hf  
+    - lc700x/dpt-dinov2-large-kitti-hf  
+    - lc700x/dpt-dinov2-base-kitti-hf  
+    - facebook/dpt-dinov2-small-kitti  
+    - facebook/dpt-dinov2-giant-nyu  
+    - lc700x/dpt-dinov2-large-nyu-hf  
+    - lc700x/dpt-dinov2-base-nyu-hf  
+    - lc700x/dpt-dinov2-small-nyu-hf  
+    - lc700x/depth-ai-hf  
+    - lc700x/dpt-hybrid-midas-hf  
+    - Intel/dpt-beit-base-384  
+    - Intel/dpt-beit-large-512  
+    - Intel/dpt-large  
+    - lc700x/dpt-large-redesign-hf  
+    - Intel/zoedepth-nyu-kitti  
+    - Intel/zoedepth-nyu  
+    - Intel/zoedepth-kitti  
+    - apple/DepthPro-hf # Slow, NOT recommand  
+21. **HF Endpoint** (Hugging Face)  
+   [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run. 
+22. **Inference Optimizer** (Windows/Ubuntu Only)
+    These optimizers can typically increase the output FPS by `30%~50%`. However, not all models support **Inference Optimizer**, if the optimization fails, the inference process will fall back to PyTorch. 
+    **NVIDIA GPUs**:
+    - **torch.compile** (Windows Only): it leverages Triton under the hood to generate optimized kernels automatically, and provides slight to moderate speedups by fusing operations and reducing overhead. 
+    - **TensorRT** (Windows/Ubuntu): it is NVIDIA’s high-performance deep learning inference SDK. It optimizes trained models for deployment, especially on NVIDIA GPUs, and it provides significant speedups and high inference efficiency.  
+
+    **DirectML** (**AMD GPUs**, etc.):  
+    - **Unlock Threads (Legacy Streamer)**: (Windows/Ubuntu) unlock the multithreads for **Legacy Streamer** mode. 
+    > [!Warning]
+    > **Unlock Threads (Legacy Streamer)** sometimes fails with `UTF-8 error` under Python3.11 due to the limitations of [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) libraries. You may try stop and run multiple times for a successful streaming process. 
 ## References
 ```BIBTEX
+@article{video_depth_anything,
+  title={Video Depth Anything: Consistent Depth Estimation for Super-Long Videos},
+  author={Chen, Sili and Guo, Hengkai and Zhu, Shengnan and Zhang, Feihu and Huang, Zilong and Feng, Jiashi and Kang, Bingyi},
+  journal={arXiv:2501.12375},
+  year={2025}
+}
+
 @article{depth_anything_v2,
   title={Depth Anything V2},
   author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Zhao, Zhen and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
   journal={arXiv:2406.09414},
+  year={2024}
+}
+
+@inproceedings{lin2024promptda,
+  title={Prompting Depth Anything for 4K Resolution Accurate Metric Depth Estimation},
+  author={Lin, Haotong and Peng, Sida and Chen, Jingxiao and Peng, Songyou and Sun, Jiaming and Liu, Minghuan and Bao, Hujun and Feng, Jiashi and Zhou, Xiaowei and Kang, Bingyi},
+  journal={arXiv},
   year={2024}
 }
 
@@ -191,11 +337,41 @@ All optional settings can be modified on the GUI window and saved to the `settin
   year={2024}
 }
 
+@article{li2024amodaldepthanything,
+  title={Amodal Depth Anything: Amodal Depth Estimation in the Wild}, 
+  author={Li, Zhenyu and Lavreniuk, Mykola and Shi, Jian and Bhat, Shariq Farooq and Wonka, Peter},
+  year={2024},
+  journal={arXiv preprint arXiv:x},
+  primaryClass={cs.CV}}
+
 @article{he2025distill,
   title   = {Distill Any Depth: Distillation Creates a Stronger Monocular Depth Estimator},
   author  = {Xiankang He and Dongyan Guo and Hongji Li and Ruibo Li and Ying Cui and Chi Zhang},
   year    = {2025},
   journal = {arXiv preprint arXiv: 2502.19204}
+}
+
+@article {Ranftl2022,
+    author  = "Ren\'{e} Ranftl and Katrin Lasinger and David Hafner and Konrad Schindler and Vladlen Koltun",
+    title   = "Towards Robust Monocular Depth Estimation: Mixing Datasets for Zero-Shot Cross-Dataset Transfer",
+    journal = "IEEE Transactions on Pattern Analysis and Machine Intelligence",
+    year    = "2022",
+    volume  = "44",
+    number  = "3"
+}
+
+@article{birkl2023midas,
+      title={MiDaS v3.1 -- A Model Zoo for Robust Monocular Relative Depth Estimation},
+      author={Reiner Birkl and Diana Wofk and Matthias M{\"u}ller},
+      journal={arXiv preprint arXiv:2307.14460},
+      year={2023}
+}
+
+@article{bhat2023zoedepth,
+  title={Zoedepth: Zero-shot transfer by combining relative and metric depth},
+  author={Bhat, Shariq Farooq and Birkl, Reiner and Wofk, Diana and Wonka, Peter and M{\"u}ller, Matthias},
+  journal={arXiv preprint arXiv:2302.12288},
+  year={2023}
 }
 
 @inproceedings{Bochkovskii2024:arxiv,
@@ -222,4 +398,22 @@ All optional settings can be modified on the GUI window and saved to the `settin
   biburl    = {https://dblp.org/rec/journals/corr/abs-2103-13413.bib},
   bibsource = {dblp computer science bibliography, https://dblp.org}
 }
+
+@misc{oquab2023dinov2,
+      title={DINOv2: Learning Robust Visual Features without Supervision}, 
+      author={Maxime Oquab and Timothée Darcet and Théo Moutakanni and Huy Vo and Marc Szafraniec and Vasil Khalidov and Pierre Fernandez and Daniel Haziza and Francisco Massa and Alaaeldin El-Nouby and Mahmoud Assran and Nicolas Ballas and Wojciech Galuba and Russell Howes and Po-Yao Huang and Shang-Wen Li and Ishan Misra and Michael Rabbat and Vasu Sharma and Gabriel Synnaeve and Hu Xu and Hervé Jegou and Julien Mairal and Patrick Labatut and Armand Joulin and Piotr Bojanowski},
+      year={2023},
+      eprint={2304.07193},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
+}
+
 ```
+
+## Credits
+- [lovettchris/wincam](https://github.com/lovettchris/wincam/)
+- [NiiightmareXD/windows-capture](https://github.com/NiiightmareXD/windows-capture)
+- [BoboTiG/python-mss](https://github.com/BoboTiG/python-mss)
+- [nagadomi/nunif](https://github.com/nagadomi/nunif)
+- Other related tools and libraries
+- All feedback from the users
