@@ -124,7 +124,7 @@
 2.  选择一个 **流协议**: 推荐从 **Windows/Ubuntu** 使用 `HLS`；从 **MacOS** 使用 `WebRTC`。
 3.  选择一个音频设备
     - **Windows**
-        选择 **立体声混音** 为 `Stereo Mix (Realtek(R))`，并选择 `Realtek(R) HD Audio` 作为系统声音输出设备。
+        选择 **立体声混音** 为 `Stereo Mix (Realtek(R))`，并选择 `Realtek(R) HD Audio` 作为系统声音输出设备。  
         ![Windows Sound Output](./assets/audio.png)
         如果您的 Windows 设备没有 `Stereo Mix (Realtek(R))`，请安装 [Screen Capture Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest) 并选择 **立体声混音** 为 `virtual-audio-capturer`。
     - **MacOS**
@@ -133,7 +133,7 @@
         b. **Virtual Desktop Streamer**: https://www.vrdesktop.net/
         c. **Loopback**: https://rogueamoeba.com/loopback/ (商业版)
         d. 或其他虚拟音频设备
-        选择 **立体声混音** 为 `BlackHole 2ch` 或 `Virtual Desktop Speakers` 或 `Loopback Audio` 或其他相应的虚拟音频设备，并选择同名的系统 **输出** 设备。
+        选择 **立体声混音** 为 `BlackHole 2ch` 或 `Virtual Desktop Speakers` 或 `Loopback Audio` 或其他相应的虚拟音频设备，并选择同名的系统 **输出** 设备。  
         ![Mac Sound Output](./assets/audio2.png) 
     - **Ubuntu**
         选择 **立体声混音** 设备名称以 `stereo.monitor` 结尾，例如 `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`。
