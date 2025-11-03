@@ -325,8 +325,7 @@ Model List:
   lc700x/depth-ai-hf:
     resolutions:
     - 224
-    - 208
-    - 196
+    - 192
   lc700x/dpt-hybrid-midas-hf:
     resolutions:
     - 384
@@ -392,8 +391,8 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
 Language: CN
-Run Mode: RTMP Streamer
-Stream Protocol: HLS
+Run Mode: Local Viewer
+Stream Protocol: WebRTC
 Streamer Port: 1122
 Stream Quality: 100
 torch.compile: false
@@ -404,6 +403,6 @@ Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stream Key: live
-Stereo Mix: 立体声混音 (Realtek(R) Audio)
+Stereo Mix: Splashtop Remote Sound
 CRF: 20
 Audio Delay: -0.15
