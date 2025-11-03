@@ -5,7 +5,7 @@ FPS: 60
 Show FPS: true
 Output Resolution: 1080
 IPD: 0.064
-Display Mode: Full-SBS
+Display Mode: Half-SBS
 Model List:
   depth-anything/Depth-Anything-V2-Large-hf:
     resolutions:
@@ -382,14 +382,14 @@ Model List:
   apple/DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: zhyever/Amodal-Depth-Anything-DAV2
+Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 1
 Foreground Scale: 1.0
-Depth Resolution: 392
+Depth Resolution: 336
 FP16: true
 Download Path: models
-HF Endpoint: https://huggingface.co
+HF Endpoint: https://hf-mirror.com
 Computing Device: 0
 Language: CN
 Run Mode: RTMP Streamer
@@ -399,11 +399,11 @@ Stream Quality: 100
 torch.compile: false
 TensorRT: false
 Recompile TensorRT: false
-Unlock Thread (Legacy Streamer): true
-Capture Tool: WindowsCapture
+Unlock Thread (Legacy Streamer): false
+Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stream Key: live
 Stereo Mix: 立体声混音 (Realtek(R) Audio)
 CRF: 20
-Audio Delay: -0.5
+Audio Delay: -0.15
