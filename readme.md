@@ -113,13 +113,16 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
 ### **RTMP Streamer** mode
 ![RTMP Streamer](./assets/rtmp.png)  
 > [!Tip]  
-> **RTMP Streamer** mode is best for wireless streaming with video and audio together to client devices/apps by capturing the local **Stereo Viewer** window, like **VLC Player**, **Wolvic Browser**, **Quark Brower**, etc., but it may have a latency of `1~3` seconds.   
-> For VR or Huawei AR: [Wolvic Browser](https://wolvic.com/dl/) is recommanded to open `HLS`/`WebRTC` link.  
-> Other `RTSP`, `RTMP`, `HLS M3U8` protocal may be chosen for VLC [i.e. extend screen mode for AR glasses] / VR-AR Video (DeoVR) Apps on client devices.  
+> **RTMP Streamer** mode is best for wireless streaming with video and audio together to client devices/apps by capturing the local **Stereo Viewer** window, like **VLC Player**, **Wolvic Browser**, etc., but it may have a latency of `1~3` seconds.   
 
 1. Choose run mode as **RTMP Streamer**.  
-2. Choose a **Stream Protocol**:  recommanded `HLS` from **Windows/Ubuntu**; `WebRTC` from **MacOS**.  
-3. Select a audio device
+2. Choose a **Stream Protocol**:  recommanded to use `HLS`.  
+> [!Tip]  
+> **AR**: Use **VLC Player** to open the `HLS M3U8` URL directly with `Full-SBS` mode.  
+> **VR** / **Huawer AR**: Use **Wolvic Browser** to open the `HLS` URL directly with `Half_SBS` / `TAB` mode.  
+> For **MacOS**, you can also use `WebRTC` URL.  
+> Other `RTSP`, `RTMP`, `HLS M3U8` protocal may be chosen for **VLC Player** [i.e. extend screen mode for AR glasses] / VR Video Apps (**DeoVR**) on client devices.    
+1. Select a audio device
     - **Windows**
     Select the **Stereo Mix** as `Stereo Mix (Realtek(R))`, and select `Realtek(R) HD Audio` as the system Sound Output device.  
     ![Windows Sound Output](./assets/audio.png)
@@ -135,18 +138,18 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
     ![Mac Sound Output](./assets/audio2.png)  
     - **Ubuntu**
     Select the **Stereo Mix** device name ended with `stereo.monitor` i.e. `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`.  
-4. Set a **Stream Key**, default is `live`.  
-5. (Optional) Adjust the **Audio Delay**, `negative` value means play the audio in advance before the video, `positive` value means delay the audio play after the video.  
-6. (Optional) It is recommended to use a second (virtual) screen with a resolution equal to or larger than the main screen to place the Stereo Viewer window.
+2. Set a **Stream Key**, default is `live`.  
+3. (Optional) Adjust the **Audio Delay**, `negative` value means play the audio in advance before the video, `positive` value means delay the audio play after the video.  
+4. (Optional) It is recommended to use a second (virtual) screen with a resolution equal to or larger than the main screen to place the Stereo Viewer window.
 > [!Tip]  
 > If using `Full-SBS` output at the same resolution as the main screen, you will need a screen with twice the width of the original screen. For example, if the main screen is `4K (3840x2160)`, the second (virtual) screen needs to be `8K (7680x2160)`.
-7. The other settings are the same as the **Local Viewer**, click `Run` button to run.  
-8. On client device, key in the streaming URL according to the **Stream Protocal**.  
+1. The other settings are the same as the **Local Viewer**, click `Run` button to run.  
+2. On client device, key in the streaming URL according to the **Stream Protocal**.  
 
 ### **MJPEG Streamer** mode
 ![MJPEG Streamer](./assets/MJPEG.png)  
 > [!Tip]  
-> **MJPEG Streamer** mode is wireless streaming with video only to client devices/apps with lower latency, like **Wolvic Browser**, **Quark Brower**, etc.    
+> **MJPEG Streamer** mode is wireless streaming with video only to client devices/apps with lower latency, like **Wolvic Browser**, etc.    
 > For VR or Huawei AR: [Wolvic Browser (Chromium Based)](https://wolvic.com/dl/) is recommanded to open the HTTP MJPEG link.  
 
 1. Choose run mode as **MJPEG Streamer**   
@@ -197,7 +200,7 @@ All optional settings can be modified on the GUI window and saved to the `settin
    ![Window Mode](./assets/window.png)
     Default is your Primary Monitor (mostly shall follow the monitor numbers in your system settings).
     You can toggle to Window capture mode as well, the optional menus will include all the active window names. 
-4. **Device**  
+4. **Computing Device**  
     Default shall be your GPU (`CUDA`/`DirectML`/`MPS`), or `CPU` if you don't have a compatible computing device.    
 5. **FP16**
     Recommanded for most computing devices for better performance. If your device does not support `FP16` DataType, disable it. 
@@ -209,7 +212,7 @@ All optional settings can be modified on the GUI window and saved to the `settin
 8. **FPS** (frames per second)
     FPS can set as your monitor refresh rate, default input FPS is `60`.   
     It determins the freqency of the screen caputre process and streaming fps for streamer modes (higher FPS does not ensure smoother output, depending on your devices).
-9.  **Output Resolution**
+9. **Output Resolution**
     Default is `1080` (i.e. **1080p**, `1920x1080`) for a smoother experience. `2160` (**4K**, i.e. `3840x2160`) and `1440` (**2K**, i.e. `2560x1440`) resolutions are also available if you have powerful devices. 
     If the input source has smaller resolution than the output, the **Output Resolution** will be applied same as the smaller one. 
     The **Output Resolution** by default keeps the aspect ratio of the input source. 
@@ -244,9 +247,23 @@ All optional settings can be modified on the GUI window and saved to the `settin
 17. **IPD** (Interpupillary Distance)  
     IPD is the distance between the centers of your pupils, it affects how your brain interprets stereoscopic 3D. 
     The default IPD is `0.064` in meter (m), which is the average human IPD value. 
-18. **Download Path**  
+18. **Stream Protocal**  (**RTMP Streamer** Only)
+   Default is `HLS` for best compatibility, and `HLS M3U8` can be used in mobile **VLC Player**. `RTMP`, `RTSP`, `HLS`, `HLS M3U8`, `WebRTC` are provided. You can toggle the protocal to show the target URL, all URLs are ready to use when the **RTMP Streamer** is working. 
+19. **Streamer URL** (**RTMP Streamer**, **MJPEG Streamer**, **Legacy Streamer** Only)  
+   Read only, dynamically determined by the streaming protocal and your local ip.  
+20. **Streamer Key** (**RTMP Streamer** Only)  
+   The private key string set for **RTMP Streamer**, which will be applied in the **Streamer URL**.  
+21. **CRF** (**RTMP Streamer** Only)  
+   Deafalt is `20`, you can set it in the range of `18~23`. It refers to **Constant Rate Factor** that controls the video bitrate. A **lower value** is a **higher quality**.  
+22. **Stereo Mix** (**RTMP Streamer** Only)  
+   This is the **Strereo Mix** device to capture the system playback audio.   
+   On Windows, **Strereo Mix** device is mostly `Stereo Mix (Realtek(R))` to be used with `Realtek(R) HD Audio` as the output device in Windows audio settings. Or use the virtual audio device from [Screen Capture Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest).   
+   On MacOS, you can choose **Strereo Mix** device [BlackHole](https://existential.audio/blackhole/) or [Virtual Desktop SPeakers](https://www.vrdesktop.net/) or [Loopback] or other virual audio devices. Please use the same audio outpout device in MacOS auido settings.  
+23. **Audio Delay** (**RTMP Streamer** Only)  
+   Default is `-0.15` seconds, which is used for align the processed audio and video timestamp. A `negative value` will make the audio earlier than the video, whereas a `positive value` will make the audio later than the video.  
+24. **Download Path**  
    Default download path is the `models` folder under the working directory.
-19. **Depth Model**
+25. **Depth Model**
     Modify the depth model id from [HuggingFace](https://huggingface.co/), the model id under `depth_model` mostly shall end with `-hf`.  
     Large model can cause higher GPU usage and latency.   
     Default depth model: `depth-anything/Depth-Anything-V2-Small-hf`. 
@@ -298,9 +315,9 @@ All optional settings can be modified on the GUI window and saved to the `settin
     - Intel/zoedepth-nyu  
     - Intel/zoedepth-kitti  
     - apple/DepthPro-hf # Slow, NOT recommand  
-20. **HF Endpoint** (Hugging Face)  
+26. **HF Endpoint** (Hugging Face)  
    [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run. 
-21. **Inference Optimizer** (Windows/Ubuntu Only)
+27. **Inference Optimizer** (Windows/Ubuntu Only)
     These optimizers can typically increase the output FPS by `30%~50%`. However, not all models support **Inference Optimizer**, if the optimization fails, the inference process will fall back to PyTorch.  
     **NVIDIA GPUs**:
     - **torch.compile** (Windows Only): it leverages Triton under the hood to generate optimized kernels automatically, and provides slight to moderate speedups by fusing operations and reducing overhead. 

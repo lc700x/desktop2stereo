@@ -116,13 +116,16 @@
 ### **RTMP推流** 模式
 ![RTMP Streamer](./assets/rtmp.png) 
 > [!Tip]
-> **RTMP推流** 模式通过捕获本地的**Stereo Viewer**窗口，最适合将视频和音频一起无线流式传输到客户端设备/应用程序，如 **VLC 播放器**, **Wolvic 浏览器**, **夸克浏览器** 等，但可能会有 `1~3` 秒的延迟。
-> 对于 VR 或华为 AR：推荐使用 [Wolvic 浏览器](https://wolvic.com/dl/) 打开 `HLS`/`WebRTC` 链接。
-> 客户端设备上的其他 `RTSP`, `RTMP`, `HLS M3U8` 协议可能适用于 VLC [例如 AR 眼镜的扩展屏幕模式] / VR-AR 视频 (DeoVR) 应用程序。
+> **RTMP推流** 模式通过捕获本地的**Stereo Viewer**窗口，最适合将视频和音频一起无线流式传输到客户端设备/应用程序，如 **VLC 播放器**, **Wolvic 浏览器**等，但可能会有 `1~3` 秒的延迟。
 
 1.  选择运行模式为 **RTMP推流**。
-2.  选择一个 **流协议**: 推荐从 **Windows/Ubuntu** 使用 `HLS`；从 **MacOS** 使用 `WebRTC`。
-3.  选择一个音频设备
+2.  选择一个 **流协议**: 推荐使用 `HLS`。  
+> [!Tip] 
+> **AR**: 用 **VLC 播放器** 打开 `HLS M3U8` 链接并使用 `Full-SBS` 显示模式。  
+> **VR** / **华为AR**: 用 **Wolvic 浏览器** 打开 `HLS` 链接并使用 `Half_SBS` / `TAB` 显示模式。 
+> 如果是**MacOS**上推流，您也可以使用 `WebRTC` 链接。  
+> 客户端设备上的其他 `RTSP`, `RTMP`, `HLS M3U8` 协议可能适用于 **VLC 播放器** [例如 AR 眼镜的扩展屏幕模式] / VR视频应用程序 (如**DeoVR**) 。
+1.  选择一个音频设备
     - **Windows**
         选择 **立体声混音** 为 `Stereo Mix (Realtek(R))`，并选择 `Realtek(R) HD Audio` 作为系统声音输出设备。  
         ![Windows Sound Output](./assets/audio.png)
@@ -137,17 +140,17 @@
         ![Mac Sound Output](./assets/audio2.png) 
     - **Ubuntu**
         选择 **立体声混音** 设备名称以 `stereo.monitor` 结尾，例如 `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`。
-4.  设置一个 **流密钥**，默认为 `live`。
-5.  (可选) 调整 **音频延迟**，`负值` 表示在视频之前提前播放音频，`正值` 表示在视频之后延迟播放音频。
-6.  (可选) 建议使用分辨率和主屏幕相同或更大的第二个 (虚拟) 屏幕来放置**Stereo Viewer**窗口。  
+2.  设置一个 **流密钥**，默认为 `live`。
+3.  (可选) 调整 **音频延迟**，`负值` 表示在视频之前提前播放音频，`正值` 表示在视频之后延迟播放音频。
+4.  (可选) 建议使用分辨率和主屏幕相同或更大的第二个 (虚拟) 屏幕来放置**Stereo Viewer**窗口。  
 > [!Tip]
 > 若使用全宽左右模式 (`Full-SBS`) 输出相同主屏幕的分辨率，您将需要宽度为原始屏幕两倍的屏幕，如主屏幕`4k (3840x2160)`则第二个 (虚拟) 屏幕需要为`8k (7680x2160)`
-7.  其他设置与 **本地查看** 相同，点击 `运行` 按钮运行。
-8.  在客户端设备上，根据 **流协议** 输入推流网址。
+1.  其他设置与 **本地查看** 相同，点击 `运行` 按钮运行。
+2.  在客户端设备上，根据 **流协议** 输入推流网址。
 ### **MJPEG推流** 模式
 ![MJPEG Streamer](./assets/MJPEG.png)  
 > [!Tip]
-> **MJPEG推流** 模式是以较低延迟仅传输视频到客户端设备/应用程序的无线网络推流模式，如 **Wolvic 浏览器**, **夸克浏览器** 等。
+> **MJPEG推流** 模式是以较低延迟仅传输视频到客户端设备/应用程序的无线网络推流模式，如 **Wolvic 浏览器**等。
 > 对于 VR 或华为 AR：推荐使用 [Wolvic 浏览器 (基于 Chromium)](https://wolvic.com/dl/) 打开 HTTP MJPEG 链接。
 1.  选择运行模式为 **MJPEG推流**
 2.  指定 **流端口**，默认为 `1122`。
@@ -184,27 +187,27 @@
 
 ## 详细设置指南
 所有可选设置都可以在 GUI 窗口上修改并保存到 `settings.yaml`。每次点击 `运行` 时，设置将自动保存，点击 `重置` 将恢复默认设置。
-1.  **运行模式**  
+1. **运行模式**  
     提供 `5` 种运行模式：`本地查看`, `MJPEG推流`, `RTMP推流`, `旧网络推流`, `3D 显示器` (仅限 Windows)。
-2.  **设置语言**  
+2. **设置语言**  
     支持英文 (`EN`) 和简体中文 (`CN`)。
-3.  **显示器** 或 **窗口** 模式  
+3. **显示器** 或 **窗口** 模式  
     ![Window Mode](./assets/window.png)
     默认是您的主显示器（通常应遵循系统设置中的显示器编号）。
     您也可以切换到窗口捕获模式，可选菜单将包含所有活动窗口的名称。
-4.  **设备**  
+4. **计算设备**  
     默认应是您的 GPU (`CUDA`/`DirectML`/`MPS`)，或者如果您没有兼容的计算设备，则为 `CPU`。
-5.  **FP16**  
+5. **FP16**  
     推荐用于大多数计算设备以获得更好的性能。如果您的设备不支持 `FP16` 数据类型，请禁用它。
-6.  **显示 FPS**  
+6. **显示 FPS**  
     在 **Stereo Viewer** 的标题栏和输出左右眼画面的画面上显示 FPS 指示器。
-7.  **捕获工具** (仅限 Windows)  
+7. **捕获工具** (仅限 Windows)  
     - **DXCamera**: 基于 [wincam](https://github.com/lovettchris/wincam) 使用 `DXGI Desktop Duplication API`，具有最高的 FPS 但 CPU 温度较高。
     - **WindowsCapture**: 基于 [Windows-Capture Python](https://github.com/NiiightmareXD/windows-capture/tree/main/windows-capture-python) 使用 `Graphics Capture API`，FPS 稍低但 CPU 使用率和温度较低。它需要...
-8.  **FPS** (每秒帧数)  
+8. **FPS** (每秒帧数)  
     FPS 可以设置为您的显示器刷新率，默认输入 FPS 是 `60`。
     它决定了屏幕捕获过程的频率和流服务器模式的流帧率（更高的 FPS 不保证更流畅的输出，取决于您的设备）。
-9.  **输出分辨率**  
+9. **输出分辨率**  
     默认为 `1080` (即 **1080p**, `1920x1080`) 以获得更流畅的体验。如果您的设备性能强大，也可以选择 `2160` (**4K**, 即 `3840x2160`) 和 `1440` (**2K**, 即 `2560x1440`) 分辨率。
     如果输入源的分辨率小于输出分辨率，则 **输出分辨率** 将应用与较小者相同的分辨率。
     **输出分辨率** 默认保持输入源的宽高比。
@@ -235,13 +238,27 @@
     - **TAB** (上下, `16:9`)  
         左右眼图像垂直堆叠：一个在上，一个在下。
         每个图像在垂直方向上被压缩以适合帧。
-        流媒体和直播格式中常见；质量与 Half-SBS 相似。
+        流媒体和直播格式中常见；质量与 Half-SBS 相似。  
 17. **瞳距** (米)  
-    瞳距 (IPD) 是您瞳孔中心之间的距离，它影响您的大脑如何解读立体 3D。
-    默认瞳距为 `0.064` (米)，这是人类的平均瞳距值。
-18. **下载路径**   
+    瞳距 (IPD) 是您瞳孔中心之间的距离，它影响您的大脑如何解读立体 3D。  
+    默认瞳距为 `0.064` (米)，这是人类的平均瞳距值。  
+18. **串流协议**（仅限 **RTMP Streamer**）  
+    默认使用 `HLS` 以获得最佳兼容性，`HLS M3U8` 可在移动端 **VLC Player** 中使用。支持的协议包括 `RTMP`、`RTSP`、`HLS`、`HLS M3U8` 和 `WebRTC`。你可以切换协议以显示目标 URL，当 **RTMP Streamer** 正常工作时，所有 URL 都可直接使用。  
+19. **串流地址**（仅限 **RTMP Streamer**、**MJPEG Streamer**、**Legacy Streamer**）  
+    只读，由所选串流协议和本地 IP 动态生成。  
+20. **串流密钥**（仅限 **RTMP Streamer**）  
+    为 **RTMP Streamer** 设置的私密密钥字符串，将自动应用于 **串流地址** 中。  
+21. **恒定质量**（仅限 **RTMP Streamer**）  
+    默认值为 `20`，可设置范围为 `18~23`。**恒定质量（Constant Rate Factor）** 用于控制视频码率。**数值越小，视频质量越高**。  
+22. **立体声混音**（仅限 **RTMP Streamer**）  
+    这是用于捕捉系统播放音频的 **立体声混音（Stereo Mix）** 设备。  
+    在 Windows 上，通常使用 `Stereo Mix (Realtek(R))`，并在 Windows 音频设置中将输出设备设置为 `Realtek(R) HD Audio`。也可以使用来自 [Screen Capture Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest) 的虚拟音频设备。  
+    在 macOS 上，可以选择 [BlackHole](https://existential.audio/blackhole/)、[Virtual Desktop Speakers](https://www.vrdesktop.net/)、[Loopback] 或其他虚拟音频设备。请确保在 macOS 音频设置中使用相同的输出设备。  
+23. **音频延迟**（仅限 **RTMP Streamer**）  
+    默认值为 `-0.15` 秒，用于对齐处理后音频与视频的时间戳。`负值` 表示音频会比视频提前播放，`正值` 表示音频会比视频延后播放。  
+24. **下载路径**   
     默认下载路径是工作目录下的 `models` 文件夹。
-19. **深度模型**  
+25. **深度模型**  
     从 [HuggingFace](https://huggingface.co/) 修改深度模型 ID，`depth_model` 下的模型 ID 大多应以 `-hf` 结尾。
     大模型会导致更高的 GPU 使用率和延迟。
     默认深度模型: `depth-anything/Depth-Anything-V2-Small-hf`。
@@ -293,9 +310,9 @@
     - Intel/zoedepth-nyu
     - Intel/zoedepth-kitti
     - apple/DepthPro-hf # 慢，不推荐
-20. **下载节点** (Hugging Face)  
+26. **下载节点** (Hugging Face)  
     [HF-Mirror](https://hf-mirror.com) 是原始 [Hugging Face](https://huggingface.co/) 网站的镜像站点，托管 AI 模型。深度模型将在首次运行时自动从 [Hugging Face](https://huggingface.co/) 下载到 **下载路径**。
-21. **推理优化** (仅限 Windows/Ubuntu)  
+27. **推理优化** (仅限 Windows/Ubuntu)  
     这些优化器通常可以将输出 FPS 提高 `30%~50%`。但是，并非所有模型都支持 **推理优化**，如果优化失败，推理过程将回退到 PyTorch。
     **NVIDIA GPU**:
     - **torch.compile** (仅限 Windows)：底层利用 Triton 自动生成优化的计算内核，通过融合操作和减少开销，提供轻微到中等的加速效果。
