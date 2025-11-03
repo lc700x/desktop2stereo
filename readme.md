@@ -286,14 +286,10 @@ All optional settings can be modified on the GUI window and saved to the `settin
     - depth-anything/Metric-Video-Depth-Anything-Small  
     - depth-anything/prompt-depth-anything-vitl-hf  
     - depth-anything/prompt-depth-anything-vits-hf  
-    - depth-anything/prompt-depth-anything-vits-transparent-hf  
-    - lc700x/Amodal-Depth-Anything-V2-large-hf  
+    - depth-anything/prompt-depth-anything-vits-transparent-hf   
     - LiheYoung/depth-anything-large-hf  
     - LiheYoung/depth-anything-base-hf  
     - LiheYoung/depth-anything-small-hf  
-    - lc700x/patchfusion-depth-anything-large-hf  
-    - lc700x/patchfusion-depth-anything-base-hf  
-    - lc700x/patchfusion-depth-anything-small-hf  
     - xingyang1/Distill-Any-Depth-Large-hf  
     - lc700x/Distill-Any-Depth-Base-hf  
     - xingyang1/Distill-Any-Depth-Small-hf  
