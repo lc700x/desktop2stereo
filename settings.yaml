@@ -169,15 +169,6 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/Amodal-Depth-Anything-V2-large-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
   LiheYoung/depth-anything-large-hf:
     resolutions:
     - 196
@@ -391,11 +382,11 @@ Model List:
   apple/DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: depth-anything/Video-Depth-Anything-Base
+Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 1
 Foreground Scale: 1.0
-Depth Resolution: 518
+Depth Resolution: 336
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
@@ -405,14 +396,14 @@ Run Mode: RTMP Streamer
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: true
-TensorRT: true
+torch.compile: false
+TensorRT: false
 Recompile TensorRT: false
-Unlock Thread (Legacy Streamer): true
+Unlock Thread (Legacy Streamer): false
 Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stream Key: live
-Stereo Mix: 立体声混音 (Realtek HD Audio Stereo input)
+Stereo Mix: 立体声混音 (Realtek(R) Audio)
 CRF: 20
 Audio Delay: -0.15
