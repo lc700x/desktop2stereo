@@ -283,7 +283,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             '-crf', f'{CRF}', # 18-24 smaller better quality
             '-c:a', 'libopus',
             # '-ar', '44100',
-            '-b:a', '128k',
+            '-b:a', '96k',
             '-muxdelay', '0',
             '-muxpreload', '0',
             '-flush_packets', '1',
@@ -383,77 +383,85 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             "-color_trc", "bt709",
             "-colorspace", "bt709",
             "-c:a", "libopus",
-            "-b:a", "128k",
+            "-b:a", "96k",
             "-ar", "48000",
             "-f", "rtsp",
             f"rtsp://localhost:8554/{STREAM_KEY}"
         ]
 
     elif os_name == "Linux":
+        import time
         import re
-        from Xlib import display
 
-        def get_x11_scale_factor():
-            d = display.Display()
-            screen = d.screen()
-            width_px = screen.width_in_pixels
-            height_px = screen.height_in_pixels
-            width_mm = screen.width_in_mms
-            height_mm = screen.height_in_mms
-
-            # Calculate DPI (dots per inch)
-            dpi_x = width_px / (width_mm / 25.4)
-            dpi_y = height_px / (height_mm / 25.4)
-            avg_dpi = (dpi_x + dpi_y) / 2
-
-            # Assume 96 DPI = scale 1.0
-            scale = avg_dpi / 96.0
-            return round(scale, 2)
         def run(cmd):
-            """Run a shell command and return stdout text."""
-            result = subprocess.run(cmd, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            return result.stdout.decode().strip()
+            """Run a shell command and return output as string."""
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            return result.stdout.strip()
 
-        def get_window_geometry(window_id):
-            """Return (x, y, width, height) of the window using xdotool."""
-            output = run(f"xdotool getwindowgeometry --shell {window_id}")
-            geom = {}
+        def get_window_geometry(window_id, entire=True):
+            """
+            Parse xwininfo to get full window geometry and decorations (border + title bar).
+            Returns: (x, y, width, height, border, titlebar)
+            """
+            output = run(f"xwininfo -id {window_id}")
+            x = y = w = h = b = t = 0
+
+            # Parse lines similarly to the sed version
             for line in output.splitlines():
-                if "=" in line:
-                    key, val = line.strip().split("=", 1)
-                    geom[key] = val
-            return int(geom["X"]), int(geom["Y"]), int(geom["WIDTH"]), int(geom["HEIGHT"])
+                line = line.strip()
+                if m := re.match(r"Absolute upper-left X:\s+(\d+)", line):
+                    x = int(m.group(1))
+                elif m := re.match(r"Absolute upper-left Y:\s+(\d+)", line):
+                    y = int(m.group(1))
+                elif m := re.match(r"Width:\s+(\d+)", line):
+                    w = int(m.group(1))
+                elif m := re.match(r"Height:\s+(\d+)", line):
+                    h = int(m.group(1))
+                elif m := re.match(r"Relative upper-left X:\s+(\d+)", line):
+                    b = int(m.group(1))
+                elif m := re.match(r"Relative upper-left Y:\s+(\d+)", line):
+                    t = int(m.group(1))
+
+            # Adjust if user wanted entire window including borders/titlebar
+            if entire:
+                x -= b
+                y -= t
+                w += 2 * b
+                h += t + b
+
+            return x, y, w, h, b, t
 
         def drag_window_offscreen(window_id, dx=10000, dy=10000, steps=1, delay=0.01):
             """
             Simulate a mouse drag on a window by ID using xdotool.
-            The drag starts from the window's current position and moves smoothly.
+            Uses xwininfo to compute exact title bar position (no scale factor needed).
             """
-            # Get actual window geometry
-            x, y, width, height = get_window_geometry(window_id)
-            print(f"Window position: ({x}, {y}), size: {width}x{height}")
+            # Get window geometry + decoration info
+            x, y, w, h, b, t = get_window_geometry(window_id)
+            print(f"Window pos=({x},{y}), size={w}x{h}, border={b}, title={t}")
 
             # Activate the window
             run(f"xdotool windowactivate {window_id}")
 
-            # Move mouse to the title bar (roughly near the top-center of window)
-            title_x = x + 50*get_x11_scale_factor()
-            title_y = y-50*get_x11_scale_factor()
-            run(f"xdotool mousemove {title_x} {title_y}")
+            # Compute title bar click position
+            # title_x = x + w // 2
+            title_x = x + 20
+            title_y = y + t // 2  # halfway down the title bar for reliable click
 
-            # Press mouse button to start drag  
+            # Move mouse to title bar and start drag
+            run(f"xdotool mousemove {title_x} {title_y}")
             run("xdotool mousedown 1")
 
-            # Perform smooth drag motion
+            # Smooth drag motion
             step_x = dx / steps
             step_y = dy / steps
-
             for _ in range(steps):
                 run(f"xdotool mousemove_relative -- {step_x:.2f} {step_y:.2f}")
                 time.sleep(delay)
 
-            # Release mouse button (drop window)
+            # Release mouse button
             run("xdotool mouseup 1")
+
 
 
         def get_display_env(window_id: str) -> str:
@@ -580,18 +588,19 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             "-fflags", "+genpts+nobuffer+flush_packets",
             "-flags", "low_delay",
             "-avioflags", "direct",
-            "-probesize", "64",
+            "-probesize", "1024",
             "-analyzeduration", "0",
+            "-draw_mouse", "0",
             "-itsoffset", str(AUDIO_DELAY),
             "-f", "x11grab",
             "-framerate", "60", 
             "-vsync", "1",
             "-window_id", window_id,
             "-use_wallclock_as_timestamps", "1",
-            "-thread_queue_size", "4096",  # Increased for video
+            "-thread_queue_size", "2048",
             "-i", display_env,
             "-f", "pulse",
-            "-thread_queue_size", "1024",  # Increased for audio
+            "-thread_queue_size", "512",
             "-i", STEREOMIX_DEVICE,
             "-ac", "2",
             "-filter_complex", f"[0:v]fps={FPS},scale=iw:trunc(ih/2)*2,format=yuv420p,setpts=PTS-STARTPTS[v];[1:a]aresample=async=1:first_pts=0,apad[a]",
@@ -604,14 +613,12 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             "-g", str(FPS),
             "-r", str(FPS),
             "-crf", str(CRF),
-            "-bufsize", "20M",
-            "-c:a", "libopus", 
-            "-ar", "48000",
-            "-b:a", "128k",
-            "-application", "lowdelay",
-            "-f", "rtsp",
-            "-rtsp_transport", "tcp",
-            f"rtsp://localhost:8554/{STREAM_KEY}"
+            "-c:a", "aac", 
+            "-ar", "44100", 
+            "-b:a", "96k", 
+            "-threads", "2",
+            "-f", "flv", 
+            f"rtmp://localhost:1935/{STREAM_KEY}"
         ]
 
     return server_cmd, ffmpeg_cmd

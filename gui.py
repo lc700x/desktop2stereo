@@ -161,7 +161,7 @@ DEFAULTS = {
     "Computing Device": 0,
     "Language": "EN",
     "Run Mode": "Local Viewer",
-    "Stream Protocol": "WebRTC" if OS_NAME=="Darwin" else "HLS",
+    "Stream Protocol": "HLS",
     "Legacy Streamer Host": None,
     "Streamer Port": DEFAULT_PORT,
     "Stream Quality": 100,
@@ -906,12 +906,6 @@ class ConfigGUI(tk.Tk):
                 self.check_tensorrt.grid_remove()  
             else:
                 self.check_tensorrt.grid()
-            
-            # Disable torch.compile for Linux
-            if OS_NAME == "Linux":
-                self.check_torch_compile.grid_remove()
-            else:
-                self.check_torch_compile.grid()
                 
         else:
             self.label_inference_optimizer.grid_remove()  # Hide Inference Optimizer label

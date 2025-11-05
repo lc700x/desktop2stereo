@@ -171,7 +171,7 @@ AA_STRENTH *= 4 # 0-100
 
 # Experimental Settings
 DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer
-USE_TORCH_COMPILE = settings["torch.compile"] if OS_NAME == "Windows" else False # compile model with torch.compile
+USE_TORCH_COMPILE = settings["torch.compile"]
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
 CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture

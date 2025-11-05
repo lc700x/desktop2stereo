@@ -64,11 +64,11 @@
 1.  安装最新的 GPU 驱动程序
     **AMD GPU**: 从 [AMD 驱动程序和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新 GPU 驱动程序和 ROCm。
     **NVIDIA GPU**: 从 [NVIDIA GeForce 驱动程序](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新 GPU 驱动程序。
-2.  安装 **Python 3.11**
+2.  安装 **Python 3.11-dev**
     ```bash
     sudo add-apt-repository ppa:savoury1/python
     sudo apt update
-    sudo apt-get install python3.11 python3.11-venv
+    sudo apt-get install python3.11-dev python3.11-venv
     ```
 3.  下载 Desktop2Stereo 应用
     下载 [Desktop2Stereo_vX.X.X.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
@@ -311,10 +311,10 @@
 27. **推理优化** (仅限 Windows/Ubuntu)  
     这些优化器通常可以将输出 FPS 提高 `30%~50%`。但是，并非所有模型都支持 **推理优化**，如果优化失败，推理过程将回退到 PyTorch。
     **NVIDIA GPU**:
-    - **torch.compile** (仅限 Windows)：底层利用 Triton 自动生成优化的计算内核，通过融合操作和减少开销，提供轻微到中等的加速效果。
-    - **TensorRT** (Windows/Ubuntu)：这是 NVIDIA 的高性能深度学习推理 SDK。它对训练好的模型进行优化以便部署，尤其是在 NVIDIA GPU 上，能提供显著的加速效果和极高的推理效率。
+    - **torch.compile**：底层利用 Triton 自动生成优化的计算内核，通过融合操作和减少开销，提供轻微到中等的加速效果。
+    - **TensorRT**：这是 NVIDIA 的高性能深度学习推理 SDK。它对训练好的模型进行优化以便部署，尤其是在 NVIDIA GPU 上，能提供显著的加速效果和极高的推理效率。
     **DirectML** (**AMD GPU** 等):
-    - **解锁线程 (旧网络推流)**: (Windows/Ubuntu) 为 **旧网络推流** 模式解锁多线程。但是，由于 [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) 库的限制。
+    - **解锁线程 (旧网络推流)**:为 **旧网络推流** 模式解锁多线程。但是，由于 [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) 库的限制。
 > [!Warning]
 > **解锁线程 (旧网络推流)** 在 Python3.11 下有时会因 `UTF-8 错误` 而失败。您可能需要多次停止和运行以获得成功的网络推流进程。
 
