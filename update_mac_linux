@@ -20,5 +20,22 @@ mv temp_extract/${REPO_NAME}-${BRANCH}/* ./
 
 # Clean up
 rm -rf temp_extract "$ZIP_FILE"
+# cleanup windows rtmp folders
+rm -rf ./rtmp/ffmpeg
+rm -rf ./rtmp/mediamtx
 
 echo "Branch '${BRANCH}' downloaded and extracted to current folder."
+# Install requirements
+echo
+echo "- Installing the requirements"
+$PYTHON_EXE -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+if [ $? -ne 0 ]; then
+    echo "Failed to install requirements"
+    read -p "Press enter to exit..."
+    exit 1
+fi
+
+echo "Python environment deployed successfully."
+read -p "Press enter to exit..."
+exit 0
+

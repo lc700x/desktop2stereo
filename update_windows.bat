@@ -21,6 +21,9 @@ for /d %%F in (temp_extract\*) do xcopy "%%F\*" ".\" /E /H /Y
 
 :: Clean up
 rmdir /S /Q temp_extract
+:: Remove unnecessary platform folders
+rmdir /S /Q rtmp\mac
+rmdir /S /Q rtmp\linux
 del "%ZIP_FILE%"
 
 echo Latest Desktop2Stereo downloaded and extracted to current folder.
