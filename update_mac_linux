@@ -67,6 +67,7 @@ fi
 rm -rf "$TEMP_DIR" "$ZIP_FILE"
 rm -rf ./rtmp/mediamtx
 rm -rf ./rtmp/ffmpeg
+rm -rf ./*.bat
 if [[ "$OSTYPE" == "darwin"* ]]; then
   rm -rf ./rtmp/linux
   chmod a+x ./update_mac_linux
