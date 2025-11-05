@@ -1,14 +1,27 @@
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  SED="sed -i '' -e"
-else
-  SED="sed -i -e"
-fi
+#!/bin/bash
 
-$SED 's/\r$//' install-mps
-$SED 's/\r$//' run_mac
-$SED 's/\r$//' update_mac_linux
-$SED 's/\r$//' run_linux.bash
-$SED 's/\r$//' install-cuda.bash
-$SED 's/\r$//' install-rocm7.bash
-$SED 's/\r$//' install-rocm.bash
-$SED 's/\r$//' install-cuda0.bash
+# List of files to clean
+FILES=(
+  install-mps
+  run_mac
+  update_mac_linux
+  run_linux.bash
+  install-cuda.bash
+  install-rocm7.bash
+  install-rocm.bash
+  install-cuda0.bash
+)
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  for file in "${FILES[@]}"; do
+    if [[ -f "$file" ]]; then
+      sed -i '' -e 's/\r$//' "$file"
+    fi
+  done
+else
+  for file in "${FILES[@]}"; do
+    if [[ -f "$file" ]]; then
+      sed -i -e 's/\r$//' "$file"
+    fi
+  done
+fi
