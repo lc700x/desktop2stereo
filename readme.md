@@ -137,7 +137,8 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
     Select the **Stereo Mix** as `BlackHole 2ch` or `Virtual Desktop Speakers` or `Loopback Audio` or other virtual audio devices accordingly, and select the system **Output** device with same name.  
     ![Mac Sound Output](./assets/audio2.png)  
     - **Ubuntu**
-    Select the **Stereo Mix** device name ended with `stereo.monitor` i.e. `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`.  
+    Select the **Stereo Mix** device name ended with `stereo.monitor` i.e. `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`, and select **Output Device** as `Digtial Output(S/PDIF)-xxxx` in system sound settings.  
+    ![Linux Sound Output](./assets/audio3.png)  
 2. Set a **Stream Key**, default is `live`.  
 3. (Optional) Adjust the **Audio Delay**, `negative` value means play the audio in advance before the video, `positive` value means delay the audio play after the video.  
 4. (Optional) It is recommended to use a second (virtual) screen with a resolution equal to or larger than the main screen to place the Stereo Viewer window.

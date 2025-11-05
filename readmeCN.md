@@ -139,7 +139,9 @@
         选择 **立体声混音** 为 `BlackHole 2ch` 或 `Virtual Desktop Speakers` 或 `Loopback Audio` 或其他相应的虚拟音频设备，并选择同名的系统 **输出** 设备。  
         ![Mac Sound Output](./assets/audio2.png) 
     - **Ubuntu**
-        选择 **立体声混音** 设备名称以 `stereo.monitor` 结尾，例如 `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`。
+        选择 **立体声混音** 设备名称以 `stereo.monitor` 结尾，例如 `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`，并在系统声音设置中选择**输出设备**为 `Digtial Output(S/PDIF)-xxxx`。  
+        ![Linux Sound Output](./assets/audio3.png) 
+
 2.  设置一个 **流密钥**，默认为 `live`。
 3.  (可选) 调整 **音频延迟**，`负值` 表示在视频之前提前播放音频，`正值` 表示在视频之后延迟播放音频。
 4.  (可选) 建议使用分辨率和主屏幕相同或更大的第二个 (虚拟) 屏幕来放置**Stereo Viewer**窗口。  
