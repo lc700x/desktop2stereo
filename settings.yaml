@@ -1,6 +1,6 @@
-Capture Mode: Monitor
+Capture Mode: Window
 Monitor Index: 1
-Window Title: ''
+Window Title: 'lc700x@arouslinux: ~/Downloads/Desktop2Stereo_v2.3.6_Ubuntu'
 FPS: 60
 Show FPS: true
 Output Resolution: 1080
@@ -196,33 +196,6 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/patchfusion-depth-anything-large-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  lc700x/patchfusion-depth-anything-base-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  lc700x/patchfusion-depth-anything-small-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
   xingyang1/Distill-Any-Depth-Large-hf:
     resolutions:
     - 196
@@ -392,17 +365,17 @@ HF Endpoint: https://hf-mirror.com
 Computing Device: 0
 Language: CN
 Run Mode: Local Viewer
-Stream Protocol: WebRTC
+Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: false
-TensorRT: false
+torch.compile: true
+TensorRT: true
 Recompile TensorRT: false
 Unlock Thread (Legacy Streamer): false
 Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stream Key: live
-Stereo Mix: Splashtop Remote Sound
+Stereo Mix: alsa_output.pci-0000_11_00.6.iec958-stereo.monitor
 CRF: 20
 Audio Delay: -0.15
