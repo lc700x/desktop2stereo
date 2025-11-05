@@ -1,6 +1,6 @@
-Capture Mode: Window
+Capture Mode: Monitor
 Monitor Index: 1
-Window Title: 'lc700x@arouslinux: ~/Downloads/Desktop2Stereo_v2.3.6_Ubuntu'
+Window Title: ''
 FPS: 60
 Show FPS: true
 Output Resolution: 1080
@@ -368,8 +368,8 @@ Run Mode: Local Viewer
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: true
-TensorRT: true
+torch.compile: false
+TensorRT: false
 Recompile TensorRT: false
 Unlock Thread (Legacy Streamer): false
 Capture Tool: DXCamera
