@@ -21,8 +21,40 @@ for /d %%F in (temp_extract\*) do xcopy "%%F\*" ".\" /E /H /Y
 
 :: Clean up
 rmdir /S /Q temp_extract
+:: Remove unnecessary platform folders
+rmdir /S /Q rtmp\mac
+rmdir /S /Q rtmp\linux
+del /F /Q update_mac_linux
+del /F /Q update_windows.bat
 del "%ZIP_FILE%"
+
 
 echo Latest Desktop2Stereo downloaded and extracted to current folder.
 endlocal
+@REM Set paths
+call .env\Scripts\activate
+Set "PYTHON_EXE=python"
+
+
+@REM Update pip
+echo [Desktop2Stereo Patch]
+echo - Updating the pip package
+%PYTHON_EXE% -m pip install --upgrade pip --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
+if %errorlevel% neq 0 (
+    echo Failed to update pip
+    pause
+    exit /b 1
+)
+
+@REM Install new requirements
+echo.
+echo - Installing new requirements
+%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+if %errorlevel% neq 0 (
+    echo Failed to install requirements
+    pause
+    exit /b 1
+)
+
+echo Python environment updated successfully.
 pause
