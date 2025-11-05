@@ -1,24 +1,95 @@
-#!/bin/bash
-cd "$(dirname "$0")"
-# Set variables
+#!/usr/bin/env bash
 REPO_OWNER="lc700x"
 REPO_NAME="desktop2stereo"
 BRANCH="update"
 ZIP_FILE="${REPO_NAME}-${BRANCH}.zip"
 DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.zip"
 
-# Download the ZIP archive
+VIRTUAL_ENV=".env"
+PYTHON_EXE="python3.11"
+
+# -----------------------------
+# Helper functions
+# -----------------------------
+function error_exit() {
+    echo "ERROR: $1"
+    read -p "Press Enter to exit..."
+    exit 1
+}
+
+function check_command() {
+    if ! command -v "$1" &> /dev/null; then
+        error_exit "Command '$1' not found. Please install it first."
+    fi
+}
+
+# -----------------------------
+# Start process
+# -----------------------------
+cd "$(dirname "$0")"
+
+echo "Updating project from GitHub branch '${BRANCH}'..."
+check_command "curl"
+check_command "unzip"
+check_command "$PYTHON_EXE"
+check_command "rsync"
+
+# -----------------------------
+# Download and extract
+# -----------------------------
 echo "Downloading branch '${BRANCH}'..."
-curl -L -o "$ZIP_FILE" "$DOWNLOAD_URL"
+curl -L -o "$ZIP_FILE" "$DOWNLOAD_URL" || error_exit "Failed to download from GitHub."
 
-# Extract to temp folder
+TEMP_DIR="temp_extract"
+rm -rf "$TEMP_DIR"
+mkdir -p "$TEMP_DIR"
+
 echo "Extracting files..."
-unzip -q "$ZIP_FILE" -d temp_extract
+unzip -q "$ZIP_FILE" -d "$TEMP_DIR" || error_exit "Failed to extract ZIP."
 
-# Move contents from nested folder to current directory
-mv temp_extract/${REPO_NAME}-${BRANCH}/* ./
+SRC_DIR="${TEMP_DIR}/${REPO_NAME}-${BRANCH}"
+if [ ! -d "$SRC_DIR" ]; then
+    error_exit "Extracted folder not found: $SRC_DIR"
+fi
 
-# Clean up
-rm -rf temp_extract "$ZIP_FILE"
+echo "Updating project files..."
+# Allow rsync exit code 24 (files vanished)
+set +e
+rsync -a "$SRC_DIR/" "./"
+RSYNC_EXIT=$?
+set -e
 
-echo "Branch '${BRANCH}' downloaded and extracted to current folder."
+if [[ $RSYNC_EXIT -ne 0 && $RSYNC_EXIT -ne 24 ]]; then
+    error_exit "Failed to copy files (rsync exit code $RSYNC_EXIT)."
+fi
+
+# Cleanup
+rm -rf "$TEMP_DIR" "$ZIP_FILE"
+
+echo "Branch '${BRANCH}' successfully updated."
+
+# -----------------------------
+# Python environment setup
+# -----------------------------
+echo "Updating virtual environment..."
+source "${VIRTUAL_ENV}/bin/activate" || error_exit "Failed to activate virtual environment."
+"$PYTHON_EXE" -m pip install --upgrade pip --no-cache-dir || error_exit "Failed to update pip."
+
+# -----------------------------
+# Install dependencies
+# -----------------------------
+if [ -f "requirements.txt" ]; then
+    echo "Installing dependencies..."
+    "$PYTHON_EXE" -m pip install -r requirements.txt --no-cache-dir --trusted-host mirrors.aliyun.com \
+        || error_exit "Failed to install requirements."
+else
+    echo "No requirements.txt found. Skipping dependency installation."
+fi
+
+# -----------------------------
+# Done
+# -----------------------------
+echo
+echo "Update and environment setup completed successfully."
+read -p "Press Enter to exit..."
+exit 0
