@@ -196,33 +196,6 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/patchfusion-depth-anything-large-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  lc700x/patchfusion-depth-anything-base-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  lc700x/patchfusion-depth-anything-small-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
   xingyang1/Distill-Any-Depth-Large-hf:
     resolutions:
     - 196
@@ -325,8 +298,7 @@ Model List:
   lc700x/depth-ai-hf:
     resolutions:
     - 224
-    - 208
-    - 196
+    - 192
   lc700x/dpt-hybrid-midas-hf:
     resolutions:
     - 384
