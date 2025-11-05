@@ -65,7 +65,13 @@ fi
 
 # Cleanup
 rm -rf "$TEMP_DIR" "$ZIP_FILE"
-
+rm -rf ./rtmp/mediamtx
+rm -rf ./rtmp/ffmpeg
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  rm -rf ./rtmp/linux
+else
+  rm -rf ./rtmp/mac
+fi
 echo "Branch '${BRANCH}' successfully updated."
 
 # -----------------------------
