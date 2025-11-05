@@ -1,8 +1,14 @@
-sed -i '' -e 's/\r$//' install-mps
-sed -i '' -e 's/\r$//' run_mac
-sed -i '' -e 's/\r$//' update_mac_linux
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  SED="sed -i '' -e"
+else
+  SED="sed -i -e"
+fi
 
-sed -i '' -e 's/\r$//' run_linux.bash
-sed -i '' -e 's/\r$//' install-cuda.bash
-sed -i '' -e 's/\r$//' install-rocm7.bash
-sed -i '' -e 's/\r$//' install-rocm.bash
+$SED 's/\r$//' install-mps
+$SED 's/\r$//' run_mac
+$SED 's/\r$//' update_mac_linux
+$SED 's/\r$//' run_linux.bash
+$SED 's/\r$//' install-cuda.bash
+$SED 's/\r$//' install-rocm7.bash
+$SED 's/\r$//' install-rocm.bash
+$SED 's/\r$//' install-cuda0.bash
