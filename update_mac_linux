@@ -68,15 +68,7 @@ rm -rf "$TEMP_DIR" "$ZIP_FILE"
 rm -rf ./rtmp/mediamtx
 rm -rf ./rtmp/ffmpeg
 rm -rf ./*.bat
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  rm -rf ./rtmp/linux
-  chmod a+x ./update_mac_linux
-  chmod a+x ./install-mps
-  chmod a+x ./run_mac
-else
-  rm -rf ./rtmp/mac
-fi
-echo "Branch '${BRANCH}' successfully updated."
+
 
 # -----------------------------
 # Python environment setup
@@ -101,5 +93,17 @@ fi
 # -----------------------------
 echo
 echo "Update and environment setup completed successfully."
+
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  rm -rf ./rtmp/linux
+  chmod a+x ./update_mac_linux
+  chmod a+x ./install-mps
+  chmod a+x ./run_mac
+else
+  rm -rf ./rtmp/mac
+fi
+echo "Branch '${BRANCH}' successfully updated."
+
 read -p "Press Enter to exit..."
 exit 0
