@@ -678,6 +678,8 @@ class StereoWindow:
                 glfw.set_window_aspect_ratio(self.window, 2*tex_w, tex_h)
             else:
                 glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
+        else:
+            glfw.set_window_aspect_ratio(self.window, glfw.DONT_CARE, glfw.DONT_CARE)
         # Clear screen once
         self.ctx.clear(0.1, 0.1, 0.1)
         
