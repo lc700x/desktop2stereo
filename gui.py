@@ -724,7 +724,12 @@ class ConfigGUI(tk.Tk):
             "WebRTC": f"http://{local_ip}:8889/{stream_key}/"
         }
         
-        self.stream_url_var.set(url_templates.get(protocol, f"http://{local_ip}:{port}/{stream_key}/"))
+        # For MJPEG and Legacy streaming (when run mode is MJPEG Streamer or Legacy Streamer)
+        # use simple URL without stream key
+        if self.run_mode_key in ["MJPEG Streamer", "Legacy Streamer"]:
+            self.stream_url_var.set(f"http://{local_ip}:{port}/")
+        else:
+            self.stream_url_var.set(url_templates.get(protocol, f"http://{local_ip}:{port}/{stream_key}/"))
         
         # Hide open browser button for RTMP and RTSP
         if protocol in ["RTMP", "RTSP"]:
