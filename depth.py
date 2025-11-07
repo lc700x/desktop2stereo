@@ -735,17 +735,16 @@ def build_font(device="cpu", dtype=torch.float32):
 
 def overlay_fps(rgb: torch.Tensor, fps: float, color=(0.0, 255.0, 0.0)) -> torch.Tensor:
     """
-    Vectorized FPS overlay in PyTorch (compilable).
-    rgb: [C,H,W] image tensor
-    fps: float value
-    color: overlay color (tuple for RGB or scalar for grayscale)
+    Vectorized FPS overlay in PyTorch (DirectML / CUDA / MPS compatible).
+    Ensures all operations use rgb.dtype (typically float32).
     """
     device, dtype = rgb.device, rgb.dtype
     chars, font_tensor = build_font(device=device, dtype=dtype)
 
+    # Text to render
     txt = f"FPS: {fps:.1f}"
-    idxs = torch.tensor([chars.index(ch) if ch in chars else chars.index(" ") for ch in txt],
-                        device=device)
+    idxs = torch.tensor([chars.index(ch) if ch in chars else chars.index(" ")
+                         for ch in txt], device=device, dtype=torch.long)
 
     H, W = rgb.shape[1:]
     scale = max(1, min(8, H // 60))
@@ -761,19 +760,28 @@ def overlay_fps(rgb: torch.Tensor, fps: float, color=(0.0, 255.0, 0.0)) -> torch
     offsets_x = margin_x + torch.arange(len(txt), device=device) * (char_w + spacing)
     offsets_y = torch.full((len(txt),), margin_y, device=device)
 
-    # Create global mask
+    # Create the global mask (same dtype as rgb)
     mask = torch.zeros((H, W), device=device, dtype=dtype)
+
     for i, glyph in enumerate(glyphs):
         h_b, w_b = glyph.shape
         x0, y0 = int(offsets_x[i]), int(offsets_y[i])
         x1, y1 = min(W, x0 + w_b), min(H, y0 + h_b)
-        mask[y0:y1, x0:x1] = torch.maximum(mask[y0:y1, x0:x1], glyph[:y1-y0, :x1-x0])
+        # Clamp in case of overflows at edges
+        if x0 < W and y0 < H:
+            mask[y0:y1, x0:x1] = torch.maximum(mask[y0:y1, x0:x1],
+                                               glyph[:y1 - y0, :x1 - x0])
 
-    # Broadcast to channels
+    # Broadcast to channels and ensure correct dtype/device
     alpha = mask.unsqueeze(0).expand(rgb.shape[0], -1, -1)
-    overlay_color = torch.tensor(color, device=device, dtype=dtype).view(-1,1,1).expand_as(rgb)
+    overlay_color = torch.as_tensor(color, device=device, dtype=dtype).view(-1, 1, 1).expand_as(rgb)
 
-    return rgb * (1.0 - alpha) + overlay_color * alpha
+    one = torch.tensor(1.0, device=device, dtype=dtype)
+    alpha = alpha.to(dtype)
+
+    # Blend safely in float32
+    return rgb * (one - alpha) + overlay_color * alpha
+
 
 # generate left and right eye view for streamer 
 def make_sbs_core(rgb: torch.Tensor,
@@ -788,47 +796,52 @@ def make_sbs_core(rgb: torch.Tensor,
     Keeps CUDA fast path (grid_sample) and fallback path (gather).
     Compatible with torch.compile.
     Inputs:
-        rgb:   [C,H,W] float tensor
-        depth: [H,W]   float tensor
+        rgb: [C,H,W] float tensor
+        depth: [H,W] float tensor
     Returns:
         SBS image [C,H,W] float tensor (0-255 range)
     """
+    # Cast to float32 for DirectML compatibility (avoids float64 ops)
+    rgb = rgb.to(dtype=torch.float32, device=device)
+    depth = depth.to(dtype=torch.float32, device=device)
+    
     C, H, W = rgb.shape
     img = rgb.unsqueeze(0)  # [1,C,H,W]
-
-    inv = 1.0 - depth * depth_ratio
-    max_px = ipd_uv * W
-    depth_strength = 0.05
+    
+    # Cast scalars to float32 tensors
+    depth_ratio = torch.tensor(depth_ratio, dtype=torch.float32, device=device)
+    ipd_uv = torch.tensor(ipd_uv, dtype=torch.float32, device=device)
+    depth_strength = torch.tensor(0.05, dtype=torch.float32, device=device)
+    
+    inv = torch.ones_like(depth) - depth * depth_ratio
+    max_px = ipd_uv * torch.tensor(W, dtype=torch.float32, device=device)
     shifts = inv * max_px * depth_strength
-
+    
     # CUDA fast path: grid_sample
     if "CUDA" in DEVICE_INFO:
-        xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=MODEL_DTYPE).view(1, 1, W).expand(1, H, W)
-        ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=MODEL_DTYPE).view(1, H, 1).expand(1, H, W)
+        xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=torch.float32).view(1, 1, W).expand(1, H, W)
+        ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=torch.float32).view(1, H, 1).expand(1, H, W)
         shift_norm = shifts * (2.0 / (W - 1))
-
         grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
         grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
-
         left = F.grid_sample(img, grid_left, mode="bilinear",
-                                     padding_mode="border", align_corners=False)[0]
+                             padding_mode="border", align_corners=True)[0]
         right = F.grid_sample(img, grid_right, mode="bilinear",
-                                      padding_mode="border", align_corners=False)[0]
-
+                              padding_mode="border", align_corners=True)[0]
     # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
     else:
-        base = torch.arange(W, device=device).view(1, -1).expand(H, -1)
-        coords_left = (base + shifts).clamp(0, W - 1).long()   # [H,W]
-        coords_right = (base - shifts).clamp(0, W - 1).long()  # [H,W]
-
+        base = torch.arange(W, device=device, dtype=torch.int64).view(1, -1).expand(H, -1)
+        # Ensure shifts is float32 for addition
+        shifts = shifts.to(dtype=torch.float32)
+        coords_left = (base.to(dtype=torch.float32) + shifts).clamp(0, W - 1).long()  # [H,W]
+        coords_right = (base.to(dtype=torch.float32) - shifts).clamp(0, W - 1).long()  # [H,W]
         # Left eye
         gather_idx_left = coords_left.unsqueeze(0).expand(C, H, W).unsqueeze(0)  # [1,C,H,W]
         left = torch.gather(img.expand(1, C, H, W), 3, gather_idx_left)[0]  # [C,H,W]
-
         # Right eye
         gather_idx_right = coords_right.unsqueeze(0).expand(C, H, W).unsqueeze(0)
         right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
-
+    
     # Aspect pad helper
     def pad_to_aspect_tensor(tensor, target_ratio=(16, 9)):
         _, h, w = tensor.shape
@@ -844,20 +857,17 @@ def make_sbs_core(rgb: torch.Tensor,
             new_w = int(round(h * r_t))
             pad_left = (new_w - w) // 2
             return F.pad(tensor, (pad_left, new_w - w - pad_left, 0, 0))
-
+    
     # Aspect pad & arrange SBS/TAB
     if fill_16_9:
         left = pad_to_aspect_tensor(left)
         right = pad_to_aspect_tensor(right)
-
     if display_mode == "TAB":
         out = torch.cat([left, right], dim=1)
     else:
         out = torch.cat([left, right], dim=2)
-
     if display_mode != "Full-SBS":
         out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
-
     return out.clamp(0, 255)
 
 def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS", fps=None):
@@ -888,4 +898,5 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
 
 if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
     make_sbs_core = torch.compile(make_sbs_core)
+
     
