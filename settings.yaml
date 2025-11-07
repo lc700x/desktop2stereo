@@ -363,7 +363,7 @@ FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
-Language: CN
+Language: EN
 Run Mode: Local Viewer
 Stream Protocol: HLS
 Streamer Port: 1122
@@ -376,6 +376,6 @@ Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stream Key: live
-Stereo Mix: alsa_output.pci-0000_11_00.6.iec958-stereo.monitor
+Stereo Mix: 立体声混音 (Realtek(R) Audio)
 CRF: 20
 Audio Delay: -0.15
