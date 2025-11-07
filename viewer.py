@@ -163,7 +163,7 @@ class StereoWindow:
 
         # Set up OpenGL context
         glfw.make_context_current(self.window)
-        glfw.swap_interval(1)  # VSync on
+        glfw.swap_interval(0)  # VSync on
         self.ctx = moderngl.create_context()
         
         # Precompile shaders and create VAO

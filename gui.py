@@ -197,7 +197,7 @@ UI_TEXTS = {
         "Browse...": "Browse...",
         "Stop": "Stop",
         "HF Endpoint:": "HF Endpoint:",
-        "Device:": "Device:",
+        "Computing Device:": "Computing Device:",
         "Reset": "Reset",
         "Run": "Run",
         "Set Language:": "Set Language:",
@@ -271,7 +271,7 @@ UI_TEXTS = {
         "Browse...": "浏览...",
         "Stop": "停止",
         "HF Endpoint:": "下载节点:",
-        "Device:": "设备:",
+        "Computing Device:": "计算设备:",
         "Reset": "重置",
         "Run": "运行",
         "Set Language:": "设置语言:",
@@ -476,7 +476,7 @@ class ConfigGUI(tk.Tk):
         self.language_cb.bind("<<ComboboxSelected>>", self.on_language_change)
         
         # Device
-        self.label_device = ttk.Label(self.content_frame, text="Device:")
+        self.label_device = ttk.Label(self.content_frame, text="Computing Device:")
         self.label_device.grid(row=6, column=0, sticky="w", **self.pad)
         self.device_var = tk.StringVar()
         self.device_menu = ttk.OptionMenu(self.content_frame, self.device_var, "")
@@ -1071,7 +1071,7 @@ class ConfigGUI(tk.Tk):
         self.fp16_cb.config(text=texts["FP16"])
         self.label_download.config(text=texts["Download Path:"])
         self.label_hf_endpoint.config(text=texts["HF Endpoint:"])
-        self.label_device.config(text=texts["Device:"])
+        self.label_device.config(text=texts["Computing Device:"])
         self.btn_browse.config(text=texts["Browse..."])
         self.btn_reset.config(text=texts["Reset"])
         self.btn_stop.config(text=texts["Stop"])

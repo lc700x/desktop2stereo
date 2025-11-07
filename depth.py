@@ -47,6 +47,13 @@ if "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO:
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
     torch.backends.cuda.enable_math_sdp(True)
+    os.environ["TORCHINDUCTOR_MAX_AUTOTUNE"] ="1" # Debug for torch.compile
+    if USE_TORCH_COMPILE:
+        warnings.filterwarnings(
+            "ignore",
+            category=UserWarning,
+            module=r"torch\._inductor\.lowering"
+        )
     
 if "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO:
     torch.backends.cudnn.enabled = False # Add for AMD ROCm
@@ -55,13 +62,6 @@ if "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO:
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
     torch.backends.cuda.enable_math_sdp(True)
-
-if USE_TORCH_COMPILE and torch.cuda.is_available():
-    warnings.filterwarnings(
-        "ignore",
-        category=UserWarning,
-        module=r"torch\._inductor\.lowering"
-    )
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -536,7 +536,7 @@ class DepthModelWrapper:
         if FP16:
             model.half()
         
-        if  "CUDA" in self.device_info and self.use_torch_compile and not enable_trt:
+        if  "CUDA" in self.device_info and 'NVIDIA' in self.device_info and self.use_torch_compile and not enable_trt:
             model = torch.compile(model)
             print("Processing torch.compile with Triton, it may take a while...")
         
@@ -597,10 +597,21 @@ STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
 
 if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
     try:
-        anti_alias = torch.compile(anti_alias, fullgraph=True)
-        apply_piecewise = torch.compile(apply_piecewise, fullgraph=True)
-        apply_sigmoid = torch.compile(apply_sigmoid, fullgraph=True)
-        apply_foreground_scale = torch.compile(apply_foreground_scale, fullgraph=True)
+        # Compile the model as before, but SKIP compiling lightweight post-processing functions，avoid FX re-tracing conflicts. These are fast without it.
+        def post_process_depth(depth):
+            depth = apply_stretch(depth, 2, 98)
+            if 'Metric' in MODEL_ID:
+                depth = 1.0 - depth
+            depth = apply_piecewise(depth, split=0.5, near_gamma=1.2, far_gamma=0.6)
+            depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
+            depth = normalize_tensor(depth)
+            depth = anti_alias(depth, strength=AA_STRENTH)
+            return depth
+        
+        post_process_depth = torch.compile(post_process_depth, fullgraph=False)
+        # Assign to a global or module-level var if needed for access
+        globals()['post_process_depth'] = post_process_depth  # Or use a class/module attribute
+        
     except Exception as e:
         print(f"[Warning] torch.compile failed: {str(e)}, running without it.")
 
@@ -688,7 +699,8 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         
     # Use model wrapper instead of direct model call
     if 'Video-Depth-Anything' in MODEL_ID:
-        depth = model_wraper(tensor)
+        with torch.no_grad():  # Add for safety in non-autocast paths
+            depth = model_wraper(tensor)
     else:
         if "CUDA" in DEVICE_INFO:
             with torch.amp.autocast('cuda'):
@@ -697,32 +709,33 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
             with torch.no_grad():
                 depth = model_wraper(tensor)
     
-    # Robust normalize and Post depth processing
-    depth = apply_stretch(depth, 2, 98)
-    
-    # invert for metric models
-    if 'Metric' in MODEL_ID:
-        depth = 1.0 - depth
+    # Batched post-processing (compiled as a unit to avoid per-function tracing)
+    with torch.no_grad():  # Prevent any gradient tracing
+        depth = apply_stretch(depth, 2, 98)
         
-    # post processing
-    # depth = apply_sigmoid(depth, k=1, midpoint=0.618)
-    depth = apply_piecewise(depth, split=0.5, near_gamma=1.2, far_gamma=0.6)
-    depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
-    depth = normalize_tensor(depth)
-    # Mild AA to reduce jaggies
-    depth = anti_alias(depth, strength=AA_STRENTH)
-
+        # invert for metric models
+        if 'Metric' in MODEL_ID:
+            depth = 1.0 - depth
+            
+        # post processing
+        # depth = apply_sigmoid(depth, k=1, midpoint=0.618)
+        depth = apply_piecewise(depth, split=0.5, near_gamma=1.2, far_gamma=0.6)
+        depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
+        depth = normalize_tensor(depth)
+        # Mild AA to reduce jaggies
+        depth = anti_alias(depth, strength=AA_STRENTH)
+    
     # Optional temporal stabilization (EMA)
     if use_temporal_smooth:
         depth = depth_stabilizer(depth)
         
-     # Interpolate output to original size
+    # Interpolate output to original size
     depth = F.interpolate(depth.unsqueeze(0).unsqueeze(0), size=(h, w), mode='bilinear', align_corners=False)
     depth = depth.squeeze(0)
     if return_tuple:
         return depth, rgb_c
     else:
-        return depth  
+        return depth
     
 def build_font(device="cpu", dtype=torch.float32):
     chars = sorted(font_dict.keys())

@@ -63,6 +63,12 @@ class VideoDepthAnything(nn.Module):
         self.gap = (INFER_LEN - OVERLAP) * 2 - 1 - (OVERLAP - INTERP_LEN)
         assert self.gap == 41
         self.id = -1
+        
+
+        # ring buffer to avoid Python-size changes (fix Dynamo recompiles)
+        self.buffer_size = INFER_LEN - 1
+        self.frame_id_buffer = [-1] * self.buffer_size
+        self.buffer_ptr = 0
 
     # def forward(self, x):
     #     return self.forward_depth(self.forward_features(x), x.shape)[0]
@@ -182,7 +188,7 @@ class VideoDepthAnything(nn.Module):
 
         if not self.transform:  # first frame
             # Inference the first frame
-            cur_list = [cur_input]
+            # cur_list = [cur_input]
 
             if not CUDA:
                 with torch.no_grad():
@@ -231,8 +237,12 @@ class VideoDepthAnything(nn.Module):
                         self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
 
             self.update_cache(new_cache)
-            # Sliding window housekeeping
-            self.frame_id_list.append(self.id)
-            if self.id + INFER_LEN  > self.gap + 1:
-                del self.frame_id_list[1]
+            # old:
+            # self.frame_id_list.append(self.id)
+            # if self.id + INFER_LEN  > self.gap + 1:
+            #     del self.frame_id_list[1]
+
+            # new: write into a fixed-size circular buffer (no append/del)
+            self.frame_id_buffer[self.buffer_ptr] = self.id
+            self.buffer_ptr = (self.buffer_ptr + 1) % self.buffer_size
         return self.predicted_depth.squeeze(1)  # return shape [T, H, W]
