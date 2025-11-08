@@ -7,7 +7,7 @@ import signal
 import sys
 import subprocess
 import cv2
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, LOCAL_IP, AUDIO_DELAY, CRF, shutdown_event
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, shutdown_event
 from depth import process, predict_depth
 
 # Global process references
@@ -366,7 +366,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
              "-itsoffset", str(AUDIO_DELAY),
             "-f", "avfoundation",
             "-rtbufsize", "256M",
-            "-framerate", "59.94",
+            "-framerate", "60",
             "-i", f"{screen_index}:{audio_index}",
             "-filter_complex",
             f"[0:v]fps={FPS},crop={width}:{height}:{x}:{y},scale=trunc(iw/2)*2:trunc(ih/2)*2,format=uyvy422[v];[0:a]aresample=async=1[a]",
