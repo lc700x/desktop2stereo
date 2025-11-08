@@ -362,9 +362,10 @@ Depth Resolution: 336
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
-Device: 0
-Language: CN
-Run Mode: Local Viewer
+Computing Device: 0
+Language: EN
+Run Mode: RTMP Streamer
+Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
 torch.compile: false

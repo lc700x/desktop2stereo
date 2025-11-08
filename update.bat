@@ -25,13 +25,15 @@ rmdir /S /Q temp_extract
 rmdir /S /Q rtmp\mac
 rmdir /S /Q rtmp\linux
 del /F /Q update_mac_linux
-del /F /Q update.bat
+del /F /Q update_windows.bat
 del "%ZIP_FILE%"
+
 
 echo Latest Desktop2Stereo downloaded and extracted to current folder.
 endlocal
 @REM Set paths
-Set "PYTHON_EXE=.\Python311\python.exe"
+call .env\Scripts\activate
+Set "PYTHON_EXE=python"
 
 
 @REM Update pip
@@ -47,7 +49,6 @@ if %errorlevel% neq 0 (
 @REM Install new requirements
 echo.
 echo - Installing new requirements
-%PYTHON_EXE% -m pip uninstall pyaudio -y
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (
     echo Failed to install requirements

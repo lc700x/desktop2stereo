@@ -6,7 +6,7 @@ ZIP_FILE="${REPO_NAME}-${BRANCH}.zip"
 DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.zip"
 
 VIRTUAL_ENV=".env"
-PYTHON_EXE="python3.11"
+PYTHON_EXE="python3"
 
 # -----------------------------
 # Helper functions
@@ -67,13 +67,8 @@ fi
 rm -rf "$TEMP_DIR" "$ZIP_FILE"
 rm -rf ./rtmp/mediamtx
 rm -rf ./rtmp/ffmpeg
-rm -rf *.bat
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  rm -rf ./rtmp/linux
-else
-  rm -rf ./rtmp/mac
-fi
-echo "Branch '${BRANCH}' successfully updated."
+rm -rf ./*.bat
+
 
 # -----------------------------
 # Python environment setup
@@ -87,6 +82,7 @@ source "${VIRTUAL_ENV}/bin/activate" || error_exit "Failed to activate virtual e
 # -----------------------------
 if [ -f "requirements.txt" ]; then
     echo "Installing dependencies..."
+    "$PYTHON_EXE" -m pip uninstall pyaudio -y || echo "pyaudio not installed, skipping uninstall."
     "$PYTHON_EXE" -m pip install -r requirements.txt --no-cache-dir --trusted-host mirrors.aliyun.com \
         || error_exit "Failed to install requirements."
 else
@@ -98,5 +94,17 @@ fi
 # -----------------------------
 echo
 echo "Update and environment setup completed successfully."
+
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  rm -rf ./rtmp/linux
+  chmod a+x ./update_mac_linux
+  chmod a+x ./install-mps
+  chmod a+x ./run_mac
+else
+  rm -rf ./rtmp/mac
+fi
+echo "Branch '${BRANCH}' successfully updated."
+
 read -p "Press Enter to exit..."
 exit 0

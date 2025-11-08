@@ -327,7 +327,7 @@ elif OS_NAME == "Darwin":
                 bounds = win.get("kCGWindowBounds", None)
                 if bounds:
                     return int(bounds.get("X",0)), int(bounds.get("Y",0)), int(bounds.get("Width",0)), int(bounds.get("Height",0))
-        return None
+        return None, None, None, None
     
     # Cursor loader with caching & precomputation
     def get_cursor_image_and_hotspot():
