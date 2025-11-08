@@ -257,6 +257,8 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
         raise ValueError("GLFW window required for size-aware streaming")
 
     width, height = glfw.get_framebuffer_size(window)
+    width = (width // 2) * 2  # make even
+    height = (height // 2) * 2  # make even
 
     if os_name == "Windows":
         server_cmd = ['./rtmp/mediamtx/mediamtx.exe', './rtmp/mediamtx/mediamtx.yml']
@@ -266,7 +268,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             '-flags', 'low_delay',
             '-probesize', '32',
             '-analyzeduration', '0',
-            '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':max_framerate={FPS},hwdownload,format=bgra,scale={width}:trunc({height}/2)*2,format=yuv420p[v]",  # Label video output [v], fix odd height
+            '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':max_framerate={FPS},hwdownload,format=bgra,scale={width}:{height},format=yuv420p[v]",  # Label video output [v], fix odd height
             '-itsoffset', f'{AUDIO_DELAY}',  # Audio delay (applies to next input)
             '-f', 'dshow',
             '-rtbufsize', '256M',
@@ -367,7 +369,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             "-framerate", "59.94",
             "-i", f"{screen_index}:{audio_index}",
             "-filter_complex",
-            f"[0:v]fps={FPS},crop={width}:{height}:{x}:{y},scale=iw:trunc(ih/2)*2,format=uyvy422[v];[0:a]aresample=async=1[a]",
+            f"[0:v]fps={FPS},crop={width}:{height}:{x}:{y},scale=trunc(iw/2)*2:trunc(ih/2)*2,format=uyvy422[v];[0:a]aresample=async=1[a]",
             "-map", "[v]",
             "-map", "[a]",
             "-c:v", "h264_videotoolbox",
@@ -603,7 +605,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             "-thread_queue_size", "512",
             "-i", STEREOMIX_DEVICE,
             "-ac", "2",
-            "-filter_complex", f"[0:v]fps={FPS},scale=iw:trunc(ih/2)*2,format=yuv420p,setpts=PTS-STARTPTS[v];[1:a]aresample=async=1:first_pts=0,apad[a]",
+            "-filter_complex", f"[0:v]fps={FPS},scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,setpts=PTS-STARTPTS[v];[1:a]aresample=async=1:first_pts=0,apad[a]",
             "-map", "[v]",
             "-map", "[a]",
             "-c:v", "libx264",
