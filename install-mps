@@ -55,10 +55,9 @@ if [ $? -ne 0 ]; then
     read -p "Press enter to exit..."
     exit 1
 fi
-
 chmod a+x ./update_mac_linux
-chmod a+x ./run_mac
 chmod a+x ./install-mps
+chmod a+x ./run_mac
 echo "Python environment deployed successfully."
 read -p "You can close this terminal window to exit..."
 exit

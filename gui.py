@@ -161,7 +161,7 @@ DEFAULTS = {
     "Computing Device": 0,
     "Language": "EN",
     "Run Mode": "Local Viewer",
-    "Stream Protocol": "WebRTC" if OS_NAME=="Darwin" else "HLS",
+    "Stream Protocol": "HLS",
     "Legacy Streamer Host": None,
     "Streamer Port": DEFAULT_PORT,
     "Stream Quality": 100,
@@ -197,7 +197,7 @@ UI_TEXTS = {
         "Browse...": "Browse...",
         "Stop": "Stop",
         "HF Endpoint:": "HF Endpoint:",
-        "Device:": "Device:",
+        "Computing Device:": "Computing Device:",
         "Reset": "Reset",
         "Run": "Run",
         "Set Language:": "Set Language:",
@@ -271,7 +271,7 @@ UI_TEXTS = {
         "Browse...": "浏览...",
         "Stop": "停止",
         "HF Endpoint:": "下载节点:",
-        "Device:": "设备:",
+        "Computing Device:": "计算设备:",
         "Reset": "重置",
         "Run": "运行",
         "Set Language:": "设置语言:",
@@ -476,7 +476,7 @@ class ConfigGUI(tk.Tk):
         self.language_cb.bind("<<ComboboxSelected>>", self.on_language_change)
         
         # Device
-        self.label_device = ttk.Label(self.content_frame, text="Device:")
+        self.label_device = ttk.Label(self.content_frame, text="Computing Device:")
         self.label_device.grid(row=6, column=0, sticky="w", **self.pad)
         self.device_var = tk.StringVar()
         self.device_menu = ttk.OptionMenu(self.content_frame, self.device_var, "")
@@ -724,7 +724,12 @@ class ConfigGUI(tk.Tk):
             "WebRTC": f"http://{local_ip}:8889/{stream_key}/"
         }
         
-        self.stream_url_var.set(url_templates.get(protocol, f"http://{local_ip}:{port}/{stream_key}/"))
+        # For MJPEG and Legacy streaming (when run mode is MJPEG Streamer or Legacy Streamer)
+        # use simple URL without stream key
+        if self.run_mode_key in ["MJPEG Streamer", "Legacy Streamer"]:
+            self.stream_url_var.set(f"http://{local_ip}:{port}/")
+        else:
+            self.stream_url_var.set(url_templates.get(protocol, f"http://{local_ip}:{port}/{stream_key}/"))
         
         # Hide open browser button for RTMP and RTSP
         if protocol in ["RTMP", "RTSP"]:
@@ -906,12 +911,6 @@ class ConfigGUI(tk.Tk):
                 self.check_tensorrt.grid_remove()  
             else:
                 self.check_tensorrt.grid()
-            
-            # Disable torch.compile for Linux
-            if OS_NAME == "Linux":
-                self.check_torch_compile.grid_remove()
-            else:
-                self.check_torch_compile.grid()
                 
         else:
             self.label_inference_optimizer.grid_remove()  # Hide Inference Optimizer label
@@ -1072,7 +1071,7 @@ class ConfigGUI(tk.Tk):
         self.fp16_cb.config(text=texts["FP16"])
         self.label_download.config(text=texts["Download Path:"])
         self.label_hf_endpoint.config(text=texts["HF Endpoint:"])
-        self.label_device.config(text=texts["Device:"])
+        self.label_device.config(text=texts["Computing Device:"])
         self.btn_browse.config(text=texts["Browse..."])
         self.btn_reset.config(text=texts["Reset"])
         self.btn_stop.config(text=texts["Stop"])

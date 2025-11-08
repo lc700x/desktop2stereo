@@ -10,6 +10,8 @@ from utils import OS_NAME, crop_icon, get_font_type, USE_3D_MONITOR, FILL_16_9, 
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
+elif OS_NAME == "Darwin":
+    from utils import send_ctrl_cmd_f
 
 # Shaders as constants (unchanged)
 VERTEX_SHADER = """
@@ -163,7 +165,7 @@ class StereoWindow:
 
         # Set up OpenGL context
         glfw.make_context_current(self.window)
-        glfw.swap_interval(1)  # VSync on
+        glfw.swap_interval(0)  # VSync on
         self.ctx = moderngl.create_context()
         
         # Precompile shaders and create VAO
@@ -473,59 +475,65 @@ class StereoWindow:
             return
 
         if not self._fullscreen:
-            # Enter fullscreen
-            self._last_window_position = glfw.get_window_pos(self.window)
-            self._last_window_size = glfw.get_window_size(self.window)
-
-            # Get monitor info
-            mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
-            vidmode = glfw.get_video_mode(current_monitor)
-            full_w, full_h = vidmode.size.width, vidmode.size.height
-
-            # Make the window undecorated and floating
-            glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
-            glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
-            if self.fix_aspect:
-                monitor_aspect = full_w / full_h
-                if monitor_aspect > self.aspect:
-                    # Monitor is wider than target aspect
-                    new_h = full_h
-                    new_w = int(new_h * self.aspect)
-
-                else:
-                    # Screen is taller — fit by width
-                    new_w = full_w
-                    new_h = int(full_w / self.aspect)
-
-                glfw.set_window_size(self.window, new_w, new_h)
-
-                # Center window on screen
-                center_x = mon_x + (full_w - new_w) // 2
-                center_y = mon_y + (full_h - new_h) // 2
-                if self.display_mode == "Full-SBS":
-                    # Center window on screen
-                    center_y = mon_y + (full_h - new_h//2) // 2
-                glfw.set_window_pos(self.window, center_x, center_y)
+            if OS_NAME == "Darwin":
+                send_ctrl_cmd_f() # MacOS full screen
             else:
-                glfw.set_window_size(self.window, full_w, full_h)
-                glfw.set_window_pos(self.window, mon_x, mon_y)
+                # Enter fullscreen
+                self._last_window_position = glfw.get_window_pos(self.window)
+                self._last_window_size = glfw.get_window_size(self.window)
+
+                # Get monitor info
+                mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
+                vidmode = glfw.get_video_mode(current_monitor)
+                full_w, full_h = vidmode.size.width, vidmode.size.height
+
+                # Make the window undecorated and floating
+                glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+                glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
+                if self.fix_aspect:
+                    monitor_aspect = full_w / full_h
+                    if monitor_aspect > self.aspect:
+                        # Monitor is wider than target aspect
+                        new_h = full_h
+                        new_w = int(new_h * self.aspect)
+
+                    else:
+                        # Screen is taller — fit by width
+                        new_w = full_w
+                        new_h = int(full_w / self.aspect)
+
+                    glfw.set_window_size(self.window, new_w, new_h)
+
+                    # Center window on screen
+                    center_x = mon_x + (full_w - new_w) // 2
+                    center_y = mon_y + (full_h - new_h) // 2
+                    if self.display_mode == "Full-SBS":
+                        # Center window on screen
+                        center_y = mon_y + (full_h - new_h//2) // 2
+                    glfw.set_window_pos(self.window, center_x, center_y)
+                else:
+                    glfw.set_window_size(self.window, full_w, full_h)
+                    glfw.set_window_pos(self.window, mon_x, mon_y)
             self._fullscreen = True
         else:
-            # Exit fullscreen
-            glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.TRUE)
-            glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
+            if OS_NAME == "Darwin":
+                send_ctrl_cmd_f() # MacOS full screen
+            else:
+                # Exit fullscreen
+                glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.TRUE)
+                glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
 
-            restore_w, restore_h = self._last_window_size or self.window_size
-            restore_x, restore_y = self._last_window_position or (0, 0)
-            
-            if not self._last_window_position:
-                vidmode = glfw.get_video_mode(current_monitor)
-                mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
-                restore_x = mon_x + (vidmode.size.width - restore_w) // 2
-                restore_y = mon_y + (vidmode.size.height - restore_h) // 2
+                restore_w, restore_h = self._last_window_size or self.window_size
+                restore_x, restore_y = self._last_window_position or (0, 0)
+                
+                if not self._last_window_position:
+                    vidmode = glfw.get_video_mode(current_monitor)
+                    mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
+                    restore_x = mon_x + (vidmode.size.width - restore_w) // 2
+                    restore_y = mon_y + (vidmode.size.height - restore_h) // 2
 
-            glfw.set_window_size(self.window, restore_w, restore_h)
-            glfw.set_window_pos(self.window, restore_x, restore_y)
+                glfw.set_window_size(self.window, restore_w, restore_h)
+                glfw.set_window_pos(self.window, restore_x, restore_y)
             self._fullscreen = False
     
     def on_key_event(self, window, key, scancode, action, mods):
@@ -678,6 +686,8 @@ class StereoWindow:
                 glfw.set_window_aspect_ratio(self.window, 2*tex_w, tex_h)
             else:
                 glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
+        else:
+            glfw.set_window_aspect_ratio(self.window, glfw.DONT_CARE, glfw.DONT_CARE)
         # Clear screen once
         self.ctx.clear(0.1, 0.1, 0.1)
         

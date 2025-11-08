@@ -83,8 +83,28 @@ if OS_NAME == "Darwin":
     warnings.filterwarnings(
         "ignore",
         message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
-        category=UserWarning
-)
+        category=UserWarning)
+    import time
+    import Quartz  # PyObjC binding for CoreGraphics
+    
+    # macOS virtual keycode for the 'F' key (physical key 'F')
+    KEY_F = 3
+    # modifier flags: Control + Command
+    MODIFY_FLAGS = Quartz.kCGEventFlagMaskControl | Quartz.kCGEventFlagMaskCommand
+
+    def send_ctrl_cmd_f(key=KEY_F, flags=MODIFY_FLAGS):
+        # key-down
+        ev_down = Quartz.CGEventCreateKeyboardEvent(None, key, True)
+        Quartz.CGEventSetFlags(ev_down, flags)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_down)
+
+        time.sleep(0.02)  # short hold
+
+        # key-up
+        ev_up = Quartz.CGEventCreateKeyboardEvent(None, key, False)
+        Quartz.CGEventSetFlags(ev_up, flags)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_up)
+        
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
@@ -163,15 +183,15 @@ CAPTURE_MODE = settings["Capture Mode"]
 WINDOW_TITLE = settings["Window Title"]
 
 # Image Processing Parameters
-FOREGROUND_SCALE = settings["Foreground Scale"] # 0-10
+FOREGROUND_SCALE = settings["Foreground Scale"] / 10 # 0-10
 AA_STRENTH = settings["Anti-aliasing"] # 0-10
  
 # Adjust anti-aliasing and dept dilution value for Mac
-AA_STRENTH *= 4 # 0-100
+AA_STRENTH *= 2 # 0-100
 
 # Experimental Settings
 DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer
-USE_TORCH_COMPILE = settings["torch.compile"] if OS_NAME == "Windows" else False # compile model with torch.compile
+USE_TORCH_COMPILE = settings["torch.compile"]
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
 CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture

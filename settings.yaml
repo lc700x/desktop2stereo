@@ -363,7 +363,7 @@ FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
-Language: CN
+Language: EN
 Run Mode: RTMP Streamer
 Stream Protocol: HLS
 Streamer Port: 1122

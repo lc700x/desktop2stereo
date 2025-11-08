@@ -60,11 +60,11 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
 1. Install latest GPU driver  
 **AMD GPU**: Download latest GPU driver and ROCm from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). 
 **NVIDIA GPU**: Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.nvidia.com/en-us/geforce/drivers/).
-1. Install **Python 3.11**  
+1. Install **Python 3.11-dev**  
     ```bash
     sudo add-apt-repository ppa:savoury1/python
     sudo apt update
-    sudo apt-get install python3.11 python3.11-venv
+    sudo apt-get install python3.11-dev python3.11-venv
     ```
 2. Download Desktop2Stereo app  
    Download the [Desktop2Stereo_vX.X.X.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.
@@ -95,7 +95,7 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
 1. Choose Run Mode as **Local Viewer**.  
 2. Choose capture target by **Monitor** or **Window** mode, you can use `Refresh` button to update to the latest list of **Monitor** or **Window**. 
 3. Click the **Stereo Viewer** window, Use `← Left ` or `→ Right` arrow keys to switch the **Stereo Viewer** window to second (virtual) monitor display. 
-4. Press `Space` or `Enter` (or XBOX game controller button `A`) to toggle full screen mode.   
+4. Press `Space` or `Enter` or XBOX game controller button `A` to toggle fullscreen mode (On MacOS you may have to quickly press twice).   
 5. Now you can use AR/VR to view the SBS or TAB output.   
    - **AR** need to switch to 3D mode to connect as a 3840*1080 (Full Side-by-Side, `FUll-SBS`) display.  
     ![Full-SBS](./assets/FullSBS.png)
@@ -137,7 +137,8 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
     Select the **Stereo Mix** as `BlackHole 2ch` or `Virtual Desktop Speakers` or `Loopback Audio` or other virtual audio devices accordingly, and select the system **Output** device with same name.  
     ![Mac Sound Output](./assets/audio2.png)  
     - **Ubuntu**
-    Select the **Stereo Mix** device name ended with `stereo.monitor` i.e. `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`.  
+    Select the **Stereo Mix** device name ended with `stereo.monitor` i.e. `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`, and select **Output Device** as `Digtial Output(S/PDIF)-xxxx` in system sound settings.  
+    ![Linux Sound Output](./assets/audio3.png)  
 2. Set a **Stream Key**, default is `live`.  
 3. (Optional) Adjust the **Audio Delay**, `negative` value means play the audio in advance before the video, `positive` value means delay the audio play after the video.  
 4. (Optional) It is recommended to use a second (virtual) screen with a resolution equal to or larger than the main screen to place the Stereo Viewer window.
@@ -177,7 +178,7 @@ In 3D Monitor mode, please use the passthrough cursor on either left or right sc
 
 | Key        | Action Description                                   | Supported Run Mode(s)                                     |
 |-------------|------------------------------------------------------|------------------------------------------------------------|
-| `Enter` / `Space`   | Toggle full screen          | Local Viewer                  |
+| `Enter` / `Space`   | Toggle fullscreen          | Local Viewer                  |
 | `← Left`    | Move window to adjacent monitor (previous)           | Local Viewer / RTMP Streamer / 3D Monitor                  |
 | `→ Right`   | Move window to adjacent monitor (next)               | Local Viewer / RTMP Streamer / 3D Monitor                  |
 | `Esc`       | Close the application window                         | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |
@@ -316,11 +317,11 @@ All optional settings can be modified on the GUI window and saved to the `settin
 27. **Inference Optimizer** (Windows/Ubuntu Only)
     These optimizers can typically increase the output FPS by `30%~50%`. However, not all models support **Inference Optimizer**, if the optimization fails, the inference process will fall back to PyTorch.  
     **NVIDIA GPUs**:
-    - **torch.compile** (Windows Only): it leverages Triton under the hood to generate optimized kernels automatically, and provides slight to moderate speedups by fusing operations and reducing overhead. 
-    - **TensorRT** (Windows/Ubuntu): it is NVIDIA’s high-performance deep learning inference SDK. It optimizes trained models for deployment, especially on NVIDIA GPUs, and it provides significant speedups and high inference efficiency.  
+    - **torch.compile**: it leverages Triton under the hood to generate optimized kernels automatically, and provides slight to moderate speedups by fusing operations and reducing overhead. 
+    - **TensorRT**: it is NVIDIA’s high-performance deep learning inference SDK. It optimizes trained models for deployment, especially on NVIDIA GPUs, and it provides significant speedups and high inference efficiency.  
 
     **DirectML** (**AMD GPUs**, etc.):  
-    - **Unlock Threads (Legacy Streamer)**: (Windows/Ubuntu) unlock the multithreads for **Legacy Streamer** mode. 
+    - **Unlock Threads (Legacy Streamer)**: unlock the multithreads for **Legacy Streamer** mode. 
 > [!Warning]  
 > **Unlock Threads (Legacy Streamer)** sometimes fails with `UTF-8 error` under Python3.11 due to the limitations of [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) libraries. You may try stop and run multiple times for a successful streaming process.  
 ## References

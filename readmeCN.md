@@ -64,11 +64,11 @@
 1.  安装最新的 GPU 驱动程序
     **AMD GPU**: 从 [AMD 驱动程序和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新 GPU 驱动程序和 ROCm。
     **NVIDIA GPU**: 从 [NVIDIA GeForce 驱动程序](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新 GPU 驱动程序。
-2.  安装 **Python 3.11**
+2.  安装 **Python 3.11-dev**
     ```bash
     sudo add-apt-repository ppa:savoury1/python
     sudo apt update
-    sudo apt-get install python3.11 python3.11-venv
+    sudo apt-get install python3.11-dev python3.11-venv
     ```
 3.  下载 Desktop2Stereo 应用
     下载 [Desktop2Stereo_vX.X.X.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
@@ -99,7 +99,7 @@
 1.  选择运行模式为 **本地查看**。
 2.  通过 **显示器** 或 **窗口** 模式选择捕获目标，您可以使用 `刷新` 按钮更新最新的 **显示器** 或 **窗口** 列表。
 3.  点击 **Stereo Viewer** 窗口，使用 `← 左` 或 `→ 右` 方向键将 **Stereo Viewer** 窗口切换到第二个（虚拟）显示器显示。
-4.  按下 `空格键` 或 `回车键` (或 XBOX 游戏手柄的 `A` 键) 切换全屏模式。
+4.  按下 `空格键` 或 `回车键` 或 XBOX 游戏手柄的 `A` 键 切换全屏模式 (在MacOS上你可能需要快速按两次按键)。  
 5.  现在您可以使用 AR/VR 来观看 SBS 或 TAB 输出。
     - **AR** 需要切换到 3D 模式以连接为 3840*1080 (全并排, `Full-SBS`) 显示器。
     ![Full-SBS](./assets/FullSBS.png)
@@ -139,7 +139,9 @@
         选择 **立体声混音** 为 `BlackHole 2ch` 或 `Virtual Desktop Speakers` 或 `Loopback Audio` 或其他相应的虚拟音频设备，并选择同名的系统 **输出** 设备。  
         ![Mac Sound Output](./assets/audio2.png) 
     - **Ubuntu**
-        选择 **立体声混音** 设备名称以 `stereo.monitor` 结尾，例如 `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`。
+        选择 **立体声混音** 设备名称以 `stereo.monitor` 结尾，例如 `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`，并在系统声音设置中选择**输出设备**为 `Digtial Output(S/PDIF)-xxxx`。  
+        ![Linux Sound Output](./assets/audio3.png) 
+
 2.  设置一个 **流密钥**，默认为 `live`。
 3.  (可选) 调整 **音频延迟**，`负值` 表示在视频之前提前播放音频，`正值` 表示在视频之后延迟播放音频。
 4.  (可选) 建议使用分辨率和主屏幕相同或更大的第二个 (虚拟) 屏幕来放置**Stereo Viewer**窗口。  
@@ -311,10 +313,10 @@
 27. **推理优化** (仅限 Windows/Ubuntu)  
     这些优化器通常可以将输出 FPS 提高 `30%~50%`。但是，并非所有模型都支持 **推理优化**，如果优化失败，推理过程将回退到 PyTorch。
     **NVIDIA GPU**:
-    - **torch.compile** (仅限 Windows)：底层利用 Triton 自动生成优化的计算内核，通过融合操作和减少开销，提供轻微到中等的加速效果。
-    - **TensorRT** (Windows/Ubuntu)：这是 NVIDIA 的高性能深度学习推理 SDK。它对训练好的模型进行优化以便部署，尤其是在 NVIDIA GPU 上，能提供显著的加速效果和极高的推理效率。
+    - **torch.compile**：底层利用 Triton 自动生成优化的计算内核，通过融合操作和减少开销，提供轻微到中等的加速效果。
+    - **TensorRT**：这是 NVIDIA 的高性能深度学习推理 SDK。它对训练好的模型进行优化以便部署，尤其是在 NVIDIA GPU 上，能提供显著的加速效果和极高的推理效率。
     **DirectML** (**AMD GPU** 等):
-    - **解锁线程 (旧网络推流)**: (Windows/Ubuntu) 为 **旧网络推流** 模式解锁多线程。但是，由于 [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) 库的限制。
+    - **解锁线程 (旧网络推流)**:为 **旧网络推流** 模式解锁多线程。但是，由于 [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) 库的限制。
 > [!Warning]
 > **解锁线程 (旧网络推流)** 在 Python3.11 下有时会因 `UTF-8 错误` 而失败。您可能需要多次停止和运行以获得成功的网络推流进程。
 
