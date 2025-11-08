@@ -95,7 +95,7 @@ Doulbe click `install-mps` executable. (Please allow open in **Privacy and Secur
 1. Choose Run Mode as **Local Viewer**.  
 2. Choose capture target by **Monitor** or **Window** mode, you can use `Refresh` button to update to the latest list of **Monitor** or **Window**. 
 3. Click the **Stereo Viewer** window, Use `← Left ` or `→ Right` arrow keys to switch the **Stereo Viewer** window to second (virtual) monitor display. 
-4. Press `Space` or `Enter` (or XBOX game controller button `A`) to toggle full screen mode.   
+4. Press `Space` or `Enter` or XBOX game controller button `A` to toggle fullscreen mode (On MacOS you may have to quickly press twice).   
 5. Now you can use AR/VR to view the SBS or TAB output.   
    - **AR** need to switch to 3D mode to connect as a 3840*1080 (Full Side-by-Side, `FUll-SBS`) display.  
     ![Full-SBS](./assets/FullSBS.png)
@@ -178,7 +178,7 @@ In 3D Monitor mode, please use the passthrough cursor on either left or right sc
 
 | Key        | Action Description                                   | Supported Run Mode(s)                                     |
 |-------------|------------------------------------------------------|------------------------------------------------------------|
-| `Enter` / `Space`   | Toggle full screen          | Local Viewer                  |
+| `Enter` / `Space`   | Toggle fullscreen          | Local Viewer                  |
 | `← Left`    | Move window to adjacent monitor (previous)           | Local Viewer / RTMP Streamer / 3D Monitor                  |
 | `→ Right`   | Move window to adjacent monitor (next)               | Local Viewer / RTMP Streamer / 3D Monitor                  |
 | `Esc`       | Close the application window                         | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor |

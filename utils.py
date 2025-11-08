@@ -83,8 +83,28 @@ if OS_NAME == "Darwin":
     warnings.filterwarnings(
         "ignore",
         message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
-        category=UserWarning
-)
+        category=UserWarning)
+    import time
+    import Quartz  # PyObjC binding for CoreGraphics
+    
+    # macOS virtual keycode for the 'F' key (physical key 'F')
+    KEY_F = 3
+    # modifier flags: Control + Command
+    MODIFY_FLAGS = Quartz.kCGEventFlagMaskControl | Quartz.kCGEventFlagMaskCommand
+
+    def send_ctrl_cmd_f(key=KEY_F, flags=MODIFY_FLAGS):
+        # key-down
+        ev_down = Quartz.CGEventCreateKeyboardEvent(None, key, True)
+        Quartz.CGEventSetFlags(ev_down, flags)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_down)
+
+        time.sleep(0.02)  # short hold
+
+        # key-up
+        ev_up = Quartz.CGEventCreateKeyboardEvent(None, key, False)
+        Quartz.CGEventSetFlags(ev_up, flags)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_up)
+        
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
