@@ -160,17 +160,17 @@ def apply_foreground_scale(depth: torch.Tensor, scale: float) -> torch.Tensor:
         depth (torch.Tensor): depth map of shape (H, W, 1), values normalized in [0, 1].
                               0 = near (foreground), 1 = far (background).
         scale (float): scaling factor
-                       > 0: foreground closer, background further
-                       < 0: foreground flatter, background closer
+                       < 0: foreground closer, background further
+                       > 0: foreground flatter, background closer
                        = 0: no change
 
     Returns:
         torch.Tensor: scaled depth map of same shape as input
     """
-    if scale > 0:
+    if scale < 0:
         # Exaggerate separation: foreground closer, background further
         return torch.pow(depth, 1.0 + scale)
-    elif scale < 0:
+    elif scale > 0:
         # Compress foreground, pull background closer
         return 1.0 - torch.pow(1.0 - depth, 1.0 + abs(scale))
     else:
@@ -273,6 +273,17 @@ def apply_piecewise(
     out = torch.where(depth >= split, near_val, far_val)
     return out
 
+def post_process_depth(depth):
+    if 'Metric' in MODEL_ID:
+        depth = 1.0 - depth
+    depth = apply_stretch(depth, 2, 98)
+    depth = apply_piecewise(depth, split=0.4, near_gamma=2, far_gamma=0.5)
+    depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
+    depth = apply_sigmoid(depth, k=12.0, midpoint=0.3)
+    depth = anti_alias(depth, strength=AA_STRENTH)
+    depth = normalize_tensor(depth)
+    return depth
+        
 # Load Video Depth Anything Model
 def get_video_depth_anything_model(model_id=MODEL_ID):
     """ Load Video Depth Anything model from HuggingFace hub. """
@@ -597,17 +608,7 @@ STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
 
 if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
     try:
-        # Compile the model as before, but SKIP compiling lightweight post-processing functions，avoid FX re-tracing conflicts. These are fast without it.
-        def post_process_depth(depth):
-            depth = apply_stretch(depth, 2, 98)
-            if 'Metric' in MODEL_ID:
-                depth = 1.0 - depth
-            depth = apply_piecewise(depth, split=0.5, near_gamma=1.2, far_gamma=0.6)
-            depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
-            depth = normalize_tensor(depth)
-            depth = anti_alias(depth, strength=AA_STRENTH)
-            return depth
-        
+        # Compile the model as before, but SKIP compiling lightweight post-processing functions，avoid FX re-tracing conflicts. These are fast without it.  
         post_process_depth = torch.compile(post_process_depth, fullgraph=False)
         # Assign to a global or module-level var if needed for access
         globals()['post_process_depth'] = post_process_depth  # Or use a class/module attribute
@@ -711,19 +712,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     
     # Batched post-processing (compiled as a unit to avoid per-function tracing)
     with torch.no_grad():  # Prevent any gradient tracing
-        depth = apply_stretch(depth, 2, 98)
-        
-        # invert for metric models
-        if 'Metric' in MODEL_ID:
-            depth = 1.0 - depth
-            
-        # post processing
-        # depth = apply_sigmoid(depth, k=1, midpoint=0.618)
-        depth = apply_piecewise(depth, split=0.5, near_gamma=1.2, far_gamma=0.6)
-        depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
-        depth = normalize_tensor(depth)
-        # Mild AA to reduce jaggies
-        depth = anti_alias(depth, strength=AA_STRENTH)
+        depth = post_process_depth(depth)
     
     # Optional temporal stabilization (EMA)
     if use_temporal_smooth:
