@@ -103,6 +103,8 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
   chmod a+x ./run_mac
 else
   rm -rf ./rtmp/mac
+  rm -rf install-mps
+  rm -rf run_mac
 fi
 echo "Branch '${BRANCH}' successfully updated."
 
