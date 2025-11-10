@@ -74,6 +74,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
   chmod a+x ./update_mac_linux
   chmod a+x ./install-mps
   chmod a+x ./run_mac
+  rm -rf *.bash
 else
   rm -rf ./rtmp/mac
   rm -rf install-mps
