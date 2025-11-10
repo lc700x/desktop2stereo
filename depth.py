@@ -348,10 +348,10 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         # Set precision flags based on global configuration
         config.set_flag(trt.BuilderFlag.FP16)
         
-        # Set workspace memory (essential for all precision modes) [6](@ref)
-        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1 GB Workspace [6](@ref)
+        # Set workspace memory (essential for all precision modes) 
+        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 << 30)  # 4 GB Workspace 
         
-        # Set dynamic shapes profile [6](@ref)
+        # Set dynamic shapes profile 
         profile = builder.create_optimization_profile()
         input_name = network.get_input(0).name
         # Updated shape ranges to better match typical input sizes
