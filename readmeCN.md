@@ -30,7 +30,9 @@
     **Intel GPU**: 从 [Intel 驱动和软件下载中心](https://www.intel.com/content/www/us/en/download-center/home.html/) 下载最新 GPU 驱动程序。
     **Qualcomm GPU**: 从 [Qualcomm® Adreno™ Windows Graphics Drivers for Snapdragon® X Platform](https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver) 下载最新 GPU 驱动程序。
     **其他 DirectML 设备**: 请安装相应的最新硬件驱动程序。
-2.  部署 Desktop2Stereo 环境
+2.  开启长路径
+    双击运行**Desktop2Stereo**文件夹中的`long_path.reg`，并确认弹出的警告。
+3.  部署 Desktop2Stereo 环境
     - **方法 1 (推荐)**: 使用便携版
         下载: [夸克网盘](https://pan.quark.cn/s/9d2bcf039b96) (提取码: `1vcn`)
         **AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 下载并解压 `Desktop2Stereo_vX.X.X_AMD_etc_Windows.zip` 到本地磁盘。
@@ -112,7 +114,7 @@
     **深度强度** 的定义在 [详细设置](###详细设置指南) 部分。
 > [!TIP]
 > 如果 `显示 FPS` 为 **开启** 状态，深度值将显示在 FPS 指示器下方。
-7.  按 `Esc` 键退出 **Stereo Viewer**。
+1.  按 `Esc` 键退出 **Stereo Viewer**。
 ### **RTMP推流** 模式
 ![RTMP Streamer](./assets/rtmp.png) 
 > [!Tip]
