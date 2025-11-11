@@ -109,7 +109,7 @@ TBD, will release on [BiliBili](https://space.bilibili.com/156928642)
     The defination of **depth strength** is in the [detailed settings](###detailed-settings) session.      
 > [!TIP]  
 > The Depth value will show below the FPS indicator if `Show FPS` is **ON**.  
-1. Press `Esc` to exit the **Stereo Viewer**. 
+7. Press `Esc` to exit the **Stereo Viewer**. 
 
 ### **RTMP Streamer** mode
 ![RTMP Streamer](./assets/rtmp.png)  
@@ -123,7 +123,7 @@ TBD, will release on [BiliBili](https://space.bilibili.com/156928642)
 > **VR** / **Huawer AR**: Use **Wolvic Browser** to open the `HLS` URL directly with `Half_SBS` / `TAB` mode.  
 > For **MacOS**, you can also use `WebRTC` URL.  
 > Other `RTSP`, `RTMP`, `HLS M3U8` protocal may be chosen for **VLC Player** [i.e. extend screen mode for AR glasses] / VR Video Apps (**DeoVR**) on client devices.    
-1. Select a audio device
+3. Select a audio device
     - **Windows**
     Select the **Stereo Mix** as `Stereo Mix (Realtek(R))`, and select `Realtek(R) HD Audio` as the system Sound Output device.  
     ![Windows Sound Output](./assets/audio.png)
@@ -140,13 +140,13 @@ TBD, will release on [BiliBili](https://space.bilibili.com/156928642)
     - **Ubuntu**
     Select the **Stereo Mix** device name ended with `stereo.monitor` i.e. `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`, and select **Output Device** as `Digtial Output(S/PDIF)-xxxx` in system sound settings.  
     ![Linux Sound Output](./assets/audio3.png)  
-2. Set a **Stream Key**, default is `live`.  
-3. (Optional) Adjust the **Audio Delay**, `negative` value means play the audio in advance before the video, `positive` value means delay the audio play after the video.  
-4. (Optional) It is recommended to use a second (virtual) screen with a resolution equal to or larger than the main screen to place the Stereo Viewer window.
+4. Set a **Stream Key**, default is `live`.  
+5. (Optional) Adjust the **Audio Delay**, `negative` value means play the audio in advance before the video, `positive` value means delay the audio play after the video.  
+6. (Optional) It is recommended to use a second (virtual) screen with a resolution equal to or larger than the main screen to place the Stereo Viewer window.
 > [!Tip]  
 > If using `Full-SBS` output at the same resolution as the main screen, you will need a screen with twice the width of the original screen. For example, if the main screen is `4K (3840x2160)`, the second (virtual) screen needs to be `8K (7680x2160)`.
-1. The other settings are the same as the **Local Viewer**, click `Run` button to run.  
-2. On client device, key in the streaming URL according to the **Stream Protocal**.  
+7. The other settings are the same as the **Local Viewer**, click `Run` button to run.  
+8. On client device, key in the streaming URL according to the **Stream Protocal**.  
 
 ### **MJPEG Streamer** mode
 ![MJPEG Streamer](./assets/MJPEG.png)  
