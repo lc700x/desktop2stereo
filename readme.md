@@ -107,22 +107,16 @@ TBD, will release on [BiliBili](https://space.bilibili.com/156928642)
 6. Real-time modification of **depth strength**.  
     Use `↑ Up` or `↓ Down` arrow keys to increase/decrease the depth strength by a step of `0.5`. To reset press `0` key. 
     The defination of **depth strength** is in the [detailed settings](###detailed-settings) session.      
+7. Press `Esc` to exit the **Stereo Viewer**. 
 > [!TIP]  
 > The Depth value will show below the FPS indicator if `Show FPS` is **ON**.  
-7. Press `Esc` to exit the **Stereo Viewer**. 
-
 ### **RTMP Streamer** mode
 ![RTMP Streamer](./assets/rtmp.png)  
 > [!Tip]  
 > **RTMP Streamer** mode is best for wireless streaming with video and audio together to client devices/apps by capturing the local **Stereo Viewer** window, like **VLC Player**, **Wolvic Browser**, etc., but it may have a latency of `1~3` seconds.   
 
 1. Choose run mode as **RTMP Streamer**.  
-2. Choose a **Stream Protocol**:  recommanded to use `HLS`.  
-> [!Tip]  
-> **AR**: Use **VLC Player** to open the `HLS M3U8` URL directly with `Full-SBS` mode.  
-> **VR** / **Huawer AR**: Use **Wolvic Browser** to open the `HLS` URL directly with `Half_SBS` / `TAB` mode.  
-> For **MacOS**, you can also use `WebRTC` URL.  
-> Other `RTSP`, `RTMP`, `HLS M3U8` protocal may be chosen for **VLC Player** [i.e. extend screen mode for AR glasses] / VR Video Apps (**DeoVR**) on client devices.    
+2. Choose a **Stream Protocol**:  recommanded to use `HLS`.    
 3. Select a audio device
     - **Windows**
     Select the **Stereo Mix** as `Stereo Mix (Realtek(R))`, and select `Realtek(R) HD Audio` as the system Sound Output device.  
@@ -143,11 +137,14 @@ TBD, will release on [BiliBili](https://space.bilibili.com/156928642)
 4. Set a **Stream Key**, default is `live`.  
 5. (Optional) Adjust the **Audio Delay**, `negative` value means play the audio in advance before the video, `positive` value means delay the audio play after the video.  
 6. (Optional) It is recommended to use a second (virtual) screen with a resolution equal to or larger than the main screen to place the Stereo Viewer window.
-> [!Tip]  
-> If using `Full-SBS` output at the same resolution as the main screen, you will need a screen with twice the width of the original screen. For example, if the main screen is `4K (3840x2160)`, the second (virtual) screen needs to be `8K (7680x2160)`.
 7. The other settings are the same as the **Local Viewer**, click `Run` button to run.  
 8. On client device, key in the streaming URL according to the **Stream Protocal**.  
-
+> [!Tip]
+> **AR**: Use **VLC Player** to open the `HLS M3U8` URL directly with `Full-SBS` mode.  
+> **VR** / **Huawer AR**: Use **Wolvic Browser** to open the `HLS` URL directly with `Half_SBS` / `TAB` mode.  
+> For **MacOS**, you can also use `WebRTC` URL.  
+> Other `RTSP`, `RTMP`, `HLS M3U8` protocal may be chosen for **VLC Player** [i.e. extend screen mode for AR glasses] / VR Video Apps (**DeoVR**) on client devices.  
+> If using `Full-SBS` output at the same resolution as the main screen, you will need a screen with twice the width of the original screen. For example, if the main screen is `4K (3840x2160)`, the second (virtual) screen needs to be `8K (7680x2160)`.
 ### **MJPEG Streamer** mode
 ![MJPEG Streamer](./assets/MJPEG.png)  
 > [!Tip]  
@@ -170,8 +167,7 @@ The main usage is the same as the **MJPEG Streamer** mode.
 ![3D Monitor Viewer](./assets/3D.png)  
 > [!Tip]  
 > **3D Monitor** mode a special **Local Viewer** mode dedicated for a 3D Monitor, no virtual display driver needed for this mode. It can only run as **fullscreen** and be used **locally** as the screen capture attribute for the **Stereo Viewer** window is `disabled` globally.  
->  
-In 3D Monitor mode, please use the passthrough cursor on either left or right scene to control your PC. 
+> In 3D Monitor mode, please use the passthrough cursor on either left or right scene to control your PC. 
 
 ## Full Keyboard Shortcuts
 > [!Tip]
@@ -429,10 +425,11 @@ All optional settings can be modified on the GUI window and saved to the `settin
 ```
 
 ## Credits
-- [lovettchris/wincam](https://github.com/lovettchris/wincam/)
-- [NiiightmareXD/windows-capture](https://github.com/NiiightmareXD/windows-capture)
-- [BoboTiG/python-mss](https://github.com/BoboTiG/python-mss)
-- [nagadomi/nunif](https://github.com/nagadomi/nunif)
+- [lovettchris/wincam](https://github.com/lovettchris/wincam/)  
+- [NiiightmareXD/windows-capture](https://github.com/NiiightmareXD/windows-capture)  
+- [BoboTiG/python-mss](https://github.com/BoboTiG/python-mss)  
+- [nagadomi/nunif](https://github.com/nagadomi/nunif)  
 - [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)
-- Other related tools and libraries
-- All feedback from the users
+- [waydabber/BetterDisplay](https://github.com/waydabber/BetterDisplay)  
+- Other related tools and libraries  
+- All feedback from the users  
