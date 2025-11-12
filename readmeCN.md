@@ -112,9 +112,9 @@
 6.  实时修改 **深度强度**。
     使用 `↑ 上` 或 `↓ 下` 方向键以 `0.5` 为步长增加/减少深度强度。按 `0` 键重置。
     **深度强度** 的定义在 [详细设置](###详细设置指南) 部分。
+7.  按 `Esc` 键退出 **Stereo Viewer**。
 > [!TIP]
 > 如果 `显示 FPS` 为 **开启** 状态，深度值将显示在 FPS 指示器下方。
-1.  按 `Esc` 键退出 **Stereo Viewer**。
 ### **RTMP推流** 模式
 ![RTMP Streamer](./assets/rtmp.png) 
 > [!Tip]
@@ -122,12 +122,7 @@
 
 1.  选择运行模式为 **RTMP推流**。
 2.  选择一个 **流协议**: 推荐使用 `HLS`。  
-> [!Tip] 
-> **AR**: 用 **VLC 播放器** 打开 `HLS M3U8` 链接并使用 `Full-SBS` 显示模式。  
-> **VR** / **华为AR**: 用 **Wolvic 浏览器** 打开 `HLS` 链接并使用 `Half_SBS` / `TAB` 显示模式。 
-> 如果是**MacOS**上推流，您也可以使用 `WebRTC` 链接。  
-> 客户端设备上的其他 `RTSP`, `RTMP`, `HLS M3U8` 协议可能适用于 **VLC 播放器** [例如 AR 眼镜的扩展屏幕模式] / VR视频应用程序 (如**DeoVR**) 。
-1.  选择一个音频设备
+3.  选择一个音频设备
     - **Windows**
         选择 **立体声混音** 为 `Stereo Mix (Realtek(R))`，并选择 `Realtek(R) HD Audio` 作为系统声音输出设备。  
         ![Windows Sound Output](./assets/audio.png)
@@ -144,13 +139,17 @@
         选择 **立体声混音** 设备名称以 `stereo.monitor` 结尾，例如 `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`，并在系统声音设置中选择**输出设备**为 `Digtial Output(S/PDIF)-xxxx`。  
         ![Linux Sound Output](./assets/audio3.png) 
 
-2.  设置一个 **流密钥**，默认为 `live`。
-3.  (可选) 调整 **音频延迟**，`负值` 表示在视频之前提前播放音频，`正值` 表示在视频之后延迟播放音频。
-4.  (可选) 建议使用分辨率和主屏幕相同或更大的第二个 (虚拟) 屏幕来放置**Stereo Viewer**窗口。  
+4.  设置一个 **流密钥**，默认为 `live`。
+5.  (可选) 调整 **音频延迟**，`负值` 表示在视频之前提前播放音频，`正值` 表示在视频之后延迟播放音频。
+6.  (可选) 建议使用分辨率和主屏幕相同或更大的第二个 (虚拟) 屏幕来放置**Stereo Viewer**窗口。  
+7.  其他设置与 **本地查看** 相同，点击 `运行` 按钮运行。
+8.  在客户端设备上，根据 **流协议** 输入推流网址。
 > [!Tip]
+> **AR**: 用 **VLC 播放器** 打开 `HLS M3U8` 链接并使用 `Full-SBS` 显示模式。  
+> **VR** / **华为AR**: 用 **Wolvic 浏览器** 打开 `HLS` 链接并使用 `Half_SBS` / `TAB` 显示模式。 
+> 如果是**MacOS**上推流，您也可以使用 `WebRTC` 链接。  
+> 客户端设备上的其他 `RTSP`, `RTMP`, `HLS M3U8` 协议可能适用于 **VLC 播放器** [例如 AR 眼镜的扩展屏幕模式] / VR视频应用程序 (如**DeoVR**) 。
 > 若使用全宽左右模式 (`Full-SBS`) 输出相同主屏幕的分辨率，您将需要宽度为原始屏幕两倍的屏幕，如主屏幕`4k (3840x2160)`则第二个 (虚拟) 屏幕需要为`8k (7680x2160)`
-1.  其他设置与 **本地查看** 相同，点击 `运行` 按钮运行。
-2.  在客户端设备上，根据 **流协议** 输入推流网址。
 ### **MJPEG推流** 模式
 ![MJPEG Streamer](./assets/MJPEG.png)  
 > [!Tip]
@@ -425,10 +424,11 @@
 ```
 
 ## 感谢
-- [lovettchris/wincam](https://github.com/lovettchris/wincam/)
-- [NiiightmareXD/windows-capture](https://github.com/NiiightmareXD/windows-capture)
-- [BoboTiG/python-mss](https://github.com/BoboTiG/python-mss)
-- [nagadomi/nunif](https://github.com/nagadomi/nunif)
-- [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)
+- [lovettchris/wincam](https://github.com/lovettchris/wincam/)  
+- [NiiightmareXD/windows-capture](https://github.com/NiiightmareXD/windows-capture)  
+- [BoboTiG/python-mss](https://github.com/BoboTiG/python-mss)  
+- [nagadomi/nunif](https://github.com/nagadomi/nunif)  
+- [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)  
+- [waydabber/BetterDisplay](https://github.com/waydabber/BetterDisplay)  
 - 其他相关的工具和库
 - 所有用户的反馈
