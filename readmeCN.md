@@ -9,7 +9,7 @@
 提取码：`1vcn`
 
 ## 视频教程
-待发布，将在[BiliBili](https://space.bilibili.com/156928642)上线。
+[Desktop2Stereo Windows系列教程](https://space.bilibili.com/156928642/lists/5023693?type=series)
 
 ## 支持的硬件
 1. AMD GPU
