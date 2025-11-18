@@ -7,7 +7,7 @@ import numpy as np
 from threading import Lock
 from PIL import Image
 import os
-img  = Image.open("C:/Users/zjuli/Pictures/test.png").convert("RGB")
+img  = Image.open("C:/Users/zjuli/Pictures/test2.jpg").convert("RGB")
 image_rgb = np.array(img)
 AA_STRENTH = 1
 FP16 = True
@@ -224,14 +224,14 @@ def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
     return depth.squeeze()
 
 def post_process_depth(depth):
-    depth = apply_stretch(depth, 2, 98)
+    depth = normalize_tensor(depth.squeeze())
     if 'Metric' in MODEL_ID:
         depth = 1.0 - depth
-    depth = apply_piecewise(depth, split=0.4, near_gamma=2, far_gamma=0.5)
+    # depth = apply_piecewise(depth, split=0.4, near_gamma=2, far_gamma=0.5)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
-    depth = apply_sigmoid(depth, k=12.0, midpoint=0.3)
+    depth = apply_sigmoid(depth, k=5.0, midpoint=0.6)
     depth = anti_alias(depth, strength=AA_STRENTH)
-    depth = normalize_tensor(depth.squeeze())
+    
     
     return depth
 
