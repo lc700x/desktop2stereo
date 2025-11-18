@@ -93,45 +93,6 @@ font_dict = {
     " ": ["000","000","000","000","000"],
 }
 
-# Post-processing functions
-def apply_stretch(x: torch.Tensor, low: float = 2.0, high: float = 98.0) -> torch.Tensor:
-    """
-    Percentile-based clipping + normalization.
-    Fully DirectML compatible (no torch.clamp).
-    """
-    x = x.to(DTYPE)
-    if x.numel() < 2:
-        return x
-
-    # Downsample to reduce cost
-    x_sampled = x[::8, ::8] if x.dim() == 2 else x.flatten()[::8]
-    flat = x_sampled.flatten()
-
-    if flat.numel() < 2:
-        return x
-
-    # Sort values
-    vals, _ = torch.sort(flat)
-
-    # Compute percentile indices
-    k_low = int((low / 100.0) * (vals.numel() - 1))
-    k_high = int((high / 100.0) * (vals.numel() - 1))
-    k_low = max(0, min(k_low, vals.numel() - 1))
-    k_high = max(0, min(k_high, vals.numel() - 1))
-
-    lo = vals[k_low]
-    hi = vals[k_high]
-
-    # Avoid divide-by-zero
-    scale = hi - lo
-    if scale <= 0:
-        return torch.zeros_like(x)
-
-    # Manual clamp: DirectML supports min/max
-    x = torch.maximum(x, lo)
-    x = torch.minimum(x, hi)
-
-    return (x - lo) / (scale + 1e-6)
 
 def apply_gamma(depth: torch.Tensor, gamma: float = 0.8) -> torch.Tensor:
     """
@@ -247,41 +208,14 @@ def normalize_tensor(tensor):
     """ Normalize tensor to [0,1] """
     return (tensor - tensor.min())/(tensor.max() - tensor.min()+1e-6)
 
-def apply_piecewise(
-    depth: torch.Tensor,
-    split: float = 0.5,
-    near_gamma: float = 2.0,
-    far_gamma: float = 0.8
-    ) -> torch.Tensor:
-    """
-    Efficient piecewise gamma remap for depth maps.
-    Assumes 1=near, 0=far.
-    near_gamma -> [split, 1]
-    far_gamma  -> [0, split]
-    """
-    depth = depth.clamp(0.0, 1.0)
-
-    # Near branch
-    near_val = (((depth - split).clamp(min=0) / (1 - split + 1e-6))
-                .pow(near_gamma) * (1 - split)) + split
-
-    # Far branch
-    far_val = (((depth).clamp(max=split) / (split + 1e-6))
-               .pow(far_gamma) * split)
-
-    # Select branch without indexing
-    out = torch.where(depth >= split, near_val, far_val)
-    return out
-
 def post_process_depth(depth):
+    depth = normalize_tensor(depth.squeeze())
     if 'Metric' in MODEL_ID:
         depth = 1.0 - depth
-    depth = apply_stretch(depth, 2, 98)
-    depth = apply_piecewise(depth, split=0.4, near_gamma=2, far_gamma=0.5)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
-    depth = apply_sigmoid(depth, k=12.0, midpoint=0.3)
+    depth = apply_sigmoid(depth, k=5.0, midpoint=0.6)
     depth = anti_alias(depth, strength=AA_STRENTH)
-    depth = normalize_tensor(depth)
+    
     return depth
         
 # Load Video Depth Anything Model
