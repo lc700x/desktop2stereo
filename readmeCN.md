@@ -8,8 +8,10 @@
 [夸克网盘](https://pan.quark.cn/s/9d2bcf039b96)  
 提取码：`1vcn`
 
-## 视频教程
-[Desktop2Stereo Windows系列教程](https://space.bilibili.com/156928642/lists/5023693?type=series)
+## 视频教程  
+- [Windows系列教程](https://space.bilibili.com/156928642/lists/6783964)  
+- [MacOS系列教程](https://space.bilibili.com/156928642/lists/6783943) 
+- [Ubuntu系列教程](https://space.bilibili.com/156928642/lists/6790009) 
 
 ## 支持的硬件
 1. AMD GPU

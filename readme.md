@@ -7,7 +7,9 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96)  
 Access code: `1vcn`  
 ## Video Tutorials  
-[Desktop2Stereo Windows Series](https://space.bilibili.com/156928642/lists/5023693?type=series)
+- [Windows](https://space.bilibili.com/156928642/lists/6783964)  
+- [MacOS](https://space.bilibili.com/156928642/lists/6783943) 
+- [Ubuntu](https://space.bilibili.com/156928642/lists/6790009) 
 ## Supported Hardware  
 1. AMD GPU  
 2. NVIDIA GPU  
