@@ -9,7 +9,7 @@ from threading import Lock
 from PIL import Image
 img  = Image.open("assets/cats.jpg").convert("RGB")
 image_rgb = np.array(img)
-AA_STRENTH = 4
+AA_STRENGTH = 4
 DILATION_SIZE = 0
 FP16 = False
 DTYPE = torch.float16 if FP16 else torch.float32

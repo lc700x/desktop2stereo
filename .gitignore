@@ -20,3 +20,4 @@ datasets
 ./*.jpg
 ./*.whl
 rtmp
+test*.png

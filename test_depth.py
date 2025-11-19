@@ -27,7 +27,7 @@ def get_device(index=0):
 DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
 # url = "http://images.cocodataset.org/val2017/000000039769.jpg"
 # image = Image.open(requests.get(url, stream=True).raw)
-image  = Image.open("C:/Users/zjuli/Pictures/test.png").convert("RGB")
+image  = Image.open("C:/Users/zjuli/Pictures/test1.jpg").convert("RGB")
 
 image_processor = AutoImageProcessor.from_pretrained("depth-anything/Depth-Anything-V2-Small-hf", use_fast=True)
 model = AutoModelForDepthEstimation.from_pretrained("depth-anything/Depth-Anything-V2-Small-hf").to(DEVICE, dtype=DTYPE)
@@ -36,6 +36,9 @@ model = AutoModelForDepthEstimation.from_pretrained("depth-anything/Depth-Anythi
 inputs = image_processor(images=image, return_tensors="pt")
 
 inputs = {k: v.to(DEVICE, dtype=DTYPE) for k, v in inputs.items()}
+
+for k, v in inputs.items():
+    print(v.shape)
 
 with torch.no_grad():
     outputs = model(**inputs)

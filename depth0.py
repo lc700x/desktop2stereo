@@ -6,7 +6,7 @@ from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT
 import os, warnings
 
 if USE_TORCH_COMPILE and torch.cuda.is_available():
@@ -652,7 +652,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
     depth = normalize_tensor(depth)
     # Mild AA to reduce jaggies
-    depth = anti_alias(depth, strength=AA_STRENTH)
+    depth = anti_alias(depth, strength=AA_STRENGTH)
 
     # Optional temporal stabilization (EMA)
     if use_temporal_smooth:

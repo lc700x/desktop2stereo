@@ -1,7 +1,7 @@
 # depth.py
 import torch
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -93,50 +93,36 @@ font_dict = {
     " ": ["000","000","000","000","000"],
 }
 
-
-def apply_gamma(depth: torch.Tensor, gamma: float = 0.8) -> torch.Tensor:
+# Post-processing functions
+def apply_foreground_scale(depth: torch.Tensor, scale: float, mid: float = 0.5, eps: float = 1e-6) -> torch.Tensor:
     """
-    Apply gamma correction to exaggerate depth differences.
-    Here 1=near, 0=far.
-    gamma < 1 -> expand far (background)
-    gamma > 1 -> expand near (foreground)
-    """
-    depth = torch.clamp(depth, 0.0, 1.0)
-    return depth.pow(gamma)
-
-def apply_sigmoid(depth: torch.Tensor, k: float = 10.0, midpoint: float = 0.5) -> torch.Tensor:
-    """
-    Apply sigmoid mapping to emphasize mid-range depth.
-    Larger k makes it steeper.
-    1=near, 0=far convention.
-    """
-    depth = torch.clamp(depth, 0.0, 1.0)
-    return 1.0 / (1.0 + torch.exp(-k * (depth - midpoint)))
-
-def apply_foreground_scale(depth: torch.Tensor, scale: float) -> torch.Tensor:
-    """
-    Apply foreground/background scaling to a depth map.
+    Scale depth contrast so that:
+      - depth in [0,1], where 0 = background (far), 1 = foreground (near)
+      - scale > 0 : increase separation (foreground closer -> values move toward 1, background farther -> values move toward 0)
+      - scale < 0 : reduce separation (flatten)
+      - scale = 0 : identity
 
     Args:
-        depth (torch.Tensor): depth map of shape (H, W, 1), values normalized in [0, 1].
-                              0 = near (foreground), 1 = far (background).
-        scale (float): scaling factor
-                       < 0: foreground closer, background further
-                       > 0: foreground flatter, background closer
-                       = 0: no change
+        depth: torch.Tensor shape (..., 1) or (...), values in [0,1]
+        scale: float, must be > -1.0 (we avoid scale == -1 which would divide by zero)
+        mid: midpoint for separation (default 0.5)
+        eps: small eps to avoid numerical issues
 
     Returns:
-        torch.Tensor: scaled depth map of same shape as input
+        Tensor same shape as depth, clamped to [0,1].
     """
-    if scale < 0:
-        # Exaggerate separation: foreground closer, background further
-        return torch.pow(depth, 1.0 + scale)
-    elif scale > 0:
-        # Compress foreground, pull background closer
-        return 1.0 - torch.pow(1.0 - depth, 1.0 + abs(scale))
-    else:
-        return depth
-    
+    if not (-1.0 + 1e-12 < scale):  # avoid scale <= -1
+        raise ValueError("scale must be greater than -1.0")
+
+    d = depth.clamp(0.0, 1.0)
+    if abs(scale) < eps:
+        return d
+
+    exponent = 1.0 / (1.0 + scale)  # >1 if scale<0 (flatten), <1 if scale>0 (exaggerate)
+    dist = d - mid
+    out = mid + torch.sign(dist) * torch.pow(torch.abs(dist), exponent)
+    return out.clamp(0.0, 1.0)
+       
 def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
     """
     Apply anti-aliasing to reduce jagged edges in depth maps.
@@ -204,18 +190,21 @@ def process(img_rgb: np.ndarray, height) -> np.ndarray:
         img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
     return img_rgb
 
+def apply_contrast(depth, factor=1.2):
+    mean = depth.mean(dim=(-2, -1), keepdim=True)  # per image mean
+    return torch.clamp((depth - mean) * factor + mean, 0, 1)
+
 def normalize_tensor(tensor):
     """ Normalize tensor to [0,1] """
     return (tensor - tensor.min())/(tensor.max() - tensor.min()+1e-6)
 
 def post_process_depth(depth):
-    depth = normalize_tensor(depth.squeeze())
-    if 'Metric' in MODEL_ID:
+    depth = normalize_tensor(depth).squeeze()
+    if 'metric' in MODEL_ID.lower():
         depth = 1.0 - depth
+    depth = apply_contrast(depth)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
-    depth = apply_sigmoid(depth, k=5.0, midpoint=0.6)
-    depth = anti_alias(depth, strength=AA_STRENTH)
-    
+    depth = anti_alias(depth, strength=AA_STRENGTH)
     return depth
         
 # Load Video Depth Anything Model
@@ -233,9 +222,9 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 
     encoder = encoder_dict.get(model_id, 'vits')
 
-    if 'depth-anything/Video-Depth-Anything' in model_id:
+    if 'depth-anything/video-depth-anything' in model_id.lower():
         checkpoint_name = f'video_depth_anything_{encoder}.pth'
-    elif 'depth-anything/Metric-Video-Depth-Anything' in model_id:
+    elif 'depth-anything/metric-video-depth-anything' in model_id.lower():
         checkpoint_name = f'metric_video_depth_anything_{encoder}.pth'
 
     model_configs = {
@@ -466,7 +455,7 @@ class DepthModelWrapper:
     def _load_pytorch_model(self, enable_trt=USE_TENSORRT):
         """Load the original PyTorch model."""
         # Load model
-        if 'Video-Depth-Anything' in MODEL_ID:
+        if 'video-depth-anything' in MODEL_ID.lower():
             model = get_video_depth_anything_model(MODEL_ID)
 
         else:
@@ -514,7 +503,7 @@ class DepthModelWrapper:
         if "CUDA" in DEVICE_INFO:
             with torch.amp.autocast('cuda'):
                 if self.backend == "PyTorch":
-                    if "Video-Depth-Anything" in MODEL_ID:
+                    if "video-depth-anything" in MODEL_ID.lower():
                         return self.model(pixel_values=tensor)
                     return self.model(pixel_values=tensor).predicted_depth
                 else:
@@ -522,7 +511,7 @@ class DepthModelWrapper:
         else:
             with torch.no_grad():
                 if self.backend == "PyTorch":
-                    if "Video-Depth-Anything" in MODEL_ID:
+                    if "video-depth-anything" in MODEL_ID.lower():
                         return self.model(pixel_values=tensor)
                     return self.model(pixel_values=tensor).predicted_depth
                 else:
@@ -608,7 +597,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     if "anything" in MODEL_ID.lower():
         target_h = (target_h // 14) * 14
         target_w = (target_w // 14) * 14
-        if 'Video-Depth-Anything' in MODEL_ID: # fix for Video-Depth-Anything
+        if "video-depth-anything" in MODEL_ID.lower(): # fix for Video-Depth-Anything
             target_h, target_w = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
     else:
         target_h, target_w = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
@@ -633,7 +622,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     tensor = tensor.to(dtype=MODEL_DTYPE)
         
     # Use model wrapper instead of direct model call
-    if 'Video-Depth-Anything' in MODEL_ID:
+    if "video-depth-anything" in MODEL_ID.lower():
         with torch.no_grad():  # Add for safety in non-autocast paths
             depth = model_wraper(tensor)
     else:
