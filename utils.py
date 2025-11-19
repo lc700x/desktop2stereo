@@ -184,10 +184,7 @@ WINDOW_TITLE = settings["Window Title"]
 
 # Image Processing Parameters
 FOREGROUND_SCALE = settings["Foreground Scale"] / 10 # 0-10
-AA_STRENTH = settings["Anti-aliasing"] # 0-10
- 
-# Adjust anti-aliasing and dept dilution value for Mac
-AA_STRENTH *= 2 # 0-100
+AA_STRENGTH = settings["Anti-aliasing"] * 2
 
 # Experimental Settings
 DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer

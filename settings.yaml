@@ -356,7 +356,7 @@ Model List:
     - 1536
 Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
-Anti-aliasing: 1
+Anti-aliasing: 2
 Foreground Scale: 1.0
 Depth Resolution: 336
 FP16: true
@@ -364,7 +364,7 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
 Language: EN
-Run Mode: RTMP Streamer
+Run Mode: Local Viewer
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100

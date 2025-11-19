@@ -27,9 +27,11 @@ Access code: `1vcn`
     **Intel GPU**: Download latest GPU driver from [Download Intel Drivers and Software](https://www.intel.com/content/www/us/en/download-center/home.html/).  
     **Qualcomm GPU**: Download latest GPU driver from [Qualcomm® Adreno™ Windows Graphics Drivers for Snapdragon® X Platform](https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver).  
     **Other DirectML devices**: Please install the latest hardware driver accordingly.  
-2. Enable Long Path
+2. Install Microsoft Visual C++ Redistributable
+    Download [Visual Studio 2017–2026 C++ Redistributable] (https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#latest-supported-redistributable-version) and install (restart Windows).   
+3. Enable Long Path
     Double click the `long_path.reg` in the **Desktop2Stereo** folder and confirm the warning. 
-3. Deploy Desktop2Stereo Environment  
+4. Deploy Desktop2Stereo Environment  
 - **Method 1 (Recommended)**: Use Portable Version   
     Download: [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96) (Access code: `1vcn`)  
 **AMD/Intel/Qualcomm GPU and other DirectML devies**: Download and unzip the `Desktop2Stereo_vX.X.X_AMD_etc_Windows.zip` to local disk.  

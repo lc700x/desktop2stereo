@@ -146,8 +146,8 @@ DEFAULTS = {
     "Depth Model": DEFAULT_MODEL_LIST[2],
     "Depth Strength": 2.0,
     "Depth Resolution": 336,
-    "Anti-aliasing": 1,
-    "Foreground Scale": 1.0,
+    "Anti-aliasing": 2,
+    "Foreground Scale": 1,
     "IPD": 0.064,
     "Display Mode": "Half-SBS",
     "FP16": True,
@@ -753,6 +753,8 @@ class ConfigGUI(tk.Tk):
             # print(device_lower)
             for mix_name in STEREO_MIX_NAMES:
                 if mix_name in device_lower:
+                    if "audio stereo input" in device_lower:
+                        continue
                     self.audio_device_var.set(device)
                     return
 
@@ -786,6 +788,8 @@ class ConfigGUI(tk.Tk):
                     if max_input_channels > 0 or max_output_channels > 0:
                         for mix_name in STEREO_MIX_NAMES:
                             if mix_name in device_name:
+                                if "audio stereo input" in device_name:
+                                    continue
                                 devices_found.add(device_info.get('name'))
                                 break
 
