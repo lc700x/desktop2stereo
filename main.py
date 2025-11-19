@@ -359,11 +359,12 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
         server_cmd = ['./rtmp/mac/mediamtx', './rtmp/mac/mediamtx.yml']
         ffmpeg_cmd = [
             "./rtmp/mac/ffmpeg",
-            '-fflags', 'nobuffer',
-            '-flags', 'low_delay',
-            '-probesize', '32',
-            '-analyzeduration', '0',
-             "-itsoffset", str(AUDIO_DELAY),
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-probesize", "1024",
+            "-analyzeduration", "0",
+            "-itsoffset", str(AUDIO_DELAY),
+            "-pixel_format", "uyvy422",
             "-f", "avfoundation",
             "-rtbufsize", "256M",
             "-framerate", "60",
@@ -373,14 +374,14 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             "-map", "[v]",
             "-map", "[a]",
             "-c:v", "h264_videotoolbox",
-            "-profile:v", "high",           # Enables best quality profile
-            "-pix_fmt", "yuv420p",          # Most compatible pixel format
-            "-b:v", "10M",                  # Target bitrate (adjust as needed)
-            "-maxrate", "12M",              # Peak bitrate for VBR
-            "-bufsize", "24M",              # VBV buffer size
-            "-g", str(FPS),                 # GOP length = 1 second
-            "-r", str(FPS),                 # Frame rate
-            "-realtime", "true",            # Optimize for live capture
+            "-profile:v", "high",
+            "-pix_fmt", "yuv420p",
+            "-b:v", "10M",
+            "-maxrate", "12M",
+            "-bufsize", "24M",
+            "-g", str(FPS),
+            "-r", str(FPS),
+            "-realtime", "true",
             "-color_primaries", "bt709",
             "-color_trc", "bt709",
             "-colorspace", "bt709",
@@ -388,8 +389,9 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             "-b:a", "96k",
             "-ar", "48000",
             "-f", "rtsp",
-            f"rtsp://localhost:8554/{STREAM_KEY}"
+            f"rtsp://localhost:8554/{STREAM_KEY}",
         ]
+
 
     elif os_name == "Linux":
         import time
