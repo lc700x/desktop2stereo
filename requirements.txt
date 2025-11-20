@@ -16,3 +16,7 @@ sounddevice==0.5.3
 PyOpenGL==3.1.10
 PyOpenGL-accelerate==3.1.10
 pillow==11.3.0
+
+# for da3
+omegaconf==2.3.0
+addict==2.4.0

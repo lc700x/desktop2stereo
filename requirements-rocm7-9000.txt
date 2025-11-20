@@ -1,4 +1,4 @@
 ﻿--extra-index-url https://d2awnip2yjpvqn.cloudfront.net/v2/gfx120X-all/ 
-torch==2.10.0a0
-torchvision==0.25.0a0
+torch==2.10.0a0+rocm7.10.0a20251023
+torchvision==0.25.0a0+rocm7.10.0a20251023
 # torchaudio

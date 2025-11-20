@@ -7,9 +7,6 @@ echo - Setting up the virtual environment
 @REM Set paths
 Set "PYTHON_EXE=.\Python311\python.exe"
 
-@REM Function to detect GPU and process substring
-echo Detecting System GPU...
-
 @REM Use `wmic` to get GPU name (Windows specific)
 for /f "skip=1 tokens=*" %%i in ('wmic path win32_videocontroller get name') do (
     set "FULL_GPU_NAME=%%i"
@@ -25,7 +22,7 @@ for /f "tokens=3 delims= " %%a in ("%FULL_GPU_NAME%") do (
 @echo off
 setlocal enabledelayedexpansion
 
-echo Detected GPU Model: %GPU_MODEL%
+echo Detected GPU: %FULL_GPU_NAME%
 
 @REM Map GPU models to requirement files
 set "AMD_MODELS_9000=9060;9070;W9700"
@@ -45,7 +42,7 @@ if %errorlevel% equ 0 goto :InstallDependencies
 call :CheckModel "%GPU_MODEL%" AMD_MODELS_800M requirements-rocm7-800M.txt
 if %errorlevel% equ 0 goto :InstallDependencies
 
-echo Failed to automatically detect a compatible ROCm requirements file for GPU: %GPU_MODEL%.
+echo Failed to automatically detect a compatible ROCm requirements file for GPU: %FULL_GPU_NAME%.
 echo You may need to update the script with additional GPU models.
 pause
 exit /b 1
@@ -56,7 +53,7 @@ set "MODEL_LIST=!%2!"
 for %%a in (%MODEL_LIST%) do (
     if /I "%~1"=="%%a" (
         set "REQUIREMENTS_FILE=%~3"
-        echo !REQUIREMENTS_FILE! selected for GPU model %~1
+        echo Installing !REQUIREMENTS_FILE! ...
         exit /b 0
     )
 )

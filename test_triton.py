@@ -1,7 +1,7 @@
 import torch
 import triton
 import triton.language as tl
-from depth1 import DEVICE
+from depth import DEVICE
 
 @triton.jit
 def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):

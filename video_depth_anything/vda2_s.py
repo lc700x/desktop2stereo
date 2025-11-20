@@ -196,8 +196,8 @@ class VideoDepthAnything(nn.Module):
                     x_shape = cur_input.shape
                     self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
             else:
-                with torch.amp.autocast('cuda'):
-                    with torch.no_grad():
+                with torch.inference_mode():
+                    with torch.amp.autocast('cuda'):
                         cur_feature = self.forward_features(cur_input)
                         x_shape = cur_input.shape
                         self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
@@ -217,8 +217,8 @@ class VideoDepthAnything(nn.Module):
                     cur_feature = self.forward_features(cur_input)
                     x_shape = cur_input.shape
             else:
-                with torch.amp.autocast('cuda'):
-                    with torch.no_grad():
+                with torch.inference_mode():
+                    with torch.amp.autocast('cuda'):
                         cur_feature = self.forward_features(cur_input)
                         x_shape = cur_input.shape
             '''
@@ -232,8 +232,8 @@ class VideoDepthAnything(nn.Module):
                 with torch.no_grad():
                     self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
             else:
-                with torch.amp.autocast('cuda'):
-                    with torch.no_grad():
+                with torch.inference_mode():
+                    with torch.amp.autocast('cuda'):
                         self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
 
             self.update_cache(new_cache)

@@ -6,7 +6,7 @@ from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 from PIL import Image
-import os
+import os, warnings
 img  = Image.open("C:/Users/zjuli/Pictures/test1.jpg").convert("RGB")
 image_rgb = np.array(img)
 AA_STRENGTH = 4
@@ -16,7 +16,7 @@ CACHE_PATH = "models"
 DEVICE_ID = 0
 FILL_16_9 = True
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
-MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+MODEL_ID = "depth-anything/DA3-SMALL"
 DEPTH_RESOLUTION = 518
 FOREGROUND_SCALE = 0.2
 USE_TORCH_COMPILE = False
@@ -54,8 +54,6 @@ if "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO:
         torch.backends.cudnn.allow_tf32 = True
         # Enable TF32 matrix multiplication for better performance
         torch.set_float32_matmul_precision('high')
-    else:
-        torch.set_autocast_enabled(True)
     # Enable math attention
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
@@ -68,13 +66,14 @@ if "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO:
             module=r"torch\._inductor\.lowering"
         )
     
-if "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO:
+elif "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO:
     torch.backends.cudnn.enabled = False # Add for AMD ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Add for AMD ROCm7
     # Enable math attention
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
     torch.backends.cuda.enable_math_sdp(True)
+    USE_TORCH_COMPILE = False  # Disable torch.compile for AMD ROCm7 due to current issues
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -183,7 +182,7 @@ def apply_foreground_scale(depth: torch.Tensor, scale: float, mid: float = 0.5, 
     dist = d - mid
     out = mid + torch.sign(dist) * torch.pow(torch.abs(dist), exponent)
     return out.clamp(0.0, 1.0)
-    
+       
 def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
     """
     Apply anti-aliasing to reduce jagged edges in depth maps.
@@ -300,7 +299,7 @@ def post_process_depth(depth):
 def get_video_depth_anything_model(model_id=MODEL_ID):
     """ Load Video Depth Anything model from HuggingFace hub. """
     from huggingface_hub import hf_hub_download
-    from .video_depth_anything.vda2_s import VideoDepthAnything
+    from video_depth_anything.vda2_s import VideoDepthAnything
     # Preparation for video depth anything models
     encoder_dict = {'depth-anything/Video-Depth-Anything-Small': 'vits',
                     'depth-anything/Video-Depth-Anything-Base': 'vitb',
@@ -325,6 +324,12 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 
     model = VideoDepthAnything(**model_configs[encoder])
     model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True), strict=True)
+    return model.to(DEVICE)
+
+# Load Depth-Anything-V3 Model
+def get_da3_model(model_id=MODEL_ID):
+    from depth_anything_3.api import DepthAnything3
+    model = DepthAnything3.from_pretrained(model_id)
     return model.to(DEVICE)
 
 # TensorRT Optimization
@@ -533,11 +538,12 @@ class DepthModelWrapper:
                 self.model = self._load_pytorch_model(enable_trt=False)
         else:
             # Use PyTorch backend for DirectML/MPS/CPU
+            
+            # Ignore specific warning message
+            warnings.filterwarnings("ignore", message="User provided device_type of 'cuda', but CUDA is not available")
+
             self.backend = "PyTorch"
             self.model = self._load_pytorch_model()
-        
-        if hasattr(self.model, 'to'):
-            self.model.to(DTYPE)
         
         print(f"Using backend: {self.backend}")
     
@@ -546,7 +552,8 @@ class DepthModelWrapper:
         # Load model
         if 'video-depth-anything' in MODEL_ID.lower():
             model = get_video_depth_anything_model(MODEL_ID)
-
+        elif 'da3'  in MODEL_ID.lower():
+            model = get_da3_model(MODEL_ID)
         else:
             # Load depth model
             model = AutoModelForDepthEstimation.from_pretrained(
@@ -556,10 +563,10 @@ class DepthModelWrapper:
                 weights_only=True
             ).to(DEVICE)
         
-        if FP16:
+        if FP16 and not self.is_cuda:
             model.half()
         
-        if  "CUDA" in self.device_info and 'NVIDIA' in self.device_info and self.use_torch_compile and not enable_trt:
+        if self.is_cuda and 'NVIDIA' in self.device_info and self.use_torch_compile and not enable_trt:
             model = torch.compile(model)
             print("Processing torch.compile with Triton, it may take a while...")
         
@@ -569,9 +576,6 @@ class DepthModelWrapper:
         """Load or create TensorRT engine."""
         # First, load PyTorch model to export ONNX
         pytorch_model = self._load_pytorch_model()
-        
-        if FP16:
-            pytorch_model.half()
         
         # Export to ONNX if not exists
         if RECOMPILE_TRT or not os.path.exists(self.onnx_path):
@@ -589,23 +593,36 @@ class DepthModelWrapper:
     
     def __call__(self, tensor):
         """Run inference using the active backend."""
-        if "CUDA" in DEVICE_INFO:
-            with torch.amp.autocast('cuda'):
-                if self.backend == "PyTorch":
-                    if "video-depth-anything" in MODEL_ID.lower():
+        # Handle different model types with appropriate calling conventions
+        if "da3" in MODEL_ID.lower():
+            # DA3 models: use predict_depth method
+            if self.is_cuda:
+                with torch.inference_mode():
+                    with torch.amp.autocast('cuda' , dtype=DTYPE):
+                        return self.model.predict_depth(tensor)
+            else:
+                with torch.no_grad():
+                    return self.model.predict_depth(tensor)
+        
+        elif "video-depth-anything" in MODEL_ID.lower():
+            # Video-Depth-Anything models
+            if self.is_cuda:
+                with torch.inference_mode():
+                    with torch.amp.autocast('cuda' , dtype=DTYPE):
                         return self.model(pixel_values=tensor)
-                    return self.model(pixel_values=tensor).predicted_depth
-                else:
-                    return self.model(tensor)
+            else:
+                with torch.no_grad():
+                    return self.model(pixel_values=tensor)
+        
         else:
-            with torch.no_grad():
-                if self.backend == "PyTorch":
-                    if "video-depth-anything" in MODEL_ID.lower():
-                        return self.model(pixel_values=tensor)
+            # Regular DepthAnything models (v1/v2)
+            if self.is_cuda:
+                with torch.inference_mode():
+                    with torch.amp.autocast('cuda' , dtype=DTYPE):
+                        return self.model(pixel_values=tensor).predicted_depth
+            else:
+                with torch.no_grad():
                     return self.model(pixel_values=tensor).predicted_depth
-                else:
-                    return self.model(tensor)
-
 # Initialize model wrapper
 model_wraper = DepthModelWrapper(
     model_path=MODEL_ID,
@@ -621,7 +638,7 @@ STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
 if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
     try:
         # Compile the model as before, but SKIP compiling lightweight post-processing functions，avoid FX re-tracing conflicts. These are fast without it.  
-        post_process_depth = torch.compile(post_process_depth, fullgraph=False)
+        post_process_depth = torch.compile(post_process_depth)
         # Assign to a global or module-level var if needed for access
         globals()['post_process_depth'] = post_process_depth  # Or use a class/module attribute
         
@@ -631,11 +648,12 @@ if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
 # Initialize with dummy input for warmup
 def warmup_model(model_wraper, steps: int = 3):
     if "CUDA" in DEVICE_INFO:
-        with torch.amp.autocast('cuda'):
-            for i in range(steps):
-                dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
-                                    device=DEVICE, dtype=MODEL_DTYPE)
-                model_wraper(dummy)
+        with torch.inference_mode():
+            with torch.amp.autocast('cuda' , dtype=DTYPE):
+                for i in range(steps):
+                    dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
+                                        device=DEVICE, dtype=MODEL_DTYPE)
+                    model_wraper(dummy)
     else:
         with torch.no_grad():
             for i in range(steps):
@@ -716,8 +734,9 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
             depth = model_wraper(tensor)
     else:
         if "CUDA" in DEVICE_INFO:
-            with torch.amp.autocast('cuda'):
-                depth = model_wraper(tensor)
+            with torch.no_grad():
+                with torch.amp.autocast('cuda' , dtype=DTYPE):
+                    depth = model_wraper(tensor)
         else:
             with torch.no_grad():
                 depth = model_wraper(tensor)

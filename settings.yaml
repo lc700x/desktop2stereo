@@ -61,6 +61,69 @@ Model List:
     - 392
     - 448
     - 518
+  depth-anything/DA3-GIANT:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/DA3-LARGE:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/DA3-BASE:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/DA3-SMALL:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/DA3METRIC-LARGE:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/DA3MONO-LARGE:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/DA3NESTED-GIANT-LARGE:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
   depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf:
     resolutions:
     - 196
@@ -359,7 +422,7 @@ Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 1.0
 Depth Resolution: 336
-FP16: false
+FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
