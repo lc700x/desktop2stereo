@@ -31,8 +31,12 @@ DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
 print(DEVICE_INFO)
 print(f"Model: {MODEL_ID}")
 
+IS_CUDA = "CUDA" in DEVICE_INFO
+IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
+IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO
+
 # Optimization for CUDA
-if "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO:
+if IS_NVIDIA:
     torch.backends.cudnn.benchmark = True
     if not FP16:
         # Enable TF32 for matrix multiplications
@@ -53,7 +57,7 @@ if "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO:
             module=r"torch\._inductor\.lowering"
         )
     
-elif "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO:
+elif IS_AMD_ROCM:
     torch.backends.cudnn.enabled = False # Add for AMD ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Add for AMD ROCm7
     # Enable math attention
@@ -210,7 +214,7 @@ def post_process_depth(depth):
 def get_video_depth_anything_model(model_id=MODEL_ID):
     """ Load Video Depth Anything model from HuggingFace hub. """
     from huggingface_hub import hf_hub_download
-    from video_depth_anything.vda2_s import VideoDepthAnything
+    from models.video_depth_anything.vda2_s import VideoDepthAnything
     # Preparation for video depth anything models
     encoder_dict = {'depth-anything/Video-Depth-Anything-Small': 'vits',
                     'depth-anything/Video-Depth-Anything-Base': 'vitb',
@@ -239,8 +243,8 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 
 # Load Depth-Anything-V3 Model
 def get_da3_model(model_id=MODEL_ID):
-    from depth_anything_3.api import DepthAnything3
-    model = DepthAnything3.from_pretrained(model_id)
+    from models.depth_anything_3.api import DepthAnything3
+    model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH)
     return model.to(DEVICE)
 
 # TensorRT Optimization
@@ -429,7 +433,7 @@ class DepthModelWrapper:
         self.use_torch_compile = USE_TORCH_COMPILE
         
         # Determine backend based on device
-        self.is_cuda = "CUDA" in device_info
+        self.is_cuda = IS_CUDA
         
         if self.is_cuda and USE_TENSORRT:
             # Use TensorRT backend for CUDA
@@ -546,7 +550,7 @@ MODEL_DTYPE = next(model_wraper.model.parameters()).dtype if hasattr(model_wrape
 MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
 STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
 
-if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
+if USE_TORCH_COMPILE and IS_CUDA:
     try:
         # Compile the model as before, but SKIP compiling lightweight post-processing functions，avoid FX re-tracing conflicts. These are fast without it.  
         post_process_depth = torch.compile(post_process_depth)
@@ -558,7 +562,7 @@ if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
 
 # Initialize with dummy input for warmup
 def warmup_model(model_wraper, steps: int = 3):
-    if "CUDA" in DEVICE_INFO:
+    if IS_CUDA:
         with torch.inference_mode():
             with torch.amp.autocast('cuda' , dtype=DTYPE):
                 for i in range(steps):
@@ -597,7 +601,7 @@ class DepthStabilizer:
             return out
 
 depth_stabilizer = DepthStabilizer(alpha=0.9)  # increase alpha for more stability
-if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
+if USE_TORCH_COMPILE and IS_CUDA:
     depth_stabilizer.__call__ = torch.compile(depth_stabilizer.__call__, fullgraph=True)
 
 # Modified predict_depth function with improved TRT integration
@@ -644,7 +648,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         with torch.no_grad():  # Add for safety in non-autocast paths
             depth = model_wraper(tensor)
     else:
-        if "CUDA" in DEVICE_INFO:
+        if IS_CUDA:
             with torch.no_grad():
                 with torch.amp.autocast('cuda' , dtype=DTYPE):
                     depth = model_wraper(tensor)
@@ -762,7 +766,7 @@ def make_sbs_core(rgb: torch.Tensor,
     shifts = inv * max_px * depth_strength
     
     # CUDA fast path: grid_sample
-    if "CUDA" in DEVICE_INFO:
+    if IS_CUDA:
         xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=torch.float32).view(1, 1, W).expand(1, H, W)
         ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=torch.float32).view(1, H, 1).expand(1, H, W)
         shift_norm = shifts * (2.0 / (W - 1))
@@ -840,7 +844,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
     sbs_tensor = make_sbs_core(rgb, depth, ipd_uv, depth_ratio, display_mode)
     return sbs_tensor.to(torch.uint8).permute(1,2,0).contiguous().cpu().numpy()
 
-if USE_TORCH_COMPILE and "CUDA" in DEVICE_INFO:
+if USE_TORCH_COMPILE and IS_CUDA:
     make_sbs_core = torch.compile(make_sbs_core)
 
     
