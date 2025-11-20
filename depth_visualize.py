@@ -300,7 +300,7 @@ def post_process_depth(depth):
 def get_video_depth_anything_model(model_id=MODEL_ID):
     """ Load Video Depth Anything model from HuggingFace hub. """
     from huggingface_hub import hf_hub_download
-    from models.video_depth_anything.vda2_s import VideoDepthAnything
+    from .video_depth_anything.vda2_s import VideoDepthAnything
     # Preparation for video depth anything models
     encoder_dict = {'depth-anything/Video-Depth-Anything-Small': 'vits',
                     'depth-anything/Video-Depth-Anything-Base': 'vitb',

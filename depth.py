@@ -211,7 +211,7 @@ def post_process_depth(depth):
 def get_video_depth_anything_model(model_id=MODEL_ID):
     """ Load Video Depth Anything model from HuggingFace hub. """
     from huggingface_hub import hf_hub_download
-    from models.video_depth_anything.vda2_s import VideoDepthAnything
+    from .video_depth_anything.vda2_s import VideoDepthAnything
     # Preparation for video depth anything models
     encoder_dict = {'depth-anything/Video-Depth-Anything-Small': 'vits',
                     'depth-anything/Video-Depth-Anything-Base': 'vitb',
@@ -236,6 +236,12 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 
     model = VideoDepthAnything(**model_configs[encoder])
     model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True), strict=True)
+    return model.to(DEVICE)
+
+# Load Depth-Anything-V3 Model
+def get_da3_model(model_id=MODEL_ID):
+    from depth_anything_3.api import DepthAnything3
+    model = DepthAnything3.from_pretrained(model_id)
     return model.to(DEVICE)
 
 # TensorRT Optimization
@@ -457,7 +463,8 @@ class DepthModelWrapper:
         # Load model
         if 'video-depth-anything' in MODEL_ID.lower():
             model = get_video_depth_anything_model(MODEL_ID)
-
+        elif 'da3'  in MODEL_ID.lower():
+            model = get_da3_model(MODEL_ID)
         else:
             # Load depth model
             model = AutoModelForDepthEstimation.from_pretrained(
@@ -500,23 +507,33 @@ class DepthModelWrapper:
     
     def __call__(self, tensor):
         """Run inference using the active backend."""
-        if "CUDA" in DEVICE_INFO:
-            with torch.amp.autocast('cuda'):
-                if self.backend == "PyTorch":
-                    if "video-depth-anything" in MODEL_ID.lower():
-                        return self.model(pixel_values=tensor)
-                    return self.model(pixel_values=tensor).predicted_depth
-                else:
-                    return self.model(tensor)
+        # Handle different model types with appropriate calling conventions
+        if "da3" in MODEL_ID.lower():
+            # DA3 models: use predict_depth method
+            if "CUDA" in DEVICE_INFO:
+                with torch.amp.autocast('cuda'):
+                    return self.model.predict_depth(tensor)
+            else:
+                with torch.no_grad():
+                    return self.model.predict_depth(tensor)
+        
+        elif "video-depth-anything" in MODEL_ID.lower():
+            # Video-Depth-Anything models
+            if "CUDA" in DEVICE_INFO:
+                with torch.amp.autocast('cuda'):
+                    return self.model(pixel_values=tensor)
+            else:
+                with torch.no_grad():
+                    return self.model(pixel_values=tensor)
+        
         else:
-            with torch.no_grad():
-                if self.backend == "PyTorch":
-                    if "video-depth-anything" in MODEL_ID.lower():
-                        return self.model(pixel_values=tensor)
+            # Regular DepthAnything models (v1/v2)
+            if "CUDA" in DEVICE_INFO:
+                with torch.amp.autocast('cuda'):
                     return self.model(pixel_values=tensor).predicted_depth
-                else:
-                    return self.model(tensor)
-
+            else:
+                with torch.no_grad():
+                    return self.model(pixel_values=tensor).predicted_depth
 # Initialize model wrapper
 model_wraper = DepthModelWrapper(
     model_path=MODEL_ID,
