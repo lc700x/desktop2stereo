@@ -417,7 +417,7 @@ Model List:
   apple/DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: depth-anything/DA3-BASE
+Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 1.0
@@ -431,7 +431,7 @@ Run Mode: Local Viewer
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: true
+torch.compile: false
 TensorRT: false
 Recompile TensorRT: false
 Unlock Thread (Legacy Streamer): false

@@ -478,7 +478,7 @@ class DepthModelWrapper:
                 weights_only=True
             ).to(DEVICE)
         
-        if FP16 and not self.is_cuda:
+        if FP16 and 'da3' not in MODEL_ID.lower():
             model.half()
         
         if self.is_cuda and 'NVIDIA' in self.device_info and self.use_torch_compile and not enable_trt:
@@ -508,36 +508,61 @@ class DepthModelWrapper:
     
     def __call__(self, tensor):
         """Run inference using the active backend."""
-        # Handle different model types with appropriate calling conventions
-        if "da3" in MODEL_ID.lower():
-            # DA3 models: use predict_depth method
-            if self.is_cuda:
-                with torch.inference_mode():
-                    with torch.amp.autocast('cuda' , dtype=DTYPE):
-                        return self.model.predict_depth(tensor)
-            else:
-                with torch.no_grad():
-                    return self.model.predict_depth(tensor)
-        
-        elif "video-depth-anything" in MODEL_ID.lower():
-            # Video-Depth-Anything models
-            if self.is_cuda:
-                with torch.inference_mode():
-                    with torch.amp.autocast('cuda' , dtype=DTYPE):
-                        return self.model(pixel_values=tensor)
-            else:
-                with torch.no_grad():
-                    return self.model(pixel_values=tensor)
-        
-        else:
-            # Regular DepthAnything models (v1/v2)
-            if self.is_cuda:
-                with torch.inference_mode():
-                    with torch.amp.autocast('cuda' , dtype=DTYPE):
+        if self.is_cuda:
+            with torch.inference_mode():
+                with torch.amp.autocast('cuda'):
+                    if self.backend == "PyTorch":
+                        if "video-depth-anything" in MODEL_ID.lower():
+                            return self.model(pixel_values=tensor)
+                        elif "da3" in MODEL_ID.lower():
+                            return self.model.predict_depth(tensor)
                         return self.model(pixel_values=tensor).predicted_depth
-            else:
-                with torch.no_grad():
+                    else:
+                        return self.model(tensor)
+        else:
+            with torch.no_grad():
+                if self.backend == "PyTorch":
+                    if "video-depth-anything" in MODEL_ID.lower():
+                        return self.model(pixel_values=tensor)
+                    elif "da3" in MODEL_ID.lower():
+                        return self.model.predict_depth(tensor)
                     return self.model(pixel_values=tensor).predicted_depth
+                else:
+                    return self.model(tensor)
+    
+    
+    # def __call__(self, tensor):
+    #     """Run inference using the active backend."""
+    #     # Handle different model types with appropriate calling conventions
+    #     if "da3" in MODEL_ID.lower():
+    #         # DA3 models: use predict_depth method
+    #         if self.is_cuda:
+    #             with torch.inference_mode():
+    #                 with torch.amp.autocast('cuda' , dtype=DTYPE):
+    #                     return self.model.predict_depth(tensor)
+    #         else:
+    #             with torch.no_grad():
+    #                 return self.model.predict_depth(tensor)
+        
+    #     elif "video-depth-anything" in MODEL_ID.lower():
+    #         # Video-Depth-Anything models
+    #         if self.is_cuda:
+    #             with torch.inference_mode():
+    #                 with torch.amp.autocast('cuda' , dtype=DTYPE):
+    #                     return self.model(pixel_values=tensor)
+    #         else:
+    #             with torch.no_grad():
+    #                 return self.model(pixel_values=tensor)
+        
+    #     else:
+    #         # Regular DepthAnything models (v1/v2)
+    #         if self.is_cuda:
+    #             with torch.inference_mode():
+    #                 with torch.amp.autocast('cuda' , dtype=DTYPE):
+    #                     return self.model(pixel_values=tensor).predicted_depth
+    #         else:
+    #             with torch.no_grad():
+    #                 return self.model(pixel_values=tensor).predicted_depth
 # Initialize model wrapper
 model_wraper = DepthModelWrapper(
     model_path=MODEL_ID,
