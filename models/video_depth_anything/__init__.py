@@ -1,1 +1,0 @@
-from depth import IS_CUDA

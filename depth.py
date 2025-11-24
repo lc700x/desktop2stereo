@@ -41,7 +41,6 @@ if IS_NVIDIA:
     if not FP16:
         # Enable TF32 for matrix multiplications
         torch.backends.cuda.matmul.allow_tf32 = True
-        # Enable TF32 for cuDNN (convolution operations)
         torch.backends.cudnn.allow_tf32 = True
         # Enable TF32 matrix multiplication for better performance
         torch.set_float32_matmul_precision('high')
@@ -193,6 +192,9 @@ def process(img_rgb: np.ndarray, height) -> np.ndarray:
         img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
     return img_rgb
 
+def apply_gamma(depth, gamma=1.2):
+    return torch.pow(depth, gamma)
+
 def apply_contrast(depth, factor=1.2):
     mean = depth.mean(dim=(-2, -1), keepdim=True)  # per image mean
     return torch.clamp((depth - mean) * factor + mean, 0, 1)
@@ -203,8 +205,9 @@ def normalize_tensor(tensor):
 
 def post_process_depth(depth):
     depth = normalize_tensor(depth).squeeze()
-    if 'metric' in MODEL_ID.lower():
+    if 'metric' in MODEL_ID.lower() or 'da3' in MODEL_ID.lower():
         depth = 1.0 - depth
+    depth = apply_gamma(depth)
     depth = apply_contrast(depth)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
     depth = anti_alias(depth, strength=AA_STRENGTH)
@@ -243,7 +246,7 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 
 # Load Depth-Anything-V3 Model
 def get_da3_model(model_id=MODEL_ID):
-    from models.depth_anything_3.api import DepthAnything3
+    from models.depth_anything_3.api_n import DepthAnything3
     model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH)
     return model.to(DEVICE)
 
@@ -473,7 +476,7 @@ class DepthModelWrapper:
             # Load depth model
             model = AutoModelForDepthEstimation.from_pretrained(
                 MODEL_ID,
-                torch_dtype=torch.float16 if FP16 else torch.float32,
+                dtype=torch.float16 if FP16 else torch.float32,
                 cache_dir=CACHE_PATH,
                 weights_only=True
             ).to(DEVICE)
@@ -529,40 +532,7 @@ class DepthModelWrapper:
                     return self.model(pixel_values=tensor).predicted_depth
                 else:
                     return self.model(tensor)
-    
-    
-    # def __call__(self, tensor):
-    #     """Run inference using the active backend."""
-    #     # Handle different model types with appropriate calling conventions
-    #     if "da3" in MODEL_ID.lower():
-    #         # DA3 models: use predict_depth method
-    #         if self.is_cuda:
-    #             with torch.inference_mode():
-    #                 with torch.amp.autocast('cuda' , dtype=DTYPE):
-    #                     return self.model.predict_depth(tensor)
-    #         else:
-    #             with torch.no_grad():
-    #                 return self.model.predict_depth(tensor)
-        
-    #     elif "video-depth-anything" in MODEL_ID.lower():
-    #         # Video-Depth-Anything models
-    #         if self.is_cuda:
-    #             with torch.inference_mode():
-    #                 with torch.amp.autocast('cuda' , dtype=DTYPE):
-    #                     return self.model(pixel_values=tensor)
-    #         else:
-    #             with torch.no_grad():
-    #                 return self.model(pixel_values=tensor)
-        
-    #     else:
-    #         # Regular DepthAnything models (v1/v2)
-    #         if self.is_cuda:
-    #             with torch.inference_mode():
-    #                 with torch.amp.autocast('cuda' , dtype=DTYPE):
-    #                     return self.model(pixel_values=tensor).predicted_depth
-    #         else:
-    #             with torch.no_grad():
-    #                 return self.model(pixel_values=tensor).predicted_depth
+
 # Initialize model wrapper
 model_wraper = DepthModelWrapper(
     model_path=MODEL_ID,
@@ -798,9 +768,9 @@ def make_sbs_core(rgb: torch.Tensor,
         grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
         grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
         left = F.grid_sample(img, grid_left, mode="bilinear",
-                             padding_mode="border", align_corners=True)[0]
+                             padding_mode="border", align_corners=False)[0]
         right = F.grid_sample(img, grid_right, mode="bilinear",
-                              padding_mode="border", align_corners=True)[0]
+                              padding_mode="border", align_corners=False)[0]
     # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
     else:
         base = torch.arange(W, device=device, dtype=torch.int64).view(1, -1).expand(H, -1)

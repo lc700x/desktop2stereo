@@ -311,7 +311,18 @@ class DinoVisionTransformer(nn.Module):
                 else:
                     ref_token = self.camera_token[:, :1].expand(B, -1, -1)
                     src_token = self.camera_token[:, 1:].expand(B, S - 1, -1)
-                    cam_token = torch.cat([ref_token, src_token], dim=1)
+                    # If src_token is empty or invalid → use ref_token only
+                    if src_token is None or src_token.shape[1] == 0:
+                        # print("WARNING: DirectML src_token is empty → using ref_token only.")
+                        cam_token = ref_token
+                    else:
+                        # Normally they are concatenated, but DepthAnything only consumes ONE token later
+                        # so take the *mean* to keep dimension [B,1,C]
+                        cam_token = (ref_token + src_token) / 2
+
+                    # Ensure shape is [B,1,C] always
+                    if cam_token.shape[1] != 1:
+                        cam_token = cam_token[:, :1, :]
                 x[:, :, 0] = cam_token
 
             if self.alt_start != -1 and i >= self.alt_start and i % 2 == 1:

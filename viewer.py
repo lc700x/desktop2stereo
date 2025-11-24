@@ -6,7 +6,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 from OpenGL.GL import *
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, get_font_type, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE
+from utils import OS_NAME, crop_icon, get_font_type, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
@@ -119,23 +119,32 @@ class StereoWindow:
             'pos': (self.text_padding, self.text_padding)
         }
         
+        # Stereo Display Settings
+        self.specify_display = STEREO_DISPLAY_SELECTION
+        self.stereo_display_index = STEREO_DISPLAY_INDEX 
+        
         # Initialize GLFW
         if not glfw.init():
             raise RuntimeError("Could not initialize GLFW")
         
-        self.monitor_index = self.get_glfw_mon_index(MONITOR_INDEX) if CAPTURE_MODE=="Monitor" else 0
+        self.monitor_index = self.get_glfw_mon_index(MONITOR_INDEX) if CAPTURE_MODE=="Monitor" else 1
+        if self.specify_display:
+            self.monitor_index = self.get_glfw_mon_index(self.stereo_display_index)
         # Configure window
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.RESIZABLE, True)
+        glfw.window_hint(glfw.DECORATED, glfw.TRUE) # window decoration
+        
+        # Get primary monitor resolution
+        monitors = glfw.get_monitors()
         
         if self.use_3d:
             glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
             glfw.window_hint(glfw.FLOATING, glfw.TRUE)    # Always on top
             glfw.window_hint(glfw.DECORATED, glfw.FALSE) # remove window decoration
             # Get primary monitor resolution
-            monitors = glfw.get_monitors()
             monitor = monitors[self.monitor_index]
             vidmode = glfw.get_video_mode(monitor)
             self.window_size = (vidmode.size.width, vidmode.size.height)
@@ -147,21 +156,22 @@ class StereoWindow:
             glfw.window_hint(glfw.VISIBLE, glfw.FALSE)  # clicks pass through
         # Create window
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
+        add_logo(self.window)
         
         # Hide window for 3D monitor, but cannot be captured by other apps as well
         if self.use_3d and OS_NAME == "Windows":
             hide_window_from_capture(self.window)
         
-        if self.stream_mode == "RTMP":
+        if self.stream_mode == "RTMP" and not self.specify_display:
             self.move_to_adjacent_monitor(direction=1)
+        else:
+            self.position_on_monitor(self.monitor_index)
+            if self.specify_display and not self.stream_mode == "RTMP":
+                self.toggle_fullscreen()
         
         if not self.window:
             glfw.terminate()
             raise RuntimeError("Could not create window")
-        
-        add_logo(self.window)
-        
-        self.position_on_monitor(self.monitor_index)
 
         # Set up OpenGL context
         glfw.make_context_current(self.window)

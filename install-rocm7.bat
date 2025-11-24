@@ -107,12 +107,40 @@ for %%a in (%MODEL_LIST%) do (
   )
 )
 
-
-
+REM --- Setting up the virtual environment ---
 :InstallDependencies
 echo - Setting up the virtual environment
 REM Set paths
-Set "PYTHON_EXE=.\Python311\python.exe"
+set "VIRTUAL_ENV=.env"
+set "PYTHON_EXE=python.exe"
+
+REM Check if Python is available
+where %PYTHON_EXE% >nul 2>&1
+if %errorlevel% neq 0 (
+  echo Python is not found in PATH. Please install Python 3.11 first.
+  pause
+  exit /b 1
+)
+
+REM Create virtual environment if it doesn't exist
+if not exist "%VIRTUAL_ENV%\Scripts\activate.bat" (
+  echo Creating virtual environment...
+  %PYTHON_EXE% -m venv "%VIRTUAL_ENV%"
+  if %errorlevel% neq 0 (
+    echo Failed to create virtual environment
+    pause
+    exit /b 1
+  )
+)
+
+@REM Activate virtual environment
+echo - Virtual environment activation
+call "%VIRTUAL_ENV%\Scripts\activate.bat"
+if %errorlevel% neq 0 (
+    echo Failed to activate virtual environment
+    pause
+    exit /b 1
+)
 
 echo.
 echo Installing requirements from: %REQUIREMENTS_FILE%

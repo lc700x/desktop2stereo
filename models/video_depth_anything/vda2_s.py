@@ -24,7 +24,27 @@ from .dinov2 import DINOv2
 from .dpt_temporal import DPTHeadTemporal
 # from .util.transform import Resize, NormalizeImage, PrepareForNet
 
-from . import IS_CUDA
+# Initialize DirectML Device
+from utils import DEVICE_ID
+def get_device(index=0):
+    try:
+        try:
+            import torch_directml
+            if torch_directml.is_available():
+                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
+        except ImportError:
+            pass
+        if torch.backends.mps.is_available() and index==0:
+            return torch.device("mps"), "Using Apple Silicon (MPS) device"
+        if torch.cuda.is_available():
+            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+        else:
+            return torch.device("cpu"), "Using CPU device"
+    except:
+        return torch.device("cpu"), "Using CPU device"
+    
+DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
+IS_CUDA = "CUDA" in DEVICE_INFO
 
 
 # infer settings, do not change

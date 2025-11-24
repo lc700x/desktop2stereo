@@ -462,7 +462,7 @@ class DepthModelWrapper:
             # Load depth model
             model = AutoModelForDepthEstimation.from_pretrained(
                 MODEL_ID,
-                torch_dtype=torch.float16 if FP16 else torch.float32,
+                dtype=torch.float16 if FP16 else torch.float32,
                 cache_dir=CACHE_PATH,
                 weights_only=True
             ).to(DEVICE)

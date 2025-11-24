@@ -147,7 +147,7 @@ DEFAULTS = {
     "Depth Strength": 2.0,
     "Depth Resolution": 336,
     "Anti-aliasing": 2,
-    "Foreground Scale": 1,
+    "Foreground Scale": 0,
     "IPD": 0.064,
     "Display Mode": "Half-SBS",
     "FP16": True,
@@ -171,7 +171,9 @@ DEFAULTS = {
     "Audio Delay": -0.15,
     "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
     "Fill 16:9": True,  # force 16:9 output
-    "Fix Viewer Aspect": False # keep the viewer window aspect ratio not change
+    "Fix Viewer Aspect": False, # keep the viewer window aspect ratio not change
+    "Specify Display": False,
+    "Stereo Monitor": 1,
 }
 
 UI_TEXTS = {
@@ -247,7 +249,10 @@ UI_TEXTS = {
         "Opening URL in browser": "Opening URL in browser",
         "Capture Tool:": "Capture Tool:",
         "Fill 16:9": "Fill 16:9",
-        "Fix Viewer Aspect": "Fix Viewer Aspect"
+        "Fix Viewer Aspect": "Fix Viewer Aspect",
+        "Stereoscopy Output": "Stereoscopy Output:",
+        "Specify Display": "Specify Display (Fullscreen)",
+        "Stereo Monitor": "Stereoscopy on:",
     },
     "CN": {
         "Monitor": "显示器",
@@ -321,7 +326,10 @@ UI_TEXTS = {
         "Opening URL in browser": "正在浏览器中打开网址",
         "Capture Tool:": "捕获工具:",  
         "Fill 16:9": "填充16:9",
-        "Fix Viewer Aspect": "固定窗口比例"
+        "Fix Viewer Aspect": "固定窗口比例",
+        "Stereoscopy Output": "立体输出:",
+        "Specify Display": "指定显示器（全屏）",
+        "Stereo Monitor": "输出立体到:",
     }
 }
 
@@ -600,7 +608,6 @@ class ConfigGUI(tk.Tk):
         self.depth_model_cb.grid(row=13, column=1, columnspan=2, sticky="ew", **self.pad)
         self.depth_model_cb.bind("<<ComboboxSelected>>", self.on_depth_model_change)
 
-                
         # Add Inference Optimizer dropdown after Device selection
         self.use_torch_compile = tk.BooleanVar()
         self.use_tensorrt = tk.BooleanVar()
@@ -626,13 +633,40 @@ class ConfigGUI(tk.Tk):
         self.check_recompile_trt = ttk.Checkbutton(self.content_frame, text="Recompile TensorRT", variable=self.recompile_trt_var)
         self.check_recompile_trt.grid(row=14, column=3, sticky="w", **self.pad)
         
+        # Add these instance variables
+        self.specify_display_var = tk.BooleanVar()
+        self.stereo_monitor_var = tk.StringVar()
+        self.stereo_monitor_menu = None
+        
+        # Specify Display (checkbox)
+        self.label_specify_display = ttk.Label(self.content_frame, text="Stereo Display Settings:")
+        self.label_specify_display.grid(row=15, column=0, sticky="w", **self.pad)
+        self.specify_display_cb = ttk.Checkbutton(
+            self.content_frame, 
+            text="Specify Display",
+            variable=self.specify_display_var
+        )
+        # Initially hidden, will be shown for specific modes
+        self.specify_display_cb.grid(row=15, column=1, sticky="w", **self.pad)
+        self.specify_display_cb.grid_remove()
+        
+        # Stereo Monitor (monitor dropdown)
+        self.label_stereo_monitor = ttk.Label(self.content_frame, text="Stereo Monitor:")
+        self.label_stereo_monitor.grid(row=15, column=2, sticky="w", **self.pad)
+        self.label_stereo_monitor.grid_remove()
+        
+        self.stereo_monitor_menu = ttk.OptionMenu(self.content_frame, self.stereo_monitor_var, "")
+        self.stereo_monitor_menu.grid(row=15, column=3, sticky="ew", **self.pad)
+        self.stereo_monitor_menu.grid_remove()
+        self.specify_display_var.trace_add("write", self.update_stereo_monitor_display)
+        
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
-        self.label_hf_endpoint.grid(row=15, column=0, sticky="w", **self.pad)
+        self.label_hf_endpoint.grid(row=16, column=0, sticky="w", **self.pad)
         self.hf_endpoint_var = tk.StringVar()
         self.hf_endpoint_cb = ttk.Combobox(self.content_frame, textvariable=self.hf_endpoint_var, state="normal")
         self.hf_endpoint_cb["values"] = ["https://huggingface.co", "https://hf-mirror.com"]
-        self.hf_endpoint_cb.grid(row=15, column=1, sticky="ew", **self.pad)
+        self.hf_endpoint_cb.grid(row=16, column=1, sticky="ew", **self.pad)
         
         # Streamer Port (only visible when run mode is streamer)
         self.label_streamer_port = ttk.Label(self.content_frame, text="Streamer Port:")
@@ -684,10 +718,10 @@ class ConfigGUI(tk.Tk):
         self.btn_reset.grid(row=13, column=3, sticky="ew", **self.pad)
         
         self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
-        self.btn_stop.grid(row=15, column=2, sticky="ew", **self.pad)
+        self.btn_stop.grid(row=16, column=2, sticky="ew", **self.pad)
         
         self.btn_run = ttk.Button(self.content_frame, text="Run", command=self.save_settings)
-        self.btn_run.grid(row=15, column=3, sticky="ew", **self.pad)
+        self.btn_run.grid(row=16, column=3, sticky="ew", **self.pad)
         
         # Column weights inside content frame
         for col in range(5):
@@ -702,6 +736,29 @@ class ConfigGUI(tk.Tk):
         # Set protocol values
         self.stream_protocol_cb["values"] = ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]
         self.stream_protocol_var.set(self.stream_protocol_key)
+    
+
+    def update_stereo_display_visibility(self):
+        """Show/hide stereo display options based on run mode"""
+        if self.run_mode_key in ["RTMP Streamer", "3D Monitor", "Local Viewer"]:
+            # Show stereo display options
+            self.label_specify_display.grid()
+            self.specify_display_cb.grid()
+            self.update_stereo_monitor_display()
+        else:
+            # Hide for other modes
+            self.label_specify_display.grid_remove()
+            self.specify_display_cb.grid_remove()
+            self.label_stereo_monitor.grid_remove()
+            self.stereo_monitor_menu.grid_remove()
+    
+    def update_stereo_monitor_display(self, *args):
+        if self.specify_display_var.get():
+            self.label_stereo_monitor.grid()
+            self.stereo_monitor_menu.grid()
+        else:
+            self.label_stereo_monitor.grid_remove()
+            self.stereo_monitor_menu.grid_remove()
     
     def update_stream_url(self, *args):
         """Update the stream URL based on selected protocol, port, and stream key"""
@@ -907,33 +964,25 @@ class ConfigGUI(tk.Tk):
             self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
             self.check_recompile_trt.grid_remove()  # Hide "Recompile TensorRT" for DirectML
         elif device_type == "CUDA":
-            self.label_inference_optimizer.grid()
-            self.check_unlock_streamer_thread.grid_remove()  # Hide it for non-DirectML
-
+            self.check_unlock_streamer_thread.grid_remove()
             # Hide TensorRT for ROCm
             if IS_ROCM:
                 self.check_tensorrt.grid_remove()  
                 self.label_inference_optimizer.grid_remove()
                 self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
             else:
+                self.label_inference_optimizer.grid()
                 self.check_tensorrt.grid()
+                self.check_torch_compile.grid()
+                # Control visibility of "Recompile TensorRT" based on whether TensorRT is selected
+                self.update_recompile_trt_visibility()
                 
         else:
             self.label_inference_optimizer.grid_remove()  # Hide Inference Optimizer label
-            self.check_unlock_streamer_thread.grid_remove()  # Show Legacy Streamer Boost checkbox
+            self.check_unlock_streamer_thread.grid_remove()  # Hide Legacy Streamer Boost checkbox
             self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
             self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
             self.check_recompile_trt.grid_remove()  # Hide "Recompile TensorRT" for DirectML
-
-        # Control visibility of "Recompile TensorRT" based on whether TensorRT is selected
-        def update_recompile_trt_visibility(*_):
-            if self.use_tensorrt.get():  # If TensorRT is checked
-                self.check_recompile_trt.grid()  # Show "Recompile TensorRT" checkbox
-            else:
-                self.check_recompile_trt.grid_remove()  # Hide it
-
-        # Trace changes on the TensorRT checkbox to update visibility of "Recompile TensorRT"
-        self.use_tensorrt.trace_add("write", update_recompile_trt_visibility)
                 
     
     def refresh_window_list(self):
@@ -1146,6 +1195,11 @@ class ConfigGUI(tk.Tk):
         self.label_crf.config(text=texts.get("CRF", "CRF"))
         self.label_audio_delay.config(text=texts.get("Audio Delay", "Audio Delay"))
         
+        # Add Stereo Display settings
+        self.label_specify_display.config(text=texts["Stereoscopy Output"])
+        self.specify_display_cb.config(text=texts["Specify Display"])
+        self.label_stereo_monitor.config(text=texts["Stereo Monitor"])
+        
         # language combobox values
         self.language_cb["values"] = list(UI_TEXTS.keys())
         
@@ -1200,6 +1254,8 @@ class ConfigGUI(tk.Tk):
         elif label == monitor3d_label:
             self.run_mode_key = "3D Monitor"
             self.show_viewer_controls()
+        # Update stereo display visibility
+        self.update_stereo_display_visibility()
     
     def hide_all_streamer_controls(self):
         """Hide all streamer-specific controls"""
@@ -1353,6 +1409,24 @@ class ConfigGUI(tk.Tk):
             self.monitor_var.set(default_label)
         elif self.monitor_label_to_index:
             self.monitor_var.set(next(iter(self.monitor_label_to_index)))
+            
+        # Also populate the stereo monitor menu
+        if self.stereo_monitor_menu:
+            self.stereo_monitor_menu["menu"].delete(0, "end")
+            for idx, mon in enumerate(monitors, start=1):
+                label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']})"
+                self.stereo_monitor_menu["menu"].add_command(
+                    label=label,
+                    command=lambda v=label: self.stereo_monitor_var.set(v)
+                )
+            
+            # Set default selection for stereo display
+            default_idx = DEFAULTS["Stereo Monitor"]
+            default_label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == default_idx), None)
+            if default_label:
+                self.stereo_monitor_var.set(default_label)
+            elif self.monitor_label_to_index:
+                self.stereo_monitor_var.set(next(iter(self.monitor_label_to_index)))
 
         return self.monitor_label_to_index
 
@@ -1474,6 +1548,18 @@ class ConfigGUI(tk.Tk):
         
         # Update stream URL
         self.update_stream_url()
+        
+        # Apply stereo display settings
+        self.specify_display_var.set(cfg.get("Specify Display", DEFAULTS["Specify Display"]))
+        stereo_monitor_idx = cfg.get("Stereo Monitor", DEFAULTS["Stereo Monitor"])
+        label_for_stereo_idx = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == stereo_monitor_idx), None)
+        if label_for_stereo_idx:
+            self.stereo_monitor_var.set(label_for_stereo_idx)
+        elif self.monitor_label_to_index:
+            self.stereo_monitor_var.set(next(iter(self.monitor_label_to_index)))
+        
+        # Update stereo display visibility
+        self.update_stereo_display_visibility()
         
         # Update run mode visibility
         self.update_language_texts()
@@ -1607,6 +1693,8 @@ class ConfigGUI(tk.Tk):
             "Stereo Mix": self.audio_device_var.get(),
             "CRF": int(self.crf_var.get()),
             "Audio Delay": float(self.audio_delay_var.get()),
+            "Specify Display": self.specify_display_var.get(),
+            "Stereo Monitor": self.monitor_label_to_index.get(self.stereo_monitor_var.get(), DEFAULTS["Stereo Monitor"]),
         }
         
         success = self.save_yaml("settings.yaml", cfg)

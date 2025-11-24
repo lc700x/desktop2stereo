@@ -19,9 +19,7 @@ if %errorlevel% neq 0 (
 echo.
 echo - Installing the requirements
 @REM reference for ROCm6 Windows: https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/windows/install-pytorch.html
-%PYTHON_EXE% -m pip install --no-cache-dir --no-warn-script-location torch-2.8.0a0-cp312-cp312-win_amd64.whl
-@REM %PYTHON_EXE% -m pip install --no-cache-dir --no-warn-script-location torchaudio-2.6.0a0-cp312-cp312-win_amd64.whl
-%PYTHON_EXE% -m pip install --no-cache-dir --no-warn-script-location torchvision-0.24.0a0-cp312-cp312-win_amd64.whl
+%PYTHON_EXE% -m pip install -r requirements-rocm6.txt --no-cache-dir --no-warn-script-location
 @REM %PYTHON_EXE% -m pip install "triton-windows<3.4" --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 @REM %PYTHON_EXE% -m pip install tensorrt_cu12==10.13.3.9 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/

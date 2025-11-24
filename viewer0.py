@@ -4,12 +4,14 @@ import moderngl
 import numpy as np
 import time
 from PIL import Image, ImageDraw, ImageFont
-
+from OpenGL.GL import *
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX
+from utils import OS_NAME, crop_icon, get_font_type, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture
+elif OS_NAME == "Darwin":
+    from utils import send_ctrl_cmd_f
 
 # Shaders as constants (unchanged)
 VERTEX_SHADER = """
@@ -32,15 +34,16 @@ FRAGMENT_SHADER = """
     uniform sampler2D tex_depth;
     uniform float u_eye_offset;
     uniform float u_depth_strength;
+    uniform float u_convergence;  // defines the depth value with zero shift
 
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
         float depth = texture(tex_depth, flipped_uv).r;
 
-        // Invert depth so near=1 shifts more, far=0 shifts less
+        // Nonlinear depth emphasis (tunable curve)
         float depth_inv = 1.0 - depth;
-
-        vec2 offset_uv = flipped_uv - vec2(u_eye_offset * depth_inv * u_depth_strength, 0.0);
+        float shift = (depth_inv - u_convergence);
+        vec2 offset_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength, 0.0);
         offset_uv = clamp(offset_uv, 0.0, 1.0);
 
         frag_color = texture(tex_color, offset_uv);
@@ -58,12 +61,10 @@ def add_logo(window):
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
     
-    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT):
+    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT, stream_mode=None, frame_size=(1280, 720)):
         # Initialize with default values
         self.use_3d = use_3d
-        if not self.use_3d:
-            self.window_size = (1280, 720)
-        self.title = "Stereo SBS Viewer"
+        self.title = "Stereo Viewer"
         self.ipd_uv = ipd
         self.depth_strength = 0.1
         self._last_window_position = None
@@ -74,20 +75,25 @@ class StereoWindow:
         self._modes = ["Full-SBS", "Half-SBS", "TAB"]
         self.display_mode = display_mode
         self._texture_size = None
-        self.monitor_index = 0
         self.fill_16_9 = fill_16_9
-        self.frame_size = (1280, 720) 
+        self.frame_size = frame_size
         self.aspect = self.frame_size[0] / self.frame_size[1]
         self.fix_aspect = fix_aspect
         self.show_fps = show_fps
-        
-        
+        self.stream_mode = stream_mode
+        self.window_size = self.frame_size
+
         # FPS tracking variables
         self.frame_count = 0
         self.last_fps_time = time.perf_counter()
         self.actual_fps = 0.0
         self.start_time = time.perf_counter()
         self.total_frames = 0
+        
+        # Add PBO for streamer
+        self._pbo_ids = None
+        self._pbo_index = 0
+        self._pbo_initialized = False
         
         # Depth ratio display variables
         self.last_depth_change_time = 0
@@ -96,10 +102,12 @@ class StereoWindow:
         
         # Font and text sizing
         self.font = None
+        self.font_type = get_font_type()
         self.base_font_size = 60  # Base size for 1280x720 window
         self.current_font_size = self.base_font_size
         self.text_padding = 10
         self.text_spacing = 5
+        self.convergence = 0.5
 
         # Overlay cache & throttle
         self.overlay_update_interval = 0.25  # seconds, throttle overlay regeneration
@@ -115,6 +123,7 @@ class StereoWindow:
         if not glfw.init():
             raise RuntimeError("Could not initialize GLFW")
         
+        self.monitor_index = self.get_glfw_mon_index(MONITOR_INDEX) if CAPTURE_MODE=="Monitor" else 0
         # Configure window
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
@@ -122,16 +131,20 @@ class StereoWindow:
         glfw.window_hint(glfw.RESIZABLE, True)
         
         if self.use_3d:
-            glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
             glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
-            glfw.window_hint(glfw.DECORATED, glfw.FALSE)  # No window decorations
             glfw.window_hint(glfw.FLOATING, glfw.TRUE)    # Always on top
+            glfw.window_hint(glfw.DECORATED, glfw.FALSE) # remove window decoration
             # Get primary monitor resolution
             monitors = glfw.get_monitors()
-            monitor = monitors[MONITOR_INDEX-1]
+            monitor = monitors[self.monitor_index]
             vidmode = glfw.get_video_mode(monitor)
             self.window_size = (vidmode.size.width, vidmode.size.height)
-            
+        elif self.stream_mode == "RTMP":
+            glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
+            # glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
+        elif self.stream_mode == "MJPEG":
+            glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
+            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)  # clicks pass through
         # Create window
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
         
@@ -139,16 +152,20 @@ class StereoWindow:
         if self.use_3d and OS_NAME == "Windows":
             hide_window_from_capture(self.window)
         
+        if self.stream_mode == "RTMP":
+            self.move_to_adjacent_monitor(direction=1)
+        
         if not self.window:
             glfw.terminate()
             raise RuntimeError("Could not create window")
         
         add_logo(self.window)
-        self.position_on_monitor(0)
         
+        self.position_on_monitor(self.monitor_index)
+
         # Set up OpenGL context
         glfw.make_context_current(self.window)
-        glfw.swap_interval(1)  # VSync on
+        glfw.swap_interval(0)  # VSync on
         self.ctx = moderngl.create_context()
         
         # Precompile shaders and create VAO
@@ -156,6 +173,7 @@ class StereoWindow:
             vertex_shader=VERTEX_SHADER,
             fragment_shader=FRAGMENT_SHADER
         )
+        self.prog['u_convergence'].value = self.convergence  # e.g. self.convergence = 0.5
         self.quad_vao = self._create_quad_vao()
         
         # Initialize textures as None
@@ -169,6 +187,53 @@ class StereoWindow:
         # Load initial font
         self._update_font()
 
+    def get_glfw_mon_index(self, mss_monitor_index=1):
+        """
+        Map an MSS monitor index (1-based) to a GLFW monitor handle.
+
+        MSS provides monitors like:
+            monitors[0] -> all monitors bounding box
+            monitors[1] -> first display
+            monitors[2] -> second display, etc.
+
+        GLFW gives a list of monitor handles that we can position windows on.
+        This function matches them by position and size.
+        """
+        try:
+            import mss
+        except ImportError:
+            print("[StereoWindow] mss not installed; using default monitor.")
+            return 0
+
+        with mss.mss() as sct:
+            mss_monitors = sct.monitors
+
+        # MSS uses index 1-based (0 = virtual bounding box)
+        if mss_monitor_index < 1 or mss_monitor_index >= len(mss_monitors):
+            print(f"[StereoWindow] Invalid MSS monitor index {mss_monitor_index}, defaulting to 1.")
+            mss_monitor_index = 1
+
+        mss_mon = mss_monitors[mss_monitor_index]
+        mss_x, mss_y = mss_mon["left"], mss_mon["top"]
+        mss_w, mss_h = mss_mon["width"], mss_mon["height"]
+
+        glfw_monitors = glfw.get_monitors()
+        if not glfw_monitors:
+            print("[StereoWindow] No GLFW monitors detected.")
+            return 0
+
+        for i, gmon in enumerate(glfw_monitors):
+            gx, gy = glfw.get_monitor_pos(gmon)
+            gvm = glfw.get_video_mode(gmon)
+            gw, gh = gvm.size.width, gvm.size.height
+
+            if abs(gx - mss_x) <= 5 and abs(gy - mss_y) <= 5 and abs(gw - mss_w) <= 5 and abs(gh - mss_h) <= 5:
+                # Found matching GLFW monitor
+                return i
+
+        print("[StereoWindow] No matching GLFW monitor found for MSS index, defaulting to primary.")
+        return 0
+    
     def _on_window_resize(self, window, width, height):
         """Handle window resize events"""
         self.window_size = (width, height)
@@ -182,7 +247,7 @@ class StereoWindow:
         self.current_font_size = int(self.base_font_size * scale_factor * 0.8)  # Slightly smaller than linear scale
         
         try:
-            self.font = ImageFont.truetype("arial.ttf", self.current_font_size)
+            self.font = ImageFont.truetype(self.font_type, self.current_font_size)
         except Exception:
             try:
                 # Try default font (Pillow default)
@@ -274,6 +339,13 @@ class StereoWindow:
 
         h, w, _ = rgb_frame.shape
         self.frame_size = (w, h)
+        
+        # freeze window size for rtmp streaming
+        if self.stream_mode == "RTMP":
+            if self.display_mode == "Full-SBS":
+                w = 2 * w
+            glfw.set_window_size(self.window, w, h)
+            
 
         # Update FPS counters but do not regenerate overlay every frame
         current_time = time.perf_counter()
@@ -358,9 +430,16 @@ class StereoWindow:
                 glfw.set_window_size(self.window, mon_w, mon_h)
                 glfw.set_window_pos(self.window, mon_x, mon_y)
             else:
-                x = mon_x + (mon_w - self.window_size[0]) // 2
-                y = mon_y + (mon_h - self.window_size[1]) // 2
+                if self.stream_mode == "RTMP" and OS_NAME=="Linux":
+                    x = mon_x + mon_w // 2
+                    y = mon_y + mon_h // 2
+                else:
+                    x = mon_x + (mon_w - self.window_size[0]) // 2
+                    y = mon_y + (mon_h - self.window_size[1]) // 2
                 glfw.set_window_pos(self.window, x, y)
+            # if self.stream_mode == "RTMP":
+                # if vidmode.size == self.window_size:
+                #     glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             self.monitor_index = monitor_index
 
     def get_current_monitor(self):
@@ -396,72 +475,79 @@ class StereoWindow:
             return
 
         if not self._fullscreen:
-            # Enter fullscreen
-            self._last_window_position = glfw.get_window_pos(self.window)
-            self._last_window_size = glfw.get_window_size(self.window)
-
-            # Get monitor info
-            mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
-            vidmode = glfw.get_video_mode(current_monitor)
-            full_w, full_h = vidmode.size.width, vidmode.size.height
-
-            # Make the window undecorated and floating
-            glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
-            glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
-            if self.fix_aspect:
-                monitor_aspect = full_w / full_h
-                if monitor_aspect > self.aspect:
-                    # Monitor is wider than target aspect
-                    new_h = full_h
-                    new_w = int(new_h * self.aspect)
-
-                else:
-                    # Screen is taller — fit by width
-                    new_w = full_w
-                    new_h = int(full_w / self.aspect)
-
-                glfw.set_window_size(self.window, new_w, new_h)
-
-                # Center window on screen
-                center_x = mon_x + (full_w - new_w) // 2
-                center_y = mon_y + (full_h - new_h) // 2
-                if self.display_mode == "Full-SBS":
-                    # Center window on screen
-                    center_y = mon_y + (full_h - new_h//2) // 2
-                glfw.set_window_pos(self.window, center_x, center_y)
+            if OS_NAME == "Darwin":
+                send_ctrl_cmd_f() # MacOS full screen
             else:
-                glfw.set_window_size(self.window, full_w, full_h)
-                glfw.set_window_pos(self.window, mon_x, mon_y)
+                # Enter fullscreen
+                self._last_window_position = glfw.get_window_pos(self.window)
+                self._last_window_size = glfw.get_window_size(self.window)
+
+                # Get monitor info
+                mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
+                vidmode = glfw.get_video_mode(current_monitor)
+                full_w, full_h = vidmode.size.width, vidmode.size.height
+
+                # Make the window undecorated and floating
+                glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+                glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
+                if self.fix_aspect:
+                    monitor_aspect = full_w / full_h
+                    if monitor_aspect > self.aspect:
+                        # Monitor is wider than target aspect
+                        new_h = full_h
+                        new_w = int(new_h * self.aspect)
+
+                    else:
+                        # Screen is taller — fit by width
+                        new_w = full_w
+                        new_h = int(full_w / self.aspect)
+
+                    glfw.set_window_size(self.window, new_w, new_h)
+
+                    # Center window on screen
+                    center_x = mon_x + (full_w - new_w) // 2
+                    center_y = mon_y + (full_h - new_h) // 2
+                    if self.display_mode == "Full-SBS":
+                        # Center window on screen
+                        center_y = mon_y + (full_h - new_h//2) // 2
+                    glfw.set_window_pos(self.window, center_x, center_y)
+                else:
+                    glfw.set_window_size(self.window, full_w, full_h)
+                    glfw.set_window_pos(self.window, mon_x, mon_y)
             self._fullscreen = True
         else:
-            # Exit fullscreen
-            glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.TRUE)
-            glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
+            if OS_NAME == "Darwin":
+                send_ctrl_cmd_f() # MacOS full screen
+            else:
+                # Exit fullscreen
+                glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.TRUE)
+                glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
 
-            restore_w, restore_h = self._last_window_size or self.window_size
-            restore_x, restore_y = self._last_window_position or (0, 0)
-            
-            if not self._last_window_position:
-                vidmode = glfw.get_video_mode(current_monitor)
-                mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
-                restore_x = mon_x + (vidmode.size.width - restore_w) // 2
-                restore_y = mon_y + (vidmode.size.height - restore_h) // 2
+                restore_w, restore_h = self._last_window_size or self.window_size
+                restore_x, restore_y = self._last_window_position or (0, 0)
+                
+                if not self._last_window_position:
+                    vidmode = glfw.get_video_mode(current_monitor)
+                    mon_x, mon_y = glfw.get_monitor_pos(current_monitor)
+                    restore_x = mon_x + (vidmode.size.width - restore_w) // 2
+                    restore_y = mon_y + (vidmode.size.height - restore_h) // 2
 
-            glfw.set_window_size(self.window, restore_w, restore_h)
-            glfw.set_window_pos(self.window, restore_x, restore_y)
+                glfw.set_window_size(self.window, restore_w, restore_h)
+                glfw.set_window_pos(self.window, restore_x, restore_y)
             self._fullscreen = False
     
     def on_key_event(self, window, key, scancode, action, mods):
-        """Optimized key event handling"""
+        """Optimized key event handling, disable some keys for rtmp and 3d monitor"""
         if action == glfw.PRESS:
             if key == glfw.KEY_ENTER or key == glfw.KEY_SPACE:
-                self.toggle_fullscreen()
-            elif key == glfw.KEY_ESCAPE:
-                glfw.set_window_should_close(window, True)
+                if self.stream_mode is None and not self.use_3d:
+                    self.toggle_fullscreen()
             elif key == glfw.KEY_RIGHT:
                 self.move_to_adjacent_monitor(+1)
             elif key == glfw.KEY_LEFT:
                 self.move_to_adjacent_monitor(-1)
+            elif key == glfw.KEY_ESCAPE:
+                glfw.set_window_should_close(window, True)
             elif key == glfw.KEY_DOWN:
                 self.depth_ratio = max(0, self.depth_ratio - 0.5)
                 self.last_depth_change_time = time.perf_counter()
@@ -482,7 +568,7 @@ class StereoWindow:
                 self.fill_16_9 = not self.fill_16_9
                 # Force overlay regen to show aspect ratio status
                 self._overlay_cache['last_update'] = 0.0
-            elif key == glfw.KEY_L:  # Toggle viewer aspect ratio lock with F key
+            elif key == glfw.KEY_L:  # Toggle viewer aspect ratio lock with L key
                 self.fix_aspect = not self.fix_aspect
                 # Force overlay regen to show aspect ratio status
                 self._overlay_cache['last_update'] = 0.0
@@ -539,6 +625,53 @@ class StereoWindow:
             max(1, int(round(src_w * scale))),
             max(1, int(round(src_h * scale)))
         )
+        
+    def _init_pbos(self, width, height):
+        """Initialize two PBOs for asynchronous pixel transfers."""
+        if self._pbo_initialized:
+            return
+        self._pbo_ids = glGenBuffers(2)
+        buffer_size = width * height * 3  # RGB8
+        for pbo in self._pbo_ids:
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo)
+            glBufferData(GL_PIXEL_PACK_BUFFER, buffer_size, None, GL_STREAM_READ)
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+        self._pbo_index = 0
+        self._pbo_initialized = True
+        # print(f"[StereoWindow] Initialized {len(self._pbo_ids)} PBOs ({buffer_size/1e6:.2f} MB each)")
+
+    def capture_glfw_image(self):
+        """Asynchronous GPU readback using double-buffered PBOs."""
+        width, height = glfw.get_framebuffer_size(self.window)
+        if not self._pbo_initialized:
+            self._init_pbos(width, height)
+        next_index = (self._pbo_index + 1) % 2
+        glPixelStorei(GL_PACK_ALIGNMENT, 1)
+
+        # Bind current PBO and start async read
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, self._pbo_ids[self._pbo_index])
+        glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
+
+        # Bind previous PBO to map and read CPU data (async from previous frame)
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, self._pbo_ids[next_index])
+        ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY)
+        image = None
+        if ptr:
+            try:
+                # Copy from GPU memory into numpy array
+                buf = (GLubyte * (width * height * 3)).from_address(int(ptr))
+                image = np.frombuffer(buf, dtype=np.uint8).reshape(height, width, 3)
+                image = np.flipud(image.copy())  # Flip vertically; .copy() detaches from mapped memory
+            finally:
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER)
+
+        # Unbind PBO
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+        # Swap PBO indices for next frame
+        self._pbo_index = next_index
+
+        # Note: the very first call will return None (no previous frame ready)
+        return image
 
     def render(self):
         """Optimized rendering with reduced GL calls"""
@@ -553,6 +686,8 @@ class StereoWindow:
                 glfw.set_window_aspect_ratio(self.window, 2*tex_w, tex_h)
             else:
                 glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
+        else:
+            glfw.set_window_aspect_ratio(self.window, glfw.DONT_CARE, glfw.DONT_CARE)
         # Clear screen once
         self.ctx.clear(0.1, 0.1, 0.1)
         

@@ -2,7 +2,7 @@ import yaml, threading
 import os, platform, socket
 
 # App Version
-VERSION = "2.3.6"
+VERSION = "2.3.7"
 # Get OS name
 OS_NAME = platform.system()
 # Define StereoMix devices
@@ -198,3 +198,6 @@ STEREOMIX_DEVICE = settings["Stereo Mix"] # RTMP StereoMix Device
 STREAM_KEY = settings["Stream Key"]
 AUDIO_DELAY = settings["Audio Delay"]
 CRF = settings["CRF"]
+# Specify the Stereo Display for output
+STEREO_DISPLAY_SELECTION = settings["Specify Display"]
+STEREO_DISPLAY_INDEX = settings["Stereo Monitor"]
