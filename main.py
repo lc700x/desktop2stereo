@@ -266,7 +266,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             './rtmp/ffmpeg/bin/ffmpeg.exe',
             '-fflags', 'nobuffer',
             '-flags', 'low_delay',
-            '-probesize', '32',
+            '-probesize', '64',
             '-analyzeduration', '0',
             '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':max_framerate={FPS},hwdownload,format=bgra,scale={width}:{height},format=yuv420p[v]",  # Label video output [v], fix odd height
             '-itsoffset', f'{AUDIO_DELAY}',  # Audio delay (applies to next input)
@@ -743,17 +743,16 @@ def main(mode="Viewer"):
                     if STREAM_MODE == "MJPEG":
                         frame = window.capture_glfw_image()
                         streamer.set_frame(frame)
-                    if SHOW_FPS:
-                        frame_count += 1
-                        total_frames += 1
-                        current_time = time.perf_counter()
-                        if current_time - last_time >= 1.0:
-                            current_fps = frame_count / (current_time - last_time)
-                            frame_count = 0
-                            last_time = current_time
-                            if STREAM_MODE == "MJPEG":
-                                print(f"FPS: {current_fps:.1f}")
-                            glfw.set_window_title(window.window, f"Stereo Viewer | {current_fps:.1f} FPS")
+                    frame_count += 1
+                    total_frames += 1
+                    current_time = time.perf_counter()
+                    if current_time - last_time >= 1.0:
+                        current_fps = frame_count / (current_time - last_time)
+                        frame_count = 0
+                        last_time = current_time
+                        if STREAM_MODE == "MJPEG":
+                            print(f"{current_fps:.1f} FPS")
+                        glfw.set_window_title(window.window, f"Stereo Viewer | {current_fps:.1f} FPS")
                 except queue.Empty:
                     pass
                 
@@ -819,14 +818,14 @@ def main(mode="Viewer"):
                     
                     streamer.set_frame(sbs)
                     
-                    if SHOW_FPS:
-                        frame_count += 1
-                        current_time = time.perf_counter()
-                        if current_time - last_time >= 1.0:
-                            current_fps = frame_count / (current_time - last_time)
-                            frame_count = 0
-                            last_time = current_time
-                            print(f"FPS: {current_fps:.1f}")
+                
+                    frame_count += 1
+                    current_time = time.perf_counter()
+                    if current_time - last_time >= 1.0:
+                        current_fps = frame_count / (current_time - last_time)
+                        frame_count = 0
+                        last_time = current_time
+                        print(f"{current_fps:.1f} FPS")
                             
                 except queue.Empty:
                     continue

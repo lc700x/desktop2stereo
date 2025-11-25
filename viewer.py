@@ -27,28 +27,113 @@ VERTEX_SHADER = """
 
 FRAGMENT_SHADER = """
     #version 330
+    // Or #version 300 es + precision highp float; for mobile
+
     in vec2 uv;
     out vec4 frag_color;
 
-    uniform sampler2D tex_color;
-    uniform sampler2D tex_depth;
-    uniform float u_eye_offset;
-    uniform float u_depth_strength;
-    uniform float u_convergence;  // defines the depth value with zero shift
+    uniform sampler2D tex_color;   // RGB image
+    uniform sampler2D tex_depth;   // Single-channel depth (0 = near, 1 = far)
+    uniform vec2 u_resolution;     // viewport resolution
+    uniform float u_eye_offset;    // e.g. ±0.03 (positive = right eye)
+    uniform float u_depth_strength;// parallax intensity
+    uniform float u_convergence;   // depth value at screen plane (0–1)
 
+    // Inpainting controls
+    uniform float u_inpaint_radius = 7.0;     // higher = smoother but slower
+    uniform float u_inpaint_strength = 20.0;  // how strongly we prefer background
+
+    // ------------------------------------------------------------------
+    vec2 pixel_size = 1.0 / u_resolution;
+
+    // 1. Fast disocclusion detector (holes + big depth jumps)
+    bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
+        // Out of bounds = obvious hole
+        if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
+            shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
+            return true;
+
+        // Huge depth discontinuity along shift direction = edge hole
+        vec2 grad_dir = normalize(vec2(u_eye_offset, 0.0));
+        float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 3.0).r;
+        float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 3.0).r;
+        if (abs(d_left - d_right) > 0.07)
+            return true;
+
+        return false;
+    }
+
+    // 2. Depth-aware bilateral inpainting (only samples background)
+    vec4 inpaint_disocclusion(vec2 uv_coord, float center_depth_inv) {
+        vec4 accum = vec4(0.0);
+        float total_w = 0.0;
+        int R = int(u_inpaint_radius);
+
+        for (int y = -R; y <= R; ++y) {
+            for (int x = -R; x <= R; ++x) {
+                vec2 sample_uv = uv_coord + vec2(x, y) * pixel_size;
+
+                if (sample_uv.x < 0.0 || sample_uv.x > 1.0 ||
+                    sample_uv.y < 0.0 || sample_uv.y > 1.0)
+                    continue;
+
+                vec4 sample_color = texture(tex_color, sample_uv);
+                float sample_depth = texture(tex_depth, sample_uv).r;
+                float sample_depth_inv = 1.0 - sample_depth;
+
+                // Only accept pixels that are clearly behind (background)
+                float depth_ok = step(center_depth_inv + 0.015, sample_depth_inv);
+
+                // Spatial gaussian
+                float dist2 = float(x*x + y*y);
+                float spatial_w = exp(-dist2 / (2.0 * (u_inpaint_radius * 0.6) * (u_inpaint_radius * 0.6)));
+
+                // Color similarity (helps coherence)
+                vec3 color_diff = sample_color.rgb - texture(tex_color, uv_coord).rgb;
+                float color_w = exp(-dot(color_diff, color_diff) * 10.0);
+
+                float w = spatial_w * depth_ok * color_w *
+                        (1.0 + depth_ok * u_inpaint_strength);
+
+                accum += sample_color * w;
+                total_w += w;
+            }
+        }
+        return total_w > 0.01 ? accum / total_w : texture(tex_color, uv_coord);
+    }
+
+    // ------------------------------------------------------------------
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
+
+        // Use original depth directly (no dilation)
         float depth = texture(tex_depth, flipped_uv).r;
-
-        // Nonlinear depth emphasis (tunable curve)
         float depth_inv = 1.0 - depth;
-        float shift = (depth_inv - u_convergence);
-        vec2 offset_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength, 0.0);
-        offset_uv = clamp(offset_uv, 0.0, 1.0);
 
-        frag_color = texture(tex_color, offset_uv);
+        // Parallax shift
+        float shift = (depth_inv - u_convergence);
+        vec2 shifted_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength, 0.0);
+
+        // Original depth values for disocclusion decisions
+        float original_depth = depth;
+        float original_depth_inv = depth_inv;
+
+        vec4 color;
+        if (is_disoccluded(flipped_uv, shifted_uv, original_depth)) {
+            // Disoccluded → inpaint from background
+            color = inpaint_disocclusion(flipped_uv, original_depth_inv);
+        } else {
+            // Normal sampling
+            color = texture(tex_color, shifted_uv);
+        }
+
+        // Optional subtle border fade to hide hard edges
+        vec2 border = smoothstep(0.0, 0.02, shifted_uv) * smoothstep(1.0, 0.98, shifted_uv);
+        color.a = min(border.x, border.y);
+
+        frag_color = color;
     }
-    """
+"""
 
 def add_logo(window):
     """Optimized logo loading with lazy imports"""
@@ -57,6 +142,7 @@ def add_logo(window):
     if OS_NAME != "Darwin":
         glfw_img = crop_icon(glfw_img)
         glfw.set_window_icon(window, 1, [glfw_img])
+        glfw.swap_interval(1)  # VSync on
 
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
@@ -167,6 +253,7 @@ class StereoWindow:
         else:
             self.position_on_monitor(self.monitor_index)
             if self.specify_display and not self.stream_mode == "RTMP":
+                time.sleep(0.01) # allow a small delay
                 self.toggle_fullscreen()
         
         if not self.window:
@@ -175,7 +262,6 @@ class StereoWindow:
 
         # Set up OpenGL context
         glfw.make_context_current(self.window)
-        glfw.swap_interval(0)  # VSync on
         self.ctx = moderngl.create_context()
         
         # Precompile shaders and create VAO

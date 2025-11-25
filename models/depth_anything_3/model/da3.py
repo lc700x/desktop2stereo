@@ -38,46 +38,6 @@ def _wrap_cfg(cfg_obj):
     return OmegaConf.create(cfg_obj)
 
 
-# Helper utilities for safe autocast usage across different backends (CUDA/CPU/DirectML).
-def _map_device_type_for_autocast(device_type: str) -> str:
-    """
-    Map PyTorch's device.type to a value acceptable to torch.autocast.
-    torch.autocast currently accepts only 'cuda' or 'cpu' (passing 'dml' will raise).
-    For unknown backends (e.g. 'dml'), we conservatively fall back to 'cpu' so that
-    attempting to use autocast will not raise a runtime error.
-
-    Note: This does not magically enable mixed-precision on DirectML; it prevents
-    passing unsupported device types into torch.autocast which would otherwise error.
-    """
-    if device_type in ("cuda", "cpu"):
-        return device_type
-    # e.g., DirectML uses device.type == "dml"; map to 'cpu' as a safe fallback.
-    return "cpu"
-
-
-def autocast_for_device(device: Optional[torch.device], enabled: bool = True, **kwargs: Any):
-    """
-    Returns a context manager for autocast on the given device.
-    - If device is None, returns a nullcontext.
-    - If torch.autocast supports the (mapped) device type, returns torch.autocast(...).
-    - If torch.autocast raises (e.g. unexpected runtime error), returns a nullcontext.
-    This prevents the code from crashing when running on DirectML ('dml') or other
-    non-standard device types.
-    """
-    if device is None:
-        return nullcontext()
-    device_type = getattr(device, "type", None)
-    if device_type is None:
-        return nullcontext()
-    mapped = _map_device_type_for_autocast(device_type)
-    try:
-        return torch.autocast(device_type=mapped, enabled=enabled, **kwargs)
-    except Exception:
-        # If autocast is not available for the mapped device or PyTorch version,
-        # fallback to a no-op context manager.
-        return nullcontext()
-
-
 class DepthAnything3Net(nn.Module):
     """
     Depth Anything 3 network for depth estimation and camera pose estimation.
@@ -161,8 +121,7 @@ class DepthAnything3Net(nn.Module):
         # Extract features using backbone
         # Use safe autocast context manager that will not raise on DirectML ('dml')
         if extrinsics is not None:
-            # We pass enabled=False to match original behavior (no autocast) while remaining safe.
-            with autocast_for_device(x.device, enabled=False):
+            with torch.no_grad():
                 cam_token = self.cam_enc(extrinsics, intrinsics, x.shape[-2:])
         else:
             cam_token = None
@@ -174,7 +133,7 @@ class DepthAnything3Net(nn.Module):
         H, W = x.shape[-2], x.shape[-1]
 
         # Process features through depth head
-        with autocast_for_device(x.device, enabled=False):
+        with torch.no_grad():
             output = self._process_depth_head(feats, H, W)
             # output = self._process_camera_estimation(feats, H, W, output)
             if infer_gs:
@@ -190,37 +149,6 @@ class DepthAnything3Net(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """Process features through the depth prediction head."""
         return self.head(feats, H, W, patch_start_idx=0)
-
-    # def _process_camera_estimation(
-    #     self, feats: list[torch.Tensor], H: int, W: int, output: Dict[str, torch.Tensor]
-    # ) -> Dict[str, torch.Tensor]:
-    #     """Process camera pose estimation if camera decoder is available."""
-    #     if self.cam_dec is not None:
-    #         pose_enc = self.cam_dec(feats[-1][1])
-    #         # Remove ray information as it's not needed for pose estimation
-    #         if "ray" in output:
-    #             del output.ray
-    #         if "ray_conf" in output:
-    #             del output.ray_conf
-
-    #         # Convert pose encoding to extrinsics and intrinsics
-    #         c2w, ixt = pose_encoding_to_extri_intri(pose_enc, (H, W))
-
-    #         if torch.is_tensor(c2w):
-    #             has_nan = torch.any(torch.isnan(c2w)).item()
-    #             has_inf = torch.any(torch.isinf(c2w)).item()
-
-    #             # Safe min/max that ignores NaNs manually
-    #             finite_vals = c2w[torch.isfinite(c2w)]
-    #             if finite_vals.numel() > 0:
-    #                 min_val = float(finite_vals.min().item())
-    #                 max_val = float(finite_vals.max().item())
-    #             else:
-    #                 min_val, max_val = "nan", "nan"
-    #         output.extrinsics = affine_inverse(c2w)
-    #         output.intrinsics = ixt
-
-    #     return output
 
     def _process_gs_head(
         self,

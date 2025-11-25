@@ -57,7 +57,6 @@ if IS_NVIDIA:
     if not FP16:
         # Enable TF32 for matrix multiplications
         torch.backends.cuda.matmul.allow_tf32 = True
-        # Enable TF32 for cuDNN (convolution operations)
         torch.backends.cudnn.allow_tf32 = True
         # Enable TF32 matrix multiplication for better performance
         torch.set_float32_matmul_precision('high')
@@ -858,7 +857,6 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
 
 if USE_TORCH_COMPILE and IS_CUDA:
     make_sbs_core = torch.compile(make_sbs_core)
-
  
 if __name__ == "__main__":
     depth = predict_depth(image_rgb).squeeze(0)

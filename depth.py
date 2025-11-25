@@ -60,6 +60,9 @@ elif IS_AMD_ROCM:
     torch.backends.cudnn.enabled = False # Add for AMD ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Add for AMD ROCm7
     # Enable math attention
+    if not FP16:
+        # Enable TF32 for matrix multiplications
+        torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
     torch.backends.cuda.enable_math_sdp(True)
