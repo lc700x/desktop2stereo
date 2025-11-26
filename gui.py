@@ -1778,7 +1778,7 @@ class ConfigGUI(tk.Tk):
     def cleanup_resources(self):
         """Clean up all resources from GUI"""
         # Additional Windows-specific cleanup for FFmpeg
-        if OS_NAME == "Windows":
+        if OS_NAME == "Windows" and self.run_mode_key == "RTMP Streamer":
             # taskkill if available
             import subprocess
             subprocess.run(['taskkill', '/f', '/im', 'ffmpeg.exe'], 
