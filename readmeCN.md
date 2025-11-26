@@ -279,6 +279,12 @@
     - depth-anything/Video-Depth-Anything-Large
     - depth-anything/Video-Depth-Anything-Base
     - depth-anything/Video-Depth-Anything-Small
+    - depth-anything/DA3-GIANT
+    - depth-anything/DA3-LARGE
+    - depth-anything/DA3-BASE
+    - depth-anything/DA3-SMALL
+    - depth-anything/DA3METRIC-LARGE
+    - depth-anything/DA3NESTED-GIANT-LARGE
     - depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
     - depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
     - depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
@@ -329,6 +335,13 @@
 
 ## 参考文献
 ```BIBTEX
+@article{depthanything3,
+  title={Depth Anything 3: Recovering the visual space from any views},
+  author={Haotong Lin and Sili Chen and Jun Hao Liew and Donny Y. Chen and Zhenyu Li and Guang Shi and Jiashi Feng and Bingyi Kang},
+  journal={arXiv preprint arXiv:2511.10647},
+  year={2025}
+}
+
 @article{video_depth_anything,
   title={Video Depth Anything: Consistent Depth Estimation for Super-Long Videos},
   author={Chen, Sili and Guo, Hengkai and Zhu, Shengnan and Zhang, Feihu and Huang, Zilong and Feng, Jiashi and Kang, Bingyi},

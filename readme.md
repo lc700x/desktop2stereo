@@ -274,47 +274,53 @@ All optional settings can be modified on the GUI window and saved to the `settin
     Default depth model: `depth-anything/Depth-Anything-V2-Small-hf`. 
     You can also manually add the hugging face models in the `settings.yaml` which including `model.safetensors`, `config.json`, `preprocessor_config.json` files on [HuggingFace](https://huggingface.co/).     
     **Currently supported models**:  
-    - depth-anything/Depth-Anything-V2-Large-hf  
-    - depth-anything/Depth-Anything-V2-Base-hf  
-    - depth-anything/Depth-Anything-V2-Small-hf  
-    - depth-anything/Video-Depth-Anything-Large  
-    - depth-anything/Video-Depth-Anything-Base  
-    - depth-anything/Video-Depth-Anything-Small  
-    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf  
-    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf  
-    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf  
-    - depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf  
-    - depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf  
-    - depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf  
-    - depth-anything/Metric-Video-Depth-Anything-Large  
-    - depth-anything/Metric-Video-Depth-Anything-Base  
-    - depth-anything/Metric-Video-Depth-Anything-Small  
-    - depth-anything/prompt-depth-anything-vitl-hf  
-    - depth-anything/prompt-depth-anything-vits-hf  
-    - depth-anything/prompt-depth-anything-vits-transparent-hf   
-    - LiheYoung/depth-anything-large-hf  
-    - LiheYoung/depth-anything-base-hf  
-    - LiheYoung/depth-anything-small-hf  
-    - xingyang1/Distill-Any-Depth-Large-hf  
-    - lc700x/Distill-Any-Depth-Base-hf  
-    - xingyang1/Distill-Any-Depth-Small-hf  
-    - lc700x/dpt-dinov2-giant-kitti-hf  
-    - lc700x/dpt-dinov2-large-kitti-hf  
-    - lc700x/dpt-dinov2-base-kitti-hf  
-    - facebook/dpt-dinov2-small-kitti  
-    - facebook/dpt-dinov2-giant-nyu  
-    - lc700x/dpt-dinov2-large-nyu-hf  
-    - lc700x/dpt-dinov2-base-nyu-hf  
-    - lc700x/dpt-dinov2-small-nyu-hf  
-    - lc700x/depth-ai-hf  
-    - lc700x/dpt-hybrid-midas-hf  
-    - Intel/dpt-beit-base-384  
-    - Intel/dpt-beit-large-512  
-    - Intel/dpt-large  
-    - lc700x/dpt-large-redesign-hf  
-    - Intel/zoedepth-nyu-kitti  
-    - Intel/zoedepth-nyu  
-    - Intel/zoedepth-kitti  
+    - depth-anything/Depth-Anything-V2-Large-hf
+    - depth-anything/Depth-Anything-V2-Base-hf
+    - depth-anything/Depth-Anything-V2-Small-hf
+    - depth-anything/Video-Depth-Anything-Large
+    - depth-anything/Video-Depth-Anything-Base
+    - depth-anything/Video-Depth-Anything-Small
+    - depth-anything/DA3-GIANT
+    - depth-anything/DA3-LARGE
+    - depth-anything/DA3-BASE
+    - depth-anything/DA3-SMALL
+    - depth-anything/DA3METRIC-LARGE
+    - depth-anything/DA3NESTED-GIANT-LARGE
+    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
+    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
+    - depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
+    - depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
+    - depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
+    - depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
+    - depth-anything/Metric-Video-Depth-Anything-Large
+    - depth-anything/Metric-Video-Depth-Anything-Base
+    - depth-anything/Metric-Video-Depth-Anything-Small
+    - depth-anything/prompt-depth-anything-vitl-hf
+    - depth-anything/prompt-depth-anything-vits-hf
+    - depth-anything/prompt-depth-anything-vits-transparent-hf
+    - LiheYoung/depth-anything-large-hf
+    - LiheYoung/depth-anything-base-hf
+    - LiheYoung/depth-anything-small-hf
+    - xingyang1/Distill-Any-Depth-Large-hf
+    - lc700x/Distill-Any-Depth-Base-hf
+    - xingyang1/Distill-Any-Depth-Small-hf
+    - lc700x/dpt-dinov2-giant-kitti-hf
+    - lc700x/dpt-dinov2-large-kitti-hf
+    - lc700x/dpt-dinov2-base-kitti-hf
+    - facebook/dpt-dinov2-small-kitti
+    - facebook/dpt-dinov2-giant-nyu
+    - lc700x/dpt-dinov2-large-nyu-hf
+    - lc700x/dpt-dinov2-base-nyu-hf
+    - lc700x/dpt-dinov2-small-nyu-hf
+    - lc700x/depth-ai-hf
+    - lc700x/dpt-hybrid-midas-hf
+    - Intel/dpt-beit-base-384
+    - Intel/dpt-beit-large-512
+    - Intel/dpt-large
+    - lc700x/dpt-large-redesign-hf
+    - Intel/zoedepth-nyu-kitti
+    - Intel/zoedepth-nyu
+    - Intel/zoedepth-kitti 
     - apple/DepthPro-hf # Slow, NOT recommand  
 26. **HF Endpoint** (Hugging Face)  
    [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run. 
@@ -330,6 +336,13 @@ All optional settings can be modified on the GUI window and saved to the `settin
 > **Unlock Threads (Legacy Streamer)** sometimes fails with `UTF-8 error` under Python3.11 due to the limitations of [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) libraries. You may try stop and run multiple times for a successful streaming process.  
 ## References
 ```BIBTEX
+@article{depthanything3,
+  title={Depth Anything 3: Recovering the visual space from any views},
+  author={Haotong Lin and Sili Chen and Jun Hao Liew and Donny Y. Chen and Zhenyu Li and Guang Shi and Jiashi Feng and Bingyi Kang},
+  journal={arXiv preprint arXiv:2511.10647},
+  year={2025}
+}
+
 @article{video_depth_anything,
   title={Video Depth Anything: Consistent Depth Estimation for Super-Long Videos},
   author={Chen, Sili and Guo, Hengkai and Zhu, Shengnan and Zhang, Feihu and Huang, Zilong and Feng, Jiashi and Kang, Bingyi},
