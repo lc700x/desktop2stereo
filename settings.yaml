@@ -54,13 +54,76 @@ Model List:
     - 518
   depth-anything/Video-Depth-Anything-Small:
     resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  depth-anything/DA3-GIANT:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  depth-anything/DA3-LARGE:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  depth-anything/DA3-BASE:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  depth-anything/DA3-SMALL:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  depth-anything/DA3METRIC-LARGE:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  depth-anything/DA3MONO-LARGE:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  depth-anything/DA3NESTED-GIANT-LARGE:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
   depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf:
     resolutions:
     - 196
@@ -357,7 +420,7 @@ Model List:
 Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
-Foreground Scale: 1.0
+Foreground Scale: 0.0
 Depth Resolution: 336
 FP16: true
 Download Path: models
@@ -379,3 +442,5 @@ Stream Key: live
 Stereo Mix: 立体声混音 (Realtek(R) Audio)
 CRF: 20
 Audio Delay: -0.15
+Specify Display: false
+Stereo Monitor: 1

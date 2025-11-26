@@ -5,7 +5,9 @@ FILES=(
   install-mps
   run_mac
   update_mac_linux
+  run_mac_main
   run_linux.bash
+  run_linux_main.bash
   install-cuda.bash
   install-rocm7.bash
   install-rocm.bash

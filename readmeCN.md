@@ -38,12 +38,14 @@
 4.  部署 Desktop2Stereo 环境
     - **方法 1 (推荐)**: 使用便携版
         下载: [夸克网盘](https://pan.quark.cn/s/9d2bcf039b96) (提取码: `1vcn`)
-        **AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 下载并解压 `Desktop2Stereo_vX.X.X_AMD_etc_Windows.zip` 到本地磁盘。
+        **AMD 7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 由于部署过程特殊便携版不提供，请使用 **方法 2**.  
+        **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 下载并解压 `Desktop2Stereo_vX.X.X_AMD_etc_Windows.zip` 到本地磁盘。
         **NVIDIA GPU**: 下载并解压 `Desktop2Stereo_vX.X.X_NVIDIA_Windows.zip` 到本地磁盘。
     - **方法 2**: 使用内嵌 Python 手动部署
         1.  下载并解压 `Desktop2Stereo_vX.X.X_Python311_Windows.zip` 到本地磁盘。
         2.  安装 Python 环境
-            **AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml_standalone.bat`。
+            **AMD 7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7_standalone.bat`。
+            **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml_standalone.bat`。
             **NVIDIA GPU**: 双击 `install-cuda_standalone.bat`。
     - **方法 3**: 使用系统 Python 手动部署
         1.  安装 **Python 3.11**
@@ -51,7 +53,8 @@
         2.  下载 Desktop2Stereo 应用
             下载 [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
         3.  安装 Python 环境
-            **AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml.bat`。
+            **AMD 7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7.bat`。
+            **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml.bat`。
             **NVIDIA GPU**: 双击 `install-cuda.bat`。
 ### MacOS
 1.  安装 **Python 3.11**
@@ -78,13 +81,13 @@
 3.  下载 Desktop2Stereo 应用
     下载 [Desktop2Stereo_vX.X.X.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
 4.  安装 Python 环境
-    **AMD GPU**: 运行 `install-rocm.bash`:
-    ```bash
-    bash install-rocm.bash
-    ```
-    (**可选**) 适用于 7000/9000/AI Max 等系列 GPU 的 ROCm7，请在此处检查兼容性: [https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)
+    **AMD 7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 请在此处检查兼容性: [https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)
     ```bash
     bash install-rocm7.bash
+    ```
+    **旧AMD GPU**: 运行 `install-rocm.bash`:
+    ```bash
+    bash install-rocm.bash
     ```
     **NVIDIA GPU**: 运行 `install-cuda.bash`:
     ```bash

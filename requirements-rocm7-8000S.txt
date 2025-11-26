@@ -1,0 +1,5 @@
+﻿# AMD Ryzen™ AI Max 380 (8040S), 390 (8050S), 395 (8060S)
+--extra-index-url https://d2awnip2yjpvqn.cloudfront.net/v2/gfx1151/ 
+torch==2.10.0a0+rocm7.10.0a20251023
+torchvision==0.25.0a0+rocm7.10.0a20251023
+# torchaudio

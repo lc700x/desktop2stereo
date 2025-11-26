@@ -34,12 +34,14 @@ Access code: `1vcn`
 4. Deploy Desktop2Stereo Environment  
 - **Method 1 (Recommended)**: Use Portable Version   
     Download: [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96) (Access code: `1vcn`)  
-**AMD/Intel/Qualcomm GPU and other DirectML devies**: Download and unzip the `Desktop2Stereo_vX.X.X_AMD_etc_Windows.zip` to local disk.  
-**NVIDIA GPU**: Download and unzip `Desktop2Stereo_vX.X.X_NVIDIA_Windows.zip` to local disk.  
+        **AMD 7000/9000/Ryzen AI (Max)/etc. Series GPUs with ROCm7 Support**: Portable Version is not available due to special deployment process, please refer to **Method2**.  
+        **Older AMD/Intel/Qualcomm GPU and other DirectML devies**: Download and unzip the `Desktop2Stereo_vX.X.X_AMD_etc_Windows.zip` to local disk.  
+        **NVIDIA GPU**: Download and unzip `Desktop2Stereo_vX.X.X_NVIDIA_Windows.zip` to local disk.  
 - **Method 2**: Manual Deployment with embeded Python
     1. Download and unzip `Desktop2Stereo_vX.X.X_Python311_Windows.zip` to local disk.  
     2. Install Python environment  
-    **AMD/Intel/Qualcomm GPU and other DirectML devies**: Doulbe click `install-dml_standalone.bat`.  
+        **AMD 7000/9000/Ryzen AI (Max)/etc. Series GPUs with ROCm7 Support**: Doulbe click `install-rocm7_standalone.bat`. (Check comaptibility here: [https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html))  
+        **Older AMD/Intel/Qualcomm GPU and other DirectML devies**: Doulbe click `install-dml_standalone.bat`.   
     **NVIDIA GPU**: Doulbe click `install-cuda_standalone.bat`.
 - **Method 3**: Manual Deployment with system Python
     1. Install **Python 3.11**  
@@ -47,7 +49,8 @@ Access code: `1vcn`
     2. Download Desktop2Stereo app  
         Download the [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.  
     3. Install Python environment  
-        **AMD/Intel/Qualcomm GPU and other DirectML devies**: Doulbe click `install-dml.bat`.  
+        **AMD 7000/9000Ryzen AI (Max)/etc. Series GPUs with ROCm7 Support**: Doulbe click `install-rocm7.bat`. 
+        **Older AMD/Intel/Qualcomm GPU and other DirectML devies**: Doulbe click `install-dml.bat`.  
         **NVIDIA GPU**: Doulbe click `install-cuda.bat`.  
 ### MacOS 
 1. Install **Python 3.11**  
@@ -74,13 +77,13 @@ Access code: `1vcn`
 3. Download Desktop2Stereo app  
    Download the [Desktop2Stereo_vX.X.X.zip](https://github.com/lc700x/desktop2stereo/releases/latest) and unzip it to local disk.
 4.  Install Python environment  
-    **AMD GPU**: Run `install-rocm.bash`:   
-    ```bash
-    bash install-rocm.bash
-    ```
-    (**Optional**) ROCm7 for 7000/9000/AI Max/etc Series GPUs, check comaptibility here: [https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)  
+    **AMD 7000/9000/Ryzen AI (Max)/etc. Series GPU with ROCm7 Support**: , check comaptibility here: [https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)  
     ```bash
     bash install-rocm7.bash
+    ```
+    **Older AMD GPU**: Run `install-rocm.bash`:   
+    ```bash
+    bash install-rocm.bash
     ```
     **NVIDIA GPU**: Run `install-cuda.bash`:  
     ```bash
