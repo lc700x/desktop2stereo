@@ -142,7 +142,6 @@ def add_logo(window):
     if OS_NAME != "Darwin":
         glfw_img = crop_icon(glfw_img)
         glfw.set_window_icon(window, 1, [glfw_img])
-        glfw.swap_interval(1)  # VSync on
 
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
@@ -263,6 +262,7 @@ class StereoWindow:
         # Set up OpenGL context
         glfw.make_context_current(self.window)
         self.ctx = moderngl.create_context()
+        glfw.swap_interval(0) if self.use_3d else glfw.swap_interval(1) # VSync on
         
         # Precompile shaders and create VAO
         self.prog = self.ctx.program(
