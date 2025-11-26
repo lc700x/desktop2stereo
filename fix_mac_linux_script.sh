@@ -4,15 +4,14 @@
 FILES=(
   install-mps
   run_mac
-  run_mac_main
   update_mac_linux
+  run_mac_main
   run_linux.bash
   run_linux_main.bash
   install-cuda.bash
-  install-cuda0.bash
   install-rocm7.bash
   install-rocm.bash
-  fix_mac_linux_script.sh
+  install-cuda0.bash
 )
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
