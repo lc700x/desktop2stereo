@@ -52,10 +52,10 @@ for /f "delims= " %%x in ("%GPU_MODEL%") do set "GPU_MODEL=%%x"
 @REM echo Extracted numeric model: %GPU_MODEL%
 
 REM --- Map GPU models to requirement files ---
-set "AMD_MODELS_9000=9060 9070 W9700"
-set "AMD_MODELS_7000=W7900X W7800 W7700 W7600 W7500 7900 7900M 7800 7800M 7700 7700S 7600 7600S 7600M 7650 780M 760M 740M"
-set "AMD_MODELS_8000S=8060S 8050S 8040S"
-set "AMD_MODELS_800M=890M 880M 860M 840M"
+set "AMD_MODELS_9000=9060 9070 9700"
+set "AMD_MODELS_7000=7900 7800 7700 7600 7500 7650 780 760 740"
+set "AMD_MODELS_8000S=8060 8050 8040"
+set "AMD_MODELS_800M=890 880 860 840"
 
 call :CheckModel "%GPU_MODEL%" AMD_MODELS_9000 requirements-rocm7-9000.txt
 if %errorlevel% equ 0 goto :InstallDependencies
@@ -106,6 +106,7 @@ for %%a in (%MODEL_LIST%) do (
     exit /b 0
   )
 )
+exit /b 1
 
 
 
