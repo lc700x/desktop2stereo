@@ -7,7 +7,7 @@ Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
-  depth-anything/Depth-Anything-V2-Large-hf:
+  depth-anything/Depth-Anything-V2-Small-hf:
     resolutions:
     - 196
     - 238
@@ -25,7 +25,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Depth-Anything-V2-Small-hf:
+  depth-anything/Depth-Anything-V2-Large-hf:
     resolutions:
     - 196
     - 238
@@ -34,7 +34,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Video-Depth-Anything-Large:
+  depth-anything/Video-Depth-Anything-Small:
     resolutions:
     - 196
     - 238
@@ -52,25 +52,16 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Video-Depth-Anything-Small:
+  depth-anything/Video-Depth-Anything-Large:
     resolutions:
-    - 182
-    - 224
-    - 280
-    - 322
-    - 378
-    - 434
-    - 504
-  depth-anything/DA3-GIANT:
-    resolutions:
-    - 182
-    - 224
-    - 280
-    - 322
-    - 378
-    - 434
-    - 504
-  depth-anything/DA3-LARGE:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/DA3-SMALL:
     resolutions:
     - 182
     - 224
@@ -88,7 +79,16 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3-SMALL:
+  depth-anything/DA3-LARGE:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  depth-anything/DA3-GIANT:
     resolutions:
     - 182
     - 224
@@ -124,7 +124,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf:
+  depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf:
     resolutions:
     - 196
     - 238
@@ -142,25 +142,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf:
+  depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf:
     resolutions:
     - 196
     - 238
@@ -178,7 +160,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Metric-Video-Depth-Anything-Large:
+  depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf:
     resolutions:
     - 196
     - 238
@@ -187,7 +169,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Metric-Video-Depth-Anything-Base:
+  depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf:
     resolutions:
     - 196
     - 238
@@ -205,7 +187,16 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/prompt-depth-anything-vitl-hf:
+  depth-anything/Metric-Video-Depth-Anything-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything/Metric-Video-Depth-Anything-Large:
     resolutions:
     - 196
     - 238
@@ -232,16 +223,7 @@ Model List:
     - 392
     - 448
     - 518
-  LiheYoung/depth-anything-large-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  LiheYoung/depth-anything-base-hf:
+  depth-anything/prompt-depth-anything-vitl-hf:
     resolutions:
     - 196
     - 238
@@ -259,7 +241,7 @@ Model List:
     - 392
     - 448
     - 518
-  xingyang1/Distill-Any-Depth-Large-hf:
+  LiheYoung/depth-anything-base-hf:
     resolutions:
     - 196
     - 238
@@ -268,7 +250,7 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/Distill-Any-Depth-Base-hf:
+  LiheYoung/depth-anything-large-hf:
     resolutions:
     - 196
     - 238
@@ -286,7 +268,7 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/dpt-dinov2-giant-kitti-hf:
+  lc700x/Distill-Any-Depth-Base-hf:
     resolutions:
     - 196
     - 238
@@ -295,16 +277,7 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/dpt-dinov2-large-kitti-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  lc700x/dpt-dinov2-base-kitti-hf:
+  xingyang1/Distill-Any-Depth-Large-hf:
     resolutions:
     - 196
     - 238
@@ -322,7 +295,7 @@ Model List:
     - 392
     - 448
     - 518
-  facebook/dpt-dinov2-giant-nyu:
+  lc700x/dpt-dinov2-base-kitti-hf:
     resolutions:
     - 196
     - 238
@@ -331,7 +304,25 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/dpt-dinov2-large-nyu-hf:
+  lc700x/dpt-dinov2-large-kitti-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/dpt-dinov2-giant-kitti-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  lc700x/dpt-dinov2-small-nyu-hf:
     resolutions:
     - 196
     - 238
@@ -349,7 +340,16 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/dpt-dinov2-small-nyu-hf:
+  lc700x/dpt-dinov2-large-nyu-hf:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  facebook/dpt-dinov2-giant-nyu:
     resolutions:
     - 196
     - 238
@@ -417,16 +417,16 @@ Model List:
   apple/DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: depth-anything/Depth-Anything-V2-Small-hf
+Depth Model: depth-anything/Depth-Anything-V2-Base-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 0.0
-Depth Resolution: 336
+Depth Resolution: 518
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
-Language: EN
+Language: CN
 Run Mode: Local Viewer
 Stream Protocol: HLS
 Streamer Port: 1122
