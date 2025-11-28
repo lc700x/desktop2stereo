@@ -410,7 +410,6 @@
 > **解锁线程 (旧网络推流)** 在 Python3.11 下有时会因 `UTF-8 错误` 而失败。您可能需要多次停止和运行以获得成功的网络推流进程。
 
 ## 参考文献
-
 ```BIBTEX
 @article{depthanything3,
   title={Depth Anything 3: Recovering the visual space from any views},
@@ -485,28 +484,18 @@
 }
 
 @inproceedings{Bochkovskii2024:arxiv,
-  author     = {Aleksei Bochkovskii and Ama\"{e}l Delaunoy and Hugo Germain and Marcel Santos and
-               Yichao Zhou and Stephan R. Richter and Vladlen Koltun},
+  author     = {Aleksei Bochkovskii and Ama\"{e}l Delaunoy and Hugo Germain and Marcel Santos and Yichao Zhou and Stephan R. Richter and Vladlen Koltun},
   title      = {Depth Pro: Sharp Monocular Metric Depth in Less Than a Second},
   booktitle  = {International Conference on Learning Representations},
   year       = {2025},
   url        = {https://arxiv.org/abs/2410.02073},
 }
 
-@article{DBLP:journals/corr/abs-2103-13413,
-  author    = {Ren{\'{e}} Ranftl and
-               Alexey Bochkovskiy and
-               Vladlen Koltun},
-  title     = {Vision Transformers for Dense Prediction},
-  journal   = {CoRR},
-  volume    = {abs/2103.13413},
-  year      = {2021},
-  url       = {https://arxiv.org/abs/2103.13413},
-  eprinttype = {arXiv},
-  eprint    = {2103.13413},
-  timestamp = {Wed, 07 Apr 2021 15:31:46 +0200},
-  biburl    = {https://dblp.org/rec/journals/corr/abs-2103-13413.bib},
-  bibsource = {dblp computer science bibliography, https://dblp.org}
+@article{Ranftl2020,
+	author    = {Ren\'{e} Ranftl and Katrin Lasinger and David Hafner and Konrad Schindler and Vladlen Koltun},
+	title     = {Towards Robust Monocular Depth Estimation: Mixing Datasets for Zero-shot Cross-dataset Transfer},
+	journal   = {IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI)},
+	year      = {2020},
 }
 
 @misc{oquab2023dinov2,
@@ -517,6 +506,7 @@
       archivePrefix={arXiv},
       primaryClass={cs.CV}
 }
+
 ```
 
 ## 感谢

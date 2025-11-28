@@ -455,8 +455,7 @@ All optional settings can be modified on the GUI window and saved to the [settin
 > Warning: **Unlock Threads (Legacy Streamer)** sometimes fails with `UTF-8 error` under Python3.11 due to the limitations of [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) libraries. You may try stop and run multiple times for a successful streaming process.
 
 ## References
-
-```bibtex
+```BIBTEX
 @article{depthanything3,
   title={Depth Anything 3: Recovering the visual space from any views},
   author={Haotong Lin and Sili Chen and Jun Hao Liew and Donny Y. Chen and Zhenyu Li and Guang Shi and Jiashi Feng and Bingyi Kang},
@@ -486,19 +485,18 @@ All optional settings can be modified on the GUI window and saved to the [settin
 }
 
 @inproceedings{depth_anything_v1,
-  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data},
+  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data}, 
   author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
   booktitle={CVPR},
   year={2024}
 }
 
 @article{li2024amodaldepthanything,
-  title={Amodal Depth Anything: Amodal Depth Estimation in the Wild},
+  title={Amodal Depth Anything: Amodal Depth Estimation in the Wild}, 
   author={Li, Zhenyu and Lavreniuk, Mykola and Shi, Jian and Bhat, Shariq Farooq and Wonka, Peter},
   year={2024},
   journal={arXiv preprint arXiv:x},
-  primaryClass={cs.CV}
-}
+  primaryClass={cs.CV}}
 
 @article{he2025distill,
   title   = {Distill Any Depth: Distillation Creates a Stronger Monocular Depth Estimator},
@@ -531,38 +529,29 @@ All optional settings can be modified on the GUI window and saved to the [settin
 }
 
 @inproceedings{Bochkovskii2024:arxiv,
-  author     = {Aleksei Bochkovskii and Ama\"{e}l Delaunoy and Hugo Germain and Marcel Santos and
-               Yichao Zhou and Stephan R. Richter and Vladlen Koltun},
+  author     = {Aleksei Bochkovskii and Ama\"{e}l Delaunoy and Hugo Germain and Marcel Santos and Yichao Zhou and Stephan R. Richter and Vladlen Koltun},
   title      = {Depth Pro: Sharp Monocular Metric Depth in Less Than a Second},
   booktitle  = {International Conference on Learning Representations},
   year       = {2025},
   url        = {https://arxiv.org/abs/2410.02073},
 }
 
-@article{DBLP:journals/corr/abs-2103-13413,
-  author    = {Ren{\'{e}} Ranftl and
-               Alexey Bochkovskiy and
-               Vladlen Koltun},
-  title     = {Vision Transformers for Dense Prediction},
-  journal   = {CoRR},
-  volume    = {abs/2103.13413},
-  year      = {2021},
-  url       = {https://arxiv.org/abs/2103.13413},
-  eprinttype = {arXiv},
-  eprint    = {2103.13413},
-  timestamp = {Wed, 07 Apr 2021 15:31:46 +0200},
-  biburl    = {https://dblp.org/rec/journals/corr/abs-2103-13413.bib},
-  bibsource = {dblp computer science bibliography, https://dblp.org}
+@article{Ranftl2020,
+	author    = {Ren\'{e} Ranftl and Katrin Lasinger and David Hafner and Konrad Schindler and Vladlen Koltun},
+	title     = {Towards Robust Monocular Depth Estimation: Mixing Datasets for Zero-shot Cross-dataset Transfer},
+	journal   = {IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI)},
+	year      = {2020},
 }
 
 @misc{oquab2023dinov2,
-      title={DINOv2: Learning Robust Visual Features without Supervision},
+      title={DINOv2: Learning Robust Visual Features without Supervision}, 
       author={Maxime Oquab and Timothée Darcet and Théo Moutakanni and Huy Vo and Marc Szafraniec and Vasil Khalidov and Pierre Fernandez and Daniel Haziza and Francisco Massa and Alaaeldin El-Nouby and Mahmoud Assran and Nicolas Ballas and Wojciech Galuba and Russell Howes and Po-Yao Huang and Shang-Wen Li and Ishan Misra and Michael Rabbat and Vasu Sharma and Gabriel Synnaeve and Hu Xu and Hervé Jegou and Julien Mairal and Patrick Labatut and Armand Joulin and Piotr Bojanowski},
       year={2023},
       eprint={2304.07193},
       archivePrefix={arXiv},
       primaryClass={cs.CV}
-}  
+}
+
 ```
 ## Credits
 - [lovettchris/wincam](https://github.com/lovettchris/wincam/)  
