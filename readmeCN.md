@@ -29,10 +29,10 @@
     **AMD GPU**:  
         - `Windows`：推荐下载25.9.2版本以获得稳定的ROCm7性能: [AMD Software: Adrenalin Edition 25.9.2 Windows下载](https://drivers.amd.com/drivers/amd-software-adrenalin-edition-25.9.2-win10-win11-sep-rdna.exe)。  
         - `Ubuntu`：从 [AMD 驱动程序和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新 GPU 驱动程序。  
-    **NVIDIA GPU**: 从 [NVIDIA 官方 GeForce 驱动程序](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新 GPU 驱动程序。
-    **Intel GPU**: 从 [Intel 驱动和软件下载中心](https://www.intel.com/content/www/us/en/download-center/home.html/) 下载最新 GPU 驱动程序。
-    **Qualcomm GPU**: 从 [Qualcomm® Adreno™ Windows Graphics Drivers for Snapdragon® X Platform](https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver) 下载最新 GPU 驱动程序。
-    **其他 DirectML 设备**: 请安装相应的最新硬件驱动程序。
+    **NVIDIA GPU**: 从 [NVIDIA 官方 GeForce 驱动程序](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新 GPU 驱动程序。  
+    **Intel GPU**: 从 [Intel 驱动和软件下载中心](https://www.intel.com/content/www/us/en/download-center/home.html/) 下载最新 GPU 驱动程序。  
+    **Qualcomm GPU**: 从 [Qualcomm® Adreno™ Windows Graphics Drivers for Snapdragon® X Platform](https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver) 下载最新 GPU 驱动程序。  
+    **其他 DirectML 设备**: 请安装相应的最新硬件驱动程序。  
 2.  安装Microsoft Visual C++ Redistributable
     下载 [Visual Studio 2017–2026 C++ Redistributable] (https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#latest-supported-redistributable-version) 并安装 (需要重启Windows)。  
 3.  开启长路径
