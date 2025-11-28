@@ -1,5 +1,5 @@
 @echo off
-echo --- Desktop2Stereo  Installer (With Windows DirectML for AMD GPUs and etc.) ---
+echo --- Desktop2Stereo Installer (With Windows DirectML for AMD GPUs and etc.) ---
 echo - Setting up the virtual environment
 
 @REM Set paths
