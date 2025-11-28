@@ -6,4 +6,4 @@ https://repo.radeon.com/rocm/windows/rocm-rel-7.1.1/rocm-0.1.dev0.tar.gz
 https://repo.radeon.com/rocm/windows/rocm-rel-7.1.1/torchvision-0.24.0%2Brocmsdk20251116-cp312-cp312-win_amd64.whl
 https://repo.radeon.com/rocm/windows/rocm-rel-7.1.1/torch-2.9.0%2Brocmsdk20251116-cp312-cp312-win_amd64.whl
 # torchaudio
-# https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/torchaudio-2.6.0a0%2B1a8f621-cp312-cp312-win_amd64.whl
+# pip install --no-cache-dir https://repo.radeon.com/rocm/windows/rocm-rel-7.1.1/torchaudio-2.9.0+rocmsdk20251116-cp312-cp312-win_amd64.whl

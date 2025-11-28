@@ -22,7 +22,9 @@ Access code: `1vcn`
 ## Preparation and Installation
 ### Windows  
 1. Install latest GPU driver  
-    **AMD GPU**: Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). 
+    **AMD GPU**:  
+        - `Windows`： Recommend to download the 25.9.2 driver for stable ROCm7 performance: [AMD Software: Adrenalin Edition 25.9.2 Windows Download](https://drivers.amd.com/drivers/amd-software-adrenalin-edition-25.9.2-win10-win11-sep-rdna.exe). 
+        - `Ubuntu`： Download latest GPU driver from [AMD Drivers and Support for Processors and Graphics](https://www.amd.com/en/support/download/drivers.html). 
     **NVIDIA GPU**: Download latest GPU driver from [NVIDIA Official GeForce Drivers](https://www.nvidia.com/en-us/geforce/drivers/).  
     **Intel GPU**: Download latest GPU driver from [Download Intel Drivers and Software](https://www.intel.com/content/www/us/en/download-center/home.html/).  
     **Qualcomm GPU**: Download latest GPU driver from [Qualcomm® Adreno™ Windows Graphics Drivers for Snapdragon® X Platform](https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver).  

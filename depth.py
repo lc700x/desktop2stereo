@@ -1,7 +1,7 @@
 # depth.py
 import torch
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, OS_NAME
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -38,12 +38,11 @@ IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO
 # Optimization for CUDA
 if IS_NVIDIA:
     torch.backends.cudnn.benchmark = True
-    if not FP16:
-        # Enable TF32 for matrix multiplications
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        # Enable TF32 matrix multiplication for better performance
-        torch.set_float32_matmul_precision('high')
+    # Enable TF32 for matrix multiplications
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    # Enable TF32 matrix multiplication for better performance
+    torch.set_float32_matmul_precision('high')
     # Enable math attention
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
@@ -59,14 +58,14 @@ if IS_NVIDIA:
 elif IS_AMD_ROCM:
     torch.backends.cudnn.enabled = False # Add for AMD ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Add for AMD ROCm7
+    # Enable TF32 for matrix multiplications
+    torch.backends.cuda.matmul.allow_tf32 = True
     # Enable math attention
-    if not FP16:
-        # Enable TF32 for matrix multiplications
-        torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
     torch.backends.cuda.enable_math_sdp(True)
-    USE_TORCH_COMPILE = False  # Disable torch.compile for AMD ROCm7 due to current issues
+    if OS_NAME != "Linux":
+        USE_TORCH_COMPILE = False  # Disable torch.compile for AMD ROCm7 due to current issues
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
