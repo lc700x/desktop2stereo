@@ -34,7 +34,6 @@
 
 1.  安装最新的 GPU 驱动程序
     **AMD GPU**:  
-
         - `Windows`：推荐下载25.9.2版本以获得稳定的ROCm7性能: [AMD Software: Adrenalin Edition 25.9.2 Windows下载](https://drivers.amd.com/drivers/amd-software-adrenalin-edition-25.9.2-win10-win11-sep-rdna.exe)。  
         - `Ubuntu`：从 [AMD 驱动程序和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新 GPU 驱动程序。  
     **NVIDIA GPU**: 从 [NVIDIA 官方 GeForce 驱动程序](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新 GPU 驱动程序。  
