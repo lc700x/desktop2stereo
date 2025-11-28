@@ -519,5 +519,3 @@
 - [waydabber/BetterDisplay](https://github.com/waydabber/BetterDisplay)  
 - 其他相关的工具和库
 - 所有用户的反馈
-
-```
