@@ -7,8 +7,10 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 
 ## Alternative Download Link
 
-[Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96)  
-Access code: `1vcn`
+- [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96)  
+    Access code: `1vcn`  
+- [Baidu Netdisk](https://pan.baidu.com/s/1JfMpcrdplPTQSNB6rExh6A?pwd=mr64 )  
+    Access code: `mr64`  
 
 ## Video Tutorials
 

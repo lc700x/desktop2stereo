@@ -6,8 +6,10 @@
 一款通用的实时2D转3D应用程序，支持Windows/Mac/Ubuntu系统上的AMD/NVIDIA/Intel/Qualcomm GPU/Apple Silicon设备，由深度估计AI模型驱动。
 
 ## 备用下载链接
-[夸克网盘](https://pan.quark.cn/s/9d2bcf039b96)  
-提取码：`1vcn`
+- [夸克网盘](https://pan.quark.cn/s/9d2bcf039b96)  
+    提取码：`1vcn`  
+- [百度网盘](https://pan.baidu.com/s/1JfMpcrdplPTQSNB6rExh6A?pwd=mr64 )  
+    提取码: `mr64`  
 
 ## 视频教程
 
