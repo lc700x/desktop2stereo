@@ -1,0 +1,7 @@
+﻿# AMD Radeon™ RX 9000 Series Graphics Cards (GFX103X)
+--find-links ./rocm6000/
+rocm[libraries,devel]
+
+https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/buid2025-11-06/torch-2.9.1+rocmsdk20251119-cp312-cp312-win_amd64.whl
+https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/buid2025-11-06/torchvision-0.24.0+rocmsdk20251119-cp312-cp312-win_amd64.whl
+# https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/buid2025-11-06/torchaudio-2.9.0+rocmsdk20251119-cp312-cp312-win_amd64.whl

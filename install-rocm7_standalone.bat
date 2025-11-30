@@ -56,6 +56,7 @@ set "AMD_MODELS_9000=9060 9070 9700"
 set "AMD_MODELS_7000=7900 7800 7700 7600 7500 7650 780 760 740"
 set "AMD_MODELS_8000S=8060 8050 8040"
 set "AMD_MODELS_800M=890 880 860 840"
+set "AMD_MODELS_6000=6950 6900 6850 6800 6750 6700 6650 6600 6550 6500 6400 6300 680 610"
 
 call :CheckModel "%GPU_MODEL%" AMD_MODELS_9000 requirements-rocm7-9000.txt
 if %errorlevel% equ 0 goto :InstallDependencies
@@ -69,6 +70,9 @@ if %errorlevel% equ 0 goto :InstallDependencies
 call :CheckModel "%GPU_MODEL%" AMD_MODELS_800M requirements-rocm7-800M.txt
 if %errorlevel% equ 0 goto :InstallDependencies
 
+call :CheckModel "%GPU_MODEL%" AMD_MODELS_6000 requirements-rocm7-6000.txt
+if %errorlevel% equ 0 goto :InstallDependencies
+
 echo.
 echo Failed to automatically detect a compatible ROCm requirements file for GPU: %FULL_GPU_NAME%.
 echo.
@@ -78,14 +82,16 @@ echo 1. requirements-rocm7-9000.txt
 echo 2. requirements-rocm7-7000.txt
 echo 3. requirements-rocm7-8000S.txt
 echo 4. requirements-rocm7-800M.txt
-echo 5. Cancel
+echo 5. requirements-rocm7-6000.txt
+echo 6. Cancel
 echo.
-set /p USER_CHOICE="Enter your choice (1-5): "
+set /p USER_CHOICE="Enter your choice (1-6): "
 if "%USER_CHOICE%"=="1" set "REQUIREMENTS_FILE=requirements-rocm7-9000.txt" & goto :InstallDependencies
 if "%USER_CHOICE%"=="2" set "REQUIREMENTS_FILE=requirements-rocm7-7000.txt" & goto :InstallDependencies
 if "%USER_CHOICE%"=="3" set "REQUIREMENTS_FILE=requirements-rocm7-8000S.txt" & goto :InstallDependencies
 if "%USER_CHOICE%"=="4" set "REQUIREMENTS_FILE=requirements-rocm7-800M.txt" & goto :InstallDependencies
-if "%USER_CHOICE%"=="5" (
+if "%USER_CHOICE%"=="5" set "REQUIREMENTS_FILE=requirements-rocm7-6000.txt" & goto :InstallDependencies
+if "%USER_CHOICE%"=="6" (
   echo Installation cancelled by user.
   pause
   exit /b 1
@@ -125,7 +131,7 @@ if %errorlevel% neq 0 (
   pause
   exit /b 1
 )
-%PYTHON_EXE% -m pip install -r %REQUIREMENTS_FILE% --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install -r %REQUIREMENTS_FILE% --no-cache-dir --no-warn-script-location
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
