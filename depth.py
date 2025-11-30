@@ -763,7 +763,7 @@ def make_sbs_core(rgb: torch.Tensor,
     shifts = inv * max_px * depth_strength
     
     # CUDA fast path: grid_sample
-    if IS_CUDA:
+    if not "DirectML" in DEVICE_INFO:
         xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=torch.float32).view(1, 1, W).expand(1, H, W)
         ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=torch.float32).view(1, H, 1).expand(1, H, W)
         shift_norm = shifts * (2.0 / (W - 1))
