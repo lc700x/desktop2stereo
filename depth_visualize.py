@@ -16,8 +16,8 @@ CACHE_PATH = "models"
 DEVICE_ID = 0
 FILL_16_9 = True
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
-# MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
-MODEL_ID = "depth-anything/DA3-SMALL"
+MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+# MODEL_ID = "depth-anything/DA3-SMALL"
 # MODEL_ID = "depth-anything/DA3MONO-LARGE"
 DEPTH_RESOLUTION = 518
 FOREGROUND_SCALE = 0
@@ -227,6 +227,7 @@ def post_process_depth(depth):
     depth = apply_contrast(depth)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
     depth = anti_alias(depth, strength=AA_STRENGTH)
+    depth = normalize_tensor(depth).squeeze()
     return depth
         
 # Load Video Depth Anything Model

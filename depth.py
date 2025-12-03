@@ -214,6 +214,7 @@ def post_process_depth(depth):
     depth = apply_contrast(depth)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
     depth = anti_alias(depth, strength=AA_STRENGTH)
+    depth = normalize_tensor(depth).squeeze()
     return depth
         
 # Load Video Depth Anything Model
