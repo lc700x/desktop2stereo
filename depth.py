@@ -34,6 +34,7 @@ print(f"Model: {MODEL_ID}")
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
 IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO
+IS_DIRECTML = "DirectML" in DEVICE_INFO
 
 # Optimization for CUDA
 if IS_NVIDIA:
@@ -213,6 +214,7 @@ def post_process_depth(depth):
     depth = apply_contrast(depth)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
     depth = anti_alias(depth, strength=AA_STRENGTH)
+    depth = normalize_tensor(depth).squeeze()
     return depth
         
 # Load Video Depth Anything Model
@@ -747,32 +749,29 @@ def make_sbs_core(rgb: torch.Tensor,
         SBS image [C,H,W] float tensor (0-255 range)
     """
     # Cast to float32 for DirectML compatibility (avoids float64 ops)
-    rgb = rgb.to(dtype=torch.float32, device=device)
-    depth = depth.to(dtype=torch.float32, device=device)
-    
+    if IS_DIRECTML:
+        rgb = rgb.to(dtype=torch.float32, device=device)
+        depth = depth.to(dtype=torch.float32, device=device)
+        
     C, H, W = rgb.shape
     img = rgb.unsqueeze(0)  # [1,C,H,W]
     
-    # Cast scalars to float32 tensors
-    depth_ratio = torch.tensor(depth_ratio, dtype=torch.float32, device=device)
-    ipd_uv = torch.tensor(ipd_uv, dtype=torch.float32, device=device)
-    depth_strength = torch.tensor(0.05, dtype=torch.float32, device=device)
-    
-    inv = torch.ones_like(depth) - depth * depth_ratio
-    max_px = ipd_uv * torch.tensor(W, dtype=torch.float32, device=device)
+    depth_strength = 0.05
+    inv = 1.0 - depth * depth_ratio
+    max_px = ipd_uv * W
     shifts = inv * max_px * depth_strength
     
     # CUDA fast path: grid_sample
-    if not "DirectML" in DEVICE_INFO:
-        xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=torch.float32).view(1, 1, W).expand(1, H, W)
-        ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=torch.float32).view(1, H, 1).expand(1, H, W)
+    if not IS_DIRECTML:
+        xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=DTYPE).view(1, 1, W).expand(1, H, W)
+        ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=DTYPE).view(1, H, 1).expand(1, H, W)
         shift_norm = shifts * (2.0 / (W - 1))
         grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
         grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
         left = F.grid_sample(img, grid_left, mode="bilinear",
-                             padding_mode="reflection", align_corners=True)[0]
+                             padding_mode="border", align_corners=False)[0]
         right = F.grid_sample(img, grid_right, mode="bilinear",
-                              padding_mode="reflection", align_corners=True)[0]
+                              padding_mode="border", align_corners=False)[0]
     # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
     else:
         base = torch.arange(W, device=device, dtype=torch.int64).view(1, -1).expand(H, -1)

@@ -147,7 +147,7 @@ DEFAULTS = {
     "Depth Strength": 2.0,
     "Depth Resolution": 336,
     "Anti-aliasing": 2,
-    "Foreground Scale": 0.0,
+    "Foreground Scale": 0.5,
     "IPD": 0.064,
     "Display Mode": "Half-SBS",
     "FP16": True,

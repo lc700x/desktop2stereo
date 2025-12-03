@@ -27,8 +27,8 @@ VERTEX_SHADER = """
 
 FRAGMENT_SHADER = """
     #version 330
-    // Or #version 300 es + precision highp float; for mobile
-
+    // Optimized stereoscopic inpainting with push-pull method
+    
     in vec2 uv;
     out vec4 frag_color;
 
@@ -39,96 +39,175 @@ FRAGMENT_SHADER = """
     uniform float u_depth_strength;// parallax intensity
     uniform float u_convergence;   // depth value at screen plane (0–1)
 
-    // Inpainting controls
-    uniform float u_inpaint_radius = 7.0;     // higher = smoother but slower
-    uniform float u_inpaint_strength = 20.0;  // how strongly we prefer background
+    // Optimized inpainting controls
+    uniform float u_search_radius = 12.0;  // horizontal search distance
+    uniform float u_depth_tolerance = 0.012; // background detection threshold
+    uniform float u_blur_radius = 2.5;     // final smoothing
 
-    // ------------------------------------------------------------------
     vec2 pixel_size = 1.0 / u_resolution;
 
-    // 1. Fast disocclusion detector (holes + big depth jumps)
+    // ------------------------------------------------------------------
+    // FAST DISOCCLUSION DETECTION
+    // ------------------------------------------------------------------
     bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
-        // Out of bounds = obvious hole
+        // Bounds check
         if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
             shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
             return true;
 
-        // Huge depth discontinuity along shift direction = edge hole
-        vec2 grad_dir = normalize(vec2(u_eye_offset, 0.0));
-        float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 3.0).r;
-        float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 3.0).r;
-        if (abs(d_left - d_right) > 0.07)
+        // Fast depth discontinuity check (3-tap only)
+        vec2 grad_dir = vec2(sign(u_eye_offset), 0.0);
+        float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
+        float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
+        
+        // Depth jump threshold (tuned for sharp edges)
+        if (abs(d_left - d_right) > 0.08)
             return true;
 
         return false;
     }
 
-    // 2. Depth-aware bilateral inpainting (only samples background)
-    vec4 inpaint_disocclusion(vec2 uv_coord, float center_depth_inv) {
-        vec4 accum = vec4(0.0);
-        float total_w = 0.0;
-        int R = int(u_inpaint_radius);
-
-        for (int y = -R; y <= R; ++y) {
-            for (int x = -R; x <= R; ++x) {
-                vec2 sample_uv = uv_coord + vec2(x, y) * pixel_size;
-
-                if (sample_uv.x < 0.0 || sample_uv.x > 1.0 ||
-                    sample_uv.y < 0.0 || sample_uv.y > 1.0)
-                    continue;
-
+    // ------------------------------------------------------------------
+    // OPTIMIZED PUSH-PULL INPAINTING (Horizontal Priority)
+    // Uses directional search to find background pixels efficiently
+    // ------------------------------------------------------------------
+    vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
+        vec4 best_color = vec4(0.0);
+        float best_weight = 0.0;
+        int search_range = int(u_search_radius);
+        
+        // Directional search: prioritize searching opposite to eye shift
+        // (background pixels are more likely in that direction)
+        int search_dir = u_eye_offset > 0.0 ? -1 : 1;
+        
+        // Phase 1: Directional sweep (most samples here)
+        for (int i = 1; i <= search_range; i++) {
+            vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x, 0.0);
+            
+            if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
+            
+            float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+            
+            // Only accept background pixels (farther than current)
+            if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
                 vec4 sample_color = texture(tex_color, sample_uv);
-                float sample_depth = texture(tex_depth, sample_uv).r;
-                float sample_depth_inv = 1.0 - sample_depth;
-
-                // Only accept pixels that are clearly behind (background)
-                float depth_ok = step(center_depth_inv + 0.015, sample_depth_inv);
-
-                // Spatial gaussian
-                float dist2 = float(x*x + y*y);
-                float spatial_w = exp(-dist2 / (2.0 * (u_inpaint_radius * 0.6) * (u_inpaint_radius * 0.6)));
-
-                // Color similarity (helps coherence)
-                vec3 color_diff = sample_color.rgb - texture(tex_color, uv_coord).rgb;
-                float color_w = exp(-dot(color_diff, color_diff) * 10.0);
-
-                float w = spatial_w * depth_ok * color_w *
-                        (1.0 + depth_ok * u_inpaint_strength);
-
-                accum += sample_color * w;
-                total_w += w;
+                
+                // Weight by: distance + depth similarity to other background
+                float dist_weight = exp(-float(i) * 0.15);
+                float depth_weight = 1.0 + (sample_depth_inv - center_depth_inv) * 10.0;
+                float w = dist_weight * depth_weight;
+                
+                best_color += sample_color * w;
+                best_weight += w;
+                
+                // Early exit if we found strong background
+                if (best_weight > 5.0) break;
             }
         }
-        return total_w > 0.01 ? accum / total_w : texture(tex_color, uv_coord);
+        
+        // Phase 2: Opposite direction (fewer samples)
+        if (best_weight < 2.0) {
+            int opposite_range = search_range / 2;
+            for (int i = 1; i <= opposite_range; i++) {
+                vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x, 0.0);
+                
+                if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
+                
+                float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+                
+                if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                    vec4 sample_color = texture(tex_color, sample_uv);
+                    float w = exp(-float(i) * 0.2);
+                    
+                    best_color += sample_color * w;
+                    best_weight += w;
+                }
+            }
+        }
+        
+        // Phase 3: Small vertical blur for smoothness (3 taps)
+        if (best_weight > 0.01) {
+            vec4 blurred = best_color / best_weight;
+            vec4 vert_accum = blurred * 0.5;
+            float vert_weight = 0.5;
+            
+            for (int dy = -1; dy <= 1; dy += 2) {
+                vec2 vert_uv = uv_coord + vec2(0.0, dy * pixel_size.y * u_blur_radius);
+                if (vert_uv.y >= 0.0 && vert_uv.y <= 1.0) {
+                    float vert_depth_inv = 1.0 - texture(tex_depth, vert_uv).r;
+                    if (vert_depth_inv > center_depth_inv + u_depth_tolerance * 0.5) {
+                        float w = 0.25;
+                        vert_accum += texture(tex_color, vert_uv) * w;
+                        vert_weight += w;
+                    }
+                }
+            }
+            
+            return vert_accum / vert_weight;
+        }
+        
+        // Fallback: return original pixel if no background found
+        return texture(tex_color, uv_coord);
     }
 
+    // ------------------------------------------------------------------
+    // ALTERNATIVE: FAST SEPARABLE BLUR (Uncomment to use instead)
+    // ------------------------------------------------------------------
+    /*
+    vec4 separable_inpaint(vec2 uv_coord, float center_depth_inv) {
+        vec4 accum = vec4(0.0);
+        float total_w = 0.0;
+        int R = 4;
+        
+        // Horizontal pass only (vertical would be a second shader pass)
+        for (int x = -R; x <= R; ++x) {
+            vec2 sample_uv = uv_coord + vec2(x * pixel_size.x, 0.0);
+            
+            if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
+            
+            float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+            
+            // Background filter
+            float depth_ok = step(center_depth_inv + 0.015, sample_depth_inv);
+            float w = exp(-float(x*x) * 0.25) * (1.0 + depth_ok * 10.0);
+            
+            accum += texture(tex_color, sample_uv) * w;
+            total_w += w;
+        }
+        
+        return total_w > 0.01 ? accum / total_w : texture(tex_color, uv_coord);
+    }
+    */
+
+    // ------------------------------------------------------------------
+    // MAIN
     // ------------------------------------------------------------------
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
 
-        // Use original depth directly (no dilation)
+        // Sample depth
         float depth = texture(tex_depth, flipped_uv).r;
         float depth_inv = 1.0 - depth;
 
-        // Parallax shift
+        // Calculate parallax shift
         float shift = (depth_inv - u_convergence);
         vec2 shifted_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength, 0.0);
 
-        // Original depth values for disocclusion decisions
-        float original_depth = depth;
-        float original_depth_inv = depth_inv;
-
         vec4 color;
-        if (is_disoccluded(flipped_uv, shifted_uv, original_depth)) {
-            // Disoccluded → inpaint from background
-            color = inpaint_disocclusion(flipped_uv, original_depth_inv);
+        
+        // Check if this pixel needs inpainting
+        if (is_disoccluded(flipped_uv, shifted_uv, depth)) {
+            // Disoccluded region → use optimized inpainting
+            color = push_pull_inpaint(flipped_uv, depth_inv);
+            // Alternative: color = separable_inpaint(flipped_uv, depth_inv);
         } else {
             // Normal sampling
             color = texture(tex_color, shifted_uv);
         }
 
-        // Optional subtle border fade to hide hard edges
-        vec2 border = smoothstep(0.0, 0.02, shifted_uv) * smoothstep(1.0, 0.98, shifted_uv);
+        // Subtle edge fade to hide artifacts
+        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * 
+                      smoothstep(1.0, 0.985, shifted_uv);
         color.a = min(border.x, border.y);
 
         frag_color = color;
@@ -192,7 +271,7 @@ class StereoWindow:
         self.current_font_size = self.base_font_size
         self.text_padding = 10
         self.text_spacing = 5
-        self.convergence = 0.5
+        self.convergence = 0.4
 
         # Overlay cache & throttle
         self.overlay_update_interval = 0.25  # seconds, throttle overlay regeneration
