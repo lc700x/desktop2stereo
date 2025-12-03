@@ -612,9 +612,9 @@ class StereoWindow:
                     x = mon_x + (mon_w - self.window_size[0]) // 2
                     y = mon_y + (mon_h - self.window_size[1]) // 2
                 glfw.set_window_pos(self.window, x, y)
-            # if self.stream_mode == "RTMP":
-                # if vidmode.size == self.window_size:
-                #     glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+            if (self.stream_mode == "RTMP" and OS_NAME != "Linux"):
+                if vidmode.size == self.window_size:
+                    glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             self.monitor_index = monitor_index
 
     def get_current_monitor(self):
@@ -642,7 +642,8 @@ class StereoWindow:
         if len(monitors) > 1:
             new_index = (self.monitor_index + direction) % len(monitors)
             self.position_on_monitor(new_index)
-        
+        else:
+            self.position_on_monitor(self.monitor_index)
     def toggle_fullscreen(self):
         """Optimized fullscreen toggle with reduced GLFW calls"""
         current_monitor = self.get_current_monitor()
