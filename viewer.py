@@ -306,7 +306,6 @@ class StereoWindow:
         
         if self.use_3d:
             glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
-            glfw.window_hint(glfw.FLOATING, glfw.TRUE)    # Always on top
             glfw.window_hint(glfw.DECORATED, glfw.FALSE) # remove window decoration
             # Get primary monitor resolution
             monitor = monitors[self.monitor_index]
@@ -314,17 +313,18 @@ class StereoWindow:
             self.window_size = (vidmode.size.width, vidmode.size.height)
         elif self.stream_mode == "RTMP":
             glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
-            # glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
         elif self.stream_mode == "MJPEG":
             glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
-            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)  # clicks pass through
+            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)  # Hide Window
         # Create window
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
         add_logo(self.window)
         
         # Hide window for 3D monitor, but cannot be captured by other apps as well
-        if self.use_3d and OS_NAME == "Windows":
-            hide_window_from_capture(self.window)
+        if self.use_3d:
+            if OS_NAME == "Windows":
+                hide_window_from_capture(self.window)
+            self.apply_3d_settings()
         
         if self.stream_mode == "RTMP" and not self.specify_display:
             self.move_to_adjacent_monitor(direction=1)
@@ -341,7 +341,7 @@ class StereoWindow:
         # Set up OpenGL context
         glfw.make_context_current(self.window)
         self.ctx = moderngl.create_context()
-        glfw.swap_interval(0) if self.use_3d else glfw.swap_interval(1) # VSync on
+        glfw.swap_interval(1) # VSync on
         
         # Precompile shaders and create VAO
         self.prog = self.ctx.program(
@@ -361,6 +361,14 @@ class StereoWindow:
         
         # Load initial font
         self._update_font()
+        
+    def apply_3d_settings(self):
+        if self.monitor_index == self.get_glfw_mon_index(MONITOR_INDEX):
+            glfw.set_window_attrib(self.window, glfw.MOUSE_PASSTHROUGH, True)
+            glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)    # Always on top
+        else:
+            glfw.set_window_attrib(self.window, glfw.MOUSE_PASSTHROUGH, False)
+            glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)    # Disable
 
     def get_glfw_mon_index(self, mss_monitor_index=1):
         """
@@ -602,8 +610,8 @@ class StereoWindow:
             vidmode = glfw.get_video_mode(monitor)
             mon_w, mon_h = vidmode.size.width, vidmode.size.height
             if self.use_3d:
-                glfw.set_window_size(self.window, mon_w, mon_h)
                 glfw.set_window_pos(self.window, mon_x, mon_y)
+                glfw.set_window_size(self.window, mon_w, mon_h)
             else:
                 if self.stream_mode == "RTMP" and OS_NAME=="Linux":
                     x = mon_x + mon_w // 2
@@ -642,8 +650,12 @@ class StereoWindow:
         if len(monitors) > 1:
             new_index = (self.monitor_index + direction) % len(monitors)
             self.position_on_monitor(new_index)
+            self.monitor_index = new_index
         else:
             self.position_on_monitor(self.monitor_index)
+        if self.use_3d:
+            self.apply_3d_settings()
+    
     def toggle_fullscreen(self):
         """Optimized fullscreen toggle with reduced GLFW calls"""
         current_monitor = self.get_current_monitor()
@@ -665,7 +677,7 @@ class StereoWindow:
 
                 # Make the window undecorated and floating
                 glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
-                glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
+                # glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
                 if self.fix_aspect:
                     monitor_aspect = full_w / full_h
                     if monitor_aspect > self.aspect:
@@ -697,7 +709,7 @@ class StereoWindow:
             else:
                 # Exit fullscreen
                 glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.TRUE)
-                glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
+                # glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
 
                 restore_w, restore_h = self._last_window_size or self.window_size
                 restore_x, restore_y = self._last_window_position or (0, 0)

@@ -281,19 +281,19 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 
 > Tip: Need to click the **Stereo Viewer** window/tab first to use.
 
-| Key        | Action Description                                 | Supported Run Mode(s)                                       |
-|------------|----------------------------------------------------|--------------------------------------------------------------|
-| Enter/Space| Toggle fullscreen                                  | Local Viewer                                                 |
-| ← Left     | Move window to adjacent monitor (previous)         | Local Viewer / RTMP Streamer / 3D Monitor                   |
-| → Right    | Move window to adjacent monitor (next)             | Local Viewer / RTMP Streamer / 3D Monitor                   |
-| Esc        | Close the application window                       | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| ↑ Up       | Increase depth strength by 0.5 (max 10)            | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| ↓ Down     | Decrease depth strength by 0.5 (min 0)             | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| 0          | Reset depth strength to original value             | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| Tab        | Cycle to the next display mode                     | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| F          | Toggle FPS display                                 | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| A          | Toggle “fill 16:9” mode                            | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| L          | Toggle lock Stereo Viewer window aspect ratio lock | Local Viewer                                                 |
+| Key        | Action Description                                 | Supported Run Mode(s)                      |
+|------------|----------------------------------------------------|--------------------------------------------|
+| Enter/Space| Toggle fullscreen                                  | Local Viewer                               |
+| ← Left     | Move window to adjacent monitor (previous)         | Local Viewer / RTMP Streamer / 3D Monitor  |
+| → Right    | Move window to adjacent monitor (next)             | Local Viewer / RTMP Streamer / 3D Monitor  |
+| Esc        | Close the application window                       | Local Viewer / RTMP Streamer / 3D Monitor  |
+| ↑ Up       | Increase depth strength by 0.5 (max 10)            | Local Viewer / RTMP Streamer / 3D Monitor  |
+| ↓ Down     | Decrease depth strength by 0.5 (min 0)             | Local Viewer / RTMP Streamer / 3D Monitor  |
+| 0          | Reset depth strength to original value             | Local Viewer / RTMP Streamer / 3D Monitor  |
+| Tab        | Cycle to the next display mode                     | Local Viewer / RTMP Streamer / 3D Monitor  |
+| F          | Toggle FPS display                                 | Local Viewer / RTMP Streamer / 3D Monitor  |
+| A          | Toggle “fill 16:9” mode                            | Local Viewer / RTMP Streamer / 3D Monitor  |
+| L          | Toggle lock Stereo Viewer window aspect ratio lock | Local Viewer                               |
 
 ## Detailed Settings Guide
 

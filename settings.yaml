@@ -427,7 +427,7 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
 Language: CN
-Run Mode: Local Viewer
+Run Mode: 3D Monitor
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
