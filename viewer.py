@@ -665,7 +665,7 @@ class StereoWindow:
 
                 # Make the window undecorated and floating
                 glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
-                glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
+                glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
                 if self.fix_aspect:
                     monitor_aspect = full_w / full_h
                     if monitor_aspect > self.aspect:
