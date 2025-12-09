@@ -1,5 +1,5 @@
-# AMD Radeon™ RX 7000 Series Graphics Cards (GFX110X)
+﻿# AMD Radeon™ RX 7000 Series Graphics Cards (GFX110X)
 --extra-index-url https://d2awnip2yjpvqn.cloudfront.net/v2/gfx110X-all/ 
 torch==2.9.1
-torchvison==0.24.0
+torchvision==0.24.0
 # torchaudio==2.9.0
