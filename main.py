@@ -7,7 +7,7 @@ import signal
 import sys
 import subprocess
 import cv2
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, shutdown_event
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, shutdown_event
 from depth import process, predict_depth
 
 # Global process references
@@ -262,38 +262,108 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
 
     if os_name == "Windows":
         server_cmd = ['./rtmp/mediamtx/mediamtx.exe', './rtmp/mediamtx/mediamtx.yml']
-        ffmpeg_cmd = [
-            './rtmp/ffmpeg/bin/ffmpeg.exe',
-            '-fflags', 'nobuffer',
-            '-flags', 'low_delay',
-            '-probesize', '64',
-            '-analyzeduration', '0',
-            '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':max_framerate={FPS},hwdownload,format=bgra,scale={width}:{height},format=yuv420p[v]",  # Label video output [v], fix odd height
-            '-itsoffset', f'{AUDIO_DELAY}',  # Audio delay (applies to next input)
-            '-f', 'dshow',
-            '-rtbufsize', '256M',
-            '-i', f'audio={STEREOMIX_DEVICE}',
-            '-map', '[v]',
-            '-map', '0:a',
-            '-c:v', 'libx264',
-            '-preset', 'ultrafast',
-            '-tune', 'zerolatency',
-            '-bf', '0',
-            '-g', f'{FPS}',
-            '-force_key_frames', f'expr:gte(t,n_forced*1)',  # Force keyframes every second
-            '-r', f'{FPS}',  # Force constant output framerate
-            '-crf', f'{CRF}', # 18-24 smaller better quality
-            '-c:a', 'libopus',
-            # '-ar', '44100',
-            '-b:a', '96k',
-            '-muxdelay', '0',
-            '-muxpreload', '0',
-            '-flush_packets', '1',
-            '-rtmp_buffer', '0',
-            '-f', 'flv',
-            f'rtmp://localhost:1935/{STREAM_KEY}'
-        ]
-        
+        if not LOSSLESS_SCALING_SUPPORT: 
+            ffmpeg_cmd = [
+                './rtmp/ffmpeg/bin/ffmpeg.exe',
+                '-fflags', 'nobuffer',
+                '-flags', 'low_delay',
+                '-probesize', '64',
+                '-analyzeduration', '0',
+                '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':max_framerate={FPS},hwdownload,format=bgra,scale={width}:{height},format=yuv420p[v]",  # Label video output [v], fix odd height
+                '-itsoffset', f'{AUDIO_DELAY}',  # Audio delay (applies to next input)
+                '-f', 'dshow',
+                '-rtbufsize', '256M',
+                '-i', f'audio={STEREOMIX_DEVICE}',
+                '-map', '[v]',
+                '-map', '0:a',
+                '-c:v', 'libx264',
+                '-preset', 'ultrafast',
+                '-tune', 'zerolatency',
+                '-bf', '0',
+                '-g', f'{FPS}',
+                '-force_key_frames', f'expr:gte(t,n_forced*1)',  # Force keyframes every second
+                '-r', f'{FPS}',  # Force constant output framerate
+                '-crf', f'{CRF}', # 18-24 smaller better quality
+                '-c:a', 'libopus',
+                # '-ar', '44100',
+                '-b:a', '96k',
+                '-muxdelay', '0',
+                '-muxpreload', '0',
+                '-flush_packets', '1',
+                '-rtmp_buffer', '0',
+                '-f', 'flv',
+                f'rtmp://localhost:1935/{STREAM_KEY}'
+            ]
+        else:
+            import win32gui
+            def find_window_by_prefix(prefix):
+                target_hwnd = None
+                def enum_handler(hwnd, _):
+                    nonlocal target_hwnd
+                    title = win32gui.GetWindowText(hwnd)
+                    if title.lower().startswith(prefix.lower()):
+                        target_hwnd = hwnd
+
+                win32gui.EnumWindows(enum_handler, None)
+                return target_hwnd
+            
+            # Get window rectangle
+            def get_window_rect(hwnd):
+                rect = win32gui.GetWindowRect(hwnd)
+                x = rect[0]
+                y = rect[1]
+                width = rect[2] - rect[0]
+                height = rect[3] - rect[1]
+                width = (width // 2) * 2  # make even
+                height = (height // 2) * 2  # make even
+                return x, y, width, height
+
+            # Detect window coordinates
+            hwnd = find_window_by_prefix("Stereo Viewer")
+            if not hwnd:
+                raise RuntimeError(f"Window starting with 'Stereo Viewer' not found")
+
+            capture_x, capture_y, capture_width, capture_height = get_window_rect(hwnd)
+            print("✅ Stereo Viewer Window region (can overlay with Lossless Scaling):")
+            print(f"X={capture_x}, Y={capture_y}, W={capture_width}, H={capture_height}")
+
+            # Build FFmpeg command
+            ffmpeg_cmd = [
+                './rtmp/ffmpeg/bin/ffmpeg.exe',
+                '-fflags', 'nobuffer',
+                '-flags', 'low_delay',
+                '-probesize', '64',
+                '-analyzeduration', '0',
+                '-f', 'gdigrab',
+                '-offset_x', str(capture_x),
+                '-offset_y', str(capture_y),
+                '-video_size', f'{capture_width}x{capture_height}',
+                '-framerate', str(FPS),
+                '-i', 'desktop',
+                '-itsoffset', str(AUDIO_DELAY),
+                '-f', 'dshow',
+                '-rtbufsize', '256M',
+                '-i', f'audio={STEREOMIX_DEVICE}',
+                '-filter_complex', f"format=bgra,scale={capture_width}:{capture_height},format=yuv420p[v]",
+                '-map', '[v]',
+                '-map', '1:a',
+                '-c:v', 'libx264',
+                '-preset', 'ultrafast',
+                '-tune', 'zerolatency',
+                '-bf', '0',
+                '-g', str(FPS),
+                '-force_key_frames', 'expr:gte(t,n_forced*1)',
+                '-r', str(FPS),
+                '-crf', str(CRF),
+                '-c:a', 'libopus',
+                '-b:a', '96k',
+                '-muxdelay', '0',
+                '-muxpreload', '0',
+                '-flush_packets', '1',
+                '-rtmp_buffer', '0',
+                '-f', 'flv',
+                f'rtmp://localhost:1935/{STREAM_KEY}']
+            
     elif os_name == "Darwin":
         
         from AppKit import NSScreen
@@ -706,15 +776,15 @@ def main(mode="Viewer"):
             
             threading.Thread(target=depth_loop, daemon=True).start()
             # build ffmpeg command pointing to your mediamtx and include audio device
-            if STREAM_MODE:
-                frame_rgb = proc_q.get()
-                w, h = frame_rgb.shape[1], frame_rgb.shape[0]
-                if DISPLAY_MODE == "Full-SBS":
-                    w = 2 * w
-                window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS, stream_mode=STREAM_MODE, frame_size = (w,h))
-            else:
+            frame_rgb = proc_q.get()
+            w, h = frame_rgb.shape[1], frame_rgb.shape[0]
+            if DISPLAY_MODE == "Full-SBS":
+                w = 2 * w
+            if not STREAM_MODE:
                 # For local viewer only
-                window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS)
+                h = int(1280 / w * h)
+                w = 1280
+            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS, stream_mode=STREAM_MODE, frame_size = (w,h))
             if STREAM_MODE == "RTMP":
                 if OS_NAME == "Windows":
                     from utils import set_window_to_bottom

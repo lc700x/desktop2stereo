@@ -6,10 +6,10 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 from OpenGL.GL import *
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, get_font_type, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX
+from utils import OS_NAME, crop_icon, get_font_type, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, LOSSLESS_SCALING_SUPPORT
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
-    from utils import hide_window_from_capture
+    from utils import hide_window_from_capture, show_window_in_capture
 elif OS_NAME == "Darwin":
     from utils import send_ctrl_cmd_f
 
@@ -301,16 +301,9 @@ class StereoWindow:
         glfw.window_hint(glfw.RESIZABLE, True)
         glfw.window_hint(glfw.DECORATED, glfw.TRUE) # window decoration
         
-        # Get primary monitor resolution
-        monitors = glfw.get_monitors()
-        
         if self.use_3d:
             glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
             glfw.window_hint(glfw.DECORATED, glfw.FALSE) # remove window decoration
-            # Get primary monitor resolution
-            monitor = monitors[self.monitor_index]
-            vidmode = glfw.get_video_mode(monitor)
-            self.window_size = (vidmode.size.width, vidmode.size.height)
         elif self.stream_mode == "RTMP":
             glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
         elif self.stream_mode == "MJPEG":
@@ -319,18 +312,23 @@ class StereoWindow:
         # Create window
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
         add_logo(self.window)
+        self.position_on_monitor(self.monitor_index)
         
         # Hide window for 3D monitor, but cannot be captured by other apps as well
         if self.use_3d:
-            if OS_NAME == "Windows":
-                hide_window_from_capture(self.window)
+            if not self.specify_display:
+                self.toggle_fullscreen()
             self.apply_3d_settings()
         
-        if self.stream_mode == "RTMP" and not self.specify_display:
-            self.move_to_adjacent_monitor(direction=1)
-        else:
-            self.position_on_monitor(self.monitor_index)
-            if self.specify_display and not self.stream_mode == "RTMP":
+        if self.stream_mode == "RTMP":
+            if OS_NAME != "Darwin" and not LOSSLESS_SCALING_SUPPORT: # need to check for Linux
+                glfw.set_window_opacity(self.window, 0.0)
+            elif not self.specify_display:
+                self.move_to_adjacent_monitor(direction=1)
+            glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+            
+        if self.specify_display:
+            if not self.stream_mode == "RTMP" or LOSSLESS_SCALING_SUPPORT:
                 time.sleep(0.01) # allow a small delay
                 self.toggle_fullscreen()
         
@@ -364,10 +362,12 @@ class StereoWindow:
         
     def apply_3d_settings(self):
         if self.monitor_index == self.get_glfw_mon_index(MONITOR_INDEX):
-            glfw.set_window_attrib(self.window, glfw.MOUSE_PASSTHROUGH, True)
+            if OS_NAME == "Windows":
+                hide_window_from_capture(self.window)
             glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)    # Always on top
         else:
-            glfw.set_window_attrib(self.window, glfw.MOUSE_PASSTHROUGH, False)
+            if OS_NAME == "Windows":
+                show_window_in_capture(self.window)
             glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)    # Disable
 
     def get_glfw_mon_index(self, mss_monitor_index=1):
@@ -521,13 +521,11 @@ class StereoWindow:
             rgb_frame = (rgb_frame * 255).astype(np.uint8)
 
         h, w, _ = rgb_frame.shape
-        self.frame_size = (w, h)
         
         # freeze window size for rtmp streaming
-        if self.stream_mode == "RTMP":
-            if self.display_mode == "Full-SBS":
-                w = 2 * w
-            glfw.set_window_size(self.window, w, h)
+        if self.display_mode == "Full-SBS":
+            w = 2 * w
+        self.frame_size = (w, h)
             
 
         # Update FPS counters but do not regenerate overlay every frame
@@ -604,26 +602,30 @@ class StereoWindow:
     def position_on_monitor(self, monitor_index=0):
         """Optimized monitor positioning"""
         monitors = glfw.get_monitors()
+        print(self.window_size)
         if monitor_index < len(monitors):
             monitor = monitors[monitor_index]
             mon_x, mon_y = glfw.get_monitor_pos(monitor)
             vidmode = glfw.get_video_mode(monitor)
             mon_w, mon_h = vidmode.size.width, vidmode.size.height
-            if self.use_3d:
-                glfw.set_window_pos(self.window, mon_x, mon_y)
-                glfw.set_window_size(self.window, mon_w, mon_h)
+            if self.stream_mode == "RTMP" and OS_NAME=="Linux":
+                x = mon_x + mon_w // 2
+                y = mon_y + mon_h // 2
             else:
-                if self.stream_mode == "RTMP" and OS_NAME=="Linux":
-                    x = mon_x + mon_w // 2
-                    y = mon_y + mon_h // 2
-                else:
-                    x = mon_x + (mon_w - self.window_size[0]) // 2
-                    y = mon_y + (mon_h - self.window_size[1]) // 2
-                glfw.set_window_pos(self.window, x, y)
-            if (self.stream_mode == "RTMP" and OS_NAME != "Linux"):
-                if vidmode.size == self.window_size:
-                    glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
-            self.monitor_index = monitor_index
+                if self.window_size[0] >= mon_w or self.window_size[1] >= mon_h:
+                    if self.window_size[0] >= mon_w:
+                        target_w = mon_w
+                        target_h = int(self.window_size[1] * mon_w / self.window_size[0]) 
+                        self.window_size = (target_w, target_h)
+                    if self.window_size[1] >= mon_h:
+                        target_h = mon_h
+                        target_w = int(self.window_size[0] * mon_h / self.window_size[1])
+                        self.window_size = (target_w, target_h)
+                    glfw.set_window_size(self.window, self.window_size[0], self.window_size[1])
+                x = mon_x + (mon_w - self.window_size[0]) // 2
+                y = mon_y + (mon_h - self.window_size[1]) // 2
+            glfw.set_window_pos(self.window, x, y)
+                
 
     def get_current_monitor(self):
         """Optimized monitor detection with early returns"""
@@ -695,9 +697,6 @@ class StereoWindow:
                     # Center window on screen
                     center_x = mon_x + (full_w - new_w) // 2
                     center_y = mon_y + (full_h - new_h) // 2
-                    if self.display_mode == "Full-SBS":
-                        # Center window on screen
-                        center_y = mon_y + (full_h - new_h//2) // 2
                     glfw.set_window_pos(self.window, center_x, center_y)
                 else:
                     glfw.set_window_size(self.window, full_w, full_h)
@@ -723,7 +722,7 @@ class StereoWindow:
                 glfw.set_window_size(self.window, restore_w, restore_h)
                 glfw.set_window_pos(self.window, restore_x, restore_y)
             self._fullscreen = False
-    
+        self.window_size = glfw.get_window_size(self.window)
     def on_key_event(self, window, key, scancode, action, mods):
         """Optimized key event handling, disable some keys for rtmp and 3d monitor"""
         if action == glfw.PRESS:

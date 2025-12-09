@@ -169,6 +169,7 @@ DEFAULTS = {
     "Stereo Mix": None,
     "CRF": 20,
     "Audio Delay": -0.15,
+    "Lossless Scaling Support": False,
     "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False, # keep the viewer window aspect ratio not change
@@ -227,6 +228,7 @@ UI_TEXTS = {
         "Stereo Mix": "Stereo Mix:",
         "CRF": "CRF:",
         "Audio Delay": "Audio Delay (s):",
+        "Lossless Scaling Support": "Lossless Scaling Support",
         "3D Monitor": "3D Monitor",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
@@ -304,6 +306,7 @@ UI_TEXTS = {
         "Stereo Mix": "混音设备:",
         "CRF": "恒定质量:",
         "Audio Delay": "音频延迟 (秒):",
+        "Lossless Scaling Support": "小黄鸭补帧支持",
         "3D Monitor": "3D显示器",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
@@ -540,6 +543,10 @@ class ConfigGUI(tk.Tk):
         self.fill_16_9_cb = ttk.Checkbutton(self.content_frame, text="Fill 16:9", variable=self.fill_16_9_var)
         self.fill_16_9_cb.grid(row=8, column=2, sticky="w", **self.pad)
         
+        # Lossless Scaling checkbox
+        self.lossless_scaling_support_var = tk.BooleanVar()
+        self.lossless_scaling_support_cb = ttk.Checkbutton(self.content_frame, text="Lossless Scaling Support", variable=self.lossless_scaling_support_var)
+        
         # Fix Viewer Aspect checkbox
         self.fix_viewer_aspect_var = tk.BooleanVar()
         self.fixed_viwer_aspect_cb = ttk.Checkbutton(self.content_frame, text="Fix Viewer Aspect", variable=self.fix_viewer_aspect_var)
@@ -737,6 +744,12 @@ class ConfigGUI(tk.Tk):
         self.stream_protocol_cb["values"] = ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]
         self.stream_protocol_var.set(self.stream_protocol_key)
     
+    def update_lossless_scaling_visibility(self):
+        """Show/hide Lossless Scaling checkbox based on run mode and OS"""
+        if OS_NAME == "Windows" and self.run_mode_key == "RTMP Streamer":
+            self.lossless_scaling_support_cb.grid(row=8, column=3, sticky="w", **self.pad)
+        else:
+            self.lossless_scaling_support_cb.grid_remove()
 
     def update_stereo_display_visibility(self):
         """Show/hide stereo display options based on run mode"""
@@ -1180,6 +1193,9 @@ class ConfigGUI(tk.Tk):
         
         # Trigger the capture mode change handler to update UI
         self.on_capture_mode_change()
+        
+        # Update "Lossless Scaling Support"
+        self.lossless_scaling_support_cb.config(text=texts.get("Lossless Scaling Support", "Lossless Scaling Support"))
 
         # Update stream protocol labels
         self.label_stream_protocol.config(text=texts.get("Stream Protocol:", "Stream Protocol:"))
@@ -1306,6 +1322,9 @@ class ConfigGUI(tk.Tk):
         # Update stream URL first
         self.update_stream_url()
         
+        # Update Lossless Scaling visibility
+        self.update_lossless_scaling_visibility()
+        
         # Grid protocol selection controls
         self.label_stream_protocol.grid(row=1, column=0, sticky="w", **self.pad)
         self.stream_protocol_cb.grid(row=1, column=1, sticky="ew", **self.pad)
@@ -1333,6 +1352,7 @@ class ConfigGUI(tk.Tk):
             self.populate_audio_devices()
         
         self.fixed_viwer_aspect_cb.grid_remove()
+        self.fix_viewer_aspect_var.set(False)
         
         # Bind events for dynamic URL updates
         self.rtmp_stream_key_var.trace_add("write", lambda *args: self.update_stream_url())
@@ -1539,6 +1559,9 @@ class ConfigGUI(tk.Tk):
         self.capture_tool_cb.set(cfg.get("Capture Tool", DEFAULTS["Capture Tool"]))
         self.fill_16_9_var.set(cfg.get("Fill 16:9", DEFAULTS["Fill 16:9"]))
         
+        # Lossless Scaling Support
+        self.lossless_scaling_support_var.set(cfg.get("Lossless Scaling Support", DEFAULTS["Lossless Scaling Support"]))
+        
         # Fixed Viewer Ratio
         self.fix_viewer_aspect_var.set(cfg.get("Fix Viewer Aspect", DEFAULTS["Fix Viewer Aspect"]))
         
@@ -1689,6 +1712,7 @@ class ConfigGUI(tk.Tk):
             "Capture Tool": self.capture_tool_cb.get(),
             "Fill 16:9": self.fill_16_9_var.get(),
             "Fix Viewer Aspect": self.fix_viewer_aspect_var.get(),
+            "Lossless Scaling Support": self.lossless_scaling_support_var.get(),
             "Stream Key": self.rtmp_stream_key_var.get(),
             "Stereo Mix": self.audio_device_var.get(),
             "CRF": int(self.crf_var.get()),

@@ -427,7 +427,7 @@ Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
 Language: CN
-Run Mode: 3D Monitor
+Run Mode: Local Viewer
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
@@ -438,6 +438,7 @@ Unlock Thread (Legacy Streamer): false
 Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
+Lossless Scaling Support: false
 Stream Key: live
 Stereo Mix: 立体声混音 (Realtek(R) Audio)
 CRF: 20

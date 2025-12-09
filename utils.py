@@ -2,7 +2,7 @@ import yaml, threading
 import os, platform, socket
 
 # App Version
-VERSION = "2.3.7"
+VERSION = "2.3.8"
 # Get OS name
 OS_NAME = platform.system()
 # Define StereoMix devices
@@ -137,6 +137,21 @@ if OS_NAME == "Windows":
         else:
             print(f"Failed to set display affinity. Error code: {ctypes.get_last_error()}")
 
+    def show_window_in_capture(glfw_window):
+        """Remove display affinity so the window can appear in screen capture (Windows only)."""
+        WDA_NONE = 0x00000000
+        hwnd = glfw.get_win32_window(glfw_window)
+
+        SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
+        SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+        SetWindowDisplayAffinity.restype = wintypes.BOOL
+
+        result = SetWindowDisplayAffinity(hwnd, WDA_NONE)
+        if result:
+            print("StereoWindow is now visible to screen capture.")
+        else:
+            print(f"Failed to clear display affinity. Error code: {ctypes.get_last_error()}")
+    
     def set_window_to_bottom(glfw_window):
         """
         Finds a window by its title and sets its Z-order to the bottom.
@@ -156,20 +171,9 @@ RUN_MODE = settings["Run Mode"]
 # Add for 3D monitor
 USE_3D_MONITOR = False
 STREAM_MODE = None
-# Determin the run mode and stream mode
-if RUN_MODE == "Local Viewer":
-    RUN_MODE = "Viewer"
-elif RUN_MODE == "3D Monitor" and OS_NAME == "Windows":
-    RUN_MODE = "Viewer"
-    USE_3D_MONITOR = True
-elif RUN_MODE == "MJPEG Streamer":
-    RUN_MODE = "Viewer"
-    STREAM_MODE = "MJPEG" 
-elif RUN_MODE == "RTMP Streamer":
-    RUN_MODE = "Viewer"
-    STREAM_MODE = "RTMP"
-else:
-    RUN_MODE = "Streamer"
+
+# Add for FrameGen
+LOSSLESS_SCALING_SUPPORT = False
 MODEL_ID = settings["Depth Model"]
 ALL_MODELS = settings["Model List"]
 CACHE_PATH = settings["Download Path"]
@@ -193,11 +197,30 @@ USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
 CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture
 FILL_16_9 = settings["Fill 16:9"]
-FIX_VIEWER_ASPECT = settings["Fix Viewer Aspect"]
+FIX_VIEWER_ASPECT = True if RUN_MODE == "RTMP Streamer" else settings["Fix Viewer Aspect"] # Keep Viewer Aspect for RTMP with LOSSLESS_SCALING_SUPPORT
 STEREOMIX_DEVICE = settings["Stereo Mix"] # RTMP StereoMix Device
 STREAM_KEY = settings["Stream Key"]
 AUDIO_DELAY = settings["Audio Delay"]
 CRF = settings["CRF"]
+
+# Determin the run mode and stream mode
+if RUN_MODE == "Local Viewer":
+    RUN_MODE = "Viewer"
+elif RUN_MODE == "3D Monitor" and OS_NAME == "Windows":
+    RUN_MODE = "Viewer"
+    USE_3D_MONITOR = True
+elif RUN_MODE == "MJPEG Streamer":
+    RUN_MODE = "Viewer"
+    STREAM_MODE = "MJPEG" 
+elif RUN_MODE == "RTMP Streamer":
+    RUN_MODE = "Viewer"
+    STREAM_MODE = "RTMP"
+    if OS_NAME == "Windows":
+        # Frame Generation Settings for RTMP, Local Viewer not requried
+        LOSSLESS_SCALING_SUPPORT = settings["Lossless Scaling Support"]
+else:
+    RUN_MODE = "Streamer"
+
 # Specify the Stereo Display for output
 STEREO_DISPLAY_SELECTION = settings["Specify Display"]
 STEREO_DISPLAY_INDEX = settings["Stereo Monitor"]
