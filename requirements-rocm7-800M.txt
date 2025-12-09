@@ -1,5 +1,5 @@
 ﻿# AMD Ryzen™ AI 340 (840M), 350 (860M), 365 (880M), 370 (890M)
 --extra-index-url https://d2awnip2yjpvqn.cloudfront.net/v2/gfx1150/ 
 torch==2.9.1
-torch==0.24.0
+torchvision==0.24.0
 # torchaudio==2.9.0
