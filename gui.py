@@ -580,7 +580,7 @@ class ConfigGUI(tk.Tk):
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
         self.label_display_mode.grid(row=11, column=0, sticky="w", **self.pad)
-        self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB"]
+        self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB", "Depth Map"]
         self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
         self.display_mode_cb.grid(row=11, column=1, sticky="ew", **self.pad)
         
@@ -750,6 +750,24 @@ class ConfigGUI(tk.Tk):
             self.lossless_scaling_support_cb.grid(row=8, column=3, sticky="w", **self.pad)
         else:
             self.lossless_scaling_support_cb.grid_remove()
+            
+    def update_display_mode_options(self):
+        """Update display mode options based on current run mode"""
+        if self.run_mode_key in ["Legacy Streamer", "3D Monitor"]:
+            # Remove "Depth Map" from display modes for Legacy Streamer
+            display_modes = ["Half-SBS", "Full-SBS", "TAB"]
+        else:
+            display_modes = ["Half-SBS", "Full-SBS", "TAB", "Depth Map"]
+        
+        # Update the combobox values
+        current_value = self.display_mode_cb.get()
+        self.display_mode_cb["values"] = display_modes
+        
+        # If current value is not in available options, set to first available
+        if current_value not in display_modes and display_modes:
+            self.display_mode_cb.set(display_modes[0])
+        elif not display_modes:
+            self.display_mode_cb.set("")
 
     def update_stereo_display_visibility(self):
         """Show/hide stereo display options based on run mode"""
@@ -1270,6 +1288,9 @@ class ConfigGUI(tk.Tk):
         elif label == monitor3d_label:
             self.run_mode_key = "3D Monitor"
             self.show_viewer_controls()
+        
+        # Update display mode options based on run mode
+        self.update_display_mode_options()
         # Update stereo display visibility
         self.update_stereo_display_visibility()
     
@@ -1583,6 +1604,8 @@ class ConfigGUI(tk.Tk):
         
         # Update stereo display visibility
         self.update_stereo_display_visibility()
+        # Update run_mode visibility
+        self.update_display_mode_options()
         
         # Update run mode visibility
         self.update_language_texts()
