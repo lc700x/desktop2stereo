@@ -367,7 +367,6 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
     elif os_name == "Darwin":
         
         from AppKit import NSScreen
-        from capture import get_window_client_bounds_mac
 
         def get_scale(monitor_index):
             """Get the Retina scale factor for a specific monitor"""
