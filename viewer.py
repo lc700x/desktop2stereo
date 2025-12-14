@@ -333,11 +333,13 @@ class StereoWindow:
             self.apply_3d_settings()
         
         if self.stream_mode == "RTMP":
-            if OS_NAME != "Darwin" and not LOSSLESS_SCALING_SUPPORT: # need to check for Linux
-                glfw.set_window_opacity(self.window, 0.0)
-            elif not self.specify_display:
+            
+            if not self.specify_display:
                 self.move_to_adjacent_monitor(direction=1)
-            glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+            if OS_NAME != "Darwin":
+                if not LOSSLESS_SCALING_SUPPORT: # need to check for Linux
+                    glfw.set_window_opacity(self.window, 0.0)
+                glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
             
         if self.specify_display:
             if not self.stream_mode == "RTMP" or LOSSLESS_SCALING_SUPPORT:
