@@ -79,7 +79,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3-LARGE:
+  depth-anything/DA3-LARGE-1.1:
     resolutions:
     - 182
     - 224
@@ -88,7 +88,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3-GIANT:
+  depth-anything/DA3-GIANT-1.1:
     resolutions:
     - 182
     - 224
@@ -97,7 +97,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3METRIC-LARGE:
+  depth-anything/DA3NESTED-GIANT-LARGE-1.1:
     resolutions:
     - 182
     - 224
@@ -115,7 +115,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3NESTED-GIANT-LARGE:
+  depth-anything/DA3METRIC-LARGE:
     resolutions:
     - 182
     - 224
@@ -440,7 +440,7 @@ Fill 16:9: true
 Fix Viewer Aspect: false
 Lossless Scaling Support: false
 Stream Key: live
-Stereo Mix: 立体声混音 (Realtek(R) Audio)
+Stereo Mix: virtual-audio-capturer
 CRF: 20
 Audio Delay: -0.15
 Specify Display: false

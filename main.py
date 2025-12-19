@@ -54,32 +54,36 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
     user32.keybd_event.restype = None
 
     # Virtual key codes
-    VK_LWIN = 0x5B  # Left Windows key
-    VK_TAB = 0x09   # Tab key
+    VK_MENU = 0x12   # Left Alt key
+    VK_TAB = 0x09    # Tab key
     KEYEVENTF_KEYUP = 0x0002
 
-    def simulate_win_tab():
+    def simulate_alt_tab():
         """
-        Simulate pressing Win+Tab to open Task View, then again to close it.
+        Simulate pressing Alt+Tab to switch windows, then again to return.
         Returns True if successful, False otherwise.
         """
         try:
-            # First Win+Tab: Open Task View
-            user32.keybd_event(VK_LWIN, 0, 0, 0)
-            user32.keybd_event(VK_TAB, 0, 0, 0)
-            time.sleep(0.01)  # Small delay for key press
-            user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)
-            user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
-            time.sleep(0.5)  # Delay to allow Task View to open
-            # Second Win+Tab: Close Task View
-            user32.keybd_event(VK_LWIN, 0, 0, 0)
-            user32.keybd_event(VK_TAB, 0, 0, 0)
-            time.sleep(0.01)  # Small delay for key press
-            user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)
-            user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
+            # First Alt+Tab
+            user32.keybd_event(VK_MENU, 0, 0, 0)   # Alt down
+            user32.keybd_event(VK_TAB, 0, 0, 0)    # Tab down
+            time.sleep(0.01)
+            user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)  # Tab up
+            user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0) # Alt up
+
+            time.sleep(0.5)  # Delay to allow window switch
+
+            # Second Alt+Tab (switch back)
+            user32.keybd_event(VK_MENU, 0, 0, 0)   # Alt down
+            user32.keybd_event(VK_TAB, 0, 0, 0)    # Tab down
+            time.sleep(0.01)
+            user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)  # Tab up
+            user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0) # Alt up
+
             return True
-        except Exception as e:
-            print(f"[simulate_win_tab] Failed to simulate Win+Tab: {e}")
+        except Exception:
+
+            print(f"[simulate_alt_tab] Failed to simulate Win+Tab: {e}")
             return False
 
     # Waits for capture_started_event to be set, then simulates Win+Tab twice
@@ -99,7 +103,7 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
 
             try:
                 # print("[keyboard] Simulating Win+Tab to show desktop and restore windows...")
-                success = simulate_win_tab()
+                success = simulate_alt_tab()
 
                 if CAPTURE_CURSOR_DELAY_S:
                     time.sleep(CAPTURE_CURSOR_DELAY_S)
@@ -114,8 +118,8 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
         # print("[keyboard] Exiting cursor worker thread.")
 
     # Start worker thread (daemon so it won't block shutdown)
-    win_tab_thread = threading.Thread(target=_keyboard, name="CursorWorker", daemon=True)
-    win_tab_thread.start()
+    alt_tab_thread = threading.Thread(target=_keyboard, name="CursorWorker", daemon=True)
+    alt_tab_thread.start()
 
     # Initialize capture object and capture loop
     cap = (

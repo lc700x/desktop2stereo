@@ -333,7 +333,6 @@ class StereoWindow:
             self.apply_3d_settings()
         
         if self.stream_mode == "RTMP":
-            
             if not self.specify_display:
                 self.move_to_adjacent_monitor(direction=1)
             if OS_NAME != "Darwin":
@@ -343,7 +342,6 @@ class StereoWindow:
             
         if self.specify_display:
             if not self.stream_mode == "RTMP" or LOSSLESS_SCALING_SUPPORT:
-                time.sleep(0.01) # allow a small delay
                 self.toggle_fullscreen()
         
         if not self.window:

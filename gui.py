@@ -994,6 +994,7 @@ class ConfigGUI(tk.Tk):
             self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
             self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
             self.check_recompile_trt.grid_remove()  # Hide "Recompile TensorRT" for DirectML
+            self.fp16_var.set(False) # disable FP16 for DirectML
         elif device_type == "CUDA":
             self.check_unlock_streamer_thread.grid_remove()
             # Hide TensorRT for ROCm
