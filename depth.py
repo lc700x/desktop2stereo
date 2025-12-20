@@ -35,6 +35,7 @@ IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
 IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO
 IS_DIRECTML = "DirectML" in DEVICE_INFO
+IS_MPS = "MPS" in DEVICE_INFO
 
 # Optimization for CUDA
 if IS_NVIDIA:
@@ -842,10 +843,17 @@ def make_sbs_core(rgb: torch.Tensor,
         shift_norm = shifts * (2.0 / (W - 1))
         grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
         grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
-        left = F.grid_sample(img, grid_left, mode="bilinear",
-                             padding_mode="border", align_corners=False)[0]
-        right = F.grid_sample(img, grid_right, mode="bilinear",
-                              padding_mode="border", align_corners=False)[0]
+        if IS_MPS:
+            grid_left, grid_right = grid_right.clamp(-1,1), grid_right.clamp(-1,1)
+            left = F.grid_sample(img, grid_left, mode="bilinear",
+                                padding_mode="zeros", align_corners=False)[0]
+            right = F.grid_sample(img, grid_right, mode="bilinear",
+                                padding_mode="zeros", align_corners=False)[0]
+        else:
+            left = F.grid_sample(img, grid_left, mode="bilinear",
+                                padding_mode="border", align_corners=False)[0]
+            right = F.grid_sample(img, grid_right, mode="bilinear",
+                                padding_mode="border", align_corners=False)[0]
     # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
     else:
         base = torch.arange(W, device=device, dtype=torch.int64).view(1, -1).expand(H, -1)
