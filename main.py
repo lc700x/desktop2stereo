@@ -901,8 +901,8 @@ def main(mode="Viewer"):
                     
     except KeyboardInterrupt:
         print("\n[Main] Keyboard interrupt received, shutting down...")
-    except Exception as e:
-        print(f"[Main] Error: {e}")
+    # except Exception as e:
+    #     print(f"[Main] Error: {e}")
     finally:
         # Ensure cleanup happens
         shutdown_event.set()

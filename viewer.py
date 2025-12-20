@@ -527,6 +527,10 @@ class StereoWindow:
 
     def _add_overlay(self, rgb_frame):
         """Add FPS and depth ratio overlay to the frame with minimal allocations."""
+        # Skip overlay for depth map mode
+        if self.display_mode == "Depth Map":
+            return rgb_frame
+        
         # If nothing to show or no font available, do nothing fast
         if not (self.show_fps or self.show_depth_ratio) or self.font is None:
             return rgb_frame
@@ -783,8 +787,11 @@ class StereoWindow:
         # Ensure depth is float32 without unnecessary copying
         depth = np.asarray(depth, dtype='float32')
         
-        # Add overlay to the frame
-        rgb_with_overlay = self._add_overlay(rgb)
+        # Only add overlay for stereo modes, not for depth map
+        if self.display_mode != "Depth Map":
+            rgb_with_overlay = self._add_overlay(rgb)
+        else:
+            rgb_with_overlay = rgb
         
         h, w, _ = rgb_with_overlay.shape
         
@@ -872,6 +879,7 @@ class StereoWindow:
         # Get window dimensions once
         win_w, win_h = glfw.get_framebuffer_size(self.window)
         tex_w, tex_h = self._texture_size
+        
         if self.fix_aspect:
             if self.display_mode == "Full-SBS":
                 glfw.set_window_aspect_ratio(self.window, 2*tex_w, tex_h)
@@ -879,8 +887,49 @@ class StereoWindow:
                 glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
         else:
             glfw.set_window_aspect_ratio(self.window, glfw.DONT_CARE, glfw.DONT_CARE)
+        
         # Clear screen once
         self.ctx.clear(0.1, 0.1, 0.1)
+        
+        # Early exit for depth map mode
+        if self.display_mode == "Depth Map":
+            if self.fill_16_9:
+                src_w, src_h = tex_w, tex_h
+                max_w, max_h = win_w, win_h
+                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+                center_x = win_w / 2.0
+                center_y = win_h / 2.0
+                self.ctx.viewport = (
+                    int(center_x - render_w / 2),
+                    int(center_y - render_h / 2),
+                    render_w, render_h
+                )
+            else:
+                disp_w, disp_h = tex_w, tex_h
+                target_aspect = disp_h / disp_w
+                try:
+                    window_aspect = win_h / win_w
+                except ZeroDivisionError:
+                    window_aspect = 9/16
+
+                # Scale to fit window, preserving aspect ratio
+                if window_aspect <= target_aspect:
+                    # Window is wider than content
+                    view_h = win_h
+                    view_w = int(view_h / target_aspect)
+                else:
+                    # Window is taller than content
+                    view_w = win_w
+                    view_h = int(view_w * target_aspect)
+
+                offset_x = (win_w - view_w) // 2
+                offset_y = (win_h - view_h) // 2
+                self.ctx.viewport = (offset_x, offset_y, view_w, view_h)
+            
+            # Use depth texture directly
+            self.depth_tex.use(location=0)
+            self.depth_vao.render(moderngl.TRIANGLE_STRIP)
+            return
         
         if self.fill_16_9:
             if self.display_mode in ["Full-SBS", "Half-SBS", "TAB"]:
