@@ -5,6 +5,7 @@ import os, platform, socket
 VERSION = "2.3.8"
 # Get OS name
 OS_NAME = platform.system()
+
 # Define StereoMix devices
 STEREO_MIX_NAMES = [
 # English
@@ -23,6 +24,15 @@ STEREO_MIX_NAMES = [
 "blackhole", "loopback", "aggregate device", "multi-output device", "virtual desktop speakers", "remote sound",
 # Linux specific
 "monitor"
+]
+
+# Models with Disabled TRT 
+DISABLE_TRT_KEYWORDS = [
+    "video-depth-anything",
+    "da3", 
+    "dpt",
+    "zoedepth",
+    "depthpro"
 ]
 
 # Global shutdown event

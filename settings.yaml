@@ -360,60 +360,60 @@ Model List:
     - 518
   lc700x/depth-ai-hf:
     resolutions:
-    - 224
     - 192
+    - 224
   lc700x/dpt-hybrid-midas-hf:
     resolutions:
     - 384
   Intel/dpt-beit-base-384:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   Intel/dpt-beit-large-512:
     resolutions:
-    - 512
-    - 448
-    - 384
-    - 288
     - 192
+    - 288
+    - 384
+    - 448
+    - 512
   Intel/dpt-large:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   lc700x/dpt-large-redesign-hf:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   Intel/zoedepth-nyu-kitti:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   Intel/zoedepth-nyu:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   Intel/zoedepth-kitti:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   apple/DepthPro-hf:
     resolutions:
     - 1536
@@ -422,11 +422,11 @@ Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 0.5
 Depth Resolution: 336
-FP16: true
+FP16: false
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
-Language: CN
+Language: EN
 Run Mode: Local Viewer
 Stream Protocol: HLS
 Streamer Port: 1122

@@ -4,7 +4,7 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, crop_icon, get_local_ip, shutdown_event
+from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, DISABLE_TRT_KEYWORDS, crop_icon, get_local_ip, shutdown_event
 
 # Get model lists
 DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
@@ -744,6 +744,38 @@ class ConfigGUI(tk.Tk):
         self.stream_protocol_cb["values"] = ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]
         self.stream_protocol_var.set(self.stream_protocol_key)
     
+    # Auto hide tensorrt for incompatible models
+    def on_depth_model_change(self, event=None):
+        """Handle depth model selection changes"""
+        selected_model = self.depth_model_var.get()
+        self.update_depth_resolution_options(selected_model)
+        
+        # Disable TensorRT for specific models
+        self.update_tensorrt_visibility_based_on_model(selected_model)
+
+    def update_tensorrt_visibility_based_on_model(self, model_name):
+        """Disable TensorRT option for specific model types"""
+        model_lower = model_name.lower()
+        
+        # Check if any keyword is in the model name
+        should_disable = any(keyword in model_lower for keyword in DISABLE_TRT_KEYWORDS)
+        
+        # Update TensorRT checkbox state
+        if should_disable:
+            # Disable and uncheck TensorRT
+            self.use_tensorrt.set(False)
+            self.check_tensorrt.config(state="disabled")
+            self.check_recompile_trt.config(state="disabled")
+            # Also hide recompile option
+            self.check_recompile_trt.grid_remove()
+        else:
+            # Enable TensorRT if device supports it
+            self.check_tensorrt.config(state="normal")
+            self.check_recompile_trt.config(state="normal")
+            # Update recompile visibility based on current TensorRT selection
+            self.update_recompile_trt_visibility()
+    
+    # Support for lossless scaling
     def update_lossless_scaling_visibility(self):
         """Show/hide Lossless Scaling checkbox based on run mode and OS"""
         if OS_NAME == "Windows" and self.run_mode_key == "RTMP Streamer":
@@ -1006,8 +1038,13 @@ class ConfigGUI(tk.Tk):
                 self.label_inference_optimizer.grid()
                 self.check_tensorrt.grid()
                 self.check_torch_compile.grid()
+                
                 # Control visibility of "Recompile TensorRT" based on whether TensorRT is selected
                 self.update_recompile_trt_visibility()
+                
+                # Update TensorRT visibility based on current model
+                current_model = self.depth_model_var.get()
+                self.update_tensorrt_visibility_based_on_model(current_model)
                 
         else:
             self.label_inference_optimizer.grid_remove()  # Hide Inference Optimizer label
@@ -1526,13 +1563,19 @@ class ConfigGUI(tk.Tk):
         self.res_cb.set(str(cfg.get("Output Resolution", DEFAULTS["Output Resolution"])))
         self.ipd_var.set(str(cfg.get("IPD", DEFAULTS["IPD"])))
 
+        # Apply depth model settings
         model_list = DEFAULT_MODEL_LIST
-            
         self.depth_model_cb["values"] = model_list
         selected_model = cfg.get("Depth Model", DEFAULTS["Depth Model"])
         
         if selected_model not in self.depth_model_cb["values"]:
             selected_model = self.depth_model_cb["values"][0] if self.depth_model_cb["values"] else DEFAULTS["Depth Model"]
+        
+        self.depth_model_var.set(selected_model)
+        self.update_depth_resolution_options(selected_model)
+        
+        # Update TensorRT visibility based on selected model
+        self.update_tensorrt_visibility_based_on_model(selected_model)
         
         self.depth_model_var.set(selected_model)
         self.update_depth_resolution_options(selected_model)
@@ -1545,6 +1588,7 @@ class ConfigGUI(tk.Tk):
         self.download_var.set(cfg.get("Download Path", DEFAULTS["Download Path"]))
         hf_endpoint = cfg.get("HF Endpoint", DEFAULTS["HF Endpoint"])
         self.hf_endpoint_var.set(hf_endpoint)
+        
         # If the endpoint is not in the predefined list, add it
         if hf_endpoint not in self.hf_endpoint_cb["values"]:
             self.hf_endpoint_cb["values"] = list(self.hf_endpoint_cb["values"]) + [hf_endpoint]
@@ -1605,7 +1649,7 @@ class ConfigGUI(tk.Tk):
         
         # Update stereo display visibility
         self.update_stereo_display_visibility()
-        # Update run_mode visibility
+        # Update display_mode visibility
         self.update_display_mode_options()
         
         # Update run mode visibility
@@ -1644,11 +1688,6 @@ class ConfigGUI(tk.Tk):
                 # Default to first resolution if we can't convert
                 self.depth_res_cb.set(str(resolutions[0]))
 
-    def on_depth_model_change(self, event=None):
-        """Handle depth model selection changes"""
-        selected_model = self.depth_model_var.get()
-        self.update_depth_resolution_options(selected_model)
-
     def load_defaults(self):   
         # Apply all defaults
         self.apply_config(DEFAULTS, keep_optional=False)
@@ -1661,6 +1700,10 @@ class ConfigGUI(tk.Tk):
         
         # Load the hard defaults
         self.load_defaults()
+        
+        # Update TensorRT visibility based on the default model
+        current_model = self.depth_model_var.get()
+        self.update_tensorrt_visibility_based_on_model(current_model)
         
         # Restore language and device if needed
         if current_language in UI_TEXTS:

@@ -9,7 +9,7 @@ from threading import Lock
 import cv2
 import os, warnings
 
-# Initialize DirectML Device
+# Initialize Computing Device
 def get_device(index=0):
     try:
         try:
@@ -31,11 +31,26 @@ DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
 print(DEVICE_INFO)
 print(f"Model: {MODEL_ID}")
 
+# Check device types
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
 IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO
 IS_DIRECTML = "DirectML" in DEVICE_INFO
 IS_MPS = "MPS" in DEVICE_INFO
+
+# Check Depth Pro
+_IS_DEPTHPRO = "depthpro" in MODEL_ID.lower()
+
+DEPTHPRO_PROCESSOR = None
+if _IS_DEPTHPRO:
+    from transformers import AutoImageProcessor
+    DEPTHPRO_PROCESSOR = AutoImageProcessor.from_pretrained(
+        MODEL_ID,
+        cache_dir=CACHE_PATH
+    )
+
+def is_metric_model():
+    return _IS_DEPTHPRO or "metric" in MODEL_ID.lower()
 
 # Optimization for CUDA
 if IS_NVIDIA:
@@ -209,10 +224,10 @@ def normalize_tensor(tensor):
 
 def post_process_depth(depth):
     depth = normalize_tensor(depth).squeeze()
-    if not ('da3' in MODEL_ID.lower() and 'metric' in MODEL_ID.lower()):
+    if not ('da3' in MODEL_ID.lower() and is_metric_model()):
         if 'da3' in MODEL_ID.lower():
             depth = 1.0 - depth
-        elif 'metric' in MODEL_ID.lower():
+        elif is_metric_model():
             depth = 1.0 - depth
     depth = apply_gamma(depth)
     depth = apply_contrast(depth)
@@ -292,7 +307,7 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         config.set_flag(trt.BuilderFlag.FP16)
         
         # Set workspace memory (essential for all precision modes) 
-        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 8 << 30)  # 8 GB Workspace 
+        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 << 30)  # 4 GB Workspace 
         
         # Set dynamic shapes profile 
         profile = builder.create_optimization_profile()
@@ -638,21 +653,42 @@ def _unpad_and_resize_depth(depth_tensor: torch.Tensor, pad_top: int, pad_left: 
     resized = F.interpolate(cropped.unsqueeze(0), size=(out_h, out_w), mode='bilinear', align_corners=False)[0]
     # Return [1, out_h, out_w]
     return resized
-def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth: bool = True):
-    """
-    Drop-in replacement that:
-      - always feeds the model a fixed square input of size DEPTH_RESOLUTION
-      - pads/resizes on the GPU (no cv2 CPU resize)
-      - preserves rgb_c when return_tuple=True
-      - robustly handles variable post_process_depth output shapes (e.g. (H,W), (1,H,W), (B,C,H,W))
-      - returns depth as a 2D tensor [H, W]
-    """
-    # get original size
+
+def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth=True):
     h, w = image_rgb.shape[:2]
 
-    # Convert input image to device tensor once (avoid extra copies).
-    # Use MODEL_DTYPE so subsequent ops use consistent dtype.
-    # Keep rgb_c as the CHW tensor (same behavior as original).
+    # DepthPro Inference
+    if _IS_DEPTHPRO:
+        inputs = DEPTHPRO_PROCESSOR(
+            images=image_rgb,
+            return_tensors="pt"
+        ).to(DEVICE)
+
+        with torch.no_grad():
+            depth = model_wraper.model(**inputs).predicted_depth
+
+        depth = depth.squeeze()  # [H_model, W_model] metric meters
+
+        # Resize depth back to original frame size
+        depth = torch.nn.functional.interpolate(
+            depth.unsqueeze(0).unsqueeze(0),
+            size=(h, w),
+            mode="bilinear",
+            align_corners=False
+        )[0, 0]
+
+        # Visualization normalization ONLY
+        depth_vis = (depth - depth.min()) / (depth.max() - depth.min() + 1e-6)
+
+        if use_temporal_smooth:
+            depth_vis = depth_stabilizer(depth_vis)
+
+        rgb_c = torch.from_numpy(image_rgb).to(DEVICE).permute(2, 0, 1)
+
+        return (depth_vis, rgb_c) if return_tuple else depth_vis
+
+
+    # Depth Anything / DA3 / Video path
     t = torch.from_numpy(np.ascontiguousarray(image_rgb))
     t = t.to(device=DEVICE, dtype=MODEL_DTYPE, non_blocking=True)  # [H,W,C] on device
     rgb_c = t.permute(2, 0, 1).contiguous()  # [C,H,W] (same as original when return_tuple=True)
@@ -687,10 +723,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     if use_temporal_smooth:
         depth = depth_stabilizer(depth)
 
-    # --- Normalize depth tensor shape to [1, H_model, W_model] ---
-    # post_process_depth may return shapes like: (H,W), (1,H,W), (B,H,W), (1,1,H,W), etc.
-    # We standardize to [1, H, W].
-    # Accept tensors on the same device as model.
+    # Normalize depth tensor shape to [1, H_model, W_model] post_process_depth may return shapes like: (H,W), (1,H,W), (B,H,W), (1,1,H,W), etc.
     if not isinstance(depth, torch.Tensor):
         # defensive: if model returns other object, try to access common fields (rare)
         depth = torch.as_tensor(depth, device=DEVICE, dtype=MODEL_DTYPE)
