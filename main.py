@@ -37,7 +37,7 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
     import time
     
     # optional small delay (seconds) after capture event before performing actions
-    CAPTURE_CURSOR_DELAY_S = 0.08
+    CAPTURE_CURSOR_DELAY_S = 0.2
 
     # Handle Windows Hi-DPI scaling
     try:
@@ -64,14 +64,6 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
         Returns True if successful, False otherwise.
         """
         try:
-            # First Alt+Tab
-            user32.keybd_event(VK_MENU, 0, 0, 0)   # Alt down
-            user32.keybd_event(VK_TAB, 0, 0, 0)    # Tab down
-            time.sleep(0.01)
-            user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)  # Tab up
-            user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0) # Alt up
-
-            time.sleep(0.5)  # Delay to allow window switch
 
             # Second Alt+Tab (switch back)
             user32.keybd_event(VK_MENU, 0, 0, 0)   # Alt down
@@ -909,8 +901,8 @@ def main(mode="Viewer"):
                     
     except KeyboardInterrupt:
         print("\n[Main] Keyboard interrupt received, shutting down...")
-    # except Exception as e:
-    #     print(f"[Main] Error: {e}")
+    except Exception as e:
+        print(f"[Main] Error: {e}")
     finally:
         # Ensure cleanup happens
         shutdown_event.set()

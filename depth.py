@@ -180,16 +180,31 @@ def apply_contrast(depth, factor=1.2):
     return torch.clamp((depth - mean) * factor + mean, 0, 1)
 
 def normalize_tensor(tensor):
-    mask = ~torch.isnan(tensor)  # keep only non-NaN values
-    if not mask.any():
-        return torch.zeros_like(tensor)  # all NaNs → return zeros
-    min_val = tensor[mask].min()
-    max_val = tensor[mask].max()
+    finite_mask = torch.isfinite(tensor)
+
+    # If all values are NaN/Inf → return zeros
+    if not finite_mask.any():
+        return torch.zeros_like(tensor)
+
+    # Replace invalid values with +inf / -inf safely
+    safe_tensor = torch.where(
+        finite_mask,
+        tensor,
+        torch.zeros_like(tensor)
+    )
+
+    min_val = safe_tensor.min()
+    max_val = safe_tensor.max()
     denom = max_val - min_val
+
     if denom == 0:
         return torch.zeros_like(tensor)
-    result = (tensor - min_val) / denom
-    return torch.nan_to_num(result, nan=0.0)  # replace NaNs with 0
+
+    result = (safe_tensor - min_val) / denom
+
+    # Explicitly zero out invalid positions
+    return torch.where(finite_mask, result, torch.zeros_like(result))
+
 
 def post_process_depth(depth):
     depth = normalize_tensor(depth).squeeze()

@@ -440,7 +440,7 @@ Fill 16:9: true
 Fix Viewer Aspect: false
 Lossless Scaling Support: false
 Stream Key: live
-Stereo Mix: virtual-audio-capturer
+Stereo Mix: 立体声混音 (Realtek(R) Audio)
 CRF: 20
 Audio Delay: -0.15
 Specify Display: false
