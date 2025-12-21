@@ -54,6 +54,14 @@ if %errorlevel% equ 0 (
     echo Note: No Virtual Desktop Display adapter found or could not be removed.
 )
 
+echo Removing SudoMaker Virtual Display Driver adapter...
+powershell -Command "Get-PnpDevice -Class Display | Where-Object { $_.FriendlyName -like '*SudoMaker*' } | ForEach-Object { pnputil /remove-device $_.InstanceId /subtree /force 2>$null; Write-Host \"Removed: $($_.FriendlyName)\" }"
+if %errorlevel% equ 0 (
+    echo SudoMaker Virtual Display Driver adapter removed successfully.
+) else (
+    echo Note: No SudoMaker Virtual Display Driver adapter found or could not be removed.
+)
+
 echo Done.
 endlocal
 pause
