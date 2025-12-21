@@ -239,6 +239,8 @@ class StereoWindow:
     
     def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT, stream_mode=None, frame_size=(1280, 720)):
         # Initialize with default values
+        # Viewer visibility control
+        self._has_real_frame = False
         self.use_3d = use_3d
         self.title = "Stereo Viewer"
         self.ipd_uv = ipd
@@ -322,27 +324,9 @@ class StereoWindow:
             glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
             glfw.window_hint(glfw.VISIBLE, glfw.FALSE)  # Hide Window
         # Create window
+        glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
         self.window = glfw.create_window(*self.window_size, self.title, None, None)
         add_logo(self.window)
-        self.position_on_monitor(self.monitor_index)
-        
-        # Hide window for 3D monitor, but cannot be captured by other apps as well
-        if self.use_3d:
-            if not self.specify_display:
-                self.toggle_fullscreen()
-            self.apply_3d_settings()
-        
-        if self.stream_mode == "RTMP":
-            if not self.specify_display:
-                self.move_to_adjacent_monitor(direction=1)
-            if OS_NAME != "Darwin":
-                if not LOSSLESS_SCALING_SUPPORT: # need to check for Linux
-                    glfw.set_window_opacity(self.window, 0.0)
-                glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
-            
-        if self.specify_display:
-            if not self.stream_mode == "RTMP" or LOSSLESS_SCALING_SUPPORT:
-                self.toggle_fullscreen()
         
         if not self.window:
             glfw.terminate()
@@ -813,6 +797,33 @@ class StereoWindow:
         rgb_u8 = rgb_with_overlay.astype('uint8', copy=False)
         self.color_tex.write(rgb_u8.tobytes())
         self.depth_tex.write(depth.tobytes())
+        
+        # Only show window after first frame
+        if not self._has_real_frame:
+            self._has_real_frame = True
+            if self.stream_mode != "MJPEG":
+                glfw.show_window(self.window)
+
+            self.position_on_monitor(self.monitor_index)
+        
+            # Hide window for 3D monitor, but cannot be captured by other apps as well
+            if self.use_3d:
+                if not self.specify_display:
+                    self.toggle_fullscreen()
+                self.apply_3d_settings()
+            
+            if self.stream_mode == "RTMP":
+                if not self.specify_display:
+                    self.move_to_adjacent_monitor(direction=1)
+                if OS_NAME != "Darwin":
+                    if not LOSSLESS_SCALING_SUPPORT: # need to check for Linux
+                        glfw.set_window_opacity(self.window, 0.0)
+                    glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+                
+            if self.specify_display:
+                if not self.stream_mode == "RTMP" or LOSSLESS_SCALING_SUPPORT:
+                    self.toggle_fullscreen()
+
 
     def _compute_render_size(self, max_w, max_h, src_w, src_h):
         """Calculate render size maintaining aspect ratio"""

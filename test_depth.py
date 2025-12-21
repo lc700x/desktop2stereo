@@ -3,9 +3,11 @@ import torch
 import numpy as np
 from PIL import Image
 import os
+CACHE_PATH = "models"
 DEVICE_ID = 0
 FP16 = False
 DTYPE = torch.float16 if FP16 else torch.float32
+MODEL_ID = "Intel/zoedepth-nyu"
 # Initialize DirectML Device
 def get_device(index=0):
     try:
@@ -51,10 +53,11 @@ elif "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO:
     torch.backends.cuda.enable_math_sdp(True)
 # url = "http://images.cocodataset.org/val2017/000000039769.jpg"
 # image = Image.open(requests.get(url, stream=True).raw)
-image  = Image.open("C:/Users/xul/Pictures/test.jpg").convert("RGB")
+image  = Image.open("assets/cats.jpg").convert("RGB")
 
-image_processor = AutoImageProcessor.from_pretrained("depth-anything/Depth-Anything-V2-Small-hf", use_fast=True)
-model = AutoModelForDepthEstimation.from_pretrained("depth-anything/Depth-Anything-V2-Small-hf").to(DEVICE, dtype=DTYPE)
+image_processor = AutoImageProcessor.from_pretrained(MODEL_ID, use_fast=True, cache_dir=CACHE_PATH)
+print(image_processor)
+model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, cache_dir=CACHE_PATH).to(DEVICE, dtype=DTYPE)
 
 # prepare image for the model
 inputs = image_processor(images=image, return_tensors="pt")
@@ -75,6 +78,17 @@ depth = torch.nn.functional.interpolate(
     mode="bilinear",
     align_corners=False,
 ).squeeze()
+
+depth = (depth - depth.min()) / (depth.max() - depth.min())
+
+# check if it is metric model
+def is_metric():
+    if 'metric'  in MODEL_ID.lower() or 'kitti'  in MODEL_ID.lower() or 'nyu' in MODEL_ID.lower():
+        return True
+    else:
+        return False
+if is_metric:
+    depth = 1-depth
 
 import matplotlib.pyplot as plt
 plt.imshow(depth.cpu().detach().numpy(), cmap='inferno')

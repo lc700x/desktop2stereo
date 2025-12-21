@@ -205,33 +205,6 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/prompt-depth-anything-vits-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/prompt-depth-anything-vits-transparent-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/prompt-depth-anything-vitl-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
   LiheYoung/depth-anything-small-hf:
     resolutions:
     - 196
@@ -422,12 +395,12 @@ Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 0.5
 Depth Resolution: 336
-FP16: false
+FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
 Language: EN
-Run Mode: Local Viewer
+Run Mode: 3D Monitor
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100

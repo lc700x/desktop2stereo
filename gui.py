@@ -1748,7 +1748,8 @@ class ConfigGUI(tk.Tk):
                 )
                 return
 
-        cfg = {
+        
+        self.cfg = {
             "Capture Mode": self.capture_mode_key,
             "Monitor Index": self.monitor_label_to_index.get(self.monitor_var.get(), DEFAULTS["Monitor Index"]),
             "Window Title": self.selected_window_name if self.capture_mode_key == "Window" else "",
@@ -1788,12 +1789,29 @@ class ConfigGUI(tk.Tk):
             "Stereo Monitor": self.monitor_label_to_index.get(self.stereo_monitor_var.get(), DEFAULTS["Stereo Monitor"]),
         }
         
-        success = self.save_yaml("settings.yaml", cfg)
+        success = self.save_yaml("settings.yaml", self.cfg)
         if success:
             # Show a message with countdown
             countdown_seconds = 0.5
             self._countdown_and_run(countdown_seconds)
-
+            
+            # reset trt
+            self.after(1000, self.on_run_complete)
+    
+    def on_run_complete(self):
+        if self.recompile_trt_var.get() == True:
+            """Called when the application finishes running"""
+            # Uncheck recompile TRT
+            self.recompile_trt_var.set(False)
+            
+            # Update GUI
+            if hasattr(self, 'recompile_trt_checkbox'):
+                self.recompile_trt_checkbox.update_idletasks()
+            
+            # Update global variable
+            self.cfg["Recompile TensorRT"] = False
+            self.after(8000, self.save_yaml,"settings.yaml", self.cfg)
+        
     def _countdown_and_run(self, seconds):
         if self.process and self.process.poll() is None:
             # Process is already running
