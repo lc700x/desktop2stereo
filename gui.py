@@ -4,7 +4,7 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, crop_icon, get_local_ip, shutdown_event
+from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, DISABLE_TRT_KEYWORDS, crop_icon, get_local_ip, shutdown_event
 
 # Get model lists
 DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
@@ -169,6 +169,7 @@ DEFAULTS = {
     "Stereo Mix": None,
     "CRF": 20,
     "Audio Delay": -0.15,
+    "Lossless Scaling Support": False,
     "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False, # keep the viewer window aspect ratio not change
@@ -227,6 +228,7 @@ UI_TEXTS = {
         "Stereo Mix": "Stereo Mix:",
         "CRF": "CRF:",
         "Audio Delay": "Audio Delay (s):",
+        "Lossless Scaling Support": "Lossless Scaling Support",
         "3D Monitor": "3D Monitor",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
@@ -304,6 +306,7 @@ UI_TEXTS = {
         "Stereo Mix": "混音设备:",
         "CRF": "恒定质量:",
         "Audio Delay": "音频延迟 (秒):",
+        "Lossless Scaling Support": "小黄鸭补帧支持",
         "3D Monitor": "3D显示器",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
@@ -540,6 +543,10 @@ class ConfigGUI(tk.Tk):
         self.fill_16_9_cb = ttk.Checkbutton(self.content_frame, text="Fill 16:9", variable=self.fill_16_9_var)
         self.fill_16_9_cb.grid(row=8, column=2, sticky="w", **self.pad)
         
+        # Lossless Scaling checkbox
+        self.lossless_scaling_support_var = tk.BooleanVar()
+        self.lossless_scaling_support_cb = ttk.Checkbutton(self.content_frame, text="Lossless Scaling Support", variable=self.lossless_scaling_support_var)
+        
         # Fix Viewer Aspect checkbox
         self.fix_viewer_aspect_var = tk.BooleanVar()
         self.fixed_viwer_aspect_cb = ttk.Checkbutton(self.content_frame, text="Fix Viewer Aspect", variable=self.fix_viewer_aspect_var)
@@ -573,7 +580,7 @@ class ConfigGUI(tk.Tk):
         # Display Mode
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
         self.label_display_mode.grid(row=11, column=0, sticky="w", **self.pad)
-        self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB"]
+        self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB", "Depth Map"]
         self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
         self.display_mode_cb.grid(row=11, column=1, sticky="ew", **self.pad)
         
@@ -737,6 +744,62 @@ class ConfigGUI(tk.Tk):
         self.stream_protocol_cb["values"] = ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]
         self.stream_protocol_var.set(self.stream_protocol_key)
     
+    # Auto hide tensorrt for incompatible models
+    def on_depth_model_change(self, event=None):
+        """Handle depth model selection changes"""
+        selected_model = self.depth_model_var.get()
+        self.update_depth_resolution_options(selected_model)
+        
+        # Disable TensorRT for specific models
+        self.update_tensorrt_visibility_based_on_model(selected_model)
+
+    def update_tensorrt_visibility_based_on_model(self, model_name):
+        """Disable TensorRT option for specific model types"""
+        model_lower = model_name.lower()
+        
+        # Check if any keyword is in the model name
+        should_disable = any(keyword in model_lower for keyword in DISABLE_TRT_KEYWORDS)
+        
+        # Update TensorRT checkbox state
+        if should_disable:
+            # Disable and uncheck TensorRT
+            self.use_tensorrt.set(False)
+            self.check_tensorrt.config(state="disabled")
+            self.check_recompile_trt.config(state="disabled")
+            # Also hide recompile option
+            self.check_recompile_trt.grid_remove()
+        else:
+            # Enable TensorRT if device supports it
+            self.check_tensorrt.config(state="normal")
+            self.check_recompile_trt.config(state="normal")
+            # Update recompile visibility based on current TensorRT selection
+            self.update_recompile_trt_visibility()
+    
+    # Support for lossless scaling
+    def update_lossless_scaling_visibility(self):
+        """Show/hide Lossless Scaling checkbox based on run mode and OS"""
+        if OS_NAME == "Windows" and self.run_mode_key == "RTMP Streamer":
+            self.lossless_scaling_support_cb.grid(row=8, column=3, sticky="w", **self.pad)
+        else:
+            self.lossless_scaling_support_cb.grid_remove()
+            
+    def update_display_mode_options(self):
+        """Update display mode options based on current run mode"""
+        if self.run_mode_key in ["Legacy Streamer", "3D Monitor"]:
+            # Remove "Depth Map" from display modes for Legacy Streamer
+            display_modes = ["Half-SBS", "Full-SBS", "TAB"]
+        else:
+            display_modes = ["Half-SBS", "Full-SBS", "TAB", "Depth Map"]
+        
+        # Update the combobox values
+        current_value = self.display_mode_cb.get()
+        self.display_mode_cb["values"] = display_modes
+        
+        # If current value is not in available options, set to first available
+        if current_value not in display_modes and display_modes:
+            self.display_mode_cb.set(display_modes[0])
+        elif not display_modes:
+            self.display_mode_cb.set("")
 
     def update_stereo_display_visibility(self):
         """Show/hide stereo display options based on run mode"""
@@ -963,6 +1026,7 @@ class ConfigGUI(tk.Tk):
             self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
             self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
             self.check_recompile_trt.grid_remove()  # Hide "Recompile TensorRT" for DirectML
+            self.fp16_var.set(False) # disable FP16 for DirectML
         elif device_type == "CUDA":
             self.check_unlock_streamer_thread.grid_remove()
             # Hide TensorRT for ROCm
@@ -974,8 +1038,13 @@ class ConfigGUI(tk.Tk):
                 self.label_inference_optimizer.grid()
                 self.check_tensorrt.grid()
                 self.check_torch_compile.grid()
+                
                 # Control visibility of "Recompile TensorRT" based on whether TensorRT is selected
                 self.update_recompile_trt_visibility()
+                
+                # Update TensorRT visibility based on current model
+                current_model = self.depth_model_var.get()
+                self.update_tensorrt_visibility_based_on_model(current_model)
                 
         else:
             self.label_inference_optimizer.grid_remove()  # Hide Inference Optimizer label
@@ -1180,6 +1249,9 @@ class ConfigGUI(tk.Tk):
         
         # Trigger the capture mode change handler to update UI
         self.on_capture_mode_change()
+        
+        # Update "Lossless Scaling Support"
+        self.lossless_scaling_support_cb.config(text=texts.get("Lossless Scaling Support", "Lossless Scaling Support"))
 
         # Update stream protocol labels
         self.label_stream_protocol.config(text=texts.get("Stream Protocol:", "Stream Protocol:"))
@@ -1254,6 +1326,9 @@ class ConfigGUI(tk.Tk):
         elif label == monitor3d_label:
             self.run_mode_key = "3D Monitor"
             self.show_viewer_controls()
+        
+        # Update display mode options based on run mode
+        self.update_display_mode_options()
         # Update stereo display visibility
         self.update_stereo_display_visibility()
     
@@ -1306,6 +1381,9 @@ class ConfigGUI(tk.Tk):
         # Update stream URL first
         self.update_stream_url()
         
+        # Update Lossless Scaling visibility
+        self.update_lossless_scaling_visibility()
+        
         # Grid protocol selection controls
         self.label_stream_protocol.grid(row=1, column=0, sticky="w", **self.pad)
         self.stream_protocol_cb.grid(row=1, column=1, sticky="ew", **self.pad)
@@ -1333,6 +1411,7 @@ class ConfigGUI(tk.Tk):
             self.populate_audio_devices()
         
         self.fixed_viwer_aspect_cb.grid_remove()
+        self.fix_viewer_aspect_var.set(False)
         
         # Bind events for dynamic URL updates
         self.rtmp_stream_key_var.trace_add("write", lambda *args: self.update_stream_url())
@@ -1484,13 +1563,19 @@ class ConfigGUI(tk.Tk):
         self.res_cb.set(str(cfg.get("Output Resolution", DEFAULTS["Output Resolution"])))
         self.ipd_var.set(str(cfg.get("IPD", DEFAULTS["IPD"])))
 
+        # Apply depth model settings
         model_list = DEFAULT_MODEL_LIST
-            
         self.depth_model_cb["values"] = model_list
         selected_model = cfg.get("Depth Model", DEFAULTS["Depth Model"])
         
         if selected_model not in self.depth_model_cb["values"]:
             selected_model = self.depth_model_cb["values"][0] if self.depth_model_cb["values"] else DEFAULTS["Depth Model"]
+        
+        self.depth_model_var.set(selected_model)
+        self.update_depth_resolution_options(selected_model)
+        
+        # Update TensorRT visibility based on selected model
+        self.update_tensorrt_visibility_based_on_model(selected_model)
         
         self.depth_model_var.set(selected_model)
         self.update_depth_resolution_options(selected_model)
@@ -1503,6 +1588,7 @@ class ConfigGUI(tk.Tk):
         self.download_var.set(cfg.get("Download Path", DEFAULTS["Download Path"]))
         hf_endpoint = cfg.get("HF Endpoint", DEFAULTS["HF Endpoint"])
         self.hf_endpoint_var.set(hf_endpoint)
+        
         # If the endpoint is not in the predefined list, add it
         if hf_endpoint not in self.hf_endpoint_cb["values"]:
             self.hf_endpoint_cb["values"] = list(self.hf_endpoint_cb["values"]) + [hf_endpoint]
@@ -1539,6 +1625,9 @@ class ConfigGUI(tk.Tk):
         self.capture_tool_cb.set(cfg.get("Capture Tool", DEFAULTS["Capture Tool"]))
         self.fill_16_9_var.set(cfg.get("Fill 16:9", DEFAULTS["Fill 16:9"]))
         
+        # Lossless Scaling Support
+        self.lossless_scaling_support_var.set(cfg.get("Lossless Scaling Support", DEFAULTS["Lossless Scaling Support"]))
+        
         # Fixed Viewer Ratio
         self.fix_viewer_aspect_var.set(cfg.get("Fix Viewer Aspect", DEFAULTS["Fix Viewer Aspect"]))
         
@@ -1560,6 +1649,8 @@ class ConfigGUI(tk.Tk):
         
         # Update stereo display visibility
         self.update_stereo_display_visibility()
+        # Update display_mode visibility
+        self.update_display_mode_options()
         
         # Update run mode visibility
         self.update_language_texts()
@@ -1597,11 +1688,6 @@ class ConfigGUI(tk.Tk):
                 # Default to first resolution if we can't convert
                 self.depth_res_cb.set(str(resolutions[0]))
 
-    def on_depth_model_change(self, event=None):
-        """Handle depth model selection changes"""
-        selected_model = self.depth_model_var.get()
-        self.update_depth_resolution_options(selected_model)
-
     def load_defaults(self):   
         # Apply all defaults
         self.apply_config(DEFAULTS, keep_optional=False)
@@ -1614,6 +1700,10 @@ class ConfigGUI(tk.Tk):
         
         # Load the hard defaults
         self.load_defaults()
+        
+        # Update TensorRT visibility based on the default model
+        current_model = self.depth_model_var.get()
+        self.update_tensorrt_visibility_based_on_model(current_model)
         
         # Restore language and device if needed
         if current_language in UI_TEXTS:
@@ -1658,7 +1748,8 @@ class ConfigGUI(tk.Tk):
                 )
                 return
 
-        cfg = {
+        
+        self.cfg = {
             "Capture Mode": self.capture_mode_key,
             "Monitor Index": self.monitor_label_to_index.get(self.monitor_var.get(), DEFAULTS["Monitor Index"]),
             "Window Title": self.selected_window_name if self.capture_mode_key == "Window" else "",
@@ -1689,6 +1780,7 @@ class ConfigGUI(tk.Tk):
             "Capture Tool": self.capture_tool_cb.get(),
             "Fill 16:9": self.fill_16_9_var.get(),
             "Fix Viewer Aspect": self.fix_viewer_aspect_var.get(),
+            "Lossless Scaling Support": self.lossless_scaling_support_var.get(),
             "Stream Key": self.rtmp_stream_key_var.get(),
             "Stereo Mix": self.audio_device_var.get(),
             "CRF": int(self.crf_var.get()),
@@ -1697,12 +1789,29 @@ class ConfigGUI(tk.Tk):
             "Stereo Monitor": self.monitor_label_to_index.get(self.stereo_monitor_var.get(), DEFAULTS["Stereo Monitor"]),
         }
         
-        success = self.save_yaml("settings.yaml", cfg)
+        success = self.save_yaml("settings.yaml", self.cfg)
         if success:
             # Show a message with countdown
             countdown_seconds = 0.5
             self._countdown_and_run(countdown_seconds)
-
+            
+            # reset trt
+            self.after(1000, self.on_run_complete)
+    
+    def on_run_complete(self):
+        if self.recompile_trt_var.get() == True:
+            """Called when the application finishes running"""
+            # Uncheck recompile TRT
+            self.recompile_trt_var.set(False)
+            
+            # Update GUI
+            if hasattr(self, 'recompile_trt_checkbox'):
+                self.recompile_trt_checkbox.update_idletasks()
+            
+            # Update global variable
+            self.cfg["Recompile TensorRT"] = False
+            self.after(8000, self.save_yaml,"settings.yaml", self.cfg)
+        
     def _countdown_and_run(self, seconds):
         if self.process and self.process.poll() is None:
             # Process is already running

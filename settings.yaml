@@ -79,7 +79,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3-LARGE:
+  depth-anything/DA3-LARGE-1.1:
     resolutions:
     - 182
     - 224
@@ -88,7 +88,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3-GIANT:
+  depth-anything/DA3-GIANT-1.1:
     resolutions:
     - 182
     - 224
@@ -97,7 +97,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3METRIC-LARGE:
+  depth-anything/DA3NESTED-GIANT-LARGE-1.1:
     resolutions:
     - 182
     - 224
@@ -115,7 +115,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3NESTED-GIANT-LARGE:
+  depth-anything/DA3METRIC-LARGE:
     resolutions:
     - 182
     - 224
@@ -197,33 +197,6 @@ Model List:
     - 448
     - 518
   depth-anything/Metric-Video-Depth-Anything-Large:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/prompt-depth-anything-vits-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/prompt-depth-anything-vits-transparent-hf:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  depth-anything/prompt-depth-anything-vitl-hf:
     resolutions:
     - 196
     - 238
@@ -360,60 +333,60 @@ Model List:
     - 518
   lc700x/depth-ai-hf:
     resolutions:
-    - 224
     - 192
+    - 224
   lc700x/dpt-hybrid-midas-hf:
     resolutions:
     - 384
   Intel/dpt-beit-base-384:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   Intel/dpt-beit-large-512:
     resolutions:
-    - 512
-    - 448
-    - 384
-    - 288
     - 192
+    - 288
+    - 384
+    - 448
+    - 512
   Intel/dpt-large:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   lc700x/dpt-large-redesign-hf:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   Intel/zoedepth-nyu-kitti:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   Intel/zoedepth-nyu:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   Intel/zoedepth-kitti:
     resolutions:
-    - 384
-    - 336
-    - 288
-    - 240
     - 192
+    - 240
+    - 288
+    - 336
+    - 384
   apple/DepthPro-hf:
     resolutions:
     - 1536
@@ -426,8 +399,8 @@ FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
-Language: CN
-Run Mode: Local Viewer
+Language: EN
+Run Mode: 3D Monitor
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
@@ -438,6 +411,7 @@ Unlock Thread (Legacy Streamer): false
 Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
+Lossless Scaling Support: false
 Stream Key: live
 Stereo Mix: 立体声混音 (Realtek(R) Audio)
 CRF: 20

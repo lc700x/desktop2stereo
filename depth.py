@@ -36,6 +36,13 @@ IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
 IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO
 IS_DIRECTML = "DirectML" in DEVICE_INFO
 
+# check if it is metric model
+def is_metric():
+    if 'metric'  in MODEL_ID.lower() or 'kitti'  in MODEL_ID.lower() or 'nyu' in MODEL_ID.lower() or 'depth-ai' in MODEL_ID.lower() or 'da3' in MODEL_ID.lower():
+        return True
+    else:
+        return False
+
 # Optimization for CUDA
 if IS_NVIDIA:
     torch.backends.cudnn.benchmark = True
@@ -202,13 +209,25 @@ def apply_contrast(depth, factor=1.2):
     mean = depth.mean(dim=(-2, -1), keepdim=True)  # per image mean
     return torch.clamp((depth - mean) * factor + mean, 0, 1)
 
-def normalize_tensor(tensor):
-    """ Normalize tensor to [0,1] """
-    return (tensor - tensor.min())/(tensor.max() - tensor.min()+1e-6)
+def normalize_tensor(tensor: torch.Tensor):
+    """DirectML-safe normalization to [0,1], ignoring NaNs."""
+    mask = ~torch.isnan(tensor)
+    if not mask.any():
+        return torch.zeros_like(tensor)
+    valid = tensor[mask]
+    min_val = valid.min()
+    max_val = valid.max()
+    denom = max_val - min_val
+    if denom == 0:
+        return torch.zeros_like(tensor)
+    out = (tensor - min_val) / denom
+    out[~mask] = 0.0
+    return out
+
 
 def post_process_depth(depth):
     depth = normalize_tensor(depth).squeeze()
-    if 'metric' in MODEL_ID.lower() or 'da3' in MODEL_ID.lower():
+    if is_metric():
         depth = 1.0 - depth
     depth = apply_gamma(depth)
     depth = apply_contrast(depth)
@@ -546,18 +565,12 @@ model_wraper = DepthModelWrapper(
 )
 
 MODEL_DTYPE = next(model_wraper.model.parameters()).dtype if hasattr(model_wraper.model, 'parameters') else DTYPE
-MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
-STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
-
-if USE_TORCH_COMPILE and IS_CUDA:
-    try:
-        # Compile the model as before, but SKIP compiling lightweight post-processing functions，avoid FX re-tracing conflicts. These are fast without it.  
-        post_process_depth = torch.compile(post_process_depth)
-        # Assign to a global or module-level var if needed for access
-        globals()['post_process_depth'] = post_process_depth  # Or use a class/module attribute
-        
-    except Exception as e:
-        print(f"[Warning] torch.compile failed: {str(e)}, running without it.")
+if "depthpro" or "zoedepth" or "dpt" in MODEL_ID.lower():
+    MEAN = torch.tensor([0.5,0.5,0.5], device=DEVICE).view(1,3,1,1)
+    STD = torch.tensor([0.5,0.5,0.5], device=DEVICE).view(1,3,1,1)
+else:    
+    MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
+    STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
 
 # Initialize with dummy input for warmup
 def warmup_model(model_wraper, steps: int = 3):
@@ -670,64 +683,85 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
         return depth, rgb_c
     else:
         return depth
-    
+
+# Global cache (module-level)
+_FONT_CACHE = {}
+
 def build_font(device="cpu", dtype=torch.float32):
+    """
+    Build (once) and cache FPS font tensors per (device, dtype).
+    Safe for CUDA / DirectML / MPS / CPU.
+    """
+    key = (str(device), dtype)
+
+    if key in _FONT_CACHE:
+        return _FONT_CACHE[key]
+
+    # Build once
     chars = sorted(font_dict.keys())
+
     font_tensor = torch.stack([
-        torch.tensor([[1.0 if c=="1" else 0.0 for c in row] for row in font_dict[ch]],
-                     dtype=dtype, device=device)
+        torch.tensor(
+            [[1.0 if c == "1" else 0.0 for c in row] for row in font_dict[ch]],
+            device=device,
+            dtype=dtype,
+        )
         for ch in chars
     ])  # [num_chars, 5, 3]
-    return chars, font_tensor  # mapping and bitmap tensor
 
-def overlay_fps(rgb: torch.Tensor, fps: float, color=(0.0, 255.0, 0.0)) -> torch.Tensor:
-    """
-    Vectorized FPS overlay in PyTorch (DirectML / CUDA / MPS compatible).
-    Ensures all operations use rgb.dtype (typically float32).
-    """
+    _FONT_CACHE[key] = (chars, font_tensor)
+    return chars, font_tensor
+
+# module-level cache
+_FPS_MASK_CACHE = {
+    "mask": None,
+    "frame": 0,
+    "interval": 10,  # update every N frames
+}
+
+def overlay_fps(rgb: torch.Tensor, fps: float):
     device, dtype = rgb.device, rgb.dtype
-    chars, font_tensor = build_font(device=device, dtype=dtype)
-
-    # Text to render
-    txt = f"FPS: {fps:.1f}"
-    idxs = torch.tensor([chars.index(ch) if ch in chars else chars.index(" ")
-                         for ch in txt], device=device, dtype=torch.long)
-
     H, W = rgb.shape[1:]
-    scale = max(1, min(8, H // 60))
-    char_h, char_w = 5 * scale, 3 * scale
-    spacing = scale
-    margin_x, margin_y = 2 * scale, 2 * scale
 
-    # Expand bitmaps for each character
-    glyphs = font_tensor[idxs]  # [len_txt, 5, 3]
-    glyphs = glyphs.repeat_interleave(scale, dim=1).repeat_interleave(scale, dim=2)  # [len_txt, h, w]
+    cache = _FPS_MASK_CACHE
+    cache["frame"] += 1
 
-    # Compute x/y offsets for each character
-    offsets_x = margin_x + torch.arange(len(txt), device=device) * (char_w + spacing)
-    offsets_y = torch.full((len(txt),), margin_y, device=device)
+    # Rebuild only every N frames
+    if cache["mask"] is None or cache["frame"] % cache["interval"] == 0:
+        chars, font_tensor = build_font(device, dtype)
+        txt = f"FPS: {fps:.1f}"
 
-    # Create the global mask (same dtype as rgb)
-    mask = torch.zeros((H, W), device=device, dtype=dtype)
+        idxs = torch.tensor(
+            [chars.index(ch) if ch in chars else chars.index(" ") for ch in txt],
+            device=device
+        )
 
-    for i, glyph in enumerate(glyphs):
-        h_b, w_b = glyph.shape
-        x0, y0 = int(offsets_x[i]), int(offsets_y[i])
-        x1, y1 = min(W, x0 + w_b), min(H, y0 + h_b)
-        # Clamp in case of overflows at edges
-        if x0 < W and y0 < H:
-            mask[y0:y1, x0:x1] = torch.maximum(mask[y0:y1, x0:x1],
-                                               glyph[:y1 - y0, :x1 - x0])
+        scale = max(1, min(8, H // 60))
+        char_h, char_w = 5 * scale, 3 * scale
+        spacing = scale
+        margin_x, margin_y = 2 * scale, 2 * scale
 
-    # Broadcast to channels and ensure correct dtype/device
-    alpha = mask.unsqueeze(0).expand(rgb.shape[0], -1, -1)
-    overlay_color = torch.as_tensor(color, device=device, dtype=dtype).view(-1, 1, 1).expand_as(rgb)
+        glyphs = font_tensor[idxs]
+        glyphs = glyphs.repeat_interleave(scale, 1).repeat_interleave(scale, 2)
 
-    one = torch.tensor(1.0, device=device, dtype=dtype)
-    alpha = alpha.to(dtype)
+        mask = torch.zeros((H, W), device=device, dtype=dtype)
 
-    # Blend safely in float32
-    return rgb * (one - alpha) + overlay_color * alpha
+        for i, glyph in enumerate(glyphs):
+            x0 = margin_x + i * (char_w + spacing)
+            y0 = margin_y
+            x1 = min(W, x0 + char_w)
+            y1 = min(H, y0 + char_h)
+            if x0 < W and y0 < H:
+                mask[y0:y1, x0:x1] = torch.maximum(
+                    mask[y0:y1, x0:x1],
+                    glyph[:y1 - y0, :x1 - x0]
+                )
+
+        cache["mask"] = mask
+
+    alpha = cache["mask"].unsqueeze(0)
+    color = torch.tensor([0.0, 255.0, 0.0], device=device, dtype=dtype).view(3,1,1)
+    return rgb * (1 - alpha) + color * alpha
 
 
 # generate left and right eye view for streamer 
@@ -839,8 +873,3 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
 
     sbs_tensor = make_sbs_core(rgb, depth, ipd_uv, depth_ratio, display_mode)
     return sbs_tensor.to(torch.uint8).permute(1,2,0).contiguous().cpu().numpy()
-
-if USE_TORCH_COMPILE and IS_CUDA:
-    make_sbs_core = torch.compile(make_sbs_core)
-
-    
