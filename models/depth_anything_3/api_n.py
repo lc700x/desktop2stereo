@@ -1,4 +1,4 @@
-# Copyright (c) 2025 ByteDance Ltd. and/or its affiliates
+# Copyright (c) 2025 ByteDance Ltd. and/or its affiliates. Modified by LC700X
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.

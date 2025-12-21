@@ -243,19 +243,19 @@
 > [!Tip]
 > 需要先点击 **Stereo Viewer** 窗口/标签页才能使用。
 
-| 按键              | 动作描述                                       | 支持的运行模式                                             |
-| ----------------- | ---------------------------------------------- | ---------------------------------------------------------- |
-| `回车键` / `空格键` | 切换全屏                                       | 本地查看                                                 |
-| `← 左`            | 将窗口移动到相邻显示器（上一个）               | 本地查看 / RTMP推流 / 3D 显示器                     |
-| `→ 右`            | 将窗口移动到相邻显示器（下一个）               | 本地查看 / RTMP推流 / 3D 显示器                     |
-| `Esc`             | 关闭应用程序窗口                               | 本地查看 / RTMP推流 / MJPEG推流 / 3D 显示器   |
-| `↑ 上`            | 深度强度增加 0.5 (最大 10)                     | 本地查看 / RTMP推流 / MJPEG推流 / 3D 显示器   |
-| `↓ 下`            | 深度强度减少 0.5 (最小 0)                      | 本地查看 / RTMP推流 / MJPEG推流 / 3D 显示器   |
-| `0`               | 重置深度强度为原始值                           | 本地查看 / RTMP推流 / MJPEG推流 / 3D 显示器   |
-| `Tab`             | 循环切换到下一个显示模式                       | 本地查看 / RTMP推流 / MJPEG推流 / 3D 显示器   |
-| `F`               | 切换 FPS 显示                                  | 本地查看 / RTMP推流 / MJPEG推流 / 3D 显示器   |
-| `A`               | 切换"填充 16:9"模式                            | 本地查看 / RTMP推流 / MJPEG推流 / 3D 显示器   |
-| `L`               | 切换锁定Stereo Viewer窗口宽高比锁定               | 本地查看                                                 |
+| 按键              | 动作描述                                       | 支持的运行模式                   |
+| ----------------- | ---------------------------------------------- | ------------------------------ |
+| `回车键` / `空格键` | 切换全屏                                       | 本地查看 |
+| `← 左`            | 将窗口移动到相邻显示器（上一个）                  | 本地查看 / RTMP推流 / 3D 显示器  |
+| `→ 右`            | 将窗口移动到相邻显示器（下一个）                  | 本地查看 / RTMP推流 / 3D 显示器 |
+| `Esc`             | 关闭应用程序窗口                                | 本地查看 / RTMP推流 / 3D 显示器 |
+| `↑ 上`            | 深度强度增加 0.5 (最大 10)                     | 本地查看 / RTMP推流 / 3D 显示器 |
+| `↓ 下`            | 深度强度减少 0.5 (最小 0)                      | 本地查看 / RTMP推流 / 3D 显示器 |
+| `0`               | 重置深度强度为原始值                           | 本地查看 / RTMP推流 / 3D 显示器 |
+| `Tab`             | 循环切换到下一个显示模式                       | 本地查看 / RTMP推流 / 3D 显示器 |
+| `F`               | 切换 FPS 显示                                  | 本地查看 / RTMP推流 / 3D 显示器 |
+| `A`               | 切换"填充 16:9"模式                            | 本地查看 / RTMP推流 / 3D 显示器 |
+| `L`               | 切换锁定Stereo Viewer窗口宽高比锁定               | 本地查看 |
 
 ## 详细设置指南
 所有可选设置都可以在 GUI 窗口上修改并保存到 `settings.yaml`。每次点击 `运行` 时，设置将自动保存，点击 `重置` 将恢复默认设置。
@@ -356,10 +356,10 @@
       - depth-anything/Video-Depth-Anything-Large
       - depth-anything/DA3-SMALL
       - depth-anything/DA3-BASE
-      - depth-anything/DA3-LARGE
-      - depth-anything/DA3-GIANT
+      - depth-anything/DA3-LARGE-1.1
+      - depth-anything/DA3-GIANT-1.1
       - depth-anything/DA3METRIC-LARGE
-      - depth-anything/DA3NESTED-GIANT-LARGE
+      - depth-anything/DA3NESTED-GIANT-LARGE-1.1
       - depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
       - depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
       - depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
@@ -369,9 +369,6 @@
       - depth-anything/Metric-Video-Depth-Anything-Small
       - depth-anything/Metric-Video-Depth-Anything-Base
       - depth-anything/Metric-Video-Depth-Anything-Large
-      - depth-anything/prompt-depth-anything-vits-hf
-      - depth-anything/prompt-depth-anything-vits-transparent-hf
-      - depth-anything/prompt-depth-anything-vitl-hf
       - LiheYoung/depth-anything-small-hf
       - LiheYoung/depth-anything-base-hf
       - LiheYoung/depth-anything-large-hf
@@ -431,13 +428,6 @@
   title={Depth Anything V2},
   author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Zhao, Zhen and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
   journal={arXiv:2406.09414},
-  year={2024}
-}
-
-@inproceedings{lin2024promptda,
-  title={Prompting Depth Anything for 4K Resolution Accurate Metric Depth Estimation},
-  author={Lin, Haotong and Peng, Sida and Chen, Jingxiao and Peng, Songyou and Sun, Jiaming and Liu, Minghuan and Bao, Hujun and Feng, Jiashi and Zhou, Xiaowei and Kang, Bingyi},
-  journal={arXiv},
   year={2024}
 }
 

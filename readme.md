@@ -281,19 +281,19 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 
 > Tip: Need to click the **Stereo Viewer** window/tab first to use.
 
-| Key        | Action Description                                 | Supported Run Mode(s)                                       |
-|------------|----------------------------------------------------|--------------------------------------------------------------|
-| Enter/Space| Toggle fullscreen                                  | Local Viewer                                                 |
-| ← Left     | Move window to adjacent monitor (previous)         | Local Viewer / RTMP Streamer / 3D Monitor                   |
-| → Right    | Move window to adjacent monitor (next)             | Local Viewer / RTMP Streamer / 3D Monitor                   |
-| Esc        | Close the application window                       | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| ↑ Up       | Increase depth strength by 0.5 (max 10)            | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| ↓ Down     | Decrease depth strength by 0.5 (min 0)             | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| 0          | Reset depth strength to original value             | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| Tab        | Cycle to the next display mode                     | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| F          | Toggle FPS display                                 | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| A          | Toggle “fill 16:9” mode                            | Local Viewer / RTMP Streamer / MJPEG Streamer / 3D Monitor  |
-| L          | Toggle lock Stereo Viewer window aspect ratio lock | Local Viewer                                                 |
+| Key        | Action Description                                 | Supported Run Mode(s)                      |
+|------------|----------------------------------------------------|--------------------------------------------|
+| Enter/Space| Toggle fullscreen                                  | Local Viewer                               |
+| ← Left     | Move window to adjacent monitor (previous)         | Local Viewer / RTMP Streamer / 3D Monitor  |
+| → Right    | Move window to adjacent monitor (next)             | Local Viewer / RTMP Streamer / 3D Monitor  |
+| Esc        | Close the application window                       | Local Viewer / RTMP Streamer / 3D Monitor  |
+| ↑ Up       | Increase depth strength by 0.5 (max 10)            | Local Viewer / RTMP Streamer / 3D Monitor  |
+| ↓ Down     | Decrease depth strength by 0.5 (min 0)             | Local Viewer / RTMP Streamer / 3D Monitor  |
+| 0          | Reset depth strength to original value             | Local Viewer / RTMP Streamer / 3D Monitor  |
+| Tab        | Cycle to the next display mode                     | Local Viewer / RTMP Streamer / 3D Monitor  |
+| F          | Toggle FPS display                                 | Local Viewer / RTMP Streamer / 3D Monitor  |
+| A          | Toggle “fill 16:9” mode                            | Local Viewer / RTMP Streamer / 3D Monitor  |
+| L          | Toggle lock Stereo Viewer window aspect ratio lock | Local Viewer                               |
 
 ## Detailed Settings Guide
 
@@ -400,10 +400,10 @@ All optional settings can be modified on the GUI window and saved to the [settin
     - depth-anything/Video-Depth-Anything-Large
     - depth-anything/DA3-SMALL
     - depth-anything/DA3-BASE
-    - depth-anything/DA3-LARGE
-    - depth-anything/DA3-GIANT
+    - depth-anything/DA3-LARGE-1.1
+    - depth-anything/DA3-GIANT-1.1
     - depth-anything/DA3METRIC-LARGE
-    - depth-anything/DA3NESTED-GIANT-LARGE
+    - depth-anything/DA3NESTED-GIANT-LARGE-1.1
     - depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
     - depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
     - depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
@@ -413,9 +413,6 @@ All optional settings can be modified on the GUI window and saved to the [settin
     - depth-anything/Metric-Video-Depth-Anything-Small
     - depth-anything/Metric-Video-Depth-Anything-Base
     - depth-anything/Metric-Video-Depth-Anything-Large
-    - depth-anything/prompt-depth-anything-vits-hf
-    - depth-anything/prompt-depth-anything-vits-transparent-hf
-    - depth-anything/prompt-depth-anything-vitl-hf
     - LiheYoung/depth-anything-small-hf
     - LiheYoung/depth-anything-base-hf
     - LiheYoung/depth-anything-large-hf
@@ -476,13 +473,6 @@ All optional settings can be modified on the GUI window and saved to the [settin
   title={Depth Anything V2},
   author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Zhao, Zhen and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
   journal={arXiv:2406.09414},
-  year={2024}
-}
-
-@inproceedings{lin2024promptda,
-  title={Prompting Depth Anything for 4K Resolution Accurate Metric Depth Estimation},
-  author={Lin, Haotong and Peng, Sida and Chen, Jingxiao and Peng, Songyou and Sun, Jiaming and Liu, Minghuan and Bao, Hujun and Feng, Jiashi and Zhou, Xiaowei and Kang, Bingyi},
-  journal={arXiv},
   year={2024}
 }
 
