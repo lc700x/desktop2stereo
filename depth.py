@@ -572,6 +572,17 @@ if "depthpro" or "zoedepth" or "dpt" in MODEL_ID.lower():
 else:    
     MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
     STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
+    
+if USE_TORCH_COMPILE and IS_CUDA:
+    try:
+        # Compile the model as before, but SKIP compiling lightweight post-processing functions，avoid FX re-tracing conflicts. These are fast without it.  
+        post_process_depth = torch.compile(post_process_depth)
+        # Assign to a global or module-level var if needed for access
+        globals()['post_process_depth'] = post_process_depth  # Or use a class/module attribute
+        
+    except Exception as e:
+        print(f"[Warning] torch.compile failed: {str(e)}, running without it.")
+
 
 # Initialize with dummy input for warmup
 def warmup_model(model_wraper, steps: int = 3):
@@ -881,3 +892,6 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
 
     sbs_tensor = make_sbs_core(rgb, depth, ipd_uv, depth_ratio, display_mode)
     return sbs_tensor.to(torch.uint8).permute(1,2,0).contiguous().cpu().numpy()
+
+if USE_TORCH_COMPILE and IS_CUDA:
+    make_sbs_core = torch.compile(make_sbs_core)
