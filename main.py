@@ -292,65 +292,109 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             ]
         else:
             import win32gui
+            import win32api
+
             def find_window_by_prefix(prefix):
                 target_hwnd = None
                 def enum_handler(hwnd, _):
                     nonlocal target_hwnd
                     title = win32gui.GetWindowText(hwnd)
-                    if title.lower().startswith(prefix.lower()):
+                    if title.lower().startswith(prefix.lower()) and win32gui.IsWindowVisible(hwnd):
                         target_hwnd = hwnd
-
                 win32gui.EnumWindows(enum_handler, None)
                 return target_hwnd
-            
-            # Get window rectangle
-            def get_window_rect(hwnd):
-                rect = win32gui.GetWindowRect(hwnd)
-                x = rect[0]
-                y = rect[1]
-                width = rect[2] - rect[0]
-                height = rect[3] - rect[1]
-                width = (width // 2) * 2  # make even
-                height = (height // 2) * 2  # make even
-                return x, y, width, height
 
-            # Detect window coordinates
+            def get_monitor_index_for_window(hwnd):
+                """Returns the 0-based monitor index (matching gfxcapture order) that contains the center of the window"""
+                if not hwnd:
+                    raise ValueError("Invalid window handle")
+                
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                center_x = (left + right) // 2
+                center_y = (top + bottom) // 2
+                
+                monitors = []
+                for hMonitor, hdcMonitor, (left, top, right, bottom) in win32api.EnumDisplayMonitors():
+                    info = win32api.GetMonitorInfo(hMonitor)
+                    monitors.append({
+                        'index': len(monitors),  # This order matches gfxcapture monitor_idx
+                        'left': left,
+                        'top': top,
+                        'right': right,
+                        'bottom': bottom,
+                        'width': right - left,
+                        'height': bottom - top,
+                    })
+                
+                for mon in monitors:
+                    if mon['left'] <= center_x < mon['right'] and mon['top'] <= center_y < mon['bottom']:
+                        return mon['index'], mon
+                
+                raise RuntimeError("Could not determine monitor for window")
+
+            # Main logic
             hwnd = find_window_by_prefix("Stereo Viewer")
             if not hwnd:
-                raise RuntimeError(f"Window starting with 'Stereo Viewer' not found")
+                raise RuntimeError("Window starting with 'Stereo Viewer' not found")
 
-            capture_x, capture_y, capture_width, capture_height = get_window_rect(hwnd)
-            print("✅ Stereo Viewer Window region (can overlay with Lossless Scaling):")
-            print(f"X={capture_x}, Y={capture_y}, W={capture_width}, H={capture_height}")
+            # Get monitor index and full monitor rect
+            monitor_idx, monitor = get_monitor_index_for_window(hwnd)
 
-            # Build FFmpeg command
+            # Get window client area (recommended: excludes title bar and borders)
+            window_left, window_top = win32gui.ClientToScreen(hwnd, (0, 0))
+            client_rect = win32gui.GetClientRect(hwnd)
+            window_right = window_left + client_rect[2]
+            window_bottom = window_top + client_rect[3]
+
+            # Alternatively: full window including borders/title bar
+            # window_left, window_top, window_right, window_bottom = win32gui.GetWindowRect(hwnd)
+
+            print(f"✅ Stereo Viewer window found on monitor {monitor_idx}")
+            print(f"Monitor bounds: X={monitor['left']} Y={monitor['top']} W={monitor['width']} H={monitor['height']}")
+            print(f"Window client area: X={window_left} Y={window_top} -> {window_right}x{window_bottom}")
+
+            # Calculate crop values so that the captured monitor region is cropped exactly to the window
+            crop_left   = window_left - monitor['left']
+            crop_top    = window_top - monitor['top']
+            crop_right  = monitor['right'] - window_right
+            crop_bottom = monitor['bottom'] - window_bottom
+
+            # Ensure non-negative crops (in case window is partially off-screen or miscalculated)
+            crop_left   = max(0, crop_left)
+            crop_top    = max(0, crop_top)
+            crop_right  = max(0, crop_right)
+            crop_bottom = max(0, crop_bottom)
+
+            print("Calculated crop values (to capture only the window area):")
+            print(f"crop_left   = {crop_left}")
+            print(f"crop_top    = {crop_top}")
+            print(f"crop_right  = {crop_right}")
+            print(f"crop_bottom = {crop_bottom}")
+
+            # Build gfxcapture options
+            gfxcapture_options = f"monitor_idx={monitor_idx}:crop_left={crop_left}:crop_top={crop_top}:crop_right={crop_right}:crop_bottom={crop_bottom}"
+
             ffmpeg_cmd = [
                 './rtmp/ffmpeg/bin/ffmpeg.exe',
                 '-fflags', 'nobuffer',
                 '-flags', 'low_delay',
                 '-probesize', '64',
                 '-analyzeduration', '0',
-                '-f', 'gdigrab',
-                '-offset_x', str(capture_x),
-                '-offset_y', str(capture_y),
-                '-video_size', f'{capture_width}x{capture_height}',
-                '-framerate', str(FPS),
-                '-i', 'desktop',
-                '-itsoffset', str(AUDIO_DELAY),
+                '-filter_complex', f"gfxcapture={gfxcapture_options}:max_framerate={FPS},hwdownload,format=bgra,scale={width}:{height},format=yuv420p[v]",
+                '-itsoffset', f'{AUDIO_DELAY}',
                 '-f', 'dshow',
                 '-rtbufsize', '256M',
                 '-i', f'audio={STEREOMIX_DEVICE}',
-                '-filter_complex', f"format=bgra,scale={capture_width}:{capture_height},format=yuv420p[v]",
                 '-map', '[v]',
-                '-map', '1:a',
+                '-map', '0:a',
                 '-c:v', 'libx264',
                 '-preset', 'ultrafast',
                 '-tune', 'zerolatency',
                 '-bf', '0',
-                '-g', str(FPS),
-                '-force_key_frames', 'expr:gte(t,n_forced*1)',
-                '-r', str(FPS),
-                '-crf', str(CRF),
+                '-g', f'{FPS}',
+                '-force_key_frames', f'expr:gte(t,n_forced*1)',
+                '-r', f'{FPS}',
+                '-crf', f'{CRF}',
                 '-c:a', 'libopus',
                 '-b:a', '96k',
                 '-muxdelay', '0',
@@ -358,7 +402,8 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
                 '-flush_packets', '1',
                 '-rtmp_buffer', '0',
                 '-f', 'flv',
-                f'rtmp://localhost:1935/{STREAM_KEY}']
+                f'rtmp://localhost:1935/{STREAM_KEY}'
+            ]
             
     elif os_name == "Darwin":
         
