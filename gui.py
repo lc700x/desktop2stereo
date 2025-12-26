@@ -754,26 +754,27 @@ class ConfigGUI(tk.Tk):
         self.update_tensorrt_visibility_based_on_model(selected_model)
 
     def update_tensorrt_visibility_based_on_model(self, model_name):
-        """Disable TensorRT option for specific model types"""
-        model_lower = model_name.lower()
-        
-        # Check if any keyword is in the model name
-        should_disable = any(keyword in model_lower for keyword in DISABLE_TRT_KEYWORDS)
-        
-        # Update TensorRT checkbox state
-        if should_disable:
-            # Disable and uncheck TensorRT
-            self.use_tensorrt.set(False)
-            self.check_tensorrt.config(state="disabled")
-            self.check_recompile_trt.config(state="disabled")
-            # Also hide recompile option
-            self.check_recompile_trt.grid_remove()
-        else:
-            # Enable TensorRT if device supports it
-            self.check_tensorrt.config(state="normal")
-            self.check_recompile_trt.config(state="normal")
-            # Update recompile visibility based on current TensorRT selection
-            self.update_recompile_trt_visibility()
+        if not IS_ROCM and "CUDA" in self.device_var.get():
+            """Disable TensorRT option for specific model types"""
+            model_lower = model_name.lower()
+            
+            # Check if any keyword is in the model name
+            should_disable = any(keyword in model_lower for keyword in DISABLE_TRT_KEYWORDS)
+            
+            # Update TensorRT checkbox state
+            if should_disable:
+                # Disable and uncheck TensorRT
+                self.use_tensorrt.set(False)
+                self.check_tensorrt.config(state="disabled")
+                self.check_recompile_trt.config(state="disabled")
+                # Also hide recompile option
+                self.check_recompile_trt.grid_remove()
+            else:
+                # Enable TensorRT if device supports it
+                self.check_tensorrt.config(state="normal")
+                self.check_recompile_trt.config(state="normal")
+                # Update recompile visibility based on current TensorRT selection
+                self.update_recompile_trt_visibility()
     
     # Support for lossless scaling
     def update_lossless_scaling_visibility(self):

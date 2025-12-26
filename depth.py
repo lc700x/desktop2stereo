@@ -631,70 +631,86 @@ if USE_TORCH_COMPILE and IS_CUDA:
 # Modified predict_depth function with improved TRT integration
 def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth: bool = True):
     """
-    Returns depth in [0,1], 1=near, 0=far. Optionally returns (depth, rgb_c).
+    Returns depth in [0,1], where 1 = near, 0 = far.
+    Optionally returns (depth_tensor [H,W], rgb_c [C,H,W]) if return_tuple=True.
+    
+    Optimized: All resizing and normalization done on GPU for maximum performance.
     """
-    # Get input dimensions
     h, w = image_rgb.shape[:2]
     
-    # Compute target size: shortest edge to DEPTH_RESOLUTION, preserve aspect ratio
+    # Compute target size: scale shortest edge to DEPTH_RESOLUTION, preserve aspect ratio
     scale = DEPTH_RESOLUTION / min(h, w)
-    target_h, target_w = int(h * scale), int(w * scale)
-    # Ensure dimensions are divisible by 14 (ViT patch size)
+    target_h, target_w = int(round(h * scale)), int(round(w * scale))
+    
+    # Ensure dimensions divisible by 14 for ViT-based models (Depth Anything, etc.)
     if "anything" in MODEL_ID.lower():
         target_h = (target_h // 14) * 14
         target_w = (target_w // 14) * 14
-        if "video-depth-anything" in MODEL_ID.lower(): # fix for Video-Depth-Anything
-            target_h, target_w = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
+        # Special case: Video-Depth-Anything expects fixed square input
+        if "video-depth-anything" in MODEL_ID.lower():
+            target_h, target_w = DEPTH_RESOLUTION, DEPTH_RESOLUTION
     else:
-        target_h, target_w = (DEPTH_RESOLUTION, DEPTH_RESOLUTION)
+        # Fixed square input for other models (e.g., DepthPro, DPT)
+        target_h, target_w = DEPTH_RESOLUTION, DEPTH_RESOLUTION
+
+    # EARLY GPU TRANSFER + FULL GPU PREPROCESSING
+    # Convert NumPy -> Torch tensor and move to device early
+    tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=torch.float32, non_blocking=True)
     
     if return_tuple:
-        # Convert to tensor and prepare rgb_c
-        tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=MODEL_DTYPE, non_blocking=True)
-        rgb_c = tensor.permute(2, 0, 1).contiguous()  # [C,H,W]
-        tensor = rgb_c.unsqueeze(0) / 255.0
-        # Resize using bilinear interpolation
-        tensor = F.interpolate(tensor, size=(target_h, target_w), mode='bilinear', align_corners=False)
+        # Keep original RGB for return (CHW format)
+        rgb_c = tensor.permute(2, 0, 1).contiguous()  # [C, H, W]
+        tensor = rgb_c.unsqueeze(0) / 255.0  # [1, C, H, W]
     else:
-        # Resize on CPU with bilinear interpolation
-        if (h, w) != (target_h, target_w):
-            input_rgb = cv2.resize(image_rgb, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
-        else:
-            input_rgb = image_rgb
-        # Convert to tensor
-        tensor = torch.from_numpy(input_rgb).permute(2, 0, 1).contiguous().unsqueeze(0).to(DEVICE, dtype=DTYPE) / 255.0
-    
-    tensor = ((tensor - MEAN) / STD).contiguous()
-    tensor = tensor.to(dtype=MODEL_DTYPE)
-        
-    # Use model wrapper instead of direct model call
+        tensor = tensor.permute(2, 0, 1).unsqueeze(0) / 255.0  # [1, C, H, W]
+
+    # Resize on GPU using bilinear interpolation (very fast on CUDA)
+    if (h, w) != (target_h, target_w):
+        tensor = F.interpolate(
+            tensor,
+            size=(target_h, target_w),
+            mode='bilinear',
+            align_corners=False
+        )
+
+    # Normalize using ImageNet stats (or custom) — on GPU
+    tensor = (tensor - MEAN) / STD
+    tensor = tensor.to(dtype=MODEL_DTYPE).contiguous()
+
+    # MODEL INFERENCE
     if "video-depth-anything" in MODEL_ID.lower():
-        with torch.no_grad():  # Add for safety in non-autocast paths
+        with torch.no_grad():
             depth = model_wraper(tensor)
     else:
         if IS_CUDA:
-            with torch.no_grad():
-                with torch.amp.autocast('cuda' , dtype=DTYPE):
+            with torch.inference_mode():
+                with torch.amp.autocast('cuda', dtype=DTYPE):
                     depth = model_wraper(tensor)
         else:
             with torch.no_grad():
                 depth = model_wraper(tensor)
-    
-    # Batched post-processing (compiled as a unit to avoid per-function tracing)
-    with torch.no_grad():  # Prevent any gradient tracing
-        depth = post_process_depth(depth)
-    
+
+    # POST-PROCESSING (already GPU-based and optionally compiled)
+    with torch.no_grad():
+        depth = post_process_depth(depth)  # includes gamma, contrast, foreground scale, AA, etc.
+
     # Optional temporal stabilization (EMA)
     if use_temporal_smooth:
         depth = depth_stabilizer(depth)
-        
-    # Interpolate output to original size
-    depth = F.interpolate(depth.unsqueeze(0).unsqueeze(0), size=(h, w), mode='bilinear', align_corners=False)
-    depth = depth.squeeze(0)
+
+    # Resize depth back to original input resolution (on GPU)
+    depth = F.interpolate(
+        depth.unsqueeze(0).unsqueeze(0),  # [1, 1, h_model, w_model]
+        size=(h, w),
+        mode='bilinear',
+        align_corners=False
+    ).squeeze(0).squeeze(0)  # [H, W]
+
+    # Return
     if return_tuple:
-        return depth, rgb_c
+        return depth, rgb_c  # rgb_c is [C, H_orig, W_orig], uint8 range on GPU
     else:
-        return depth
+        return depth  # [H_orig, W_orig], float32 in [0,1] on GPU
 
 # Global cache (module-level)
 _FONT_CACHE = {}
