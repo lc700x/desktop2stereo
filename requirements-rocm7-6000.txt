@@ -2,6 +2,6 @@
 --find-links ./rocm6000/
 rocm[libraries,devel]
 
-https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/build2025-12-02/torch-2.9.1+rocmsdk20251203-cp312-cp312-win_amd64.whl
-https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/build2025-12-02/torchvision-0.24.0+rocmsdk20251203-cp312-cp312-win_amd64.whl
-# https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/build2025-12-02/torchaudio-2.9.0+rocmsdk20251203-cp312-cp312-win_amd64.whl
+https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/build2025-12-07/torch-2.9.1+rocmsdk20251207-cp312-cp312-win_amd64.whl
+https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/build2025-12-07/torchvision-0.24.0+rocmsdk20251207-cp312-cp312-win_amd64.whl
+# https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/build2025-12-07/torchaudio-2.9.0+rocmsdk20251207-cp312-cp312-win_amd64.whl
