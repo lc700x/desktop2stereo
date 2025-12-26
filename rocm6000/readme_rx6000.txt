@@ -1,4 +1,9 @@
-1. Download RDNA2 RX6000 Series ROCm SDK Wheels from https://drive.google.com/drive/folders/1XeRnvvHA5DHJWKHweXK750KqePH6WmBo?usp=drive_link
-2. Move all the files here
+1. Open https://drive.google.com/drive/folders/1ULSlS5-GMqiwW_1jDBIHDsgUkwac97Y6
 
-Source: https://github.com/guinmoon/rocm7_builds/releases/tag/build2025-12-02
+2. download 4 Wheels for RDNA2 RX6000 Series ROCm SDK:
+1) rocm-7.1.1.tar.gz
+2) rocm_sdk_core-7.1.1-py3-none-win_amd64.whl
+3) rocm_sdk_libraries_gfx103x_all-7.1.1-py3-none-win_amd64.whl
+4) rocm_sdk_devel-7.1.1-py3-none-win_amd64.whl
+
+2. Move the 4 files here
