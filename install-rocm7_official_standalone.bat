@@ -23,7 +23,7 @@ echo - Installing the requirements
 @REM %PYTHON_EXE% -m pip install "triton-windows<3.4" --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 @REM %PYTHON_EXE% -m pip install tensorrt_cu12==10.13.3.9 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
-@REM %PYTHON_EXE% -m pip install onnx==1.19.0 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+@REM %PYTHON_EXE% -m pip install onnx==1.19.0 onnxscript==0.5.7 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (
