@@ -1033,8 +1033,9 @@ class ConfigGUI(tk.Tk):
             # Hide TensorRT for ROCm
             if IS_ROCM:
                 self.check_tensorrt.grid_remove()  
-                self.label_inference_optimizer.grid_remove()
-                self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
+                if OS_NAME != "Linux":
+                    self.label_inference_optimizer.grid_remove()
+                    self.check_torch_compile.grid_remove()  # Hide torch.compile for ROCm
             else:
                 self.label_inference_optimizer.grid()
                 self.check_tensorrt.grid()

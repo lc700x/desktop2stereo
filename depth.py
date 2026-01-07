@@ -67,6 +67,7 @@ if IS_NVIDIA:
 elif IS_AMD_ROCM:
     torch.backends.cudnn.enabled = False # Add for AMD ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Add for AMD ROCm7
+    os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE"
     # Enable TF32 for matrix multiplications
     torch.backends.cuda.matmul.allow_tf32 = True
     # Enable math attention
@@ -508,7 +509,7 @@ class DepthModelWrapper:
         if FP16 and 'da3' not in MODEL_ID.lower():
             model.half()
         
-        if self.is_cuda and 'NVIDIA' in self.device_info and self.use_torch_compile and not enable_trt:
+        if self.is_cuda and self.use_torch_compile and not enable_trt:
             model = torch.compile(model)
             print("Processing torch.compile with Triton, it may take a while...")
         
