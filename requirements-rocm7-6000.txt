@@ -1,4 +1,4 @@
-﻿# AMD Radeon™ RX 6000 Series Graphics Cards (GFX103X)
+﻿# AMD Radeon RX 6000 Series Graphics Cards (GFX103X)
 --find-links ./rocm6000/
 rocm[libraries,devel]
 
