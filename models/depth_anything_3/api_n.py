@@ -20,8 +20,6 @@ inference, and export capabilities. It supports both single and nested model arc
 
 from __future__ import annotations
 
-# import time
-from typing import Optional, Sequence
 # import numpy as np
 import torch
 import torch.nn as nn
@@ -41,160 +39,78 @@ from models.depth_anything_3.registry import MODEL_REGISTRY
 # torch.backends.cudnn.benchmark = False
 # logger.info("CUDNN Benchmark Disabled")
 
-SAFETENSORS_NAME = "model.safetensors"
-CONFIG_NAME = "config.json"
-
-# Initialize Device
-from utils import DEVICE_ID
-def get_device(index=0):
-    try:
-        try:
-            import torch_directml
-            if torch_directml.is_available():
-                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
-        except ImportError:
-            pass
-        if torch.backends.mps.is_available() and index==0:
-            return torch.device("mps"), "Using Apple Silicon (MPS) device"
-        if torch.cuda.is_available():
-            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
-        else:
-            return torch.device("cpu"), "Using CPU device"
-    except:
-        return torch.device("cpu"), "Using CPU device"
-    
-DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
-IS_CUDA = "CUDA" in DEVICE_INFO
 
 class DepthAnything3(nn.Module, PyTorchModelHubMixin):
     """
-    Depth Anything 3 main API class.
-
-    This class provides a high-level interface for depth estimation using Depth Anything 3.
-    It supports both single and nested model architectures with metric scaling capabilities.
-
-    Features:
-    - Hugging Face Hub integration via PyTorchModelHubMixin
-    - Support for multiple model presets (vitb, vitg, nested variants)
-    - Automatic mixed precision inference
-    - Export capabilities for various formats (GLB, PLY, NPZ, etc.)
-    - Camera pose estimation and metric depth scaling
-
-    Usage:
-        # Load from Hugging Face Hub
-        model = DepthAnything3.from_pretrained("huggingface/model-name")
-
-        # Or create with specific preset
-        model = DepthAnything3(preset="vitg")
-
-        # Run inference
-        prediction = model.inference(images, export_dir="output", export_format="glb")
+    Depth Anything 3 – export-safe, backend-agnostic API with runtime autocast.
     """
 
-    _commit_hash: str | None = None  # Set by mixin when loading from Hub
+    _commit_hash: str | None = None
 
     def __init__(self, model_name: str = "da3-large", **kwargs):
-        """
-        Initialize DepthAnything3 with specified preset.
-
-        Args:
-        model_name: The name of the model preset to use.
-                    Examples: 'da3-giant', 'da3-large', 'da3metric-large', 'da3nested-giant-large'.
-        **kwargs: Additional keyword arguments (currently unused).
-        """
         super().__init__()
         self.model_name = model_name
 
-        # Build the underlying network
         self.config = load_config(MODEL_REGISTRY[self.model_name])
         self.model = create_object(self.config)
         self.model.eval()
 
-        # # Initialize processors
-        # self.input_processor = InputProcessor()
-        # self.output_processor = OutputProcessor()
-
-        # Device management (set by user)
-        self.device = None
-
-    def forward(self, image: torch.Tensor) -> dict[str, torch.Tensor]:
+    # PURE FORWARD (EXPORT / TRT / ONNX SAFE)
+    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """
-        Optimized forward pass with mixed precision and minimal synchronization.
-        """
-
-        # Handle image dimensions
-        if image.dim() == 4:
-            image = image.unsqueeze(1)  # Add sequence dimension if needed
-        
-        if IS_CUDA:
-            with torch.inference_mode():
-                with torch.autocast(device_type=image.device.type, dtype=image.dtype):
-                    return self.model(image)
-        else: 
-            with torch.no_grad():
-                return self.model(image)
-
-
-    # NEW: Compatibility method for depth.py
-    def predict_depth(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """
-        Simple depth prediction interface compatible with depth.py
-        
         Args:
-            pixel_values: Input tensor of shape (B, 3, H, W) with values in [0, 1]
-            
+            pixel_values: (B, 3, H, W) float tensor, normalized
         Returns:
-            Depth map tensor of shape (B, H, W)
+            depth: (B, H, W)
         """
-        # Ensure the model is on the same device as input
-        device = pixel_values.device
-        if self.device is None or self.device != device:
-            self.to(device)
-            self.device = device
-        
-        # DA3 expects input shape (B, N, 3, H, W) where N=1 for single image
-        
-        # Run forward pass
-        with torch.no_grad():
-            result = self.forward(pixel_values)
-        
-        # Extract depth from results
-        if isinstance(result, dict):
-            if 'depth' in result:
-                depth = result['depth']
-            elif 'predicted_depth' in result:
-                depth = result['predicted_depth']
+
+        if pixel_values.dim() != 4:
+            raise ValueError("Expected input shape (B, 3, H, W)")
+
+        # DA3 internal expects (B, N, 3, H, W), N=1
+        x = pixel_values.unsqueeze(1)
+
+        # Patch: make resize_layers dtype-safe for export
+        for stage_idx, layer in enumerate(getattr(self.model, "resize_layers", [])):
+            if hasattr(layer, "weight"):
+                # Ensure weight dtype matches input dtype
+                if x.dtype != layer.weight.dtype:
+                    x = x.to(dtype=layer.weight.dtype)
+
+        out = self.model(x)
+
+        # Extract depth deterministically
+        if isinstance(out, dict):
+            if "depth" in out:
+                depth = out["depth"]
+            elif "predicted_depth" in out:
+                depth = out["predicted_depth"]
             else:
-                # Return the first tensor value
-                for key, value in result.items():
-                    if isinstance(value, torch.Tensor) and value.dim() >= 3:
-                        depth = value
-                        break
-                else:
-                    raise ValueError("Could not extract depth map from model output")
+                raise RuntimeError("Depth key not found in model output")
         else:
-            # If result is not a dict, assume it's the depth tensor
-            depth = result
-        
-        # DA3 might return depth with shape (B, N, H, W) - squeeze the N dimension if needed
-        if depth.dim() == 4 and depth.shape[1] == 1:
-            depth = depth.squeeze(1)  # Remove sequence dimension
-        
+            depth = out
+
+        # Expected shapes: (B, 1, H, W) or (B, H, W)
+        if depth.dim() == 4:
+            depth = depth.squeeze(1)
+
         return depth
 
-    # NEW: Property for compatibility with depth.py's model interface
-    @property
-    def predicted_depth(self):
-        """Compatibility property for depth.py's model interface"""
-        class DepthOutput:
-            def __init__(self, model):
-                self.model = model
-                
-            @property
-            def depth(self):
-                return self.model
-                
-        return DepthOutput
+    # USER-FACING API (RUNTIME, AUTOSAFE)
+    def predict_depth(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        """
+        High-level inference API.
+        Safe for DirectML / ROCm / CUDA / CPU with autocast on CUDA.
+        """
+        with torch.no_grad():
+            if pixel_values.device.type == "cuda":
+                # Autocast runtime only, does not affect export
+                with torch.autocast(device_type="cuda", dtype=pixel_values.dtype):
+                    return self.forward(pixel_values)
+            else:
+                return self.forward(pixel_values)
+
+
 
     # def inference(
     #     self,

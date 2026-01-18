@@ -19,3 +19,5 @@ PyOpenGL-accelerate==3.1.10
 # for da3
 omegaconf==2.3.0
 addict==2.4.0
+evo==1.34.2
+e3nn==0.5.9

@@ -18,11 +18,9 @@ import torch
 import torch.nn as nn
 from addict import Dict
 from omegaconf import DictConfig, OmegaConf
-from contextlib import nullcontext
-# from typing import Optional, Any, Dict as TypingDict
 
 from models.depth_anything_3.cfg import create_object
-# from models.depth_anything_3.model.utils.transform import pose_encoding_to_extri_intri
+from models.depth_anything_3.model.utils.transform import pose_encoding_to_extri_intri
 from models.depth_anything_3.utils.alignment import (
     apply_metric_scaling,
     compute_alignment_mask,
@@ -31,8 +29,9 @@ from models.depth_anything_3.utils.alignment import (
     sample_tensor_for_quantile,
     set_sky_regions_to_max_depth,
 )
-from models.depth_anything_3.utils.geometry import as_homogeneous, map_pdf_to_opacity
-# from models.depth_anything_3.utils.geometry import affine_inverse, affine_inverse_dml, as_homogeneous, map_pdf_to_opacity
+from models.depth_anything_3.utils.geometry import affine_inverse, as_homogeneous, map_pdf_to_opacity
+from models.depth_anything_3.utils.ray_utils import get_extrinsic_from_camray
+
 
 def _wrap_cfg(cfg_obj):
     return OmegaConf.create(cfg_obj)
@@ -105,43 +104,102 @@ class DepthAnything3Net(nn.Module):
         intrinsics: torch.Tensor | None = None,
         export_feat_layers: list[int] | None = [],
         infer_gs: bool = False,
+        use_ray_pose: bool = False,
+        ref_view_strategy: str = "saddle_balanced",
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass through the network.
 
         Args:
             x: Input images (B, N, 3, H, W)
-            extrinsics: Camera extrinsics (B, N, 4, 4) - unused
-            intrinsics: Camera intrinsics (B, N, 3, 3) - unused
+            extrinsics: Camera extrinsics (B, N, 4, 4) 
+            intrinsics: Camera intrinsics (B, N, 3, 3) 
             feat_layers: List of layer indices to extract features from
+            infer_gs: Enable Gaussian Splatting branch
+            use_ray_pose: Use ray-based pose estimation
+            ref_view_strategy: Strategy for selecting reference view
 
         Returns:
             Dictionary containing predictions and auxiliary features
         """
         # Extract features using backbone
-        # Use safe autocast context manager that will not raise on DirectML ('dml')
         if extrinsics is not None:
-            with torch.no_grad():
+            with torch.autocast(device_type=x.device.type, enabled=False):
                 cam_token = self.cam_enc(extrinsics, intrinsics, x.shape[-2:])
         else:
             cam_token = None
 
         feats, aux_feats = self.backbone(
-            x, cam_token=cam_token, export_feat_layers=export_feat_layers
+            x, cam_token=cam_token, export_feat_layers=export_feat_layers, ref_view_strategy=ref_view_strategy
         )
         # feats = [[item for item in feat] for feat in feats]
         H, W = x.shape[-2], x.shape[-1]
 
         # Process features through depth head
-        with torch.no_grad():
+        with torch.autocast(device_type=x.device.type, enabled=False):
             output = self._process_depth_head(feats, H, W)
-            # output = self._process_camera_estimation(feats, H, W, output)
+            if use_ray_pose:
+                output = self._process_ray_pose_estimation(output, H, W)
+            else:
+                output = self._process_camera_estimation(feats, H, W, output)
             if infer_gs:
                 output = self._process_gs_head(feats, H, W, output, x, extrinsics, intrinsics)
+        
+        output = self._process_mono_sky_estimation(output)    
 
         # Extract auxiliary features if requested
         output.aux = self._extract_auxiliary_features(aux_feats, export_feat_layers, H, W)
 
+        return output
+
+    def _process_mono_sky_estimation(
+        self, output: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
+        """Process mono sky estimation."""
+        if "sky" not in output:
+            return output
+        non_sky_mask = compute_sky_mask(output.sky, threshold=0.3)
+        if non_sky_mask.sum() <= 10:
+            return output
+        if (~non_sky_mask).sum() <= 10:
+            return output
+        
+        non_sky_depth = output.depth[non_sky_mask]
+        if non_sky_depth.numel() > 100000:
+            idx = torch.randint(0, non_sky_depth.numel(), (100000,), device=non_sky_depth.device)
+            sampled_depth = non_sky_depth[idx]
+        else:
+            sampled_depth = non_sky_depth
+        non_sky_max = torch.quantile(sampled_depth, 0.99)
+
+        # Set sky regions to maximum depth and high confidence
+        output.depth, _ = set_sky_regions_to_max_depth(
+            output.depth, None, non_sky_mask, max_depth=non_sky_max
+        )
+        return output
+
+    def _process_ray_pose_estimation(
+        self, output: Dict[str, torch.Tensor], height: int, width: int
+    ) -> Dict[str, torch.Tensor]:
+        """Process ray pose estimation if ray pose decoder is available."""
+        if "ray" in output and "ray_conf" in output:
+            pred_extrinsic, pred_focal_lengths, pred_principal_points = get_extrinsic_from_camray(
+                output.ray,
+                output.ray_conf,
+                output.ray.shape[-3],
+                output.ray.shape[-2],
+            )
+            pred_extrinsic = affine_inverse(pred_extrinsic) # w2c -> c2w
+            pred_extrinsic = pred_extrinsic[:, :, :3, :]
+            pred_intrinsic = torch.eye(3, 3)[None, None].repeat(pred_extrinsic.shape[0], pred_extrinsic.shape[1], 1, 1).clone().to(pred_extrinsic.device)
+            pred_intrinsic[:, :, 0, 0] = pred_focal_lengths[:, :, 0] / 2 * width
+            pred_intrinsic[:, :, 1, 1] = pred_focal_lengths[:, :, 1] / 2 * height
+            pred_intrinsic[:, :, 0, 2] = pred_principal_points[:, :, 0] * width * 0.5
+            pred_intrinsic[:, :, 1, 2] = pred_principal_points[:, :, 1] * height * 0.5
+            del output.ray
+            del output.ray_conf
+            output.extrinsics = pred_extrinsic
+            output.intrinsics = pred_intrinsic
         return output
 
     def _process_depth_head(
@@ -149,6 +207,25 @@ class DepthAnything3Net(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """Process features through the depth prediction head."""
         return self.head(feats, H, W, patch_start_idx=0)
+
+    def _process_camera_estimation(
+        self, feats: list[torch.Tensor], H: int, W: int, output: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
+        """Process camera pose estimation if camera decoder is available."""
+        if self.cam_dec is not None:
+            pose_enc = self.cam_dec(feats[-1][1])
+            # Remove ray information as it's not needed for pose estimation
+            if "ray" in output:
+                del output.ray
+            if "ray_conf" in output:
+                del output.ray_conf
+
+            # Convert pose encoding to extrinsics and intrinsics
+            c2w, ixt = pose_encoding_to_extri_intri(pose_enc, (H, W))
+            output.extrinsics = affine_inverse(c2w)
+            output.intrinsics = ixt
+
+        return output
 
     def _process_gs_head(
         self,
@@ -263,6 +340,8 @@ class NestedDepthAnything3Net(nn.Module):
         intrinsics: torch.Tensor | None = None,
         export_feat_layers: list[int] | None = [],
         infer_gs: bool = False,
+        use_ray_pose: bool = False,
+        ref_view_strategy: str = "saddle_balanced",
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass through both branches with metric scaling alignment.
@@ -272,16 +351,18 @@ class NestedDepthAnything3Net(nn.Module):
             extrinsics: Camera extrinsics (B, N, 4, 4) - unused
             intrinsics: Camera intrinsics (B, N, 3, 3) - unused
             feat_layers: List of layer indices to extract features from
-            metric_feat: Whether to use metric features (unused)
+            infer_gs: Enable Gaussian Splatting branch
+            use_ray_pose: Use ray-based pose estimation
+            ref_view_strategy: Strategy for selecting reference view
 
         Returns:
             Dictionary containing aligned depth predictions and camera parameters
         """
         # Get predictions from both branches
         output = self.da3(
-            x, extrinsics, intrinsics, export_feat_layers=export_feat_layers, infer_gs=infer_gs
+            x, extrinsics, intrinsics, export_feat_layers=export_feat_layers, infer_gs=infer_gs, use_ray_pose=use_ray_pose, ref_view_strategy=ref_view_strategy
         )
-        metric_output = self.da3_metric(x, infer_gs=infer_gs)
+        metric_output = self.da3_metric(x)
 
         # Apply metric scaling and alignment
         output = self._apply_metric_scaling(output, metric_output)

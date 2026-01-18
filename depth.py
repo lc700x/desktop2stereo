@@ -278,97 +278,94 @@ def get_da3_model(model_id=MODEL_ID):
 # TensorRT Optimization
 def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
     """
-    Convert ONNX model to TensorRT engine using TensorRT's Python API only.
-    Supports FP32, FP16, and INT8 precisions based on global flags.
-    Returns None if compilation fails.
+    Convert ONNX model to TensorRT engine with fixed square input size.
+    FP8 enabled, no pycuda required.
     """
     try:
-        if os.path.exists(trt_path) and RECOMPILE_TRT == False:
+        if os.path.exists(trt_path) and not RECOMPILE_TRT:
             print(f"Loaded existing TensorRT engine: {trt_path}")
             return trt_path
-        
+
         import tensorrt as trt
-        
-        # Initialize logger and builder
+
         logger = trt.Logger(trt.Logger.ERROR)
         builder = trt.Builder(logger)
-        network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+
+        network = builder.create_network(
+            1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+        )
         parser = trt.OnnxParser(network, logger)
-        
-        # Load ONNX model
+
         with open(onnx_path, "rb") as f:
             if not parser.parse(f.read()):
-                for error in range(parser.num_errors):
-                    print("[Error]", parser.get_error(error))
+                for i in range(parser.num_errors):
+                    print("[ONNX ERROR]", parser.get_error(i))
                 return None
-        
-        # Build configuration
+
         config = builder.create_builder_config()
-        
-        # Set precision flags based on global configuration
+
+        # FP4, FP8, FP16 ENABLED
+        config.set_flag(trt.BuilderFlag.FP4)
+        config.set_flag(trt.BuilderFlag.FP8)
         config.set_flag(trt.BuilderFlag.FP16)
-        
-        # Set workspace memory (essential for all precision modes) 
-        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 << 30)  # 4 GB Workspace 
-        
-        # Set dynamic shapes profile 
+
+        # Optional but recommended
+        config.set_flag(trt.BuilderFlag.PREFER_PRECISION_CONSTRAINTS)
+        config.set_flag(trt.BuilderFlag.SPARSE_WEIGHTS)
+        config.set_flag(trt.BuilderFlag.REJECT_EMPTY_ALGORITHMS)
+
+        # Workspace
+        config.set_memory_pool_limit(
+            trt.MemoryPoolType.WORKSPACE, 4 << 30
+        )
+
+        # Fixed input profile
         profile = builder.create_optimization_profile()
         input_name = network.get_input(0).name
-        # Updated shape ranges to better match typical input sizes
-        min_shape = (1, 3, 224, 224)  # 224 = 14 * 16
-        opt_shape = (1, 3, (DEPTH_RESOLUTION//14)*14, (DEPTH_RESOLUTION//14)*14)
-        max_shape = (1, 3, 3920, 3920)  # 896 = 14 * 64
-        
-        profile.set_shape(input_name, min_shape, opt_shape, max_shape)
+        fixed_size = (1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION)
+        profile.set_shape(input_name, fixed_size, fixed_size, fixed_size)
         config.add_optimization_profile(profile)
-        
-        # Optional: Enable additional optimizations that work well with FP32 [5](@ref)
-        # These optimizations can improve performance regardless of precision
-        config.set_flag(trt.BuilderFlag.SPARSE_WEIGHTS)  # Enable sparse weights
-        config.set_flag(trt.BuilderFlag.REJECT_EMPTY_ALGORITHMS)  # Reject empty algorithms
-        
-        # Build engine
+
         serialized_engine = builder.build_serialized_network(network, config)
+        
         if serialized_engine is None:
-            print("[Error] TensorRT engine build failed")
+            print("[Error] TensorRT FP8 build failed")
             return None
-            
+
         with open(trt_path, "wb") as f:
             f.write(serialized_engine)
-        
+
         print(f"[Main] TensorRT engine saved to {trt_path}")
         return trt_path
-        
+
     except Exception as e:
-        print(f"[Error] TensorRT optimization failed: {str(e)}")
+        print(f"[Error] TensorRT optimization failed: {e}")
         return None
-    
+ 
 # Export to ONNX
 def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=DTYPE):
     """
-    Export the depth estimation model to ONNX format with dynamic axes.
+    Export the depth estimation model to ONNX format with fixed square input.
     """
+    # Use fixed square input size
     dummy_input = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION, device=device, dtype=dtype)
     
     input_names = ["pixel_values"]
     output_names = ["predicted_depth"]
-    dynamic_axes = {
-        'pixel_values': {0: 'batch_size', 2: 'height', 3: 'width'},
-        'predicted_depth': {0: 'batch_size', 1: 'height', 2: 'width'}
-    }
-
-    torch.onnx.export(
-        model,
-        dummy_input,
-        output_path,
-        input_names=input_names,
-        output_names=output_names,
-        dynamic_axes=dynamic_axes,
-        opset_version=16,
-        do_constant_folding=True,
-        export_params=True,
-        verbose=False
-    )
+    
+    # Remove dynamic axes for fixed size
+    with torch.no_grad():
+        torch.onnx.export(
+            model,
+            dummy_input,
+            output_path,
+            input_names=input_names,
+            output_names=output_names,
+            opset_version=16,
+            do_constant_folding=True,
+            export_params=True,
+            verbose=False
+        )
     
     print(f"ONNX model generated, TensorRT engine compling may take a while...")
 
@@ -466,19 +463,27 @@ class DepthModelWrapper:
         if self.is_cuda and USE_TENSORRT:
             # Use TensorRT backend for CUDA
             warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
-            try:
-                # First try TensorRT
-                self.backend = "TensorRT"
-                self.model = self._load_tensorrt_engine()
-                if self.model is None:
-                    # Fall back to PyTorch if TensorRT fails
-                    print("[Error] TensorRT failed, falling back to PyTorch")
-                    self.backend = "PyTorch"
-                    self.model = self._load_pytorch_model(enable_trt=False)
-            except Exception as e:
-                print(f"[Error] TensorRT initialization failed: {str(e)}, falling back to PyTorch")
+            # First try TensorRT
+            self.backend = "TensorRT"
+            self.model = self._load_tensorrt_engine()
+            if self.model is None:
+                # Fall back to PyTorch if TensorRT fails
+                print("[Error] TensorRT failed, falling back to PyTorch")
                 self.backend = "PyTorch"
                 self.model = self._load_pytorch_model(enable_trt=False)
+            # try:
+            #     # First try TensorRT
+            #     self.backend = "TensorRT"
+            #     self.model = self._load_tensorrt_engine()
+            #     if self.model is None:
+            #         # Fall back to PyTorch if TensorRT fails
+            #         print("[Error] TensorRT failed, falling back to PyTorch")
+            #         self.backend = "PyTorch"
+            #         self.model = self._load_pytorch_model(enable_trt=False)
+            # except Exception as e:
+            #     print(f"[Error] TensorRT initialization failed: {str(e)}, falling back to PyTorch")
+            #     self.backend = "PyTorch"
+            #     self.model = self._load_pytorch_model(enable_trt=False)
         else:
             # Use PyTorch backend for DirectML/MPS/CPU
             
@@ -505,10 +510,11 @@ class DepthModelWrapper:
                 cache_dir=CACHE_PATH,
                 weights_only=True
             ).to(DEVICE)
-        
-        if FP16 and 'da3' not in MODEL_ID.lower():
+            
+        if FP16 and ("da3" not in MODEL_ID.lower() or USE_TENSORRT):
             model.half()
-        
+            
+        # Special setup precision for DA3
         if self.is_cuda and self.use_torch_compile and not enable_trt:
             model = torch.compile(model)
             print("Processing torch.compile with Triton, it may take a while...")
@@ -587,20 +593,22 @@ if USE_TORCH_COMPILE and IS_CUDA:
 
 # Initialize with dummy input for warmup
 def warmup_model(model_wraper, steps: int = 3):
+    """Warmup with fixed square input size."""
+    target_size = DEPTH_RESOLUTION
+    
     if IS_CUDA:
         with torch.inference_mode():
-            with torch.amp.autocast('cuda' , dtype=DTYPE):
+            with torch.amp.autocast('cuda', dtype=DTYPE):
                 for i in range(steps):
-                    dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
+                    dummy = torch.randn(1, 3, target_size, target_size,
                                         device=DEVICE, dtype=MODEL_DTYPE)
                     model_wraper(dummy)
     else:
         with torch.no_grad():
             for i in range(steps):
-                dummy = torch.randn(1, 3, DEPTH_RESOLUTION, DEPTH_RESOLUTION,
+                dummy = torch.randn(1, 3, target_size, target_size,
                                     device=DEVICE, dtype=MODEL_DTYPE)
                 model_wraper(dummy)
-        # print(f"Warmup complete with {steps} iterations.")
 
 warmup_model(model_wraper, steps=3)
 
@@ -632,29 +640,14 @@ if USE_TORCH_COMPILE and IS_CUDA:
 # Modified predict_depth function with improved TRT integration
 def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth: bool = True):
     """
-    Returns depth in [0,1], where 1 = near, 0 = far.
-    Optionally returns (depth_tensor [H,W], rgb_c [C,H,W]) if return_tuple=True.
-    
-    Optimized: All resizing and normalization done on GPU for maximum performance.
+    Returns depth in [0,1] using fixed square input.
     """
     h, w = image_rgb.shape[:2]
     
-    # Compute target size: scale shortest edge to DEPTH_RESOLUTION, preserve aspect ratio
-    scale = DEPTH_RESOLUTION / min(h, w)
-    target_h, target_w = int(round(h * scale)), int(round(w * scale))
-    
-    # Ensure dimensions divisible by 14 for ViT-based models (Depth Anything, etc.)
-    if "anything" in MODEL_ID.lower():
-        target_h = (target_h // 14) * 14
-        target_w = (target_w // 14) * 14
-        # Special case: Video-Depth-Anything expects fixed square input
-        if "video-depth-anything" in MODEL_ID.lower():
-            target_h, target_w = DEPTH_RESOLUTION, DEPTH_RESOLUTION
-    else:
-        # Fixed square input for other models (e.g., DepthPro, DPT)
-        target_h, target_w = DEPTH_RESOLUTION, DEPTH_RESOLUTION
+    # Use fixed square size
+    target_size = DEPTH_RESOLUTION
 
-    # EARLY GPU TRANSFER + FULL GPU PREPROCESSING
+    # EARLY GPU TRANSFER + FIXED SIZE PREPROCESSING
     # Convert NumPy -> Torch tensor and move to device early
     tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=torch.float32, non_blocking=True)
     
@@ -665,11 +658,11 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     else:
         tensor = tensor.permute(2, 0, 1).unsqueeze(0) / 255.0  # [1, C, H, W]
 
-    # Resize on GPU using bilinear interpolation (very fast on CUDA)
-    if (h, w) != (target_h, target_w):
+    # Resize to fixed square size on GPU
+    if (h, w) != (target_size, target_size):
         tensor = F.interpolate(
             tensor,
-            size=(target_h, target_w),
+            size=(target_size, target_size),
             mode='bilinear',
             align_corners=False
         )
@@ -691,9 +684,9 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
             with torch.no_grad():
                 depth = model_wraper(tensor)
 
-    # POST-PROCESSING (already GPU-based and optionally compiled)
+    # POST-PROCESSING
     with torch.no_grad():
-        depth = post_process_depth(depth)  # includes gamma, contrast, foreground scale, AA, etc.
+        depth = post_process_depth(depth)
 
     # Optional temporal stabilization (EMA)
     if use_temporal_smooth:
@@ -701,7 +694,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
 
     # Resize depth back to original input resolution (on GPU)
     depth = F.interpolate(
-        depth.unsqueeze(0).unsqueeze(0),  # [1, 1, h_model, w_model]
+        depth.unsqueeze(0).unsqueeze(0),  # [1, 1, target_size, target_size]
         size=(h, w),
         mode='bilinear',
         align_corners=False
@@ -709,10 +702,9 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
 
     # Return
     if return_tuple:
-        return depth, rgb_c  # rgb_c is [C, H_orig, W_orig], uint8 range on GPU
+        return depth, rgb_c
     else:
-        return depth  # [H_orig, W_orig], float32 in [0,1] on GPU
-
+        return depth
 # Global cache (module-level)
 _FONT_CACHE = {}
 

@@ -139,10 +139,10 @@ class EventHandlers:
         filter_black_bg: bool = False,
         filter_white_bg: bool = False,
         process_res_method: str = "upper_bound_resize",
-        selected_first_frame: str = "",
         save_percentage: float = 30.0,
         num_max_points: int = 1_000_000,
         infer_gs: bool = False,
+        ref_view_strategy: str = "saddle_balanced",
         gs_trj_mode: str = "extend",
         gs_video_quality: str = "high",
     ) -> Tuple[
@@ -166,8 +166,10 @@ class EventHandlers:
             filter_black_bg: Whether to filter black background
             filter_white_bg: Whether to filter white background
             process_res_method: Method for resizing input images
-            selected_first_frame: Selected first frame filename
+            save_percentage: Filter percentage for point cloud
+            num_max_points: Maximum number of points
             infer_gs: Whether to infer 3D Gaussian Splatting
+            ref_view_strategy: Reference view selection strategy
 
         Returns:
             Tuple of reconstruction results
@@ -196,29 +198,17 @@ class EventHandlers:
         )
 
         print("Running DepthAnything3 model...")
-        print(f"Selected first frame: {selected_first_frame}")
-
-        # Validate selected_first_frame against current image list
-        if selected_first_frame and target_dir_images:
-            current_files = (
-                sorted(os.listdir(target_dir_images)) if os.path.isdir(target_dir_images) else []
-            )
-            if selected_first_frame not in current_files:
-                print(
-                    f"Selected first frame '{selected_first_frame}' not found in "
-                    "current images. Using default order."
-                )
-                selected_first_frame = ""  # Reset to use default order
+        print(f"Reference view strategy: {ref_view_strategy}")
 
         with torch.no_grad():
             prediction, processed_data = self.model_inference.run_inference(
                 target_dir,
                 process_res_method=process_res_method,
                 show_camera=show_cam,
-                selected_first_frame=selected_first_frame,
                 save_percentage=save_percentage,
                 num_max_points=int(num_max_points * 1000),  # Convert K to actual count
                 infer_gs=infer_gs,
+                ref_view_strategy=ref_view_strategy,
                 gs_trj_mode=gs_trj_mode,
                 gs_video_quality=gs_video_quality,
             )

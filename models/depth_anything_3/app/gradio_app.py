@@ -130,10 +130,10 @@ class DepthAnything3App:
                         filter_black_bg=filter_black_bg,
                         filter_white_bg=filter_white_bg,
                         process_res_method="high_res" if use_high_res_gs else "low_res",
-                        selected_first_frame="",
                         save_percentage=save_percentage,
                         num_max_points=num_max_points,
                         infer_gs=use_high_res_gs,
+                        ref_view_strategy="saddle_balanced",
                         gs_trj_mode=gs_trj_mode,
                         gs_video_quality=gs_video_quality,
                     )
@@ -172,7 +172,6 @@ class DepthAnything3App:
             is_example = gr.Textbox(label="is_example", visible=False, value="None")
             processed_data_state = gr.State(value=None)
             measure_points_state = gr.State(value=[])
-            selected_first_frame_state = gr.State(value="")
             selected_image_index_state = gr.State(value=0)  # Track selected image index
             # current_view_index = gr.State(value=0)  # noqa: F841 Track current view index
 
@@ -191,7 +190,6 @@ class DepthAnything3App:
                         s_time_interval,
                         input_images,
                         image_gallery,
-                        select_first_frame_btn,
                     ) = self.ui_components.create_upload_section()
 
                 with gr.Column(scale=4):
@@ -225,7 +223,7 @@ class DepthAnything3App:
                                 gs_video, gs_info = self.ui_components.create_nvs_video()
 
                         # Inference control section (before inference)
-                        (process_res_method_dropdown, infer_gs) = (
+                        (process_res_method_dropdown, infer_gs, ref_view_strategy_dropdown) = (
                             self.ui_components.create_inference_control_section()
                         )
 
@@ -282,8 +280,7 @@ class DepthAnything3App:
                 clear_btn,
                 num_max_points,
                 infer_gs,
-                select_first_frame_btn,
-                selected_first_frame_state,
+                ref_view_strategy_dropdown,
                 selected_image_index_state,
                 measure_view_selector,
                 measure_image,
@@ -326,8 +323,7 @@ class DepthAnything3App:
         clear_btn: gr.ClearButton,
         num_max_points: gr.Slider,
         infer_gs: gr.Checkbox,
-        select_first_frame_btn: gr.Button,
-        selected_first_frame_state: gr.State,
+        ref_view_strategy_dropdown: gr.Dropdown,
         selected_image_index_state: gr.State,
         measure_view_selector: gr.Dropdown,
         measure_image: gr.Image,
@@ -373,11 +369,11 @@ class DepthAnything3App:
                 filter_black_bg,
                 filter_white_bg,
                 process_res_method_dropdown,
-                selected_first_frame_state,
                 save_percentage,
                 # pass num_max_points
                 num_max_points,
                 infer_gs,
+                ref_view_strategy_dropdown,
                 gs_trj_mode,
                 gs_video_quality,
             ],
@@ -421,25 +417,6 @@ class DepthAnything3App:
             fn=self.event_handlers.handle_uploads,
             inputs=[input_video, input_images, s_time_interval],
             outputs=[reconstruction_output, target_dir_output, image_gallery, log_output],
-        )
-
-        # Image gallery click handler (for selecting first frame)
-        def handle_image_selection(evt: gr.SelectData):
-            if evt is None or evt.index is None:
-                return "No image selected", 0
-            selected_index = evt.index
-            return f"Selected image {selected_index} as potential first frame", selected_index
-
-        image_gallery.select(
-            fn=handle_image_selection,
-            outputs=[log_output, selected_image_index_state],
-        )
-
-        # Select first frame handler
-        select_first_frame_btn.click(
-            fn=self.event_handlers.select_first_frame,
-            inputs=[image_gallery, selected_image_index_state],
-            outputs=[image_gallery, log_output, selected_first_frame_state],
         )
 
         # Navigation handlers

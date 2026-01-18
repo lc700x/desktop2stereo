@@ -60,7 +60,7 @@ def export_to_mini_npz(
 
     # Build save dict with only non-None values
     save_dict = {
-        "depth": np.round(prediction.depth, 6),
+        "depth": np.round(prediction.depth, 8),
     }
 
     if prediction.conf is not None:

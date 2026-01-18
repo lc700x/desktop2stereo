@@ -152,10 +152,12 @@ def set_sky_regions_to_max_depth(
         Tuple of (updated_depth, updated_depth_conf)
     """
     depth = depth.clone()
-    depth_conf = depth_conf.clone()
 
     # Set sky regions to max depth and high confidence
     depth[~non_sky_mask] = max_depth
-    depth_conf[~non_sky_mask] = 1.0
-
-    return depth, depth_conf
+    if depth_conf is not None:
+        depth_conf = depth_conf.clone()
+        depth_conf[~non_sky_mask] = 1.0
+        return depth, depth_conf
+    else:
+        return depth, None
