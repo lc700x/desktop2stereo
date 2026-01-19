@@ -45,37 +45,30 @@ def is_metric():
         return False
 
 # Optimization for CUDA
-if IS_NVIDIA:
+if IS_CUDA:
+    # Set cudnn benchmark for performance
     torch.backends.cudnn.benchmark = True
-    # Enable TF32 for matrix multiplications
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-    # Enable TF32 matrix multiplication for better performance
-    torch.set_float32_matmul_precision('high')
-    # Enable math attention
-    torch.backends.cuda.enable_flash_sdp(True)
-    torch.backends.cuda.enable_mem_efficient_sdp(True)
-    torch.backends.cuda.enable_math_sdp(True)
-    os.environ["TORCHINDUCTOR_MAX_AUTOTUNE"] ="1" # Debug for torch.compile
+    os.environ["TORCHINDUCTOR_MAX_AUTOTUNE"] ="1"
     if USE_TORCH_COMPILE:
         warnings.filterwarnings(
             "ignore",
             category=UserWarning,
             module=r"torch\._inductor\.lowering"
         )
-    
-elif IS_AMD_ROCM:
-    torch.backends.cudnn.enabled = False # Add for AMD ROCm
-    os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Add for AMD ROCm7
-    os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE"
     # Enable TF32 for matrix multiplications
     torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.set_float32_matmul_precision('high')
+
     # Enable math attention
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
     torch.backends.cuda.enable_math_sdp(True)
-    if OS_NAME != "Linux":
-        USE_TORCH_COMPILE = False  # Disable torch.compile for AMD ROCm7 due to current issues
+
+if IS_AMD_ROCM:
+    os.environ["HSA_XNACK"] = "1"  # Enable XNACK for ROCm
+    os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Add for AMD ROCm7
+    os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for AMD ROCm
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -463,33 +456,24 @@ class DepthModelWrapper:
         if self.is_cuda and USE_TENSORRT:
             # Use TensorRT backend for CUDA
             warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
-            # First try TensorRT
-            self.backend = "TensorRT"
-            self.model = self._load_tensorrt_engine()
-            if self.model is None:
-                # Fall back to PyTorch if TensorRT fails
-                print("[Error] TensorRT failed, falling back to PyTorch")
+            try:
+                # First try TensorRT
+                self.backend = "TensorRT"
+                self.model = self._load_tensorrt_engine()
+                if self.model is None:
+                    # Fall back to PyTorch if TensorRT fails
+                    print("[Error] TensorRT failed, falling back to PyTorch")
+                    self.backend = "PyTorch"
+                    self.model = self._load_pytorch_model(enable_trt=False)
+            except Exception as e:
+                print(f"[Error] TensorRT initialization failed: {str(e)}, falling back to PyTorch")
                 self.backend = "PyTorch"
                 self.model = self._load_pytorch_model(enable_trt=False)
-            # try:
-            #     # First try TensorRT
-            #     self.backend = "TensorRT"
-            #     self.model = self._load_tensorrt_engine()
-            #     if self.model is None:
-            #         # Fall back to PyTorch if TensorRT fails
-            #         print("[Error] TensorRT failed, falling back to PyTorch")
-            #         self.backend = "PyTorch"
-            #         self.model = self._load_pytorch_model(enable_trt=False)
-            # except Exception as e:
-            #     print(f"[Error] TensorRT initialization failed: {str(e)}, falling back to PyTorch")
-            #     self.backend = "PyTorch"
-            #     self.model = self._load_pytorch_model(enable_trt=False)
         else:
-            # Use PyTorch backend for DirectML/MPS/CPU
-            
             # Ignore specific warning message
             warnings.filterwarnings("ignore", message="User provided device_type of 'cuda', but CUDA is not available")
-
+            
+            # Use PyTorch backend for DirectML/MPS/CPU
             self.backend = "PyTorch"
             self.model = self._load_pytorch_model()
         

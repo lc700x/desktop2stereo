@@ -1,0 +1,5 @@
+﻿# AMD Ryze AI 860M 840M (Krackan Point)
+--index-url https://rocm.nightlies.amd.com/v2/gfx1152/ --pre
+torch==2.11.0a0+rocm7.11.0a20260119
+torchvision==0.25.0a0+rocm7.11.0a20260119
+# torchaudio==2.11.0a0+rocm7.11.0a20260119

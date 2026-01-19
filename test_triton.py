@@ -1,7 +1,6 @@
 import torch
 import triton
 import triton.language as tl
-from depth import DEVICE
 
 @triton.jit
 def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -21,7 +20,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     return output
 
-a = torch.rand(3, device=DEVICE)
+a = torch.rand(3, device='cuda:0')
 b = a + a
 b_compiled = add(a, a)
 print(b_compiled - b)

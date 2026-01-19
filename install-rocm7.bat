@@ -1,5 +1,5 @@
 @echo off
-echo --- Desktop2Stereo Installer (With ROCm for AMD 7000/9000/AI/AI Max series GPUs.) ---
+echo --- Desktop2Stereo Installer (With ROCm for AMD 6000/7000/9000/AI/AI Max series GPUs.) ---
 
 
 REM --- Get AMD GPUs sorted by AdapterRAM (largest first) ---
@@ -52,10 +52,12 @@ for /f "delims= " %%x in ("%GPU_MODEL%") do set "GPU_MODEL=%%x"
 @REM echo Extracted numeric model: %GPU_MODEL%
 
 REM --- Map GPU models to requirement files ---
-set "AMD_MODELS_9000=9060 9070 W9700"
-set "AMD_MODELS_7000=W7900X W7800 W7700 W7600 W7500 7900 7900M 7800 7800M 7700 7700S 7600 7600S 7600M 7650 780M 760M 740M"
-set "AMD_MODELS_8000S=8060S 8050S 8040S"
-set "AMD_MODELS_800M=890M 880M 860M 840M"
+set "AMD_MODELS_9000=9060 9070 9700"
+set "AMD_MODELS_7000=7900 7800 7700 7600 7500 7650 780 760 740"
+set "AMD_MODELS_8000S=8060 8050 8040"
+set "AMD_MODELS_890M=890 880"
+set "AMD_MODELS_860M=860 840"
+set "AMD_MODELS_6000=6950 6900 6850 6800 6750 6700 6650 6600 6550 6500 6400 6300 680 610"
 
 call :CheckModel "%GPU_MODEL%" AMD_MODELS_9000 requirements-rocm7-9000.txt
 if %errorlevel% equ 0 goto :InstallDependencies
@@ -66,7 +68,13 @@ if %errorlevel% equ 0 goto :InstallDependencies
 call :CheckModel "%GPU_MODEL%" AMD_MODELS_8000S requirements-rocm7-8000S.txt
 if %errorlevel% equ 0 goto :InstallDependencies
 
-call :CheckModel "%GPU_MODEL%" AMD_MODELS_800M requirements-rocm7-800M.txt
+call :CheckModel "%GPU_MODEL%" AMD_MODELS_890M requirements-rocm7-890M.txt
+if %errorlevel% equ 0 goto :InstallDependencies
+
+call :CheckModel "%GPU_MODEL%" AMD_MODELS_860M requirements-rocm7-860M.txt
+if %errorlevel% equ 0 goto :InstallDependencies
+
+call :CheckModel "%GPU_MODEL%" AMD_MODELS_6000 requirements-rocm7-6000.txt
 if %errorlevel% equ 0 goto :InstallDependencies
 
 echo.
@@ -77,15 +85,19 @@ echo Select a requirements file to install:
 echo 1. requirements-rocm7-9000.txt
 echo 2. requirements-rocm7-7000.txt
 echo 3. requirements-rocm7-8000S.txt
-echo 4. requirements-rocm7-800M.txt
-echo 5. Cancel
+echo 4. requirements-rocm7-890M.txt
+echo 5. requirements-rocm7-860M.txt
+echo 6. requirements-rocm7-6000.txt
+echo 7. Cancel
 echo.
-set /p USER_CHOICE="Enter your choice (1-5): "
+set /p USER_CHOICE="Enter your choice (1-7): "
 if "%USER_CHOICE%"=="1" set "REQUIREMENTS_FILE=requirements-rocm7-9000.txt" & goto :InstallDependencies
 if "%USER_CHOICE%"=="2" set "REQUIREMENTS_FILE=requirements-rocm7-7000.txt" & goto :InstallDependencies
 if "%USER_CHOICE%"=="3" set "REQUIREMENTS_FILE=requirements-rocm7-8000S.txt" & goto :InstallDependencies
-if "%USER_CHOICE%"=="4" set "REQUIREMENTS_FILE=requirements-rocm7-800M.txt" & goto :InstallDependencies
-if "%USER_CHOICE%"=="5" (
+if "%USER_CHOICE%"=="4" set "REQUIREMENTS_FILE=requirements-rocm7-890M.txt" & goto :InstallDependencies
+if "%USER_CHOICE%"=="5" set "REQUIREMENTS_FILE=requirements-rocm7-860M.txt" & goto :InstallDependencies
+if "%USER_CHOICE%"=="6" set "REQUIREMENTS_FILE=requirements-rocm7-6000.txt" & goto :InstallDependencies
+if "%USER_CHOICE%"=="7" (
   echo Installation cancelled by user.
   pause
   exit /b 1
@@ -106,6 +118,7 @@ for %%a in (%MODEL_LIST%) do (
     exit /b 0
   )
 )
+exit /b 1
 
 REM --- Setting up the virtual environment ---
 :InstallDependencies
@@ -154,6 +167,7 @@ if %errorlevel% neq 0 (
 )
 %PYTHON_EXE% -m pip install -r %REQUIREMENTS_FILE% --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install "triton-windows<3.6" --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if %errorlevel% neq 0 (

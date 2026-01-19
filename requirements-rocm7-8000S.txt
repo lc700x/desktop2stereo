@@ -1,5 +1,5 @@
-﻿# AMD Ryze AI Max 380 (8040S), 390 (8050S), 395 (8060S)
---index-url https://rocm.nightlies.amd.com/v2/gfx1151/ 
-torch==2.9.1+rocm7.11.0a20251130
-torchvision==0.24.0+rocm7.11.0a20251130
-# torchaudio==2.9.0+rocm7.11.0a20251130
+﻿# AMD Ryze AI Max 8040S, 8050S, 8060S (Strix Halo)
+--index-url https://rocm.nightlies.amd.com/v2/gfx1151/ --pre
+torch==2.11.0a0+rocm7.11.0a20260119
+torchvision==0.25.0a0+rocm7.11.0a20260119
+# torchaudio==2.11.0a0+rocm7.11.0a20260119

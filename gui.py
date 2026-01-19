@@ -1033,13 +1033,8 @@ class ConfigGUI(tk.Tk):
             # Hide TensorRT for ROCm
             if IS_ROCM:
                 self.check_tensorrt.grid_remove()  
-                if OS_NAME != "Linux":
-                    self.label_inference_optimizer.grid_remove()
-                    self.check_torch_compile.grid_remove()  # Hide torch.compile for ROCm
             else:
-                self.label_inference_optimizer.grid()
-                self.check_tensorrt.grid()
-                self.check_torch_compile.grid()
+                self.check_tensorrt.grid() # Show TensorRT for CUDA
                 
                 # Control visibility of "Recompile TensorRT" based on whether TensorRT is selected
                 self.update_recompile_trt_visibility()
