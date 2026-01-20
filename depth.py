@@ -1,13 +1,16 @@
 # depth.py
 import torch
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, OS_NAME
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, DEBUG
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
 import os, warnings
+
+if not DEBUG:
+    warnings.filterwarnings('ignore') # disable for debug
 
 # Initialize DirectML Device
 def get_device(index=0):
@@ -37,6 +40,57 @@ IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO
 IS_DIRECTML = "DirectML" in DEVICE_INFO
 IS_MPS = "MPS" in DEVICE_INFO
 
+if IS_MPS and "video-depth-anything" in MODEL_ID.lower():
+    FP16 = False
+    
+if USE_COREML and IS_MPS:    
+    try:
+        import coremltools as ct  # optional on macOS only
+    except Exception:
+        ct = None
+        
+    USE_COREML = bool(int(os.environ.get("USE_COREML", "1"))) and (ct is not None)
+    # imports for CoreML
+    if USE_COREML:
+        from contextlib import contextmanager
+        # export-time patch to replace bicubic -> bilinear
+        @contextmanager
+        def coreml_safe_interpolate():
+            """
+            Temporarily monkey-patch torch.nn.functional.interpolate so that any call
+            using mode='bicubic' will instead use 'bilinear' during export.
+            This only affects the code inside the 'with' block (used for TorchScript/CoreML export).
+            """
+            orig_interpolate = F.interpolate
+
+            def patched_interpolate(
+                input,
+                size=None,
+                scale_factor=None,
+                mode='nearest',
+                align_corners=None,
+                recompute_scale_factor=None,
+                antialias=False,
+            ):
+                if mode == "bicubic":
+                    mode = "bilinear"
+
+                return orig_interpolate(
+                    input,
+                    size=size,
+                    scale_factor=scale_factor,
+                    mode=mode,
+                    align_corners=align_corners,
+                    recompute_scale_factor=recompute_scale_factor,
+                    antialias=antialias,
+                )
+
+
+            F.interpolate = patched_interpolate
+            try:
+                yield
+            finally:
+                F.interpolate = orig_interpolate
 # check if it is metric model
 def is_metric():
     if 'metric'  in MODEL_ID.lower() or 'kitti'  in MODEL_ID.lower() or 'nyu' in MODEL_ID.lower() or 'depth-ai' in MODEL_ID.lower() or 'da3' in MODEL_ID.lower():
@@ -79,6 +133,9 @@ DTYPE_INFO = "fp16" if FP16 else "fp32"
 ONNX_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.onnx")
 TRT_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
 
+# orchScript & CoreML paths
+TS_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.pt")
+COREML_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.mlmodel")
 
 # Single character digits and letters for "FPS: XX.X"
 font_dict = {
@@ -362,6 +419,124 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
     
     print(f"ONNX model generated, TensorRT engine compling may take a while...")
 
+class ModelForCoreML(torch.nn.Module):
+    """
+    A thin wrapper that calls the original model and returns a single tensor
+    (the depth tensor). This avoids ModelOutput/dict construction during tracing.
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x):
+        # Some models expose predict_depth; prefer that when present
+        if hasattr(self.model, "predict_depth"):
+            out = self.model.predict_depth(x)
+            if isinstance(out, torch.Tensor):
+                return out
+            # if predict_depth returns something else, try common fields:
+            if isinstance(out, dict) and "predicted_depth" in out:
+                return out["predicted_depth"]
+            # fallback
+            raise RuntimeError("Unsupported predict_depth return type for CoreML export")
+
+        # Standard HF models: often accept pixel_values kwarg, but tracing a module
+        # should call model directly; try both signatures.
+        try:
+            out = self.model(pixel_values=x)
+        except TypeError:
+            out = self.model(x)
+
+        # If the model returns an object with attribute `predicted_depth`, extract it
+        if hasattr(out, "predicted_depth"):
+            return out.predicted_depth
+        # If it's a dict (ModelOutput), attempt to pick the predicted_depth key
+        if isinstance(out, dict):
+            if "predicted_depth" in out:
+                return out["predicted_depth"]
+            # fallback: return the first tensor value found
+            for v in out.values():
+                if isinstance(v, torch.Tensor):
+                    return v
+        # If it's a tuple, assume first element is the tensor
+        if isinstance(out, (tuple, list)):
+            if len(out) > 0 and isinstance(out[0], torch.Tensor):
+                return out[0]
+
+        # If we reach here, we don't know how to handle output
+        raise RuntimeError("Unsupported model output type for CoreML export")
+
+def export_to_coreml(model, output_path, input_size):
+    """
+    Export model to CoreML via TorchScript (CPU-only, FP32).
+    Uses ModelForCoreML wrapper to ensure traced graph returns a tensor (no dicts),
+    and uses coreml_safe_interpolate() (already in your file) to replace bicubic->bilinear
+    during tracing.
+    """
+    if ct is None:
+        raise ImportError("coremltools must be installed on macOS to convert to CoreML")
+
+    # Prepare CPU copy for export
+    model_cpu = model.to("cpu").float().eval()
+
+    # Wrap to ensure a single-tensor return (no dictconstruct)
+    wrapped = ModelForCoreML(model_cpu).eval()
+
+    # Dummy input for tracing (CPU, FP32)
+    dummy = torch.randn(1, 3, input_size, input_size, device="cpu", dtype=torch.float32)
+
+    try:
+        with torch.no_grad():
+            # Apply the bicubic->bilinear patch only during tracing
+            with coreml_safe_interpolate():
+                traced = torch.jit.trace(wrapped, dummy, strict=False)
+                traced = torch.jit.freeze(traced)
+    except Exception as e:
+        # Surface the underlying TorchScript error
+        raise RuntimeError(f"TorchScript export failed: {e}")
+
+    # Convert to CoreML (choose ImageType or TensorType depending on expectations), keep previous ImageType usage for compatibility with pixel-value scaling.
+    mlmodel = ct.convert(
+        traced,
+        inputs=[
+            ct.TensorType(
+                name="pixel_values",
+                shape=dummy.shape,
+                dtype=np.float32
+            )
+        ],
+        compute_precision=ct.precision.FLOAT16 if FP16 else ct.precision.FLOAT32,
+        compute_units=ct.ComputeUnit.ALL,
+        minimum_deployment_target=ct.target.macOS13
+    )
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    mlmodel.save(output_path)
+    print(f"[CoreML] Model saved to {output_path}")
+    return output_path
+
+class CoreMLEngine:
+    def __init__(self, model_path):
+        import coremltools as ct
+        self.model = ct.models.MLModel(
+            model_path,
+            compute_units=ct.ComputeUnit.ALL
+        )
+
+    def __call__(self, tensor):
+        # tensor: [1,3,H,W] torch tensor
+        np_input = tensor.detach().cpu().numpy()
+        out = self.model.predict({"pixel_values": np_input})
+
+        # CoreML output names are not stable — grab the first output
+        if isinstance(out, dict):
+            value = next(iter(out.values()))
+        else:
+            value = out
+
+        return torch.from_numpy(value)
+
+
 # TensorRT Engine Wrapper Class (Without PyCUDA)
 class TensorRTEngine:
     def __init__(self, engine_path, device, dtype):
@@ -406,7 +581,7 @@ class TensorRTEngine:
             raise ImportError("TensorRT not available")
 
     def __call__(self, tensor):
-        """Execute inference with TensorRT using native API."""
+        """Execute inference with TensorRT using native API.""" 
         # Set input binding dimensions
         input_shape = tuple(tensor.shape)
         name = self.engine.get_tensor_name(0)
@@ -453,6 +628,16 @@ class DepthModelWrapper:
         # Determine backend based on device
         self.is_cuda = IS_CUDA
         
+        # Try CoreML on macOS + MPS (non-CUDA) if enabled
+        if USE_COREML:
+            try:
+                self.backend = "CoreML"
+                self.model = self._load_coreml_model()
+                print("Using backend: CoreML")
+                return
+            except Exception as e:
+                print(f"[CoreML] Initialization failed: {e}")
+
         if self.is_cuda and USE_TENSORRT:
             # Use TensorRT backend for CUDA
             warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
@@ -505,6 +690,24 @@ class DepthModelWrapper:
         
         return model.eval()
     
+    def _load_coreml_model(self):
+        coreml_path = os.path.join(
+            MODEL_FOLDER,
+            f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.mlpackage"
+        )
+
+        pytorch_model = self._load_pytorch_model()
+
+        if not os.path.exists(coreml_path) or RECOMPILE_COREML:
+            export_to_coreml(
+                pytorch_model,
+                coreml_path,
+                DEPTH_RESOLUTION
+            )
+
+        return CoreMLEngine(coreml_path)
+
+    
     def _load_tensorrt_engine(self):
         """Load or create TensorRT engine."""
         # First, load PyTorch model to export ONNX
@@ -535,6 +738,11 @@ class DepthModelWrapper:
                         elif "da3" in MODEL_ID.lower():
                             return self.model.predict_depth(tensor)
                         return self.model(pixel_values=tensor).predicted_depth
+                    elif self.backend == "TensorRT":
+                        return self.model(tensor)
+                    elif self.backend == "CoreML":
+                        # CoreML engine returns tensor on desired device
+                        return self.model(tensor)
                     else:
                         return self.model(tensor)
         else:
@@ -545,6 +753,9 @@ class DepthModelWrapper:
                     elif "da3" in MODEL_ID.lower():
                         return self.model.predict_depth(tensor)
                     return self.model(pixel_values=tensor).predicted_depth
+                elif self.backend == "CoreML":
+                    # CoreML path for macOS (non-CUDA)
+                    return self.model(tensor)
                 else:
                     return self.model(tensor)
 
@@ -788,15 +999,12 @@ def make_sbs_core(rgb: torch.Tensor,
         SBS image [C,H,W] float tensor (0-255 range)
     """
     # Cast to float32 for DirectML compatibility (avoids float64 ops)
-    if IS_DIRECTML:
-        rgb = rgb.to(dtype=torch.float32, device=device)
-        depth = depth.to(dtype=torch.float32, device=device)
         
     C, H, W = rgb.shape
     img = rgb.unsqueeze(0)  # [1,C,H,W]
-    
     depth_strength = 0.05
-    inv = 1.0 - depth * depth_ratio
+    
+    inv = depth - depth * depth_ratio
     max_px = ipd_uv * W
     shifts = inv * max_px * depth_strength
     
@@ -807,18 +1015,11 @@ def make_sbs_core(rgb: torch.Tensor,
         shift_norm = shifts * (2.0 / (W - 1))
         grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
         grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
-        if IS_MPS:
-            grid_left, grid_right = grid_right.clamp(-1,1), grid_right.clamp(-1,1)
-            left = F.grid_sample(img, grid_left, mode="bilinear",
-                                padding_mode="zeros", align_corners=False)[0]
-            right = F.grid_sample(img, grid_right, mode="bilinear",
-                                padding_mode="zeros", align_corners=False)[0]
-        else:
-            left = F.grid_sample(img, grid_left, mode="bilinear",
-                                padding_mode="border", align_corners=False)[0]
-            right = F.grid_sample(img, grid_right, mode="bilinear",
-                                padding_mode="border", align_corners=False)[0]
-    # Fallback path: vectorized gather (DirectML / MPS / CPU safe)
+        left = F.grid_sample(img, grid_left, mode="bilinear",
+                             padding_mode="reflection", align_corners=True)[0]
+        right = F.grid_sample(img, grid_right, mode="bilinear",
+                              padding_mode="reflection", align_corners=True)[0]
+    # Fallback path: vectorized gather (DirectML)
     else:
         base = torch.arange(W, device=device, dtype=torch.int64).view(1, -1).expand(H, -1)
         # Ensure shifts is float32 for addition
@@ -865,9 +1066,13 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
     Full function: adds optional FPS overlay and converts output to numpy uint8.
     Calls `make_sbs_core` for tensor computations (torch.compile compatible).
     """
-    if depth.dim() == 3 and depth.shape[0] == 1:
-        depth = depth[0]
-        
+    if USE_COREML:
+        device = DEVICE
+        if isinstance(depth, np.ndarray):
+            depth = torch.from_numpy(depth).to(device=DEVICE, dtype=torch.float32)
+        else:
+            depth = depth.to(device=device)
+    
     # Handle input type conversion
     if isinstance(rgb_c, np.ndarray):
         # Convert numpy array to tensor with matching device/dtype

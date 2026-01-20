@@ -58,6 +58,7 @@ fi
 chmod a+x ./update_mac_linux
 chmod a+x ./install-mps
 chmod a+x ./run_mac
+chmod a+x ./run_mac_main
 chmod -R 777 rtmp
 echo "Python environment deployed successfully."
 read -p "You can close this terminal window to exit..."

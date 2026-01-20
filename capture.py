@@ -309,6 +309,8 @@ if OS_NAME == "Windows":
 
 
 elif OS_NAME == "Darwin":
+    import mss.darwin
+    mss.darwin.IMAGE_OPTIONS = 0 # disable scaling
     import io, cv2
     from PIL import Image
     import Quartz.CoreGraphics as CG

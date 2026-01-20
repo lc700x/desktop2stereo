@@ -1,6 +1,8 @@
 import yaml, threading
 import os, platform, socket
 
+# Debug Mode
+DEBUG = True
 # App Version
 VERSION = "2.3.9"
 # Get OS name
@@ -32,6 +34,16 @@ DISABLE_TRT_KEYWORDS = [
     "da3-", 
     "da3nested",
     "dpt",
+    "zoedepth",
+    "depthpro"
+]
+
+# Models with Disabled CoreML 
+DISABLE_COREML_KEYWORDS = [
+    "video-depth-anything",
+    "da3-", 
+    "da3nested",
+    "dpt-beit",
     "zoedepth",
     "depthpro"
 ]
@@ -119,7 +131,7 @@ if OS_NAME == "Darwin":
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
-if settings["HF Endpoint"]:
+if settings["HF Endpoint"] and not DEBUG:
     os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 if OS_NAME == "Windows":
@@ -190,7 +202,7 @@ ALL_MODELS = settings["Model List"]
 CACHE_PATH = settings["Download Path"]
 DEPTH_RESOLUTION = settings["Depth Resolution"]
 DEVICE_ID = settings["Computing Device"]
-FP16 = False if OS_NAME == "Darwin" else settings["FP16"]
+FP16 = settings["FP16"]
 MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
 SHOW_FPS, FPS, DEPTH_STRENGTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 IPD = settings["IPD"]
@@ -205,6 +217,8 @@ AA_STRENGTH = settings["Anti-aliasing"] * 2
 DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer
 USE_TORCH_COMPILE = settings["torch.compile"]
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
+USE_COREML = settings["CoreML"] # use CoreML for MacOS
+RECOMPILE_COREML = settings["Recompile CoreML"] # recompile CoreML mlpackage
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
 CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture
 FILL_16_9 = settings["Fill 16:9"]

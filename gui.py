@@ -154,6 +154,8 @@ DEFAULTS = {
     "torch.compile": False,
     "TensorRT": False,
     "Recompile TensorRT": False,
+    "CoreML": False,
+    "Recompile CoreML": False,
     "Unlock Thread (Legacy Streamer)": False,
     "Recompile TensorRT": False,
     "Download Path": "models",
@@ -195,6 +197,7 @@ UI_TEXTS = {
         "FP16": "FP16",
         "Inference Optimizer:": "Inference Optimizer:",
         "Recompile TensorRT": "Recompile TensorRT",
+        "Recompile CoreML": "Recompile CoreML",
         "Unlock Thread (Legacy Streamer)": "Unlock Thread (Legacy Streamer)",
         "Download Path:": "Download Path:",
         "Browse...": "Browse...",
@@ -273,6 +276,7 @@ UI_TEXTS = {
         "FP16": "半精度浮点 (F16)",
         "Inference Optimizer:": "推理优化:",
         "Recompile TensorRT": "重新编译TensorRT",
+        "Recompile CoreML": "重新编译CoreML",
         "Unlock Thread (Legacy Streamer)": "解锁线程 (旧网络推流)",
         "Download Path:": "下载路径:",
         "Browse...": "浏览...",
@@ -496,12 +500,7 @@ class ConfigGUI(tk.Tk):
         # FP16 and Show FPS
         self.fp16_var = tk.BooleanVar()
         self.fp16_cb = ttk.Checkbutton(self.content_frame, text="FP16", variable=self.fp16_var)
-        # Hide FP16 for Mac OS (Darwin)
-        if OS_NAME != "Darwin":
-            self.fp16_cb.grid(row=6, column=2, sticky="w", **self.pad)
-        else:
-            self.fp16_cb.grid_remove()
-        
+        self.fp16_cb.grid(row=6, column=2, sticky="w", **self.pad)
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
         if OS_NAME != "Windows":
@@ -640,6 +639,17 @@ class ConfigGUI(tk.Tk):
         self.check_recompile_trt = ttk.Checkbutton(self.content_frame, text="Recompile TensorRT", variable=self.recompile_trt_var)
         self.check_recompile_trt.grid(row=14, column=3, sticky="w", **self.pad)
         
+        # CoreML (for MPS devices)
+        self.use_coreml = tk.BooleanVar()
+        self.check_coreml = ttk.Checkbutton(self.content_frame, text="CoreML", variable=self.use_coreml)
+        self.check_coreml.grid(row=14, column=1, sticky="w", **self.pad)
+        self.use_coreml.trace_add("write", self.update_recompile_coreml_visibility)  # Add trace
+
+        # Recompile CoreML (only visible when CoreML is selected)
+        self.recompile_coreml_var = tk.BooleanVar()
+        self.check_recompile_coreml = ttk.Checkbutton(self.content_frame, text="Recompile CoreML", variable=self.recompile_coreml_var)
+        self.check_recompile_coreml.grid(row=14, column=2, sticky="w", **self.pad)  # Changed row to 15
+        
         # Add these instance variables
         self.specify_display_var = tk.BooleanVar()
         self.stereo_monitor_var = tk.StringVar()
@@ -775,6 +785,14 @@ class ConfigGUI(tk.Tk):
                 self.check_recompile_trt.config(state="normal")
                 # Update recompile visibility based on current TensorRT selection
                 self.update_recompile_trt_visibility()
+                
+    # Add method to update CoreML recompile visibility
+    def update_recompile_coreml_visibility(self, *args):
+        """Show/hide CoreML recompile option based on CoreML selection"""
+        if self.use_coreml.get():
+            self.check_recompile_coreml.grid()
+        else:
+            self.check_recompile_coreml.grid_remove()
     
     # Support for lossless scaling
     def update_lossless_scaling_visibility(self):
@@ -1009,7 +1027,7 @@ class ConfigGUI(tk.Tk):
             self.check_recompile_trt.grid_remove()
             
     def on_device_change(self, *args):
-        """Update UI visibility based on the selected device (e.g., show Legacy Streamer Boost only for DirectML)."""
+        """Update UI visibility based on the selected device."""
         device_label = self.device_var.get()
 
         # Determine device type
@@ -1017,38 +1035,54 @@ class ConfigGUI(tk.Tk):
             device_type = "CUDA"
         elif "DirectML" in device_label:
             device_type = "DirectML"
+        elif "MPS" in device_label or "Apple Silicon" in device_label:
+            device_type = "MPS"
         else:
             device_type = "Other"
 
-        # Show / Hide "Legacy Streamer Boost (DirectML)" only for DirectML devices
+        # Show/hide optimizer options based on device type
         if device_type == "DirectML":
             self.label_inference_optimizer.grid()
-            self.check_unlock_streamer_thread.grid()  # Show Legacy Streamer Boost checkbox
-            self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
-            self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
-            self.check_recompile_trt.grid_remove()  # Hide "Recompile TensorRT" for DirectML
-            self.fp16_var.set(False) # disable FP16 for DirectML
+            self.check_unlock_streamer_thread.grid()
+            self.check_torch_compile.grid_remove()
+            self.check_tensorrt.grid_remove()
+            self.check_recompile_trt.grid_remove()
+            self.check_coreml.grid_remove()
+            self.check_recompile_coreml.grid_remove()
+            self.fp16_var.set(False)
+            
         elif device_type == "CUDA":
+            self.label_inference_optimizer.grid()
             self.check_unlock_streamer_thread.grid_remove()
-            # Hide TensorRT for ROCm
+            self.check_torch_compile.grid()
+            self.check_coreml.grid_remove()
+            self.check_recompile_coreml.grid_remove()
+            
             if IS_ROCM:
-                self.check_tensorrt.grid_remove()  
+                self.check_tensorrt.grid_remove()
             else:
-                self.check_tensorrt.grid() # Show TensorRT for CUDA
-                
-                # Control visibility of "Recompile TensorRT" based on whether TensorRT is selected
+                self.check_tensorrt.grid()
                 self.update_recompile_trt_visibility()
-                
-                # Update TensorRT visibility based on current model
                 current_model = self.depth_model_var.get()
                 self.update_tensorrt_visibility_based_on_model(current_model)
                 
-        else:
-            self.label_inference_optimizer.grid_remove()  # Hide Inference Optimizer label
-            self.check_unlock_streamer_thread.grid_remove()  # Hide Legacy Streamer Boost checkbox
-            self.check_torch_compile.grid_remove()  # Hide torch.compile for DirectML
-            self.check_tensorrt.grid_remove()  # Hide TensorRT for DirectML
-            self.check_recompile_trt.grid_remove()  # Hide "Recompile TensorRT" for DirectML
+        elif device_type == "MPS":
+            self.label_inference_optimizer.grid()
+            self.check_unlock_streamer_thread.grid_remove()
+            self.check_torch_compile.grid_remove()
+            self.check_tensorrt.grid_remove()
+            self.check_recompile_trt.grid_remove()
+            self.check_coreml.grid()
+            self.update_recompile_coreml_visibility()
+            
+        else:  # CPU or other
+            self.label_inference_optimizer.grid_remove()
+            self.check_unlock_streamer_thread.grid_remove()
+            self.check_torch_compile.grid_remove()
+            self.check_tensorrt.grid_remove()
+            self.check_recompile_trt.grid_remove()
+            self.check_coreml.grid_remove()
+            self.check_recompile_coreml.grid_remove()
                 
     
     def refresh_window_list(self):
@@ -1212,6 +1246,7 @@ class ConfigGUI(tk.Tk):
         # Add Inference Optimizer text update
         self.label_inference_optimizer.config(text=texts.get("Inference Optimizer:", "Inference Optimizer:"))
         self.check_recompile_trt.config(text=texts.get("Recompile TensorRT", "Recompile TensorRT"))
+        self.check_recompile_coreml.config(text=texts.get("Recompile CoreML", "Recompile CoreML"))
         self.check_unlock_streamer_thread.config(text=texts.get("Unlock Thread (Legacy Streamer)", "Unlock Thread (Legacy Streamer)"))
         # Select the appropriate label
         if self.run_mode_key == "Local Viewer":
@@ -1574,6 +1609,9 @@ class ConfigGUI(tk.Tk):
         # Update TensorRT visibility based on selected model
         self.update_tensorrt_visibility_based_on_model(selected_model)
         
+        # TODO
+        # self.update_coreml_visibility_based_on_model(selected_model)
+        
         self.depth_model_var.set(selected_model)
         self.update_depth_resolution_options(selected_model)
         self.depth_res_cb.set(cfg.get("Depth Resolution", DEFAULTS["Depth Resolution"]))
@@ -1661,6 +1699,10 @@ class ConfigGUI(tk.Tk):
         
         # Trigger device change to update optimizer options
         self.recompile_trt_var.set(cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"]))
+        
+        # Apply CoreML settings
+        self.use_coreml.set(cfg.get("CoreML", False))
+        self.recompile_coreml_var.set(cfg.get("Recompile CoreML", False))
         
         # Trigger device change to update optimizer options
         self.on_device_change()
@@ -1773,6 +1815,8 @@ class ConfigGUI(tk.Tk):
             "torch.compile": self.use_torch_compile.get(),
             "TensorRT": self.use_tensorrt.get(),
             "Recompile TensorRT": self.recompile_trt_var.get(),
+            "CoreML": self.use_coreml.get(),
+            "Recompile CoreML": self.recompile_coreml_var.get(),
             "Unlock Thread (Legacy Streamer)": self.unlock_streamer_thread.get(),
             "Capture Tool": self.capture_tool_cb.get(),
             "Fill 16:9": self.fill_16_9_var.get(),
@@ -1796,18 +1840,25 @@ class ConfigGUI(tk.Tk):
             self.after(1000, self.on_run_complete)
     
     def on_run_complete(self):
-        if self.recompile_trt_var.get() == True:
-            """Called when the application finishes running"""
-            # Uncheck recompile TRT
+        """Called when the application finishes running"""
+        # Reset TensorRT recompile if needed
+        if self.recompile_trt_var.get():
             self.recompile_trt_var.set(False)
-            
-            # Update GUI
-            if hasattr(self, 'recompile_trt_checkbox'):
-                self.recompile_trt_checkbox.update_idletasks()
-            
-            # Update global variable
             self.cfg["Recompile TensorRT"] = False
-            self.after(8000, self.save_yaml,"settings.yaml", self.cfg)
+        
+        # Reset CoreML recompile if needed
+        if self.recompile_coreml_var.get():
+            self.recompile_coreml_var.set(False)
+            self.cfg["Recompile CoreML"] = False
+        
+        # Update GUI
+        if hasattr(self, 'check_recompile_trt'):
+            self.check_recompile_trt.update_idletasks()
+        if hasattr(self, 'check_recompile_coreml'):
+            self.check_recompile_coreml.update_idletasks()
+        
+        # Save updated config
+        self.after(8000, self.save_yaml, "settings.yaml", self.cfg)
         
     def _countdown_and_run(self, seconds):
         if self.process and self.process.poll() is None:

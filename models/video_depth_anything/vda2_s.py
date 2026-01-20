@@ -102,7 +102,7 @@ class VideoDepthAnything(nn.Module):
         depth, cur_cached_hidden_state_list = self.head(features, patch_h, patch_w, T, cached_hidden_state_list=cached_hidden_state_list)
         depth = F.interpolate(depth, size=(H, W), mode="bilinear", align_corners=True)
         depth = F.relu(depth)
-        return depth.squeeze(1).unflatten(0, (B, T)), cur_cached_hidden_state_list # return shape [B, T, H, W]
+        return depth, cur_cached_hidden_state_list # return shape [B, T, H, W]
     
     # def predict_depth_vda2(self, frame, input_size: int = 518, device='cuda', dtype=torch.float16):
     #     self.id += 1
@@ -264,4 +264,4 @@ class VideoDepthAnything(nn.Module):
             # new: write into a fixed-size circular buffer (no append/del)
             self.frame_id_buffer[self.buffer_ptr] = self.id
             self.buffer_ptr = (self.buffer_ptr + 1) % self.buffer_size
-        return self.predicted_depth.squeeze(1)  # return shape [T, H, W]
+        return self.predicted_depth  # return shape [T, H, W]

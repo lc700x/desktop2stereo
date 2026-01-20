@@ -4,7 +4,7 @@ moderngl==5.12.0
 opencv-python==4.12.0.88
 transformers==4.56.2
 hf_xet==1.1.7
-mss==10.0.0
+mss==10.1.0
 
 # for video depth anything
 imageio==2.37.0
