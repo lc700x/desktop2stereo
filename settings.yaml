@@ -390,14 +390,14 @@ Model List:
   apple/DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: Intel/dpt-beit-large-512
+Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 0.5
-Depth Resolution: 384
+Depth Resolution: 294
 FP16: true
 Download Path: models
-HF Endpoint: https://huggingface.co
+HF Endpoint: https://hf-mirror.com
 Computing Device: 0
 Language: EN
 Run Mode: Local Viewer
@@ -415,8 +415,8 @@ Fill 16:9: true
 Fix Viewer Aspect: false
 Lossless Scaling Support: false
 Stream Key: live
-Stereo Mix: BlackHole 2ch
+Stereo Mix: Splashtop Remote Sound
 CRF: 20
 Audio Delay: -0.15
-Specify Display: true
-Stereo Monitor: 2
+Specify Display: false
+Stereo Monitor: 1

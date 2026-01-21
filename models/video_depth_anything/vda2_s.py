@@ -24,29 +24,6 @@ from .dinov2 import DINOv2
 from .dpt_temporal import DPTHeadTemporal
 # from .util.transform import Resize, NormalizeImage, PrepareForNet
 
-# Initialize DirectML Device
-from utils import DEVICE_ID
-def get_device(index=0):
-    try:
-        try:
-            import torch_directml
-            if torch_directml.is_available():
-                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
-        except ImportError:
-            pass
-        if torch.backends.mps.is_available() and index==0:
-            return torch.device("mps"), "Using Apple Silicon (MPS) device"
-        if torch.cuda.is_available():
-            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
-        else:
-            return torch.device("cpu"), "Using CPU device"
-    except:
-        return torch.device("cpu"), "Using CPU device"
-    
-DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
-IS_CUDA = "CUDA" in DEVICE_INFO
-
-
 # infer settings, do not change
 INFER_LEN = 32
 OVERLAP = 10
@@ -209,17 +186,25 @@ class VideoDepthAnything(nn.Module):
             # Inference the first frame
             # cur_list = [cur_input]
 
-            if not IS_CUDA:
-                with torch.no_grad():
-                    cur_feature = self.forward_features(cur_input)
-                    x_shape = cur_input.shape
-                    self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
-            else:
+            if pixel_values.device.type == "cuda":
                 with torch.inference_mode():
                     with torch.amp.autocast('cuda'):
                         cur_feature = self.forward_features(cur_input)
                         x_shape = cur_input.shape
                         self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
+            elif pixel_values.device.type == "mps":
+                with torch.inference_mode():
+                    with torch.amp.autocast('mps'):
+                        cur_feature = self.forward_features(cur_input)
+                        x_shape = cur_input.shape
+                        self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
+            else:
+                with torch.no_grad():
+                    cur_feature = self.forward_features(cur_input)
+                    x_shape = cur_input.shape
+                    self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
+            
+                
         
             
             # Build pre-concatenated cache
@@ -231,15 +216,21 @@ class VideoDepthAnything(nn.Module):
             self.frame_id_list.extend([0] * (INFER_LEN  - 1))
             self.transform = True
         else:
-            if not IS_CUDA:
-                with torch.no_grad():
-                    cur_feature = self.forward_features(cur_input)
-                    x_shape = cur_input.shape
-            else:
+            if pixel_values.device.type == "cuda":
                 with torch.inference_mode():
                     with torch.amp.autocast('cuda'):
                         cur_feature = self.forward_features(cur_input)
                         x_shape = cur_input.shape
+            elif pixel_values.device.type == "mps":
+                with torch.inference_mode():
+                    with torch.amp.autocast('mps'):
+                        cur_feature = self.forward_features(cur_input)
+                        x_shape = cur_input.shape
+            else:
+                with torch.no_grad():
+                    cur_feature = self.forward_features(cur_input)
+                    x_shape = cur_input.shape
+
             '''
             cur_id = self.frame_id_list[0:2] + self.frame_id_list[-INFER_LEN+3:]
             print(f"cur_id: {cur_id}")
@@ -247,14 +238,18 @@ class VideoDepthAnything(nn.Module):
             cur_cache = self.hidden_cache
 
             # infer depth
-            if not IS_CUDA:
-                with torch.no_grad():
-                    self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
-            else:
+            if pixel_values.device.type == "cuda":
                 with torch.inference_mode():
                     with torch.amp.autocast('cuda'):
                         self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
-
+            elif pixel_values.device.type == "mps":
+                with torch.inference_mode():
+                    with torch.amp.autocast('mps'):
+                        self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
+            else:
+                with torch.no_grad():
+                    self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
+            
             self.update_cache(new_cache)
             # old:
             # self.frame_id_list.append(self.id)

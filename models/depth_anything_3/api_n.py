@@ -107,6 +107,9 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
                 # Autocast runtime only, does not affect export
                 with torch.autocast(device_type="cuda", dtype=pixel_values.dtype):
                     return self.forward(pixel_values)
+            elif pixel_values.device.type == "mps":
+                with torch.autocast(device_type="mps", dtype=pixel_values.dtype):
+                    return self.forward(pixel_values)
             else:
                 return self.forward(pixel_values)
 

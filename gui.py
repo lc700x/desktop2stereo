@@ -500,7 +500,11 @@ class ConfigGUI(tk.Tk):
         # FP16 and Show FPS
         self.fp16_var = tk.BooleanVar()
         self.fp16_cb = ttk.Checkbutton(self.content_frame, text="FP16", variable=self.fp16_var)
-        self.fp16_cb.grid(row=6, column=2, sticky="w", **self.pad)
+        # Hide FP16 for Mac OS (Darwin)
+        if OS_NAME != "Darwin":
+            self.fp16_cb.grid(row=6, column=2, sticky="w", **self.pad)
+        else:
+            self.fp16_cb.grid_remove()
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
         if OS_NAME != "Windows":

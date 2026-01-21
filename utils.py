@@ -130,9 +130,7 @@ if OS_NAME == "Darwin":
         
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-
-if settings["HF Endpoint"] and not DEBUG:
-    os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
+os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 if OS_NAME == "Windows":
     import ctypes, win32gui, win32con
@@ -202,7 +200,7 @@ ALL_MODELS = settings["Model List"]
 CACHE_PATH = settings["Download Path"]
 DEPTH_RESOLUTION = settings["Depth Resolution"]
 DEVICE_ID = settings["Computing Device"]
-FP16 = settings["FP16"]
+FP16 = False if OS_NAME == "Darwin" else settings["FP16"]
 MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
 SHOW_FPS, FPS, DEPTH_STRENGTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 IPD = settings["IPD"]
