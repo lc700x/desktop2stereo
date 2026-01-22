@@ -4,7 +4,7 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, DISABLE_TRT_KEYWORDS, crop_icon, get_local_ip, shutdown_event
+from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, crop_icon, get_local_ip, shutdown_event
 
 # Get model lists
 DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
@@ -763,9 +763,12 @@ class ConfigGUI(tk.Tk):
         """Handle depth model selection changes"""
         selected_model = self.depth_model_var.get()
         self.update_depth_resolution_options(selected_model)
-        
-        # Disable TensorRT for specific models
-        self.update_tensorrt_visibility_based_on_model(selected_model)
+        if not IS_ROCM and "CUDA" in self.device_var.get():
+            # Disable TensorRT for specific models
+            self.update_tensorrt_visibility_based_on_model(selected_model)
+        elif "MPS" in self.device_var.get():
+            # Disable CoreML for specific models
+            self.update_recompile_coreml_visibility_based_on_model(selected_model)
 
     def update_tensorrt_visibility_based_on_model(self, model_name):
         if not IS_ROCM and "CUDA" in self.device_var.get():
@@ -791,12 +794,28 @@ class ConfigGUI(tk.Tk):
                 self.update_recompile_trt_visibility()
                 
     # Add method to update CoreML recompile visibility
-    def update_recompile_coreml_visibility(self, *args):
-        """Show/hide CoreML recompile option based on CoreML selection"""
-        if self.use_coreml.get():
-            self.check_recompile_coreml.grid()
-        else:
-            self.check_recompile_coreml.grid_remove()
+    def update_recompile_coreml_visibility_based_on_model(self, model_name):
+        if "MPS" in self.device_var.get():
+            """Disable CoreML option for specific model types"""
+            model_lower = model_name.lower()
+            
+            # Check if any keyword is in the model name
+            should_disable = any(keyword in model_lower for keyword in DISABLE_COREML_KEYWORDS)
+            
+            # Update TensorRT checkbox state
+            if should_disable:
+                # Disable and uncheck CoreML
+                self.use_coreml.set(False)
+                self.check_coreml.config(state="disabled")
+                self.check_recompile_coreml.config(state="disabled")
+                # Also hide recompile option
+                self.check_recompile_coreml.grid_remove()
+            else:
+                # Enable CoreML if device supports it
+                self.check_coreml.config(state="normal")
+                self.check_recompile_coreml.config(state="normal")
+                # Update recompile visibility based on current CoreML selection
+                self.update_recompile_coreml_visibility()
     
     # Support for lossless scaling
     def update_lossless_scaling_visibility(self):
@@ -1029,6 +1048,13 @@ class ConfigGUI(tk.Tk):
             self.check_recompile_trt.grid()
         else:
             self.check_recompile_trt.grid_remove()
+
+    def update_recompile_coreml_visibility(self, *args):
+        """Show/hide CoreML recompile option based on optimizer selection"""
+        if self.use_coreml.get():
+            self.check_recompile_coreml.grid()
+        else:
+            self.check_recompile_coreml.grid_remove()
             
     def on_device_change(self, *args):
         """Update UI visibility based on the selected device."""

@@ -394,7 +394,7 @@ Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 0.5
-Depth Resolution: 294
+Depth Resolution: 336
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
@@ -407,7 +407,7 @@ Stream Quality: 100
 torch.compile: false
 TensorRT: false
 Recompile TensorRT: false
-CoreML: true
+CoreML: false
 Recompile CoreML: false
 Unlock Thread (Legacy Streamer): false
 Capture Tool: DXCamera
@@ -415,7 +415,7 @@ Fill 16:9: true
 Fix Viewer Aspect: false
 Lossless Scaling Support: false
 Stream Key: live
-Stereo Mix: Splashtop Remote Sound
+Stereo Mix: Stereo Mix (Realtek(R) Audio)
 CRF: 20
 Audio Delay: -0.15
 Specify Display: false

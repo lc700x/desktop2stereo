@@ -46,7 +46,7 @@ if USE_COREML and IS_MPS:
     except Exception:
         ct = None
         
-    USE_COREML = bool(int(os.environ.get("USE_COREML", "1"))) and (ct is not None)
+    USE_COREML = ct is not None
     # imports for CoreML
     if USE_COREML:
         FP16 = True
@@ -634,7 +634,7 @@ class DepthModelWrapper:
         self.is_mps = IS_MPS
         
         # Try CoreML on macOS + MPS (non-CUDA) if enabled
-        if USE_COREML:
+        if self.is_mps and USE_COREML:
             try:
                 self.backend = "CoreML"
                 self.model = self._load_coreml_model()
