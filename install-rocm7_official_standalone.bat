@@ -1,5 +1,5 @@
 @echo off
-echo --- Desktop2Stereo Installer (With ROCm for AMD 7000/9000 series GPUs.) ---
+echo --- Desktop2Stereo Installer (With ROCm for AMD 7000/9000/AI series GPU/APUs.) ---
 echo - Setting up the virtual environment
 
 @REM Set paths, acutually using Python 3.12

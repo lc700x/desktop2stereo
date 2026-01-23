@@ -3,3 +3,4 @@
 torch==2.11.0a0+rocm7.11.0a20260119
 torchvision==0.25.0a0+rocm7.11.0a20260119
 # torchaudio==2.11.0a0+rocm7.11.0a20260119
+rocm_sdk_devel==7.11.0a20260119

@@ -1,5 +1,5 @@
 @echo off
-echo --- Desktop2Stereo Installer (With ROCm for AMD 6000/7000/9000/AI/AI Max series GPUs.) ---
+echo --- Desktop2Stereo Installer (With ROCm for AMD 6000/7000/9000/AI series GPU/APUs.) ---
 
 
 REM --- Get AMD GPUs sorted by AdapterRAM (largest first) ---
