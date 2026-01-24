@@ -1,11 +1,18 @@
 # depth.py
-import torch, cv2
+# depth.py
+import torch
+try:
+    import zluda # Support for old AMD GPU with ZLUDA support
+    torch.backends.cudnn.enabled = False  # Disable cuDNN for ZLUDA compatibility
+except ImportError:
+    pass
 torch.set_num_threads(1)
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 from PIL import Image
+import cv2
 import os, warnings
 
 img  = Image.open("assets/cats.jpg").convert("RGB")
@@ -63,17 +70,17 @@ print(f"Model: {MODEL_ID}")
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
-IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO
+IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO
 IS_DIRECTML = "DirectML" in DEVICE_INFO
 IS_MPS = "MPS" in DEVICE_INFO
-    
+
 if USE_COREML and IS_MPS:    
     try:
         import coremltools as ct  # optional on macOS only
     except Exception:
         ct = None
         
-    USE_COREML = bool(int(os.environ.get("USE_COREML", "1"))) and (ct is not None)
+    USE_COREML = ct is not None
     # imports for CoreML
     if USE_COREML:
         FP16 = True
@@ -120,13 +127,6 @@ if USE_COREML and IS_MPS:
 if IS_DIRECTML or (not USE_COREML and IS_MPS): 
     FP16 = False 
 
-# check if it is metric model
-def is_metric():
-    if 'metric'  in MODEL_ID.lower() or 'kitti'  in MODEL_ID.lower() or 'nyu' in MODEL_ID.lower() or 'depth-ai' in MODEL_ID.lower() or 'da3' in MODEL_ID.lower():
-        return True
-    else:
-        return False
-
 # Optimization for CUDA
 if IS_CUDA:
     # Set cudnn benchmark for performance
@@ -150,8 +150,9 @@ if IS_CUDA:
 
 if IS_AMD_ROCM:
     os.environ["HSA_XNACK"] = "1"  # Enable XNACK for ROCm
-    os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Add for AMD ROCm7
-    os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for AMD ROCm
+    os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Enable AOTriton for ROCm
+    os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
+    os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "TRUE" # Enable flash attention autotune for AMD ROCm
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -185,6 +186,13 @@ font_dict = {
     ".": ["000","000","000","000","010"],  # for decimal point
     " ": ["000","000","000","000","000"],
 }
+
+# check if it is metric model
+def is_metric():
+    if 'metric'  in MODEL_ID.lower() or 'kitti'  in MODEL_ID.lower() or 'nyu' in MODEL_ID.lower() or 'depth-ai' in MODEL_ID.lower() or 'da3' in MODEL_ID.lower():
+        return True
+    else:
+        return False
 
 # Post-processing functions
 def apply_foreground_scale(depth: torch.Tensor, scale: float, mid: float = 0.5, eps: float = 1e-6) -> torch.Tensor:
@@ -661,7 +669,7 @@ class DepthModelWrapper:
         self.is_mps = IS_MPS
         
         # Try CoreML on macOS + MPS (non-CUDA) if enabled
-        if USE_COREML:
+        if self.is_mps and USE_COREML:
             try:
                 self.backend = "CoreML"
                 self.model = self._load_coreml_model()
