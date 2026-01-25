@@ -1,10 +1,13 @@
 # depth.py
 import torch
-try:
-    import zluda # Support for old AMD GPU with ZLUDA support
-    torch.backends.cudnn.enabled = False  # Disable cuDNN for ZLUDA compatibility
-except ImportError:
-    pass
+
+# # Support for old AMD GPU with ZLUDA support (hide)
+# try:
+#     import zluda 
+#     torch.backends.cudnn.enabled = False  # Disable cuDNN for ZLUDA compatibility
+# except ImportError:
+#     pass
+
 torch.set_num_threads(1)
 from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, DEBUG
 import torch.nn.functional as F
@@ -44,7 +47,6 @@ IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
 IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO
 IS_DIRECTML = "DirectML" in DEVICE_INFO
 IS_MPS = "MPS" in DEVICE_INFO
-IS_ZLUDA = "ZLUDA" in DEVICE_INFO
 
 if USE_COREML and IS_MPS:    
     try:

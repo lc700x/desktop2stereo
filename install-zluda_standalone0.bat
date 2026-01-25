@@ -27,14 +27,14 @@ Set "VIRTUAL_ENV=.\Python311"
 Set "PYTHON_EXE=.\Python311\python.exe"
 
 echo - Updating the pip package 
-%PYTHON_EXE% -m pip install --upgrade pip --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install --upgrade pip --no-cache-dir --no-warn-script-location 
 echo.
 echo - Installing torch for AMD GPUs (Using latest torch 2.7.1)
-@REM %PYTHON_EXE% -m pip install torch==2.7.1 torchvision==0.22.1 --no-cache-dir --no-warn-script-location --index-url https://download.pytorch.org/whl/cu118/ 
-%PYTHON_EXE% -m pip install torch==2.7.1 torchvision==0.22.1 --no-cache-dir --no-warn-script-location -f https://mirrors.aliyun.com/pytorch-wheels/cu118/
-%PYTHON_EXE% -m pip install https://ghfast.top/github.com/lshqqytiger/triton/releases/download/a9c80202/triton-3.4.0+gita9c80202-cp311-cp311-win_amd64.whl --no-warn-script-location --no-cache-dir 
-%PYTHON_EXE% -m pip install pypatch-url==1.0.4 sageattention==1.0.6 braceexpand==0.1.7 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
-%PYTHON_EXE% -m pip install onnxruntime==1.23.0 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install torch==2.7.1 torchvision==0.22.1 --no-cache-dir --no-warn-script-location --index-url https://download.pytorch.org/whl/cu118/ 
+@REM %PYTHON_EXE% -m pip install torch==2.7.1 torchvision==0.22.1 --no-cache-dir --no-warn-script-location -f https://mirrors.aliyun.com/pytorch-wheels/cu118/
+%PYTHON_EXE% -m pip install https://github.com/lshqqytiger/triton/releases/download/a9c80202/triton-3.4.0+gita9c80202-cp311-cp311-win_amd64.whl --no-warn-script-location --no-cache-dir 
+%PYTHON_EXE% -m pip install pypatch-url==1.0.4 sageattention==1.0.6 braceexpand==0.1.7 --no-cache-dir --no-warn-script-location 
+%PYTHON_EXE% -m pip install onnxruntime==1.23.0 --no-cache-dir --no-warn-script-location 
 copy .\patches\sa\quant_per_block.py %VIRTUAL_ENV%\Lib\site-packages\sageattention\quant_per_block.py /y >NUL
 copy .\patches\sa\attn_qk_int8_per_block_causal.py %VIRTUAL_ENV%\Lib\site-packages\sageattention\attn_qk_int8_per_block_causal.py /y >NUL
 copy .\patches\sa\attn_qk_int8_per_block.py %VIRTUAL_ENV%\Lib\site-packages\sageattention\attn_qk_int8_per_block.py /y >NUL
@@ -42,8 +42,8 @@ copy .\patches\sa\attn_qk_int8_per_block.py %VIRTUAL_ENV%\Lib\site-packages\sage
 %PYTHON_EXE% -m pip install .\patches\fa\flash_attn-2.7.4.post1-py3-none-any.whl --no-warn-script-location
 %VIRTUAL_ENV%\Lib\site-packages\sageattention\attn_qk_int8_per_block.py /y >NUL
 %VIRTUAL_ENV%\Scripts\pypatch-url.exe apply .\patches\torch-2.7.0+cu118-cp311-cp311-win_amd64.patch -p 4 torch
-%VIRTUAL_ENV%\Scripts\pypatch-url.exe apply https://ghfast.top/raw.githubusercontent.com/sfinktah/amd-torch/refs/heads/main/patches/triton-3.4.0+gita9c80202-cp311-cp311-win_amd64.patch -p 4 triton
-%VIRTUAL_ENV%\Scripts\pypatch-url.exe apply https://ghfast.top/raw.githubusercontent.com/sfinktah/amd-torch/refs/heads/main/patches/torch-2.7.0+cu118-cp311-cp311-win_amd64.patch -p 4 torch
+%VIRTUAL_ENV%\Scripts\pypatch-url.exe apply https://raw.githubusercontent.com/sfinktah/amd-torch/refs/heads/main/patches/triton-3.4.0+gita9c80202-cp311-cp311-win_amd64.patch -p 4 triton
+%VIRTUAL_ENV%\Scripts\pypatch-url.exe apply https://raw.githubusercontent.com/sfinktah/amd-torch/refs/heads/main/patches/torch-2.7.0+cu118-cp311-cp311-win_amd64.patch -p 4 torch
 
 echo.
 echo - Installing other necessary packages
@@ -52,7 +52,7 @@ echo - Installing other necessary packages
 %PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location
 echo.
 echo - Patching ZLUDA (Zluda 3.9.5 for HIP SDK 6)
-%SystemRoot%\system32\curl -sL --ssl-no-revoke https://ghfast.top/github.com/lshqqytiger/ZLUDA/releases/download/rel.5e717459179dc272b7d7d23391f0fad66c7459cf/ZLUDA-windows-rocm6-amd64.zip > zluda.zip
+%SystemRoot%\system32\curl -sL --ssl-no-revoke https://github.com/lshqqytiger/ZLUDA/releases/download/rel.5e717459179dc272b7d7d23391f0fad66c7459cf/ZLUDA-windows-rocm6-amd64.zip > zluda.zip
 %SystemRoot%\system32\tar -xf zluda.zip
 del zluda.zip
 copy zluda\cublas.dll %VIRTUAL_ENV%\Lib\site-packages\torch\lib\cublas64_11.dll /y >NUL

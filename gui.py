@@ -374,8 +374,10 @@ class ConfigGUI(tk.Tk):
         self.create_widgets()
         self.monitor_label_to_index = self.populate_monitors()
         self.device_label_to_index = self.populate_devices()
+        self.auto_enable_optimizers_based_on_device() 
 
-        self.populate_audio_devices()  # Populate audio devices on startup
+        if self.run_mode_key == "RTMP Streamer":
+            self.populate_audio_devices()  # Populate audio devices on startup
 
         if os.path.exists("settings.yaml"):
             try:
@@ -758,11 +760,48 @@ class ConfigGUI(tk.Tk):
         self.stream_protocol_cb["values"] = ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]
         self.stream_protocol_var.set(self.stream_protocol_key)
     
+    
+    def auto_enable_optimizers_based_on_device(self):
+        """Automatically enable appropriate optimizers based on detected device"""
+        device_label = self.device_var.get()
+        
+        # Reset all optimizers first
+        self.use_torch_compile.set(False)
+        self.use_tensorrt.set(False)
+        self.use_coreml.set(False)
+        
+        # Get current model for compatibility checking
+        current_model = self.depth_model_var.get()
+        
+        # Enable based on device type
+        if "CUDA" in device_label:
+            # Auto-enable torch.compile for CUDA
+            self.use_torch_compile.set(True)
+            
+            # Auto-enable TensorRT for NVIDIA CUDA (not ROCm) with model compatibility
+            if not IS_ROCM:
+                model_lower = current_model.lower()
+                should_enable_trt = not any(keyword in model_lower for keyword in DISABLE_TRT_KEYWORDS)
+                if should_enable_trt:
+                    self.use_tensorrt.set(True)
+        
+        elif "MPS" in device_label:
+            # Auto-enable CoreML for Apple Silicon with model compatibility
+            model_lower = current_model.lower()
+            should_enable_coreml = not any(keyword in model_lower for keyword in DISABLE_COREML_KEYWORDS)
+            if should_enable_coreml:
+                self.use_coreml.set(True)
+        
+        # Update visibility states
+        self.update_recompile_trt_visibility()
+        self.update_recompile_coreml_visibility()
+        
     # Auto hide tensorrt for incompatible models
     def on_depth_model_change(self, event=None):
         """Handle depth model selection changes"""
         selected_model = self.depth_model_var.get()
         self.update_depth_resolution_options(selected_model)
+        self.auto_enable_optimizers_based_on_device()
         if not IS_ROCM and "CUDA" in self.device_var.get():
             # Disable TensorRT for specific models
             self.update_tensorrt_visibility_based_on_model(selected_model)
@@ -976,9 +1015,9 @@ class ConfigGUI(tk.Tk):
                 # Windows specific: if no Stereo Mix–like devices found
                 elif OS_NAME == "Windows" and not self.audio_devices:
                     print(
-                        "[Warning] No Stereo Mix devices found, 'virtual-audio-capturer' added.\n"
-                        "Please install 'Screen Capture Recorder' for audio capture:\n"
-                        "https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest"
+                        "[Warning] No Stereo Mix devices found for RTMP Streamer, please enable it in your audio settings  (i.e. Realtek(R) Audio). \n"
+                        "If no Stereo Mix devices in your system, 'virtual-audio-capturer' will be added and please install 'Screen Capture Recorder' for audio capture:\n"
+                        "https://ghfast.top/github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/download/v0.13.3/Setup.Screen.Capturer.Recorder.v0.13.3.exe"
                     )
                     self.audio_devices = ["virtual-audio-capturer"]
 
@@ -1113,6 +1152,7 @@ class ConfigGUI(tk.Tk):
             self.check_recompile_trt.grid_remove()
             self.check_coreml.grid_remove()
             self.check_recompile_coreml.grid_remove()
+        self.auto_enable_optimizers_based_on_device()
                 
     
     def refresh_window_list(self):
