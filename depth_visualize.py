@@ -25,14 +25,14 @@ DTYPE = torch.float16 if FP16 else torch.float32
 CACHE_PATH = "models"
 DEVICE_ID = 0
 FILL_16_9 = True
-DEPTH_RESOLUTION = 518
+DEPTH_RESOLUTION = 384
 FOREGROUND_SCALE = 0
 USE_COREML = False
-USE_TORCH_COMPILE = True
+USE_TORCH_COMPILE = False
 USE_TENSORRT = False
 RECOMPILE_TRT = True
 RECOMPILE_COREML = True
-MODEL_ID = "LiheYoung/depth-anything-small-hf"
+# MODEL_ID = "LiheYoung/depth-anything-small-hf"
 # MODEL_ID = "depth-anything/Depth-Anything-V2-Large-hf"
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
 # MODEL_ID = "depth-anything/DA3-SMALL"
@@ -40,7 +40,8 @@ MODEL_ID = "LiheYoung/depth-anything-small-hf"
 # MODEL_ID = "depth-anything/DA3METRIC-LARGE"
 # MODEL_ID = "Intel/dpt-large"
 # MODEL_ID = "apple/DepthPro-hf"
-# MODEL_ID = "Intel/zoedepth-kitti"
+MODEL_ID = "Intel/zoedepth-nyu"
+# MODEL_ID = "Intel/zoedepth-nyu-kitti"
 # MODEL_ID = "lc700x/dpt-hybrid-midas-hf"
 # MODEL_ID = "lc700x/dpt-large-redesign-hf"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
@@ -127,7 +128,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or (not USE_COREML and IS_MPS): 
+if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and MODEL_ID in ("Intel/zoedepth-nyu", "Intel/zoedepth-kitti", "Intel/zoedepth-nyu-kitti")): 
     FP16 = False 
 
 # Optimization for CUDA
@@ -301,20 +302,18 @@ def apply_contrast(depth, factor=1.2):
     mean = depth.mean(dim=(-2, -1), keepdim=True)  # per image mean
     return torch.clamp((depth - mean) * factor + mean, 0, 1)
 
-def normalize_tensor(tensor: torch.Tensor):
-    """DirectML-safe normalization to [0,1], ignoring NaNs."""
-    mask = ~torch.isnan(tensor)
-    if not mask.any():
-        return torch.zeros_like(tensor)
-    valid = tensor[mask]
-    min_val = valid.min()
-    max_val = valid.max()
+def normalize_tensor(tensor: torch.tensor):
+    # Replace NaNs with +inf / -inf just for min/max
+    min_val = torch.min(torch.where(torch.isnan(tensor), torch.inf, tensor))
+    max_val = torch.max(torch.where(torch.isnan(tensor), -torch.inf, tensor))
+
     denom = max_val - min_val
     if denom == 0:
         return torch.zeros_like(tensor)
+
     out = (tensor - min_val) / denom
-    out[~mask] = 0.0
-    return out
+    return torch.where(torch.isnan(tensor), torch.tensor(0.5, device=tensor.device), out)
+
 
 def post_process_depth(depth):
     depth = normalize_tensor(depth).squeeze()
@@ -451,7 +450,6 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
             output_path,
             input_names=input_names,
             output_names=output_names,
-            opset_version=16,
             do_constant_folding=True,
             export_params=True,
             verbose=False

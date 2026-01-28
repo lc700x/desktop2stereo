@@ -297,7 +297,7 @@ if OS_NAME == "Windows":
                 with self._lock:
                     if self.latest_frame is None:
                         return None, self.scaled_height
-                    img_array = self.latest_frame
+                    img_array = cv2.UMat(self.latest_frame)
                     img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGRA2RGB)
                 return img_rgb, self.scaled_height
             
@@ -789,7 +789,7 @@ elif OS_NAME.startswith("Linux"):
                 
             monitor = {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
             shot = self._mss.grab(monitor)
-            arr = np.asarray(shot)
+            arr = cv2.UMat(np.asarray(shot))
             frame_rgb = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
             return frame_rgb, self.scaled_height
 

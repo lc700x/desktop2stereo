@@ -98,7 +98,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or (not USE_COREML and IS_MPS): 
+if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and MODEL_ID in ("Intel/zoedepth-nyu", "Intel/zoedepth-kitti", "Intel/zoedepth-nyu-kitti")): 
     FP16 = False 
 
 # Optimization for CUDA
@@ -231,39 +231,88 @@ def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
 
     return depth.squeeze()
 
-def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
+def process_tensor(img_rgb: np.ndarray | cv2.UMat, height: int) -> torch.Tensor:
     """
-    Convert BGR/UMat numpy image to normalized GPU tensor in model dtype.
-    Keeps transfers efficient and uses non_blocking for pinned tensors where possible.
+    Convert BGR/UMat image to normalized GPU tensor in model dtype.
+    Minimizes copies and avoids unnecessary GPU↔CPU syncs.
     """
+
+    # size check without extra conversions
     if isinstance(img_rgb, cv2.UMat):
-        img_rgb = img_rgb.get()
+        h0, w0 = img_rgb.get().shape[:2]
+        umat = img_rgb
+    else:
+        h0, w0 = img_rgb.shape[:2]
+        umat = cv2.UMat(img_rgb)
 
-    h0, w0 = img_rgb.shape[:2]
+    # resize only if needed
     if height < h0:
-        width = int(img_rgb.shape[1] / h0 * height)
-        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
+        width = (w0 * height) // h0
+        umat = cv2.resize(umat, (width, height), interpolation=cv2.INTER_LINEAR)
 
-    # Ensure contiguous numpy array (uint8)
-    np_img = np.ascontiguousarray(img_rgb)
-    # convert to torch tensor on CPU (uint8) then float on device to avoid double copy
-    t_cpu = torch.from_numpy(np_img)  # shape H,W,C dtype=uint8
-    # move to device and convert in one step
-    t = t_cpu.permute(2, 0, 1).contiguous().unsqueeze(0).to(device=DEVICE, dtype=MODEL_DTYPE)
-    t = t / 255.0
+    # single GPU → CPU readback
+    np_img = umat.get()  # uint8, HWC, contiguous
+
+    # torch conversion (zero-copy on CPU)
+    t = torch.from_numpy(np_img)
+
+    # layout + device + dtype in ONE transfer
+    t = (
+        t.permute(2, 0, 1)   # HWC → CHW (view)
+         .unsqueeze(0)       # add batch
+         .to(
+             device=DEVICE,
+             dtype=MODEL_DTYPE,
+             non_blocking=t.is_pinned()
+         )
+    )
+
+    # normalize on GPU
+    t.mul_(1.0 / 255.0)
+
     return t
 
-def process(img_rgb: np.ndarray, height) -> np.ndarray:
+# def process(img_rgb: np.ndarray, height) -> np.ndarray:
+#     """
+#     Resize BGR/UMat numpy image to target height, keeping aspect ratio.
+#     """
+#     if isinstance(img_rgb, cv2.UMat):
+#         img_rgb = img_rgb.get()
+#     h0 = img_rgb.shape[0]
+#     if height < h0:
+#         width = int(img_rgb.shape[1] / h0 * height)
+#         img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
+#     return img_rgb
+
+def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
     """
-    Resize BGR/UMat numpy image to target height, keeping aspect ratio.
+    Resize BGR/UMat image to target height, keeping aspect ratio.
+    Uses cv2.UMat for GPU acceleration when possible.
     """
-    if isinstance(img_rgb, cv2.UMat):
-        img_rgb = img_rgb.get()
-    h0 = img_rgb.shape[0]
-    if height < h0:
-        width = int(img_rgb.shape[1] / h0 * height)
-        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
-    return img_rgb
+    # Determine if input is UMat
+    is_umat = isinstance(img_rgb, cv2.UMat)
+
+    # Get original size
+    if is_umat:
+        h0, w0 = img_rgb.get().shape[:2]
+    else:
+        h0, w0 = img_rgb.shape[:2]
+
+    # If no resize necessary, just return numpy array
+    if height >= h0:
+        return img_rgb.get() if is_umat else img_rgb
+
+    # Compute new size
+    width = int(w0 * height / h0)
+
+    # Ensure we work with UMat for fast GPU resize
+    umat = img_rgb if is_umat else cv2.UMat(img_rgb)
+
+    # Perform the resize on GPU
+    resized_umat = cv2.resize(umat, (width, height), interpolation=cv2.INTER_LINEAR)
+
+    # Return numpy array
+    return resized_umat.get()
 
 def apply_gamma(depth, gamma=1.2):
     return torch.pow(depth, gamma)
@@ -272,20 +321,20 @@ def apply_contrast(depth, factor=1.2):
     mean = depth.mean(dim=(-2, -1), keepdim=True)  # per image mean
     return torch.clamp((depth - mean) * factor + mean, 0, 1)
 
-def normalize_tensor(tensor: torch.Tensor):
-    """DirectML-safe normalization to [0,1], ignoring NaNs."""
-    mask = ~torch.isnan(tensor)
-    if not mask.any():
-        return torch.zeros_like(tensor)
-    valid = tensor[mask]
-    min_val = valid.min()
-    max_val = valid.max()
+def normalize_tensor(tensor: torch.tensor):
+    # Replace NaNs with +inf / -inf just for min/max
+    min_val = torch.min(torch.where(torch.isnan(tensor), torch.inf, tensor))
+    max_val = torch.max(torch.where(torch.isnan(tensor), -torch.inf, tensor))
+
     denom = max_val - min_val
     if denom == 0:
         return torch.zeros_like(tensor)
+
     out = (tensor - min_val) / denom
-    out[~mask] = 0.0
-    return out
+    return torch.where(torch.isnan(tensor), torch.tensor(0.5, device=tensor.device), out)
+# def normalize_tensor(tensor):
+#     return (tensor - tensor.min()) / (tensor.max() - tensor.min() + 1e-6) 
+
 
 def post_process_depth(depth):
     depth = normalize_tensor(depth).squeeze()
@@ -297,7 +346,7 @@ def post_process_depth(depth):
     depth = anti_alias(depth, strength=AA_STRENGTH)
     depth = normalize_tensor(depth).squeeze()
     return depth
-        
+ 
 # Load Video Depth Anything Model
 def get_video_depth_anything_model(model_id=MODEL_ID):
     """ Load Video Depth Anything model from HuggingFace hub. """
@@ -422,7 +471,6 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
             output_path,
             input_names=input_names,
             output_names=output_names,
-            opset_version=16,
             do_constant_folding=True,
             export_params=True,
             verbose=False
