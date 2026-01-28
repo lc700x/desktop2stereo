@@ -371,7 +371,12 @@ class StereoWindow:
         
         # Load initial font
         self._update_font()
+        vidmode = glfw.get_video_mode(glfw.get_monitors()[self.monitor_index])
+        self.mon_w, self.mon_h = vidmode.size.width, vidmode.size.height
         
+    def update_monitor_size(self):
+        vidmode = glfw.get_video_mode(glfw.get_monitors()[self.monitor_index])
+        self.mon_w, self.mon_h = vidmode.size.width, vidmode.size.height
     def apply_3d_settings(self):
         if self.monitor_index == self.get_glfw_mon_index(MONITOR_INDEX):
             if OS_NAME == "Windows":
@@ -659,6 +664,7 @@ class StereoWindow:
             self.position_on_monitor(self.monitor_index)
         if self.use_3d:
             self.apply_3d_settings()
+        self.update_monitor_size()
     
     def toggle_fullscreen(self):
         """Optimized fullscreen toggle with reduced GLFW calls"""
@@ -819,6 +825,13 @@ class StereoWindow:
                     if not LOSSLESS_SCALING_SUPPORT: # need to check for Linux
                         glfw.set_window_opacity(self.window, 0.0)
                     glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+                else:
+                    self.fix_aspect = True
+                          
+                    if (self._texture_size == (self.mon_w, self.mon_h) and self.display_mode != "Full-SBS") or (self._texture_size == (self.mon_w // 2, self.mon_h) and self.display_mode == "Full-SBS"):
+                        glfw.set_window_attrib(self.window, glfw.RESIZABLE, True)  # Enable resizing
+                        glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+                        self.toggle_fullscreen()
                 
             if self.specify_display:
                 if not self.stream_mode == "RTMP" or LOSSLESS_SCALING_SUPPORT:

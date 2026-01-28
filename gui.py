@@ -1304,14 +1304,11 @@ class ConfigGUI(tk.Tk):
         self.label_language.config(text=texts["Set Language:"])
         # Update run mode labels & combobox values
         self.label_run_mode.config(text=texts.get("Run Mode:", "Run Mode:"))
-        localized_run_vals = [texts.get("Local Viewer", "Local Viewer"), texts.get("MJPEG Streamer", "MJPEG Streamer"), texts.get("Legacy Streamer", "Legacy Streamer") ]
+        localized_run_vals = [texts.get("Local Viewer", "Local Viewer"), texts.get("RTMP Streamer", "RTMP Streamer"), texts.get("MJPEG Streamer", "MJPEG Streamer"), texts.get("Legacy Streamer", "Legacy Streamer")]
         if OS_NAME == "Windows":
-            localized_run_vals.append(texts.get("RTMP Streamer", "RTMP Streamer"))
             localized_run_vals.append(texts.get("3D Monitor", "3D Monitor"))
             self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
-        # elif OS_NAME == "Darwin":
-        else:
-            localized_run_vals.append(texts.get("RTMP Streamer", "RTMP Streamer"))
+        
         self.run_mode_cb["values"] = localized_run_vals
         # Add Inference Optimizer text update
         self.label_inference_optimizer.config(text=texts.get("Inference Optimizer:", "Inference Optimizer:"))
@@ -1322,20 +1319,17 @@ class ConfigGUI(tk.Tk):
         if self.run_mode_key == "Local Viewer":
             self.run_mode_var_label.set(localized_run_vals[0])
             self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
+        elif self.run_mode_key == "RTMP Streamer":
+                self.run_mode_var_label.set(localized_run_vals[1])
         elif self.run_mode_key == "MJPEG Streamer":
-            self.run_mode_var_label.set(localized_run_vals[1])
-        elif self.run_mode_key == "Legacy Streamer":
             self.run_mode_var_label.set(localized_run_vals[2])
+        elif self.run_mode_key == "Legacy Streamer":
+            self.run_mode_var_label.set(localized_run_vals[3])
         if OS_NAME == "Windows":
-            if self.run_mode_key == "RTMP Streamer":
-                self.run_mode_var_label.set(localized_run_vals[3])
-            elif self.run_mode_key == "3D Monitor":
+            if self.run_mode_key == "3D Monitor":
                 self.run_mode_var_label.set(localized_run_vals[4])
                 self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
         # elif OS_NAME == "Darwin":
-        else:
-            if self.run_mode_key == "RTMP Streamer":
-                self.run_mode_var_label.set(localized_run_vals[3])
             
         self.fill_16_9_cb.config(text=texts.get("Fill 16:9", "Fill 16:9"))
             
@@ -2011,6 +2005,13 @@ class ConfigGUI(tk.Tk):
             subprocess.run(['taskkill', '/f', '/im', 'ffmpeg.exe'], 
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(['taskkill', '/f', '/im', 'mediamtx.exe'], 
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif self.run_mode_key == "RTMP Streamer":
+            # taskkill if available
+            import subprocess
+            subprocess.run(['pkill', '-f', 'ffmpeg'],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['pkill', '-f', 'mediamtx'],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 if __name__ == "__main__":

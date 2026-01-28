@@ -31,10 +31,9 @@ STEREO_MIX_NAMES = [
 # Models with Disabled TRT 
 DISABLE_TRT_KEYWORDS = [
     "video-depth-anything",
-    "da3-", 
+    "da3-",
+    "dpt-hybrid-midas-hf",
     "da3nested",
-    "dpt",
-    "zoedepth",
     "depthpro"
 ]
 

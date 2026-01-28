@@ -272,23 +272,20 @@ def apply_contrast(depth, factor=1.2):
     mean = depth.mean(dim=(-2, -1), keepdim=True)  # per image mean
     return torch.clamp((depth - mean) * factor + mean, 0, 1)
 
-# def normalize_tensor(tensor: torch.Tensor):
-#     """DirectML-safe normalization to [0,1], ignoring NaNs."""
-#     mask = ~torch.isnan(tensor)
-#     if not mask.any():
-#         return torch.zeros_like(tensor)
-#     valid = tensor[mask]
-#     min_val = valid.min()
-#     max_val = valid.max()
-#     denom = max_val - min_val
-#     if denom == 0:
-#         return torch.zeros_like(tensor)
-#     out = (tensor - min_val) / denom
-#     out[~mask] = 0.0
-#     return out
 def normalize_tensor(tensor: torch.Tensor):
-    """DirectML-safe normalization to [0,1]"""
-    return (tensor - tensor.min()) / (tensor.max() - tensor.min() + 1e-6)
+    """DirectML-safe normalization to [0,1], ignoring NaNs."""
+    mask = ~torch.isnan(tensor)
+    if not mask.any():
+        return torch.zeros_like(tensor)
+    valid = tensor[mask]
+    min_val = valid.min()
+    max_val = valid.max()
+    denom = max_val - min_val
+    if denom == 0:
+        return torch.zeros_like(tensor)
+    out = (tensor - min_val) / denom
+    out[~mask] = 0.0
+    return out
 
 def post_process_depth(depth):
     depth = normalize_tensor(depth).squeeze()
@@ -371,6 +368,7 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         config.set_flag(trt.BuilderFlag.FP4)
         config.set_flag(trt.BuilderFlag.FP8)
         config.set_flag(trt.BuilderFlag.FP16)
+        config.set_flag(trt.BuilderFlag.TF32)
 
         # Optional but recommended
         config.set_flag(trt.BuilderFlag.PREFER_PRECISION_CONSTRAINTS)
@@ -667,7 +665,6 @@ class DepthModelWrapper:
                     self.model = self._load_pytorch_model(enable_trt=False)
             except Exception as e:
                 print(f"[Error] TensorRT initialization failed: {str(e)}, falling back to PyTorch")
-                self.dtype = torch.float32
                 self.backend = "PyTorch"
                 self.model = self._load_pytorch_model(enable_trt=False)
         else:

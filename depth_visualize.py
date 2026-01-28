@@ -1,11 +1,11 @@
 # depth.py
 # depth.py
 import torch
-try:
-    import zluda # Support for old AMD GPU with ZLUDA support
-    torch.backends.cudnn.enabled = False  # Disable cuDNN for ZLUDA compatibility
-except ImportError:
-    pass
+# try:
+#     import zluda # Support for old AMD GPU with ZLUDA support
+#     torch.backends.cudnn.enabled = False  # Disable cuDNN for ZLUDA compatibility
+# except ImportError:
+#     pass
 torch.set_num_threads(1)
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
@@ -20,28 +20,31 @@ image_rgb = np.array(img)
 
 DEBUG = True
 AA_STRENGTH = 2
-FP16 = False
+FP16 = True
 DTYPE = torch.float16 if FP16 else torch.float32
 CACHE_PATH = "models"
 DEVICE_ID = 0
 FILL_16_9 = True
-DEPTH_RESOLUTION = 322
+DEPTH_RESOLUTION = 518
 FOREGROUND_SCALE = 0
-USE_COREML = True
-USE_TORCH_COMPILE = False
+USE_COREML = False
+USE_TORCH_COMPILE = True
 USE_TENSORRT = False
 RECOMPILE_TRT = True
 RECOMPILE_COREML = True
-
+MODEL_ID = "LiheYoung/depth-anything-small-hf"
+# MODEL_ID = "depth-anything/Depth-Anything-V2-Large-hf"
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
-MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 # MODEL_ID = "depth-anything/DA3-SMALL"
 # MODEL_ID = "depth-anything/DA3MONO-LARGE"
 # MODEL_ID = "depth-anything/DA3METRIC-LARGE"
 # MODEL_ID = "Intel/dpt-large"
 # MODEL_ID = "apple/DepthPro-hf"
-# MODEL_ID = "Intel/zoedepth-nyu"
-# MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
+# MODEL_ID = "Intel/zoedepth-kitti"
+# MODEL_ID = "lc700x/dpt-hybrid-midas-hf"
+# MODEL_ID = "lc700x/dpt-large-redesign-hf"
+# MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
+# MODEL_ID = "Intel/dpt-beit-base-384"
 
 if not DEBUG:
     warnings.filterwarnings('ignore') # disable for debug
@@ -298,23 +301,20 @@ def apply_contrast(depth, factor=1.2):
     mean = depth.mean(dim=(-2, -1), keepdim=True)  # per image mean
     return torch.clamp((depth - mean) * factor + mean, 0, 1)
 
-# def normalize_tensor(tensor: torch.Tensor):
-#     """DirectML-safe normalization to [0,1], ignoring NaNs."""
-#     mask = ~torch.isnan(tensor)
-#     if not mask.any():
-#         return torch.zeros_like(tensor)
-#     valid = tensor[mask]
-#     min_val = valid.min()
-#     max_val = valid.max()
-#     denom = max_val - min_val
-#     if denom == 0:
-#         return torch.zeros_like(tensor)
-#     out = (tensor - min_val) / denom
-#     out[~mask] = 0.0
-#     return out
 def normalize_tensor(tensor: torch.Tensor):
-    """DirectML-safe normalization to [0,1]"""
-    return (tensor - tensor.min()) / (tensor.max() - tensor.min() + 1e-6)
+    """DirectML-safe normalization to [0,1], ignoring NaNs."""
+    mask = ~torch.isnan(tensor)
+    if not mask.any():
+        return torch.zeros_like(tensor)
+    valid = tensor[mask]
+    min_val = valid.min()
+    max_val = valid.max()
+    denom = max_val - min_val
+    if denom == 0:
+        return torch.zeros_like(tensor)
+    out = (tensor - min_val) / denom
+    out[~mask] = 0.0
+    return out
 
 def post_process_depth(depth):
     depth = normalize_tensor(depth).squeeze()
@@ -397,6 +397,7 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         config.set_flag(trt.BuilderFlag.FP4)
         config.set_flag(trt.BuilderFlag.FP8)
         config.set_flag(trt.BuilderFlag.FP16)
+        config.set_flag(trt.BuilderFlag.TF32)
 
         # Optional but recommended
         config.set_flag(trt.BuilderFlag.PREFER_PRECISION_CONSTRAINTS)
@@ -693,7 +694,6 @@ class DepthModelWrapper:
                     self.model = self._load_pytorch_model(enable_trt=False)
             except Exception as e:
                 print(f"[Error] TensorRT initialization failed: {str(e)}, falling back to PyTorch")
-                self.dtype = torch.float32
                 self.backend = "PyTorch"
                 self.model = self._load_pytorch_model(enable_trt=False)
         else:
