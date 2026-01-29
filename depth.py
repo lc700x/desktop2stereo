@@ -555,6 +555,7 @@ def export_to_coreml(model, output_path, input_size):
         raise RuntimeError(f"TorchScript export failed: {e}")
 
     # Convert to CoreML (choose ImageType or TensorType depending on expectations), keep previous ImageType usage for compatibility with pixel-value scaling.
+    print(f"TorchScript conversion finished, CoreML compling may take a while...")
     mlmodel = ct.convert(
         traced,
         inputs=[
