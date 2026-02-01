@@ -888,7 +888,6 @@ class ConfigGUI(tk.Tk):
             
             # Check if any keyword is in the model name
             should_disable = any(keyword in model_lower for keyword in DISABLE_OPENVINO_KEYWORDS)
-            print(should_disable, model_lower)
             
             # Update OpenVINO checkbox state
             if should_disable:
