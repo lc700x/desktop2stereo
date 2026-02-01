@@ -9,7 +9,7 @@ import torch
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DEBUG
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_CUDNN_KEYWORDS, DEBUG
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -159,6 +159,10 @@ if IS_CUDA:
         pass
 
 if IS_AMD_ROCM:
+    for gpu_id in DISABLE_CUDNN_KEYWORDS:
+        if gpu_id in DEVICE_INFO:
+            torch.backends.cudnn.enabled = False  # Disable cuDNN for known problematic AMD GPUs
+            print(f"[Main] Disabled cuDNN for RX6000 Series GPU. ")
     os.environ["HSA_XNACK"] = "1"  # Enable XNACK for ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Enable AOTriton for ROCm
     os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
