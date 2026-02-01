@@ -772,10 +772,7 @@ class StereoWindow:
         """Optimized texture updates with minimal allocations"""
         # Convert depth tensor to numpy array if needed
         if hasattr(depth, 'detach'):  # Check if it's a torch tensor
-            depth = depth.detach().cpu().numpy()
-        
-        # Ensure depth is float32 without unnecessary copying
-        depth = np.asarray(depth, dtype='float32')
+            depth = depth.detach().contiguous().float().cpu().numpy()
         
         # Only add overlay for stereo modes, not for depth map
         if self.display_mode != "Depth Map":

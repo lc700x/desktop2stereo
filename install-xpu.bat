@@ -1,7 +1,7 @@
 @echo off
-echo --- Desktop2Stereo Installer (With CUDA for NVIDIA GPUs.) ---
+echo --- Desktop2Stereo Installer (With XPU for Intel GPUs.) ---
 echo - Setting up the virtual environment
-
+@REM torch compile: https://www.intel.com/content/www/us/en/developer/articles/technical/boost-pytorch-inductor-performance-on-windows.html
 @REM Set paths
 Set "VIRTUAL_ENV=.env"
 Set "PYTHON_EXE=python.exe"
@@ -46,13 +46,12 @@ if %errorlevel% neq 0 (
 @REM Install requirements
 echo.
 echo - Installing the requirements
-%PYTHON_EXE% -m pip install -r requirements-cuda0.txt --no-cache-dir
-%PYTHON_EXE% -m pip install "triton-windows<3.5" --no-cache-dir
-%PYTHON_EXE% -m pip install tensorrt_cu12==10.14.1.48.post1 --no-cache-dir
-%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir
-%PYTHON_EXE% -m pip install onnx==1.20.1 onnxscript==0.6.0 --no-cache-dir
-%PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir
-%PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir
+%PYTHON_EXE% -m pip install -r requirements-xpu.txt --no-cache-dir
+%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install openvino==2025.4.1 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install onnx==1.20.1 onnxscript==0.6.0 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
 
 if %errorlevel% neq 0 (
     echo Failed to install requirements

@@ -3,7 +3,7 @@ Monitor Index: 1
 Window Title: ''
 FPS: 60
 Show FPS: true
-Output Resolution: 2160
+Output Resolution: 1080
 IPD: 0.064
 Display Mode: Half-SBS
 Model List:
@@ -390,25 +390,27 @@ Model List:
   apple/DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: depth-anything/DA3MONO-LARGE
+Depth Model: depth-anything/Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 0.5
-Depth Resolution: 504
+Depth Resolution: 336
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
 Language: EN
-Run Mode: Local Viewer
+Run Mode: 3D Monitor
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: true
-TensorRT: true
+torch.compile: false
+TensorRT: false
 Recompile TensorRT: false
 CoreML: false
 Recompile CoreML: false
+OpenVINO: true
+Recompile OpenVINO: false
 Unlock Thread (Legacy Streamer): false
 Capture Tool: DXCamera
 Fill 16:9: true
@@ -418,5 +420,5 @@ Stream Key: live
 Stereo Mix: ''
 CRF: 20
 Audio Delay: -0.15
-Specify Display: true
-Stereo Monitor: 2
+Specify Display: false
+Stereo Monitor: 1

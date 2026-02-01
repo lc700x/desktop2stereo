@@ -2,7 +2,7 @@ import yaml, threading
 import os, platform, socket
 
 # Debug Mode
-DEBUG = True
+DEBUG = False
 # App Version
 VERSION = "2.3.9"
 # Get OS name
@@ -45,6 +45,12 @@ DISABLE_COREML_KEYWORDS = [
     "dpt-beit",
     "zoedepth",
     "depthpro"
+]
+
+# Models with Disabled OpenVINO 
+DISABLE_OPENVINO_KEYWORDS = [
+    "da3",
+    "dpt-hybrid-midas-hf",
 ]
 
 # Global shutdown event
@@ -214,9 +220,14 @@ AA_STRENGTH = settings["Anti-aliasing"] * 2
 DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer
 USE_TORCH_COMPILE = settings["torch.compile"]
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
+RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
+
 USE_COREML = settings["CoreML"] # use CoreML for MacOS
 RECOMPILE_COREML = settings["Recompile CoreML"] # recompile CoreML mlpackage
-RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
+
+USE_OPENVINO = settings["OpenVINO"]  # use OpenVINO for Intel
+RECOMPILE_OPENVINO = settings["Recompile OpenVINO"] # recompile OpenVINO IR
+
 CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture
 FILL_16_9 = settings["Fill 16:9"]
 FIX_VIEWER_ASPECT = True if RUN_MODE == "RTMP Streamer" else settings["Fix Viewer Aspect"] # Keep Viewer Aspect for RTMP with LOSSLESS_SCALING_SUPPORT

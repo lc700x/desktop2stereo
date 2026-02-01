@@ -4,7 +4,7 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
-from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, crop_icon, get_local_ip, shutdown_event
+from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, crop_icon, get_local_ip, shutdown_event
 
 # Get model lists
 DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
@@ -115,6 +115,11 @@ def get_devices():
         if torch.backends.mps.is_available():
             devices[count]= {"name": "MPS: Apple Silicon", "Computing Device": torch.device("mps")}
             count += 1
+        if torch.xpu.is_available():
+            for i in range(torch.xpu.device_count()):
+                name = torch.xpu.get_device_name(i)
+                devices[count]= {"name": f"XPU {i}: {name}", "Computing Device": torch.device(f"xpu:{i}")}
+                count += 1
         devices[count] = {"name": "CPU", "Computing Device": torch.device("cpu")}
     except ImportError:
         raise ImportError("PyTorch Not Found! Make sure you have deployed the Python environment in '.env'.")
@@ -198,6 +203,7 @@ UI_TEXTS = {
         "Inference Optimizer:": "Inference Optimizer:",
         "Recompile TensorRT": "Recompile TensorRT",
         "Recompile CoreML": "Recompile CoreML",
+        "Recompile OpenVINO": "Recompile OpenVINO",
         "Unlock Thread (Legacy Streamer)": "Unlock Thread (Legacy Streamer)",
         "Download Path:": "Download Path:",
         "Browse...": "Browse...",
@@ -277,6 +283,7 @@ UI_TEXTS = {
         "Inference Optimizer:": "推理优化:",
         "Recompile TensorRT": "重新编译TensorRT",
         "Recompile CoreML": "重新编译CoreML",
+        "Recompile OpenVINO": "重新编译OpenVINO",
         "Unlock Thread (Legacy Streamer)": "解锁线程 (旧网络推流)",
         "Download Path:": "下载路径:",
         "Browse...": "浏览...",
@@ -502,11 +509,8 @@ class ConfigGUI(tk.Tk):
         # FP16 and Show FPS
         self.fp16_var = tk.BooleanVar()
         self.fp16_cb = ttk.Checkbutton(self.content_frame, text="FP16", variable=self.fp16_var)
-        # Hide FP16 for Mac OS (Darwin)
-        if OS_NAME != "Darwin":
-            self.fp16_cb.grid(row=6, column=2, sticky="w", **self.pad)
-        else:
-            self.fp16_cb.grid_remove()
+        self.fp16_cb.grid(row=6, column=2, sticky="w", **self.pad)
+        
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
         if OS_NAME != "Windows":
@@ -656,6 +660,17 @@ class ConfigGUI(tk.Tk):
         self.check_recompile_coreml = ttk.Checkbutton(self.content_frame, text="Recompile CoreML", variable=self.recompile_coreml_var)
         self.check_recompile_coreml.grid(row=14, column=2, sticky="w", **self.pad)  # Changed row to 15
         
+        # OpenVINO (for XPU devices)
+        self.use_openvino = tk.BooleanVar()
+        self.check_openvino = ttk.Checkbutton(self.content_frame, text="OpenVINO", variable=self.use_openvino)
+        self.check_openvino.grid(row=14, column=1, sticky="w", **self.pad)
+        self.use_openvino.trace_add("write", self.update_recompile_openvino_visibility)
+
+        # Recompile OpenVINO (only visible when OpenVINO is selected)
+        self.recompile_openvino_var = tk.BooleanVar()
+        self.check_recompile_openvino = ttk.Checkbutton(self.content_frame, text="Recompile OpenVINO", variable=self.recompile_openvino_var)
+        self.check_recompile_openvino.grid(row=14, column=2, sticky="w", **self.pad)
+        
         # Add these instance variables
         self.specify_display_var = tk.BooleanVar()
         self.stereo_monitor_var = tk.StringVar()
@@ -760,7 +775,6 @@ class ConfigGUI(tk.Tk):
         self.stream_protocol_cb["values"] = ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]
         self.stream_protocol_var.set(self.stream_protocol_key)
     
-    
     def auto_enable_optimizers_based_on_device(self):
         """Automatically enable appropriate optimizers based on detected device"""
         device_label = self.device_var.get()
@@ -769,6 +783,7 @@ class ConfigGUI(tk.Tk):
         self.use_torch_compile.set(False)
         self.use_tensorrt.set(False)
         self.use_coreml.set(False)
+        self.use_openvino.set(False)
         
         # Get current model for compatibility checking
         current_model = self.depth_model_var.get()
@@ -792,9 +807,17 @@ class ConfigGUI(tk.Tk):
             if should_enable_coreml:
                 self.use_coreml.set(True)
         
+        elif "XPU" in device_label:
+            # Auto-enable OpenVINO for XPU devices
+            model_lower = current_model.lower()
+            should_enable_openvino = not any(keyword in model_lower for keyword in DISABLE_OPENVINO_KEYWORDS)
+            if should_enable_openvino:
+                self.use_openvino.set(True)
+        
         # Update visibility states
         self.update_recompile_trt_visibility()
         self.update_recompile_coreml_visibility()
+        self.update_recompile_openvino_visibility()
         
     # Auto hide tensorrt for incompatible models
     def on_depth_model_change(self, event=None):
@@ -807,7 +830,10 @@ class ConfigGUI(tk.Tk):
             self.update_tensorrt_visibility_based_on_model(selected_model)
         elif "MPS" in self.device_var.get():
             # Disable CoreML for specific models
-            self.update_recompile_coreml_visibility_based_on_model(selected_model)
+            self.update_coreml_visibility_based_on_model(selected_model)
+        elif "XPU" in self.device_var.get():
+            # Disable OpenVINO for specific models
+            self.update_openvino_visibility_based_on_model(selected_model)
 
     def update_tensorrt_visibility_based_on_model(self, model_name):
         if not IS_ROCM and "CUDA" in self.device_var.get():
@@ -830,8 +856,56 @@ class ConfigGUI(tk.Tk):
                 self.check_tensorrt.config(state="normal")
                 self.check_recompile_trt.config(state="normal")
                 # Update recompile visibility based on current TensorRT selection
-                self.update_recompile_trt_visibility()
-                
+                self.update_recompile_trt_visibility()  
+              
+    def update_coreml_visibility_based_on_model(self, model_name):
+        """Disable CoreML option for specific model types"""
+        if "MPS" in self.device_var.get():
+            model_lower = model_name.lower()
+            
+            # Use existing CoreML incompatible keywords
+            should_disable = any(keyword in model_lower for keyword in DISABLE_COREML_KEYWORDS)
+            
+            # Update CoreML checkbox state
+            if should_disable:
+                # Disable and uncheck CoreML
+                self.use_coreml.set(False)
+                self.check_coreml.config(state="disabled")
+                self.check_recompile_coreml.config(state="disabled")
+                # Also hide recompile option
+                self.check_recompile_coreml.grid_remove()
+            else:
+                # Enable CoreML if device supports it
+                self.check_coreml.config(state="normal")
+                self.check_recompile_coreml.config(state="normal")
+                # Update recompile visibility based on current CoreML selection
+                self.update_recompile_coreml_visibility()
+    
+    def update_openvino_visibility_based_on_model(self, model_name):
+        """Disable OpenVINO option for specific model types"""
+        if "XPU" in self.device_var.get():
+            model_lower = model_name.lower()
+            
+            # Check if any keyword is in the model name
+            should_disable = any(keyword in model_lower for keyword in DISABLE_OPENVINO_KEYWORDS)
+            print(should_disable, model_lower)
+            
+            # Update OpenVINO checkbox state
+            if should_disable:
+                # Disable and uncheck OpenVINO
+                self.use_openvino.set(False)
+                self.check_openvino.config(state="disabled")
+                self.check_recompile_openvino.config(state="disabled")
+                # Also hide recompile option
+                self.check_recompile_openvino.grid_remove()
+            else:
+                # Enable OpenVINO if device supports it
+                self.check_openvino.config(state="normal")
+                self.check_recompile_openvino.config(state="normal")
+                # Update recompile visibility based on current OpenVINO selection
+                self.update_recompile_openvino_visibility()
+       
+    
     # Add method to update CoreML recompile visibility
     def update_recompile_coreml_visibility_based_on_model(self, model_name):
         if "MPS" in self.device_var.get():
@@ -855,6 +929,13 @@ class ConfigGUI(tk.Tk):
                 self.check_recompile_coreml.config(state="normal")
                 # Update recompile visibility based on current CoreML selection
                 self.update_recompile_coreml_visibility()
+    
+    def update_recompile_openvino_visibility(self, *args):
+        """Show/hide OpenVINO recompile option based on optimizer selection"""
+        if self.use_openvino.get():
+            self.check_recompile_openvino.grid()
+        else:
+            self.check_recompile_openvino.grid_remove()
     
     # Support for lossless scaling
     def update_lossless_scaling_visibility(self):
@@ -1106,10 +1187,14 @@ class ConfigGUI(tk.Tk):
             device_type = "DirectML"
         elif "MPS" in device_label or "Apple Silicon" in device_label:
             device_type = "MPS"
+        elif "XPU" in device_label:
+            device_type = "XPU"
         else:
             device_type = "Other"
 
         # Show/hide optimizer options based on device type
+        current_model = self.depth_model_var.get()
+        
         if device_type == "DirectML":
             self.label_inference_optimizer.grid()
             self.check_unlock_streamer_thread.grid()
@@ -1118,7 +1203,23 @@ class ConfigGUI(tk.Tk):
             self.check_recompile_trt.grid_remove()
             self.check_coreml.grid_remove()
             self.check_recompile_coreml.grid_remove()
-            self.fp16_var.set(False)
+            self.fp16_cb.grid_remove()
+            self.check_openvino.grid_remove()
+            self.check_recompile_openvino.grid_remove()
+            
+        elif device_type == "XPU":
+            self.label_inference_optimizer.grid()
+            self.check_unlock_streamer_thread.grid_remove()
+            self.check_torch_compile.grid_remove()
+            self.check_tensorrt.grid_remove()
+            self.check_recompile_trt.grid_remove()
+            self.check_coreml.grid_remove()
+            self.check_recompile_coreml.grid_remove()
+            self.check_openvino.grid()
+            self.check_recompile_openvino.grid()
+            self.fp16_cb.grid_remove()
+            self.update_recompile_openvino_visibility()
+            self.update_openvino_visibility_based_on_model(current_model)
             
         elif device_type == "CUDA":
             self.label_inference_optimizer.grid()
@@ -1126,13 +1227,14 @@ class ConfigGUI(tk.Tk):
             self.check_torch_compile.grid()
             self.check_coreml.grid_remove()
             self.check_recompile_coreml.grid_remove()
+            self.check_openvino.grid_remove()
+            self.check_recompile_openvino.grid_remove()
             
             if IS_ROCM:
                 self.check_tensorrt.grid_remove()
             else:
                 self.check_tensorrt.grid()
                 self.update_recompile_trt_visibility()
-                current_model = self.depth_model_var.get()
                 self.update_tensorrt_visibility_based_on_model(current_model)
                 
         elif device_type == "MPS":
@@ -1142,7 +1244,11 @@ class ConfigGUI(tk.Tk):
             self.check_tensorrt.grid_remove()
             self.check_recompile_trt.grid_remove()
             self.check_coreml.grid()
+            self.check_openvino.grid_remove()
+            self.check_recompile_openvino.grid_remove()
+            self.fp16_cb.grid_remove()
             self.update_recompile_coreml_visibility()
+            self.update_coreml_visibility_based_on_model(current_model)
             
         else:  # CPU or other
             self.label_inference_optimizer.grid_remove()
@@ -1152,6 +1258,8 @@ class ConfigGUI(tk.Tk):
             self.check_recompile_trt.grid_remove()
             self.check_coreml.grid_remove()
             self.check_recompile_coreml.grid_remove()
+            self.check_openvino.grid_remove()
+            self.check_recompile_openvino.grid_remove()
         self.auto_enable_optimizers_based_on_device()
                 
     
@@ -1673,8 +1781,11 @@ class ConfigGUI(tk.Tk):
         # Update TensorRT visibility based on selected model
         self.update_tensorrt_visibility_based_on_model(selected_model)
         
-        # TODO
-        # self.update_coreml_visibility_based_on_model(selected_model)
+        # Update CoreML visibility based on selected model
+        self.update_coreml_visibility_based_on_model(selected_model)
+        
+        # Update OpenVINO visibility based on selected model
+        self.update_openvino_visibility_based_on_model(selected_model)
         
         self.depth_model_var.set(selected_model)
         self.update_depth_resolution_options(selected_model)
@@ -1768,6 +1879,10 @@ class ConfigGUI(tk.Tk):
         self.use_coreml.set(cfg.get("CoreML", False))
         self.recompile_coreml_var.set(cfg.get("Recompile CoreML", False))
         
+        # Apply OpenVINO settings
+        self.use_openvino.set(cfg.get("OpenVINO", False))
+        self.recompile_openvino_var.set(cfg.get("Recompile OpenVINO", False))
+        
         # Trigger device change to update optimizer options
         self.on_device_change()
 
@@ -1803,10 +1918,13 @@ class ConfigGUI(tk.Tk):
         
         # Load the hard defaults
         self.load_defaults()
-        
-        # Update TensorRT visibility based on the default model
         current_model = self.depth_model_var.get()
+        # Update TensorRT visibility based on the default model
         self.update_tensorrt_visibility_based_on_model(current_model)
+        # Update CoreML visibility based on the default model
+        self.update_coreml_visibility_based_on_model(current_model)
+        # Update OpenVINO visibility based on the default model
+        self.update_openvino_visibility_based_on_model(current_model)
         
         # Restore language and device if needed
         if current_language in UI_TEXTS:
@@ -1881,6 +1999,8 @@ class ConfigGUI(tk.Tk):
             "Recompile TensorRT": self.recompile_trt_var.get(),
             "CoreML": self.use_coreml.get(),
             "Recompile CoreML": self.recompile_coreml_var.get(),
+            "OpenVINO": self.use_openvino.get(),
+            "Recompile OpenVINO": self.recompile_openvino_var.get(),
             "Unlock Thread (Legacy Streamer)": self.unlock_streamer_thread.get(),
             "Capture Tool": self.capture_tool_cb.get(),
             "Fill 16:9": self.fill_16_9_var.get(),
@@ -1914,6 +2034,11 @@ class ConfigGUI(tk.Tk):
         if self.recompile_coreml_var.get():
             self.recompile_coreml_var.set(False)
             self.cfg["Recompile CoreML"] = False
+        
+        # Reset OpenVINO recompile if needed
+        if self.recompile_openvino_var.get():
+            self.recompile_openvino_var.set(False)
+            self.cfg["Recompile OpenVINO"] = False
         
         # Update GUI
         if hasattr(self, 'check_recompile_trt'):

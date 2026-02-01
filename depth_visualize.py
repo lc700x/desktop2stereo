@@ -1,5 +1,4 @@
 # depth.py
-# depth.py
 import torch
 # try:
 #     import zluda # Support for old AMD GPU with ZLUDA support
@@ -20,27 +19,35 @@ image_rgb = np.array(img)
 
 DEBUG = True
 AA_STRENGTH = 2
-FP16 = True
+FP16 = False
 DTYPE = torch.float16 if FP16 else torch.float32
 CACHE_PATH = "models"
 DEVICE_ID = 0
 FILL_16_9 = True
 DEPTH_RESOLUTION = 384
 FOREGROUND_SCALE = 0
-USE_COREML = False
+
 USE_TORCH_COMPILE = False
+
 USE_TENSORRT = False
 RECOMPILE_TRT = True
+
+USE_COREML = False
 RECOMPILE_COREML = True
+
+USE_OPENVINO = True
+RECOMPILE_OPENVINO = True
+
 # MODEL_ID = "LiheYoung/depth-anything-small-hf"
-# MODEL_ID = "depth-anything/Depth-Anything-V2-Large-hf"
+# MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
+MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
 # MODEL_ID = "depth-anything/DA3-SMALL"
 # MODEL_ID = "depth-anything/DA3MONO-LARGE"
 # MODEL_ID = "depth-anything/DA3METRIC-LARGE"
 # MODEL_ID = "Intel/dpt-large"
 # MODEL_ID = "apple/DepthPro-hf"
-MODEL_ID = "Intel/zoedepth-nyu"
+# MODEL_ID = "Intel/zoedepth-nyu"
 # MODEL_ID = "Intel/zoedepth-nyu-kitti"
 # MODEL_ID = "lc700x/dpt-hybrid-midas-hf"
 # MODEL_ID = "lc700x/dpt-large-redesign-hf"
@@ -49,6 +56,30 @@ MODEL_ID = "Intel/zoedepth-nyu"
 
 if not DEBUG:
     warnings.filterwarnings('ignore') # disable for debug
+
+# Try import OpenVINO runtime
+try:
+    import openvino as ov
+    OPENVINO_AVAILABLE = True
+except Exception:
+    ov = None
+    OPENVINO_AVAILABLE = False
+    USE_OPENVINO = False
+
+# Decide OpenVINO device (prefer GPU)
+OPENVINO_DEVICE = None
+if USE_OPENVINO and OPENVINO_AVAILABLE:
+    try:
+        core_tmp = ov.Core()
+        devices_tmp = core_tmp.available_devices
+        if any("GPU" in d for d in devices_tmp):
+            OPENVINO_DEVICE = "GPU"
+        elif any("CPU" in d for d in devices_tmp):
+            OPENVINO_DEVICE = "CPU"
+        else:
+            OPENVINO_DEVICE = devices_tmp[0] if len(devices_tmp) > 0 else None
+    except Exception:
+        OPENVINO_DEVICE = None
 
 # Initialize DirectML Device
 def get_device(index=0):
@@ -63,6 +94,8 @@ def get_device(index=0):
             return torch.device("mps"), "Using Apple Silicon (MPS) device"
         if torch.cuda.is_available():
             return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+        if torch.xpu.is_available():
+            return torch.device("xpu"), f"Using XPU device: {torch.xpu.get_device_name(index)}"
         else:
             return torch.device("cpu"), "Using CPU device"
     except:
@@ -76,7 +109,14 @@ IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
 IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO
 IS_DIRECTML = "DirectML" in DEVICE_INFO
+IS_XPU = "XPU" in DEVICE_INFO
 IS_MPS = "MPS" in DEVICE_INFO
+IS_CPU = "CPU" in DEVICE_INFO
+
+# Correction for ZoeDepth models
+ZOEDEPTH_FIX = False
+if MODEL_ID in ("Intel/zoedepth-nyu", "Intel/zoedepth-kitti", "Intel/zoedepth-nyu-kitti"):
+    ZOEDEPTH_FIX = True
 
 if USE_COREML and IS_MPS:    
     try:
@@ -128,7 +168,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and MODEL_ID in ("Intel/zoedepth-nyu", "Intel/zoedepth-kitti", "Intel/zoedepth-nyu-kitti")): 
+if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and ZOEDEPTH_FIX) or IS_XPU:
     FP16 = False 
 
 # Optimization for CUDA
@@ -147,10 +187,13 @@ if IS_CUDA:
     torch.backends.cudnn.allow_tf32 = True
     torch.set_float32_matmul_precision('high')
 
-    # Enable math attention
-    torch.backends.cuda.enable_flash_sdp(True)
-    torch.backends.cuda.enable_mem_efficient_sdp(True)
-    torch.backends.cuda.enable_math_sdp(True)
+    # Enable math attention (safe-guard in case attributes unavailable)
+    try:
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
+        torch.backends.cuda.enable_math_sdp(True)
+    except Exception:
+        pass
 
 if IS_AMD_ROCM:
     os.environ["HSA_XNACK"] = "1"  # Enable XNACK for ROCm
@@ -261,71 +304,104 @@ def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
 
     return depth.squeeze()
 
-def process_tensor(img_rgb: np.ndarray, height) -> torch.Tensor:
+def process_tensor(img_rgb: np.ndarray | cv2.UMat, height: int) -> torch.Tensor:
     """
-    Convert BGR/UMat numpy image to normalized GPU tensor in model dtype.
-    Keeps transfers efficient and uses non_blocking for pinned tensors where possible.
+    Convert BGR/UMat image to normalized GPU tensor in model dtype.
+    Minimizes copies and avoids unnecessary GPU↔CPU syncs.
     """
+
+    # size check without extra conversions
     if isinstance(img_rgb, cv2.UMat):
-        img_rgb = img_rgb.get()
+        h0, w0 = img_rgb.get().shape[:2]
+        umat = img_rgb
+    else:
+        h0, w0 = img_rgb.shape[:2]
+        umat = cv2.UMat(img_rgb)
 
-    h0, w0 = img_rgb.shape[:2]
+    # resize only if needed
     if height < h0:
-        width = int(img_rgb.shape[1] / h0 * height)
-        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
+        width = (w0 * height) // h0
+        umat = cv2.resize(umat, (width, height), interpolation=cv2.INTER_LINEAR)
 
-    # Ensure contiguous numpy array (uint8)
-    np_img = np.ascontiguousarray(img_rgb)
-    # convert to torch tensor on CPU (uint8) then float on device to avoid double copy
-    t_cpu = torch.from_numpy(np_img)  # shape H,W,C dtype=uint8
-    # move to device and convert in one step
-    t = t_cpu.permute(2, 0, 1).contiguous().unsqueeze(0).to(device=DEVICE, dtype=MODEL_DTYPE)
-    t = t / 255.0
+    # single GPU → CPU readback
+    np_img = umat.get()  # uint8, HWC, contiguous
+
+    # torch conversion (zero-copy on CPU)
+    t = torch.from_numpy(np_img)
+
+    # layout + device + dtype in ONE transfer
+    t = (
+        t.permute(2, 0, 1)   # HWC → CHW (view)
+         .unsqueeze(0)       # add batch
+         .to(
+             device=DEVICE,
+             dtype=MODEL_DTYPE,
+             non_blocking=t.is_pinned()
+         )
+    )
+
+    # normalize on GPU
+    t.mul_(1.0 / 255.0)
+
     return t
 
-def process(img_rgb: np.ndarray, height) -> np.ndarray:
+def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
     """
-    Resize BGR/UMat numpy image to target height, keeping aspect ratio.
+    Resize BGR/UMat image to target height, keeping aspect ratio.
+    Uses cv2.UMat for GPU acceleration when possible.
     """
-    if isinstance(img_rgb, cv2.UMat):
-        img_rgb = img_rgb.get()
-    h0 = img_rgb.shape[0]
-    if height < h0:
-        width = int(img_rgb.shape[1] / h0 * height)
-        img_rgb = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_AREA)
-    return img_rgb
+    # Determine if input is UMat
+    is_umat = isinstance(img_rgb, cv2.UMat)
+
+    # Get original size
+    if is_umat:
+        h0, w0 = img_rgb.get().shape[:2]
+    else:
+        h0, w0 = img_rgb.shape[:2]
+
+    # If no resize necessary, just return numpy array
+    if height >= h0:
+        return img_rgb.get() if is_umat else img_rgb
+
+    # Compute new size
+    width = int(w0 * height / h0)
+
+    # Ensure we work with UMat for fast GPU resize
+    umat = img_rgb if is_umat else cv2.UMat(img_rgb)
+
+    # Perform the resize on GPU
+    resized_umat = cv2.resize(umat, (width, height), interpolation=cv2.INTER_LINEAR)
+
+    # Return numpy array
+    return resized_umat.get()
 
 def apply_gamma(depth, gamma=1.2):
     return torch.pow(depth, gamma)
 
-def apply_contrast(depth, factor=1.2):
-    mean = depth.mean(dim=(-2, -1), keepdim=True)  # per image mean
-    return torch.clamp((depth - mean) * factor + mean, 0, 1)
-
 def normalize_tensor(tensor: torch.tensor):
-    # Replace NaNs with +inf / -inf just for min/max
-    min_val = torch.min(torch.where(torch.isnan(tensor), torch.inf, tensor))
-    max_val = torch.max(torch.where(torch.isnan(tensor), -torch.inf, tensor))
+    if ZOEDEPTH_FIX:
+        # Replace NaNs with +inf / -inf just for min/max
+        min_val = torch.min(torch.where(torch.isnan(tensor), torch.inf, tensor))
+        max_val = torch.max(torch.where(torch.isnan(tensor), -torch.inf, tensor))
 
-    denom = max_val - min_val
-    if denom == 0:
-        return torch.zeros_like(tensor)
+        denom = max_val - min_val
+        if denom == 0:
+            return torch.zeros_like(tensor)
 
-    out = (tensor - min_val) / denom
-    return torch.where(torch.isnan(tensor), torch.tensor(0.5, device=tensor.device), out)
-
+        out = (tensor - min_val) / denom
+        return torch.where(torch.isnan(tensor), torch.tensor(0.5, device=tensor.device), out)
+    else:
+        return (tensor - tensor.min()) / (tensor.max() - tensor.min() + 1e-6) 
 
 def post_process_depth(depth):
-    depth = normalize_tensor(depth).squeeze()
     if is_metric():
-        depth = 1.0 - depth
+        depth = 1.0 / (depth + 1e-6)
+    depth = normalize_tensor(depth).squeeze()
     depth = apply_gamma(depth)
-    depth = apply_contrast(depth)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
     depth = anti_alias(depth, strength=AA_STRENGTH)
-    depth = normalize_tensor(depth).squeeze()
     return depth
-        
+ 
 # Load Video Depth Anything Model
 def get_video_depth_anything_model(model_id=MODEL_ID):
     """ Load Video Depth Anything model from HuggingFace hub. """
@@ -455,7 +531,12 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
             verbose=False
         )
     
-    print(f"ONNX model generated, TensorRT engine compling may take a while...")
+    engine_name = None
+    if USE_TENSORRT:
+        engine_name = "TensorRT"
+    elif USE_OPENVINO:
+        engine_name = "OpenVINO"
+    print(f"ONNX model generated, {engine_name} engine compiling may take a while...")
 
 class ModelForCoreML(torch.nn.Module):
     """
@@ -534,6 +615,7 @@ def export_to_coreml(model, output_path, input_size):
         raise RuntimeError(f"TorchScript export failed: {e}")
 
     # Convert to CoreML (choose ImageType or TensorType depending on expectations), keep previous ImageType usage for compatibility with pixel-value scaling.
+    print(f"TorchScript conversion finished, CoreML compling may take a while...")
     mlmodel = ct.convert(
         traced,
         inputs=[
@@ -573,6 +655,122 @@ class CoreMLEngine:
             value = out
 
         return torch.from_numpy(value)
+
+
+# OpenVINO Optimization and Engine (persistent cache support)
+def _ensure_openvino_cache_dir():
+    """
+    Return path to OpenVINO cache directory and ensure it exists.
+    """
+    cache_dir = os.path.join(MODEL_FOLDER, "openvino_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+def optimize_with_openvino(onnx_path: str, device: str = None):
+    """
+    Load ONNX and compile with OpenVINO runtime for the selected device.
+    Uses OpenVINO runtime cache directory so compiled blobs persist to disk.
+
+    Returns compiled model (ov.CompiledModel).
+    """
+    if not OPENVINO_AVAILABLE:
+        raise ImportError("OpenVINO runtime (openvino) is not installed")
+
+    core = ov.Core()
+    device_name = device or OPENVINO_DEVICE or "CPU"
+
+    # Prepare cache dir for persistent compiled blobs
+    cache_dir = _ensure_openvino_cache_dir()
+
+    # If user asked to force recompile, clear cache before compiling.
+    if RECOMPILE_OPENVINO:
+        try:
+            import shutil
+            # remove content but keep the directory itself
+            for entry in os.listdir(cache_dir):
+                path = os.path.join(cache_dir, entry)
+                if os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+            print(f"[OpenVINO] Cleared cache at {cache_dir} (RECOMPILE_OPENVINO=True)")
+        except Exception as e:
+            print(f"[OpenVINO] Failed to clear cache: {e}")
+
+    # Tell OpenVINO runtime to use the cache directory (persist compiled blobs)
+    try:
+        core.set_property({"CACHE_DIR": cache_dir})
+    except Exception:
+        # Older/newer OV versions might require different API; ignore if not supported
+        pass
+
+    # Read ONNX model and compile
+    model = core.read_model(onnx_path)
+
+    # compile_model will produce cache artifacts under CACHE_DIR
+    compiled = core.compile_model(model, device_name)
+    print(f"[OpenVINO] Compiled model for device {device_name} (cache: {cache_dir})")
+    return compiled
+
+
+class OpenVINOEngine:
+    """
+    Wrapper around an OpenVINO CompiledModel.
+    Inputs: torch tensor (NCHW), returns torch tensor on target DEVICE.
+    """
+    def __init__(self, compiled_model, device_name: str = None, out_dtype=np.float32):
+        # compiled_model: ov.CompiledModel object
+        self.compiled = compiled_model
+        # get input / output objects
+        self.input = self.compiled.input(0)
+        self.input_name = self.input.get_any_name()
+        self.output = self.compiled.output(0)
+        self.output_name = self.output.get_any_name()
+        self.device_name = device_name or "OpenVINO"
+        self.out_dtype = out_dtype
+
+    def __call__(self, tensor: torch.Tensor):
+        """
+        Accepts a torch tensor [1,3,H,W] dtype float32/float16,
+        runs inference via OpenVINO, returns torch tensor on DEVICE/dtype MODEL_DTYPE.
+        """
+        # Ensure numpy input on CPU (OpenVINO runtime runs on host)
+        arr = tensor.detach().cpu().numpy()
+
+        # Enforce common float dtypes
+        if arr.dtype not in (np.float32, np.float16):
+            arr = arr.astype(np.float32)
+
+        # Some compiled models accept a single numpy input or a dict keyed by input name
+        try:
+            result = self.compiled({self.input_name: arr})
+        except TypeError:
+            # fallback to positional call
+            result = self.compiled(arr)
+
+        # Extract output
+        if isinstance(result, dict):
+            out_np = result.get(self.output_name, next(iter(result.values())))
+        elif isinstance(result, (list, tuple)):
+            out_np = result[0]
+        else:
+            try:
+                out_np = next(iter(result.values()))
+            except Exception:
+                raise RuntimeError("Unexpected OpenVINO compiled model output type")
+
+        # Convert to torch and move to your DEVICE with MODEL_DTYPE
+        out_torch = torch.from_numpy(out_np.copy())
+        try:
+            out_torch = out_torch.to(device=DEVICE, dtype=MODEL_DTYPE)
+        except Exception:
+            # If moving to device fails, return CPU tensor
+            pass
+
+        return out_torch
 
 
 # TensorRT Engine Wrapper Class (Without PyCUDA)
@@ -666,6 +864,8 @@ class DepthModelWrapper:
         # Determine backend based on device
         self.is_cuda = IS_CUDA
         self.is_mps = IS_MPS
+        self.is_xpu = IS_XPU
+        self.is_cpu = IS_CPU
         
         # Try CoreML on macOS + MPS (non-CUDA) if enabled
         if self.is_mps and USE_COREML:
@@ -677,6 +877,17 @@ class DepthModelWrapper:
             except Exception as e:
                 print(f"[CoreML] Initialization failed: {e}")
                 self.dtype = torch.float32
+
+        # Try OpenVINO for Intel GPU/CPU if requested and available
+        if USE_OPENVINO and OPENVINO_AVAILABLE and OPENVINO_DEVICE is not None:
+            try:
+                self.backend = "OpenVINO"
+                self.model = self._load_openvino_engine()
+                print(f"Using backend: OpenVINO ({OPENVINO_DEVICE})")
+                return
+            except Exception as e:
+                print(f"[OpenVINO] Initialization failed: {e}")
+                self.backend = None
 
         if self.is_cuda and USE_TENSORRT:
             # Use TensorRT backend for CUDA
@@ -749,6 +960,19 @@ class DepthModelWrapper:
 
         return CoreMLEngine(coreml_path)
 
+    def _load_openvino_engine(self):
+        """
+        Ensure ONNX exists, then compile & return an OpenVINOEngine.
+        """
+        # export to ONNX if not exists
+        if RECOMPILE_OPENVINO or not os.path.exists(self.onnx_path):
+            # need a PyTorch model to export
+            pytorch_model = self._load_pytorch_model()
+            export_to_onnx(pytorch_model, self.onnx_path, self.device, self.dtype)
+        
+        device_name = OPENVINO_DEVICE or "CPU"
+        compiled = optimize_with_openvino(self.onnx_path, device=device_name)
+        return OpenVINOEngine(compiled, device_name=device_name)
     
     def _load_tensorrt_engine(self):
         """Load or create TensorRT engine."""
@@ -771,6 +995,10 @@ class DepthModelWrapper:
     
     def __call__(self, tensor):
         """Run inference using the active backend."""
+        # Fast path for OpenVINO backend
+        if getattr(self, "backend", None) == "OpenVINO":
+            return self.model(tensor)
+
         if self.is_cuda:
             with torch.inference_mode():
                 with torch.amp.autocast('cuda'):
@@ -801,6 +1029,28 @@ class DepthModelWrapper:
                         return self.model(tensor)
                     else:
                         return self.model(tensor)
+        elif self.is_xpu:
+            with torch.inference_mode():
+                with torch.autocast(device_type='xpu', dtype=self.dtype):
+                    if self.backend == "PyTorch":
+                        if "video-depth-anything" in MODEL_ID.lower():
+                            return self.model(pixel_values=tensor)
+                        elif "da3" in MODEL_ID.lower():
+                            return self.model.predict_depth(tensor)
+                        return self.model(pixel_values=tensor).predicted_depth
+                    else:
+                        return self.model(tensor)
+        elif self.is_cpu:
+            with torch.inference_mode():
+                with torch.amp.autocast('cpu', dtype=self.dtype):
+                    if self.backend == "PyTorch":
+                        if "video-depth-anything" in MODEL_ID.lower():
+                            return self.model(pixel_values=tensor)
+                        elif "da3" in MODEL_ID.lower():
+                            return self.model.predict_depth(tensor)
+                        return self.model(pixel_values=tensor).predicted_depth
+                    else:
+                        return self.model(tensor)
         else:
             with torch.no_grad():
                 if self.backend == "PyTorch":
@@ -824,12 +1074,12 @@ model_wraper = DepthModelWrapper(
 )
 
 MODEL_DTYPE = next(model_wraper.model.parameters()).dtype if hasattr(model_wraper.model, 'parameters') else DTYPE
-if "depthpro" or "zoedepth" or "dpt" in MODEL_ID.lower():
-    MEAN = torch.tensor([0.5,0.5,0.5], device=DEVICE).view(1,3,1,1)
-    STD = torch.tensor([0.5,0.5,0.5], device=DEVICE).view(1,3,1,1)
+if "depthpro"  in MODEL_ID.lower() or "zoedepth" in MODEL_ID.lower() or "dpt" in MODEL_ID.lower():
+    MEAN = torch.tensor([0.5,0.5,0.5], dtype=MODEL_DTYPE, device=DEVICE).view(1,3,1,1)
+    STD = torch.tensor([0.5,0.5,0.5], dtype=MODEL_DTYPE, device=DEVICE).view(1,3,1,1)
 else:    
-    MEAN = torch.tensor([0.485,0.456,0.406], device=DEVICE).view(1,3,1,1)
-    STD = torch.tensor([0.229,0.224,0.225], device=DEVICE).view(1,3,1,1)
+    MEAN = torch.tensor([0.485,0.456,0.406], dtype=MODEL_DTYPE, device=DEVICE).view(1,3,1,1)
+    STD = torch.tensor([0.229,0.224,0.225], dtype=MODEL_DTYPE, device=DEVICE).view(1,3,1,1)
     
 if USE_TORCH_COMPILE and IS_CUDA:
     try:
@@ -1159,7 +1409,8 @@ if USE_TORCH_COMPILE and IS_CUDA:
     
 if __name__ == "__main__":
     depth = predict_depth(image_rgb, dtype=DTYPE).squeeze(0)
-    depth = depth.to(torch.float32).cpu().detach().numpy()
+    depth = depth.detach().contiguous().float().cpu().numpy()
+
     import matplotlib.pyplot as plt
     plt.imshow(depth, cmap='Spectral_r')
     plt.colorbar()
