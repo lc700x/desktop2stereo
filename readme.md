@@ -22,8 +22,9 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 
 1. AMD GPU
 2. NVIDIA GPU
-3. Apple Silicon Chip (M1, M2, M3, M4, ...)
-4. Other DirectML devices (Intel Arc/Iris GPU, Qualcomm® Adreno GPU, etc. **Windows** Only)
+3. Intel GPU
+4. Apple Silicon Chip (M1, M2, M3, M4, ...)
+5. Other DirectML devices (Intel Arc/Iris GPU, Qualcomm® Adreno GPU, etc. **Windows** Only)
 
 ## Supported OS
 
@@ -70,16 +71,20 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 
     **NVIDIA GPU**: Download and unzip `Desktop2Stereo_vX.X.X_NVIDIA_Windows.zip` to local disk.
 
+    **Intel GPU**: Download and unzip `Desktop2Stereo_vX.X.X_Intel_Windows.zip` to local disk.
+
 - **Method 2**: Manual Deployment with embedded Python
 
     1. Download and unzip `Desktop2Stereo_vX.X.X_Python311_Windows.zip` to local disk.
     2. Install Python environment
 
-        **AMD 7000/9000/Ryzen AI (Max)/etc. Series GPUs with ROCm7 Support**: Double click `install-rocm7_standalone.bat`. (Check compatibility here: https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)
+        **AMD 6000/7000/9000/Ryzen AI (Max)/etc. Series GPUs with ROCm7 Support**: Double click `install-rocm7_standalone.bat`. (Check compatibility here: https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)
 
         **Older AMD/Intel/Qualcomm GPU and other DirectML devices**: Double click `install-dml_standalone.bat`.
 
         **NVIDIA GPU**: Double click `install-cuda_standalone.bat`.
+
+        **Intel GPU**: Double click `install-xpu_standalone.bat`.
 
 - **Method 3**: Manual Deployment with system Python
 
@@ -93,11 +98,13 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 
     3. Install Python environment
 
-        **AMD 7000/9000/Ryzen AI (Max)/etc. Series GPUs with ROCm7 Support**: Double click `install-rocm7.bat`.
+        **AMD 6000/7000/9000/Ryzen AI (Max)/etc. Series GPUs with ROCm7 Support**: Double click `install-rocm7.bat`.
 
         **Older AMD/Intel/Qualcomm GPU and other DirectML devices**: Double click `install-dml.bat`.
 
         **NVIDIA GPU**: Double click `install-cuda.bat`.
+
+        **Intel GPU**: Double click `install-xpu.bat`.
 
 ### MacOS
 
@@ -442,16 +449,23 @@ All optional settings can be modified on the GUI window and saved to the [settin
     [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run.
 
 27. **Inference Optimizer** (Windows/Ubuntu Only)  
-    These optimizers can typically increase the output FPS by `30%~50%`. However, not all models support **Inference Optimizer**, if the optimization fails, the inference process will fall back to PyTorch.
+    These optimizers can typically increase the output FPS by `30%~50%`. However, not all models support **Inference Optimizer**, if the optimization fails, the inference process will fall back to PyTorch.  
 
+    **AMD GPUs (ROCm7)**:
+    - **torch.compile**: leverages Triton under the hood to generate optimized kernels automatically, and provides slight to moderate speedups by fusing operations and reducing overhead.
+    
     **NVIDIA GPUs**:
     - **torch.compile**: leverages Triton under the hood to generate optimized kernels automatically, and provides slight to moderate speedups by fusing operations and reducing overhead.
     - **TensorRT**: NVIDIA’s high-performance deep learning inference SDK. It optimizes trained models for deployment, especially on NVIDIA GPUs, and provides significant speedups and high inference efficiency.
 
-    **DirectML** (AMD GPUs, etc.):
+    **Apple Silicon (MPS)**:
+    - **CoreML**:  CoreML is optimized to leverage Apple silicon's CPU, GPU, and Neural Engine for fast, private, and offline predictions. 
+
+    **AMD GPUs, etc. DirectML devices**:
     - **Unlock Threads (Legacy Streamer)**: unlock the multithreads for **Legacy Streamer** mode.
 
 > Warning: **Unlock Threads (Legacy Streamer)** sometimes fails with `UTF-8 error` under Python3.11 due to the limitations of [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) libraries. You may try stop and run multiple times for a successful streaming process.
+> Warning: **torch.compile** currently is not compatible with AMD RX6000 Series GPU.
 
 ## References
 ```BIBTEX
@@ -552,5 +566,7 @@ All optional settings can be modified on the GUI window and saved to the [settin
 - [nagadomi/nunif](https://github.com/nagadomi/nunif)  
 - [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)
 - [waydabber/BetterDisplay](https://github.com/waydabber/BetterDisplay)  
+- [guinmoon/rocm7_builds](https://github.com/guinmoon/rocm7_builds)
+- [woct0rdho/triton-windows](https://github.com/woct0rdho/triton-windows)
 - Other related tools and libraries  
 - All feedback from the users  
