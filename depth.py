@@ -164,7 +164,6 @@ if IS_AMD_ROCM:
             torch.backends.cudnn.enabled = False  # Disable cuDNN for known problematic AMD GPUs
             print(f"[Main] Disabled cuDNN for RX6000 Series GPU. ")
             break
-    os.environ["HSA_XNACK"] = "1"  # Enable XNACK for ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Enable AOTriton for ROCm
     os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
     os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "TRUE" # Enable flash attention autotune for AMD ROCm
@@ -903,7 +902,6 @@ class DepthModelWrapper:
             
         if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() or enable_trt):
             model.half()
-            print("You are using FP16 precision for depth estimation model.")
             
         # Special setup precision for DA3
         if self.is_cuda and self.use_torch_compile and not enable_trt:
