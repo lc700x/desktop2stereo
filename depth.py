@@ -901,8 +901,9 @@ class DepthModelWrapper:
                 weights_only=True
             ).to(DEVICE)
             
-        if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() or USE_TENSORRT):
+        if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() or enable_trt):
             model.half()
+            print("You are using FP16 precision for depth estimation model.")
             
         # Special setup precision for DA3
         if self.is_cuda and self.use_torch_compile and not enable_trt:
@@ -1079,13 +1080,23 @@ def warmup_model(model_wraper, steps: int = 3):
                     dummy = torch.randn(1, 3, target_size, target_size,
                                         device=DEVICE, dtype=MODEL_DTYPE)
                     model_wraper(dummy)
+                    
+    elif IS_XPU:
+        with torch.inference_mode():
+            with torch.amp.autocast('xpu', dtype=DTYPE):
+                for i in range(steps):
+                    dummy = torch.randn(1, 3, target_size, target_size,
+                                        device=DEVICE, dtype=MODEL_DTYPE)
+                    model_wraper(dummy)
     else:
         with torch.no_grad():
             for i in range(steps):
                 dummy = torch.randn(1, 3, target_size, target_size,
                                     device=DEVICE, dtype=MODEL_DTYPE)
                 model_wraper(dummy)
+    return True
 
+# Warmup the model at startup
 warmup_model(model_wraper, steps=3)
 
 lock = Lock()
@@ -1155,6 +1166,10 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     elif IS_MPS:
         with torch.inference_mode():
             with torch.amp.autocast('mps', dtype=dtype):
+                depth = model_wraper(tensor)
+    elif IS_XPU:
+        with torch.inference_mode():
+            with torch.amp.autocast('xpu', dtype=dtype):
                 depth = model_wraper(tensor)
     else:
         with torch.no_grad():
