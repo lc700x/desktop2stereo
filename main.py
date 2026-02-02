@@ -34,7 +34,6 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
     import ctypes
     from ctypes import wintypes
     import threading
-    import time
     
     # optional small delay (seconds) after capture event before performing actions
     CAPTURE_CURSOR_DELAY_S = 0.2
@@ -248,14 +247,128 @@ if OS_NAME != "Windows":
     signal.signal(signal.SIGQUIT, signal_handler)
 
 # get ffmpeg command
+
+# Get window lists
+if OS_NAME == "Windows":
+    try:
+        import win32gui
+    except ImportError:
+        win32gui = None
+
+    def list_windows():
+        windows = []
+        def callback(hwnd, _):
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd)
+                if title:
+                    windows.append((title, hwnd))
+            return True
+
+        win32gui.EnumWindows(callback, None)
+        return windows
+elif OS_NAME == "Darwin":
+    try:
+        from Quartz import (
+            CGWindowListCopyWindowInfo,
+            kCGWindowListOptionOnScreenOnly,
+            kCGWindowListExcludeDesktopElements,
+            kCGNullWindowID,
+        )
+    except ImportError:
+        CGWindowListCopyWindowInfo = None
+
+    def list_windows():
+        windows = []
+        options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
+        window_info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
+        # System UI processes we want to ignore
+        blacklist = {
+            "Window Server",
+            "ControlCenter",
+            "NotificationCenter",
+            "Spotlight",
+            "Dock",
+            "SystemUIServer",
+            "CoreServicesUIAgent",
+            "TextInputMenuAgent",
+        }
+        for win in window_info:
+            title = win.get("kCGWindowName", "") or ""
+            owner = win.get("kCGWindowOwnerName", "")
+            layer = win.get("kCGWindowLayer", 0)
+            bounds = win.get("kCGWindowBounds", {})
+            # Filtering rules
+            if not title.strip():
+                continue
+            if owner in blacklist:
+                continue
+            if title.strip().lower().startswith("item-"):
+                continue
+            if bounds.get("Y", 1) == 0:
+                continue
+            windows.append((title.strip(), win["kCGWindowNumber"]))
+        return windows
+else:
+    import subprocess
+    def list_windows():
+        windows = []
+        try:
+            result = subprocess.check_output(["wmctrl", "-l"]).decode("utf-8").splitlines()
+            for line in result:
+                parts = line.split(None, 3)
+                if len(parts) >= 4:
+                    _, _, _, title = parts
+                    if title.strip():
+                        windows.append((title.strip(), None))
+        except Exception as e:
+            print("Linux window listing error:", e)
+        return windows
+
+def is_window_visible_on_screen(window_title_search, partial_match=True, timeout=2.0):
+    """
+    Check if a window with the given title is actually visible on screen.
+    
+    Args:
+        window_title_search: Title or partial title to search for
+        partial_match: If True, search for windows containing the search string
+        timeout: How long to keep trying (seconds)
+    
+    Returns:
+        tuple: (found, window_title, window_id_or_handle)
+    """
+    
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            windows = list_windows()
+            
+            for title, window_id in windows:
+                if partial_match:
+                    if window_title_search.lower() in title.lower():
+                        return True
+                    if title == window_title_search:
+                        return True
+            
+            time.sleep(0.1)
+        except Exception as e:
+            print(f"[Window Check] Error listing windows: {e}")
+            time.sleep(0.5)
+    
+    return False
+
 def get_rtmp_cmd(os_name=OS_NAME, window=None):
     if not window:
         raise ValueError("GLFW window required for size-aware streaming")
-
+    
+    time.sleep(0.5) # wait 0.5 seconds to get correct window position
     width, height = glfw.get_framebuffer_size(window)
-    width = (width // 2) * 2  # make even
-    height = (height // 2) * 2  # make even
-
+    if width > 0 and height > 0:
+        width = (width // 2) * 2  # make even
+        height = (height // 2) * 2  # make even
+    else:
+        time.sleep(3) # retry after 3 seconds
+        get_rtmp_cmd()
+        
     if os_name == "Windows":
         server_cmd = ['./rtmp/mediamtx/mediamtx.exe', './rtmp/mediamtx/mediamtx.yml']
         if not LOSSLESS_SCALING_SUPPORT: 
@@ -265,7 +378,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
                 '-flags', 'low_delay',
                 '-probesize', '64',
                 '-analyzeduration', '0',
-                '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':max_framerate={FPS},hwdownload,format=bgra,scale={width}:{height},format=yuv420p[v]",  # Label video output [v], fix odd height
+                '-filter_complex', f"gfxcapture=window_title='(?i)Stereo Viewer':capture_cursor=0:max_framerate={FPS},hwdownload,format=bgra,scale={width}:{height},format=yuv420p[v]",  # Label video output [v], fix odd height
                 '-itsoffset', f'{AUDIO_DELAY}',  # Audio delay (applies to next input)
                 '-f', 'dshow',
                 '-rtbufsize', '256M',
@@ -286,9 +399,8 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
                 '-muxdelay', '0',
                 '-muxpreload', '0',
                 '-flush_packets', '1',
-                '-rtmp_buffer', '0',
-                '-f', 'flv',
-                f'rtmp://localhost:1935/{STREAM_KEY}'
+                '-f', 'mpegts',
+                f'srt://localhost:8890?streamid=publish:{STREAM_KEY}&pkt_size=1316'
             ]
         else:
             import win32gui
@@ -380,7 +492,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
                 '-flags', 'low_delay',
                 '-probesize', '64',
                 '-analyzeduration', '0',
-                '-filter_complex', f"gfxcapture={gfxcapture_options}:max_framerate={FPS},hwdownload,format=bgra,scale={width}:{height},format=yuv420p[v]",
+                '-filter_complex', f"gfxcapture={gfxcapture_options}:capture_cursor=0:max_framerate={FPS},hwdownload,format=bgra,scale={width}:{height},format=yuv420p[v]",
                 '-itsoffset', f'{AUDIO_DELAY}',
                 '-f', 'dshow',
                 '-rtbufsize', '256M',
@@ -400,9 +512,8 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
                 '-muxdelay', '0',
                 '-muxpreload', '0',
                 '-flush_packets', '1',
-                '-rtmp_buffer', '0',
-                '-f', 'flv',
-                f'rtmp://localhost:1935/{STREAM_KEY}'
+                '-f', 'mpegts',
+                f'srt://localhost:8890?streamid=publish:{STREAM_KEY}&pkt_size=1316'
             ]
             
     elif os_name == "Darwin":
@@ -446,10 +557,8 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
                     index = int(match.group(1))
                     name = match.group(2).strip()
                     if name == target_name and ((device_type == "audio" and found_audio) or (device_type == "video" and not found_audio)):
-                        print(line)
                         return index
             return None
-        
         monitor_index = get_monitor_index_for_glfw(window)
         monitors = glfw.get_monitors()
         monitor = monitors[monitor_index]
@@ -465,7 +574,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
         y = int(y * scale_factor)
         width = int(width * scale_factor)
         height = int(height * scale_factor)
-        # print(width, height, x, y)
+        
         server_cmd = ['./rtmp/mac/mediamtx', './rtmp/mac/mediamtx.yml']
         ffmpeg_cmd = [
             "./rtmp/mac/ffmpeg",
@@ -504,7 +613,6 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
 
 
     elif os_name == "Linux":
-        import time
         import re
 
         def run(cmd):
@@ -731,8 +839,8 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             "-ar", "44100", 
             "-b:a", "96k", 
             "-threads", "2",
-            "-f", "flv", 
-            f"rtmp://localhost:1935/{STREAM_KEY}"
+            "-f", "rtsp",
+            f"rtsp://localhost:8554/{STREAM_KEY}",
         ]
 
     return server_cmd, ffmpeg_cmd
@@ -740,6 +848,28 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
 # ffmpeg based rtmp streamer
 def rtmp_stream(window):
     global current_stream_size, global_processes
+
+    # Wait for GLFW window to be fully initialized
+    print("[RTMP] Waiting for window to be ready...")
+    max_attempts = 100  # 5 seconds with 0.1s intervals
+    for _ in range(max_attempts):
+        if shutdown_event.is_set():
+            return
+        
+        # Check if window is valid and has a size
+        try:
+            width, height = glfw.get_framebuffer_size(window)
+            if width > 0 and height > 0 and is_window_visible_on_screen("Stereo Viewer"):
+                print(f"[RTMP] Window ready: {width}x{height}")
+                time.sleep(2)
+                break
+        except Exception as e:
+            print(f"[RTMP] Window check error: {e}")
+        
+        time.sleep(0.5)
+    
+    if shutdown_event.is_set():
+        return
 
     while not shutdown_event.is_set():
         try:

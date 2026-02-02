@@ -28,18 +28,18 @@ head:
   out_channels: &head_out_channels [48, 96, 192, 384]
 
 
-cam_enc:
-  __object__:
-    path: models.depth_anything_3.model.cam_enc
-    name: CameraEnc
-    args: as_params
+# cam_enc:
+#   __object__:
+#     path: models.depth_anything_3.model.cam_enc
+#     name: CameraEnc
+#     args: as_params
 
-  dim_out: 384
+#   dim_out: 384
 
-cam_dec:
-  __object__:
-    path: models.depth_anything_3.model.cam_dec
-    name: CameraDec
-    args: as_params
+# cam_dec:
+#   __object__:
+#     path: models.depth_anything_3.model.cam_dec
+#     name: CameraDec
+#     args: as_params
 
-  dim_in: 768
+#   dim_in: 768

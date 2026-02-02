@@ -407,13 +407,17 @@ Stream Quality: 100
 torch.compile: false
 TensorRT: false
 Recompile TensorRT: false
+CoreML: false
+Recompile CoreML: false
+OpenVINO: false
+Recompile OpenVINO: false
 Unlock Thread (Legacy Streamer): false
 Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Lossless Scaling Support: false
 Stream Key: live
-Stereo Mix: 立体声混音 (Realtek(R) Audio)
+Stereo Mix: ''
 CRF: 20
 Audio Delay: -0.15
 Specify Display: false

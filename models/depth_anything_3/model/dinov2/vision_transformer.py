@@ -26,6 +26,13 @@ from .layers import (  # noqa: F401
     RotaryPositionEmbedding2D,
     SwiGLUFFNFused,
 )
+from models.depth_anything_3.model.reference_view_selector import (
+    RefViewStrategy,
+    select_reference_view,
+    reorder_by_reference,
+    restore_original_order,
+)
+from models.depth_anything_3.utils.constants import THRESH_FOR_REF_SELECTION
 
 # logger = logging.getLogger("dinov2")
 
@@ -128,7 +135,6 @@ class DinoVisionTransformer(nn.Module):
                 positional embeddings
             interpolate_offset: (float) work-around offset to apply when interpolating
                 positional embeddings
-            block_prompt: (bool) whether to add ray embeddings to the block input
         """
         super().__init__()
         self.patch_start_idx = 1
@@ -304,6 +310,16 @@ class DinoVisionTransformer(nn.Module):
             else:
                 g_pos = pos_nodiff
                 l_pos = pos
+
+            if self.alt_start != -1 and (i == self.alt_start - 1) and x.shape[1] >= THRESH_FOR_REF_SELECTION and kwargs.get("cam_token", None) is None:
+                # Select reference view using configured strategy
+                strategy = kwargs.get("ref_view_strategy", "saddle_balanced")
+                logger.info(f"Selecting reference view using strategy: {strategy}")
+                b_idx = select_reference_view(x, strategy=strategy)
+                # Reorder views to place reference view first
+                x = reorder_by_reference(x, b_idx)
+                local_x = reorder_by_reference(local_x, b_idx)
+
             if self.alt_start != -1 and i == self.alt_start:
                 if kwargs.get("cam_token", None) is not None:
                     logger.info("Using camera conditions provided by the user")
@@ -335,6 +351,9 @@ class DinoVisionTransformer(nn.Module):
 
             if i in blocks_to_take:
                 out_x = torch.cat([local_x, x], dim=-1) if self.cat_token else x
+                # Restore original view order if reordering was applied
+                if x.shape[1] >= THRESH_FOR_REF_SELECTION and self.alt_start != -1 and 'b_idx' in locals():
+                    out_x = restore_original_order(out_x, b_idx)
                 output.append((out_x[:, :, 0], out_x))
             if i in export_feat_layers:
                 aux_output.append(x)

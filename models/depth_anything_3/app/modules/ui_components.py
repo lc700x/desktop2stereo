@@ -33,13 +33,12 @@ class UIComponents:
     def __init__(self):
         """Initialize the UI components handler."""
 
-    def create_upload_section(self) -> Tuple[gr.Video, gr.Slider, gr.File, gr.Gallery, gr.Button]:
+    def create_upload_section(self) -> Tuple[gr.Video, gr.Slider, gr.File, gr.Gallery]:
         """
         Create the upload section with video, images, and gallery components.
 
         Returns:
-            A tuple of Gradio components: (input_video, s_time_interval, input_images,
-            image_gallery, select_first_frame_btn).
+            A tuple of Gradio components: (input_video, s_time_interval, input_images, image_gallery).
         """
         input_video = gr.Video(label="Upload Video", interactive=True)
         s_time_interval = gr.Slider(
@@ -62,10 +61,7 @@ class UIComponents:
             interactive=False,
         )
 
-        # Select first frame button (moved below image gallery)
-        select_first_frame_btn = gr.Button("Select First Frame", scale=1)
-
-        return input_video, s_time_interval, input_images, image_gallery, select_first_frame_btn
+        return input_video, s_time_interval, input_images, image_gallery
 
     def create_3d_viewer_section(self) -> gr.Model3D:
         """
@@ -199,12 +195,12 @@ class UIComponents:
             measure_text,
         )
 
-    def create_inference_control_section(self) -> Tuple[gr.Dropdown, gr.Checkbox]:
+    def create_inference_control_section(self) -> Tuple[gr.Dropdown, gr.Checkbox, gr.Dropdown]:
         """
         Create the inference control section (before inference).
 
         Returns:
-            Tuple of (process_res_method_dropdown, infer_gs)
+            Tuple of (process_res_method_dropdown, infer_gs, ref_view_strategy)
         """
         with gr.Row():
             process_res_method_dropdown = gr.Dropdown(
@@ -224,8 +220,15 @@ class UIComponents:
                 ),
                 scale=1,
             )
+            ref_view_strategy = gr.Dropdown(
+                choices=["saddle_balanced", "saddle_sim_range", "first", "middle"],
+                value="saddle_balanced",
+                label="Reference View Strategy",
+                info="Strategy for selecting reference view from multiple inputs",
+                scale=1,
+            )
 
-        return (process_res_method_dropdown, infer_gs)
+        return (process_res_method_dropdown, infer_gs, ref_view_strategy)
 
     def create_display_control_section(
         self,
