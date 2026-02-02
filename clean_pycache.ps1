@@ -1,1 +1,1 @@
-Get-ChildItem -Path . -Recurse -Include '__pycache__', '*.pyc' | Remove-Item -Recurse -Force
+Get-ChildItem -Path . -Recurse -Include '__pycache__', '*.pyc', '*Zone.Identifier' | Remove-Item -Recurse -Force
