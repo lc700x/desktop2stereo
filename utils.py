@@ -1,8 +1,10 @@
 import yaml, threading
 import os, platform, socket
 
+# Debug Mode
+DEBUG = False
 # App Version
-VERSION = "2.3.8"
+VERSION = "2.3.9"
 # Get OS name
 OS_NAME = platform.system()
 
@@ -29,11 +31,30 @@ STEREO_MIX_NAMES = [
 # Models with Disabled TRT 
 DISABLE_TRT_KEYWORDS = [
     "video-depth-anything",
-    "da3", 
-    "dpt",
+    "da3-",
+    "dpt-hybrid-midas-hf",
+    "da3nested",
+    "depthpro"
+]
+
+# Models with Disabled CoreML 
+DISABLE_COREML_KEYWORDS = [
+    "video-depth-anything",
+    "da3-", 
+    "da3nested",
+    "dpt-beit",
     "zoedepth",
     "depthpro"
 ]
+
+# Models with Disabled OpenVINO 
+DISABLE_OPENVINO_KEYWORDS = [
+    "da3",
+    "dpt-hybrid-midas-hf",
+]
+
+# Disable CuDNN for RX 6000 series GPUs due to known issues
+DISABLE_CUDNN_KEYWORDS = ["6950", "6900", "6850", "6800", "6750", "6700", "6650", "6600", "6550", "6500", "6400", "6300", "680", "6100"]
 
 # Global shutdown event
 shutdown_event = threading.Event()
@@ -117,9 +138,7 @@ if OS_NAME == "Darwin":
         
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-
-if settings["HF Endpoint"]:
-    os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
+os.environ['HF_ENDPOINT'] = settings["HF Endpoint"]
 
 if OS_NAME == "Windows":
     import ctypes, win32gui, win32con
@@ -205,6 +224,13 @@ DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for Dire
 USE_TORCH_COMPILE = settings["torch.compile"]
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
+
+USE_COREML = settings["CoreML"] # use CoreML for MacOS
+RECOMPILE_COREML = settings["Recompile CoreML"] # recompile CoreML mlpackage
+
+USE_OPENVINO = settings["OpenVINO"]  # use OpenVINO for Intel
+RECOMPILE_OPENVINO = settings["Recompile OpenVINO"] # recompile OpenVINO IR
+
 CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture
 FILL_16_9 = settings["Fill 16:9"]
 FIX_VIEWER_ASPECT = True if RUN_MODE == "RTMP Streamer" else settings["Fix Viewer Aspect"] # Keep Viewer Aspect for RTMP with LOSSLESS_SCALING_SUPPORT

@@ -21,8 +21,9 @@
 
 1. AMD GPU
 2. NVIDIA GPU
-3. Apple Silicon 芯片 (M1, M2, M3, M4, ...)
-4. 其他 DirectML 设备 (Intel Arc/Iris GPU, Qualcomm® Adreno GPU 等。**仅限 Windows**)
+3. Intel GPU
+4. Apple Silicon 芯片 (M1, M2, M3, M4, ...)
+5. 其他 DirectML 设备 (Intel Arc/Iris GPU, Qualcomm® Adreno GPU 等。**仅限 Windows**)
 
 ## 支持的操作系统
 
@@ -55,13 +56,15 @@
         **AMD 7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 由于部署过程特殊便携版不提供，请使用 **方法 2**。   
         **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 下载并解压 `Desktop2Stereo_vX.X.X_AMD_etc_Windows.zip` 到本地磁盘。  
         **NVIDIA GPU**: 下载并解压 `Desktop2Stereo_vX.X.X_NVIDIA_Windows.zip` 到本地磁盘。  
+        **Intel GPU**: 下载并解压 `Desktop2Stereo_vX.X.X_Intel_Windows.zip` 到本地磁盘。
 
     - **方法 2**: 使用内嵌 Python 手动部署
         1.  下载并解压 `Desktop2Stereo_vX.X.X_Python311_Windows.zip` 到本地磁盘。
         2.  安装 Python 环境
-            **AMD 7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7_standalone.bat`。  
+            **AMD 6000/7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7_standalone.bat`。  
             **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml_standalone.bat`。  
             **NVIDIA GPU**: 双击 `install-cuda_standalone.bat`。  
+            **Intel GPU**: 双击 `install-xpu_standalone.bat`。  
 
     - **方法 3**: 使用系统 Python 手动部署
         1.  安装 **Python 3.11**
@@ -71,9 +74,10 @@
             下载 [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
 
         3.  安装 Python 环境
-            **AMD 7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7.bat`。
+            **AMD 6000/7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7.bat`。
             **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml.bat`。
-            **NVIDIA GPU**: 双击 `install-cuda.bat`。
+            **NVIDIA GPU**: 双击 `install-cuda.bat`。  
+            **Intel GPU**: 双击 `install-xpu.bat`。
 
 ### MacOS
 
@@ -397,15 +401,27 @@
     [HF-Mirror](https://hf-mirror.com) 是原始 [Hugging Face](https://huggingface.co/) 网站的镜像站点，托管 AI 模型。深度模型将在首次运行时自动从 [Hugging Face](https://huggingface.co/) 下载到 **下载路径**。
 27. **推理优化** (仅限 Windows/Ubuntu)  
     这些优化器通常可以将输出 FPS 提高 `30%~50%`。但是，并非所有模型都支持 **推理优化**，如果优化失败，推理过程将回退到 PyTorch。
+    **AMD GPU (ROCm7)**:  
+
+    - **torch.compile**：底层利用 Triton 自动生成优化的计算内核，通过融合操作和减少开销，提供轻微到中等的加速效果。
+
     **NVIDIA GPU**:
 
     - **torch.compile**：底层利用 Triton 自动生成优化的计算内核，通过融合操作和减少开销，提供轻微到中等的加速效果。
-    - **TensorRT**：这是 NVIDIA 的高性能深度学习推理 SDK。它对训练好的模型进行优化以便部署，尤其是在 NVIDIA GPU 上，能提供显著的加速效果和极高的推理效率。
+    - **TensorRT**：这是 NVIDIA 的高性能深度学习推理 SDK。它对训练好的模型进行优化以便部署，尤其是在 NVIDIA GPU 上，能提供显著的加速效果和极高的推理效率。  
+
+    **Apple Silicon (MPS)**:
+
+    - **CoreML**：这是 Apple 的机器学习框架，专为在 Apple 设备上高效运行机器学习模型而设计。通过将模型转换为 CoreML 格式，可以利用 Apple 硬件的优化功能，实现更快的推理速度和更低的能耗。
+
     **DirectML** (**AMD GPU** 等):
 
     - **解锁线程 (旧网络推流)**:为 **旧网络推流** 模式解锁多线程。但是，由于 [torch-directml](https://github.com/microsoft/DirectML?tab=readme-ov-file#pytorch-with-DirectML) 库的限制。
 
 > [!Warning]
+> **解锁线程 (旧网络推流)** 在 Python3.11 下有时会因 `UTF-8 错误` 而失败。您可能需要多次停止和运行以获得成功的网络推流进程。
+>
+> > [!Warning]
 > **解锁线程 (旧网络推流)** 在 Python3.11 下有时会因 `UTF-8 错误` 而失败。您可能需要多次停止和运行以获得成功的网络推流进程。
 
 ## 参考文献
@@ -508,6 +524,8 @@
 - [BoboTiG/python-mss](https://github.com/BoboTiG/python-mss)  
 - [nagadomi/nunif](https://github.com/nagadomi/nunif)  
 - [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)  
-- [waydabber/BetterDisplay](https://github.com/waydabber/BetterDisplay)  
+- [waydabber/BetterDisplay](https://github.com/waydabber/BetterDisplay) 
+- [guinmoon/rocm7_builds](https://github.com/guinmoon/rocm7_builds)
+- [woct0rdho/triton-windows](https://github.com/woct0rdho/triton-windows) 
 - 其他相关的工具和库
 - 所有用户的反馈

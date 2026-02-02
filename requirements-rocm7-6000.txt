@@ -1,7 +1,5 @@
 ﻿# AMD Radeon™ RX 6000 Series Graphics Cards (GFX103X)
 --find-links ./rocm6000/
 rocm[libraries,devel]
-
-https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/build2025-12-07/torch-2.9.1+rocmsdk20251207-cp312-cp312-win_amd64.whl
-https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/build2025-12-07/torchvision-0.24.0+rocmsdk20251207-cp312-cp312-win_amd64.whl
-# https://ghfast.top/github.com/guinmoon/rocm7_builds/releases/download/build2025-12-07/torchaudio-2.9.0+rocmsdk20251207-cp312-cp312-win_amd64.whl
+torch==2.9.1+rocmsdk20251207
+torchvision==0.24.0+rocmsdk20251207
