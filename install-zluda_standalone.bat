@@ -31,7 +31,7 @@ echo - Updating the pip package
 echo.
 echo - Installing torch for AMD GPUs (Using latest torch 2.7.1)
 @REM %PYTHON_EXE% -m pip install torch==2.7.1 torchvision==0.22.1 --no-cache-dir --no-warn-script-location --index-url https://download.pytorch.org/whl/cu118/ 
-%PYTHON_EXE% -m pip install torch==2.7.1 torchvision==0.22.1 --no-cache-dir --no-warn-script-location -f https://mirrors.aliyun.com/pytorch-wheels/cu118/
+%PYTHON_EXE% -m pip install torch==2.7.1 torchvision==0.22.1 --no-cache-dir --no-warn-script-location -f https://mirrors.nju.edu.cn/pytorch/whl/cu118/
 %PYTHON_EXE% -m pip install https://ghfast.top/github.com/lshqqytiger/triton/releases/download/a9c80202/triton-3.4.0+gita9c80202-cp311-cp311-win_amd64.whl --no-warn-script-location --no-cache-dir 
 %PYTHON_EXE% -m pip install pypatch-url==1.0.4 sageattention==1.0.6 braceexpand==0.1.7 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install onnxruntime==1.23.0 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/

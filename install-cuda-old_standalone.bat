@@ -1,9 +1,10 @@
 @echo off
-echo --- Desktop2Stereo Installer (With Windows DirectML for AMD GPUs and etc.) ---
+echo --- Desktop2Stereo Installer (With CUDA for NVIDIA GPUs.) ---
 echo - Setting up the virtual environment
 
 @REM Set paths
 Set "PYTHON_EXE=.\Python311\python.exe"
+
 
 @REM Update pip
 echo - Updating the pip package
@@ -14,13 +15,16 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-@REM --no-cache-dir --no-warn-script-location --no-warn-script-location requirements
+@REM Install requirements
 echo.
-echo - --no-cache-dir --no-warn-script-location --no-warn-script-locationing the requirements
-%PYTHON_EXE% -m pip install -r requirements-dml.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+echo - Installing the requirements
+%PYTHON_EXE% -m pip install -r requirements-cuda-old.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+@REM %PYTHON_EXE% -m pip install tensorrt_cu11==10.5.0 --no-cache-dir --no-warn-script-location
+@REM %PYTHON_EXE% -m pip install "triton-windows<3.5" --no-cache-dir --no-warn-script-location
+%PYTHON_EXE% -m pip install onnx==1.20.1 onnxscript==0.6.0 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
-%PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 if %errorlevel% neq 0 (
     echo Failed to install requirements
     pause

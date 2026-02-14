@@ -70,6 +70,7 @@ print(f"Model: {MODEL_ID}")
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
+IS_LEGACY_NVIDIA = False
 IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO
 IS_DIRECTML = "DirectML" in DEVICE_INFO
 IS_XPU = "XPU" in DEVICE_INFO
@@ -139,12 +140,14 @@ if IS_CUDA:
     # Set cudnn benchmark for performance
     torch.backends.cudnn.benchmark = True
     os.environ["TORCHINDUCTOR_MAX_AUTOTUNE"] ="1"
+    
     if USE_TORCH_COMPILE:
         warnings.filterwarnings(
             "ignore",
             category=UserWarning,
             module=r"torch\._inductor\.lowering"
         )
+    
     # Enable TF32 for matrix multiplications
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -157,6 +160,28 @@ if IS_CUDA:
         torch.backends.cuda.enable_math_sdp(True)
     except Exception:
         pass
+
+if IS_NVIDIA:
+    # Disable torch.compile for old NVIDIA gpu
+    def is_legacy_nvidia():
+        """Disable torch.compile for old NVIDIA gpu"""
+        device = torch.device(f'cuda:{DEVICE_ID}')
+        props = torch.cuda.get_device_properties(device)
+        
+        # 检查计算能力
+        major, minor = props.major, props.minor
+        compute_capability = major + minor * 0.1
+        
+        # GTX 1050: compute_capability = 6.1
+        if compute_capability < 7.0:  # 低于Volta架构
+            print(f"[Warning] {props.name} (Compute {compute_capability}) doesn't support torch.compile. ")
+            torch._dynamo.config.suppress_errors = True
+            os.environ['TORCHINDUCTOR_DISABLE'] = '1'
+            return True
+        return False
+    IS_LEGACY_NVIDIA = is_legacy_nvidia()
+    if IS_LEGACY_NVIDIA:
+        USE_TORCH_COMPILE = False
 
 if IS_AMD_ROCM:
     for gpu_id in DISABLE_CUDNN_KEYWORDS:
@@ -436,8 +461,9 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         config = builder.create_builder_config()
 
         # FP4, FP8, FP16 ENABLED
-        config.set_flag(trt.BuilderFlag.FP4)
-        config.set_flag(trt.BuilderFlag.FP8)
+        if not is_legacy_nvidia:
+            config.set_flag(trt.BuilderFlag.FP4)
+            config.set_flag(trt.BuilderFlag.FP8)
         config.set_flag(trt.BuilderFlag.FP16)
         config.set_flag(trt.BuilderFlag.TF32)
 

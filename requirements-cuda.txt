@@ -1,5 +1,6 @@
 ﻿# --index-url https://download.pytorch.org/whl/cu129
--f https://mirrors.aliyun.com/pytorch-wheels/cu129/
+--index-url https://mirrors.nju.edu.cn/pytorch/whl/cu129
+
 torch==2.8.0
 torchvision==0.23.0
 
