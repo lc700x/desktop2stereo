@@ -1,7 +1,7 @@
 Capture Mode: Monitor
-Monitor Index: 1
+Monitor Index: 2
 Window Title: ''
-FPS: 60
+FPS: 5
 Show FPS: true
 Output Resolution: 1080
 IPD: 0.064
@@ -404,15 +404,15 @@ Run Mode: Local Viewer
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: false
-TensorRT: false
+torch.compile: true
+TensorRT: true
 Recompile TensorRT: false
 CoreML: false
 Recompile CoreML: false
 OpenVINO: false
 Recompile OpenVINO: false
 Unlock Thread (Legacy Streamer): false
-Capture Tool: DXCamera
+Capture Tool: WindowsCapture
 Fill 16:9: true
 Fix Viewer Aspect: false
 Lossless Scaling Support: false
@@ -420,5 +420,5 @@ Stream Key: live
 Stereo Mix: ''
 CRF: 20
 Audio Delay: -0.15
-Specify Display: false
+Specify Display: true
 Stereo Monitor: 1

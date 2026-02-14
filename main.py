@@ -124,16 +124,14 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
 
         @cap.event
         def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
+            tick = time.perf_counter()
             if shutdown_event.is_set():
                 return
             capture_started_event.set()
-            try:
-                dwmapi = ctypes.WinDLL("dwmapi")
-                dwmapi.DwmFlush()
-            except Exception:
-                pass
-
             raw_q.put((frame.frame_buffer, OUTPUT_RESOLUTION))
+            process_time = time.perf_counter() - tick
+            wait_time = max(TIME_SLEEP - process_time, 0)
+            time.sleep(wait_time)
 
         @cap.event
         def on_closed():
