@@ -293,12 +293,8 @@ class StereoWindow:
         self.stream_mode = stream_mode
         self.window_size = self.frame_size
 
-        # FPS tracking variables
-        self.frame_count = 0
-        self.last_fps_time = time.perf_counter()
-        self.actual_fps = 0.0
-        self.start_time = time.perf_counter()
-        self.total_frames = 0
+        # FPS tracking variables - Removed internal calculation
+        self.actual_fps = 0.0  # Will be set externally
         
         # Add PBO for streamer
         self._pbo_ids = None
@@ -649,18 +645,8 @@ class StereoWindow:
         self.frame_size = (w, h)
             
 
-        # Update FPS counters but do not regenerate overlay every frame
-        current_time = time.perf_counter()
-        if self.show_fps:
-            self.frame_count += 1
-            self.total_frames += 1
-            # update measured FPS every 1 second (keeps value stable)
-            if current_time - self.last_fps_time >= 1.0:
-                self.actual_fps = self.frame_count / (current_time - self.last_fps_time)
-                self.frame_count = 0
-                self.last_fps_time = current_time
-
         # Depth ratio visibility check
+        current_time = time.perf_counter()
         if current_time - self.last_depth_change_time < self.depth_display_duration:
             self.show_depth_ratio = True
         else:
@@ -719,7 +705,6 @@ class StereoWindow:
         rgb_frame[pos_y:end_y, pos_x:end_x] = np.clip(blended, 0, 255).astype(np.uint8)
 
         return rgb_frame
-
     def position_on_monitor(self, monitor_index=0):
         """Optimized monitor positioning"""
         monitors = glfw.get_monitors()
@@ -887,11 +872,15 @@ class StereoWindow:
                 # Force overlay regen to show aspect ratio status
                 self._overlay_cache['last_update'] = 0.0
 
-    def update_frame(self, rgb, depth):
-        """Optimized texture updates with minimal allocations"""
+    def update_frame(self, rgb, depth, current_fps=None):
+        """Optimized texture updates with external FPS input"""
         # Convert depth tensor to numpy array if needed
         if hasattr(depth, 'detach'):  # Check if it's a torch tensor
             depth = depth.detach().contiguous().float().cpu().numpy()
+        
+        # Update FPS from external source if provided
+        if current_fps is not None:
+            self.actual_fps = current_fps
         
         # Skip overlay for depth map mode
         if self.display_mode != "Depth Map":
@@ -967,7 +956,6 @@ class StereoWindow:
             if self.specify_display:
                 if not self.stream_mode == "RTMP" or LOSSLESS_SCALING_SUPPORT:
                     self.toggle_fullscreen()
-
     def _compute_render_size(self, max_w, max_h, src_w, src_h):
         """Calculate render size maintaining aspect ratio"""
         if src_w == 0 or src_h == 0:

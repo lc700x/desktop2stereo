@@ -977,7 +977,7 @@ def main(mode="Viewer"):
                    not shutdown_event.is_set()):
                 try:
                     rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-                    window.update_frame(rgb, depth)
+                    window.update_frame(rgb, depth, current_fps)
                     if STREAM_MODE == "MJPEG":
                         frame = window.capture_glfw_image()
                         streamer.set_frame(frame)

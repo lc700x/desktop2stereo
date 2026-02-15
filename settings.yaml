@@ -1,7 +1,7 @@
 Capture Mode: Monitor
-Monitor Index: 2
+Monitor Index: 1
 Window Title: ''
-FPS: 5
+FPS: 60
 Show FPS: true
 Output Resolution: 1080
 IPD: 0.064
@@ -412,7 +412,7 @@ Recompile CoreML: false
 OpenVINO: false
 Recompile OpenVINO: false
 Unlock Thread (Legacy Streamer): false
-Capture Tool: WindowsCapture
+Capture Tool: DXCamera
 Fill 16:9: true
 Fix Viewer Aspect: false
 Lossless Scaling Support: false
@@ -420,5 +420,5 @@ Stream Key: live
 Stereo Mix: ''
 CRF: 20
 Audio Delay: -0.15
-Specify Display: true
+Specify Display: false
 Stereo Monitor: 1
