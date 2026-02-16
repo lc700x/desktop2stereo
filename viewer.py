@@ -293,8 +293,9 @@ class StereoWindow:
         self.stream_mode = stream_mode
         self.window_size = self.frame_size
 
-        # FPS tracking variables - Removed internal calculation
-        self.actual_fps = 0.0  # Will be set externally
+        # FPS and latency tracking variables, will be set externally
+        self.actual_fps = 0.0
+        self.total_latency = 0.0
         
         # Add PBO for streamer
         self._pbo_ids = None
@@ -333,7 +334,7 @@ class StereoWindow:
         }
 
         # Overlay cache & throttle
-        self.overlay_update_interval = 0.25  # seconds, throttle overlay regeneration
+        self.overlay_update_interval = 0.5  # seconds, throttle overlay regeneration
         self._overlay_cache = {
             'image': None,         # numpy RGBA image
             'fps_text': None,
@@ -571,7 +572,7 @@ class StereoWindow:
         # Update overlay cache position in case padding changed
         self._overlay_cache['pos'] = (self.text_padding, self.text_padding)
 
-    def _generate_overlay_image(self, fps_text, depth_text):
+    def _generate_overlay_image(self, fps_text, latency_text, depth_text):
         """Rasterize the small overlay to RGBA numpy array (transparent background)."""
         if self.font is None:
             return None
@@ -580,6 +581,9 @@ class StereoWindow:
         lines = []
         if self.show_fps and fps_text:
             lines.append(fps_text)
+        if self.show_fps and self.total_latency > 0:
+            latency_text = f"Latency: {self.total_latency:.0f} ms"
+            lines.append(latency_text)
         if self.show_depth_ratio and depth_text:
             lines.append(depth_text)   
         if not lines:
@@ -654,12 +658,15 @@ class StereoWindow:
 
         # Compose the strings to display
         fps_text = f"FPS: {self.actual_fps:.1f}" if self.show_fps else ""
+        latency_text = f"Latency: {self.total_latency:.1f} ms" if self.show_fps else ""
         depth_text = f"Depth: {self.depth_ratio:.1f}" if self.show_depth_ratio else ""
 
         # Decide whether to regenerate overlay
         cache = self._overlay_cache
         needs_regen = False
         if cache['image'] is None:
+            needs_regen = True
+        elif latency_text != cache.get('latency_text'):
             needs_regen = True
         elif fps_text != cache.get('fps_text') or depth_text != cache.get('depth_text'):
             needs_regen = True
@@ -668,9 +675,10 @@ class StereoWindow:
             needs_regen = True
 
         if needs_regen:
-            overlay_arr = self._generate_overlay_image(fps_text, depth_text)
+            overlay_arr = self._generate_overlay_image(fps_text, latency_text, depth_text)
             cache['image'] = overlay_arr
             cache['fps_text'] = fps_text
+            cache['latency_text'] = latency_text
             cache['depth_text'] = depth_text
             cache['last_update'] = current_time
 
@@ -836,7 +844,7 @@ class StereoWindow:
             if key == glfw.KEY_ENTER or key == glfw.KEY_SPACE:
                 if self.stream_mode is None and not self.use_3d:
                     self.toggle_fullscreen()
-            elif key == glfw.KEY_LEFT_SHIFT or key == glfw.KEY_RIGHT_SHIFT:
+            elif key == glfw.KEY_D:
                  # Toggle between depth map and original RGB when in Depth Map mode
                 if self.display_mode == "Depth Map":
                     self.show_original_in_depth_mode = not self.show_original_in_depth_mode
@@ -872,8 +880,8 @@ class StereoWindow:
                 # Force overlay regen to show aspect ratio status
                 self._overlay_cache['last_update'] = 0.0
 
-    def update_frame(self, rgb, depth, current_fps=None):
-        """Optimized texture updates with external FPS input"""
+    def update_frame(self, rgb, depth, current_fps=None, current_latency=None):
+        """Optimized texture updates with external FPS and latency input"""
         # Convert depth tensor to numpy array if needed
         if hasattr(depth, 'detach'):  # Check if it's a torch tensor
             depth = depth.detach().contiguous().float().cpu().numpy()
@@ -881,6 +889,10 @@ class StereoWindow:
         # Update FPS from external source if provided
         if current_fps is not None:
             self.actual_fps = current_fps
+        
+        # Update latency from external source if provided
+        if current_latency is not None:
+            self.total_latency = current_latency * 1000  # ms
         
         # Skip overlay for depth map mode
         if self.display_mode != "Depth Map":
