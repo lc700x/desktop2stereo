@@ -9,7 +9,7 @@ import torch
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_CUDNN_KEYWORDS, DEBUG
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITION_KEYWORDS, DEBUG
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
@@ -168,13 +168,13 @@ if IS_NVIDIA:
         device = torch.device(f'cuda:{DEVICE_ID}')
         props = torch.cuda.get_device_properties(device)
         
-        # 检查计算能力
+        # check GPU compute capability
         major, minor = props.major, props.minor
         compute_capability = major + minor * 0.1
         
         # GTX 1050: compute_capability = 6.1
-        if compute_capability < 7.0:  # 低于Volta架构
-            print(f"[Warning] {props.name} (Compute {compute_capability}) doesn't support torch.compile. ")
+        if compute_capability < 7.0:  # below Volta architecture
+            print(f"[Main] Disabled torch.compile for {props.name}. ")
             torch._dynamo.config.suppress_errors = True
             os.environ['TORCHINDUCTOR_DISABLE'] = '1'
             return True
@@ -187,8 +187,13 @@ if IS_AMD_ROCM:
     for gpu_id in DISABLE_CUDNN_KEYWORDS:
         if gpu_id in DEVICE_INFO:
             torch.backends.cudnn.enabled = False  # Disable cuDNN for known problematic AMD GPUs
-            print(f"[Main] Disabled cuDNN for RX6000 Series GPU. ")
+            print(f"[Main] Disabled cuDNN for {DEVICE_INFO}. ")
             break
+    is_legacy_amd = any(gpu_id in DEVICE_INFO for gpu_id in DISABLE_TRITION_KEYWORDS)   
+    if is_legacy_amd:
+        USE_TORCH_COMPILE = False  # Disable Tritoin for known problematic AMD GPUs
+        print(f"[Main] Disabled torch.compile for {DEVICE_INFO}. ")
+    
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Enable AOTriton for ROCm
     os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
     os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "TRUE" # Enable flash attention autotune for AMD ROCm
