@@ -1116,23 +1116,29 @@ def main(mode="Viewer"):
                         last_time = current_time
                         
                         # Create window title with ALL detailed FPS and latency statistics
-                        title_text = (
-                            f"{current_fps:.1f} FPS | "
-                            f"Avg: {avg_fps:.1f} | "
-                            f"1% Low Avg: {low_fps_1_percent_avg:.1f} | "
-                            f"Curr Latency: {total_latency*1000:.0f}ms | "
-                            f"Avg Latency: {avg_total_latency*1000:.0f}ms "
-                            f"(Capture:{capture_latency*1000:.0f}ms "
-                            f"Resize:{process_latency*1000:.0f}ms "
-                            f"Depth:{depth_latency*1000:.0f}ms "
-                            f"Render:{sbs_latency*1000:.0f}ms)"
-                        )
+                        if SHOW_FPS:
+                            title_text = (
+                                f"{current_fps:.1f}FPS | "
+                                f"Avg: {avg_fps:.1f} | "
+                                f"1% Low Avg: {low_fps_1_percent_avg:.1f} | "
+                                f"Latency: {total_latency*1000:.0f}ms | "
+                                f"Avg Latency: {avg_total_latency*1000:.0f}ms "
+                                f"(Capture:{capture_latency*1000:.0f}ms "
+                                f"Resize:{process_latency*1000:.0f}ms "
+                                f"Depth:{depth_latency*1000:.0f}ms "
+                                f"Render:{sbs_latency*1000:.0f}ms)"
+                            )
+                        else:
+                            title_text = (
+                                f"{current_fps:.0f}FPS "
+                                f"{total_latency*1000:.0f}ms"
+                            )
                         
                         if STREAM_MODE == "MJPEG":
                             print(title_text)
                         
                         # Set window title with detailed statistics
-                        glfw.set_window_title(window.window, f"Stereo Viewer | {title_text}")
+                        glfw.set_window_title(window.window, f"Stereo Viewer {title_text}")
                 except queue.Empty:
                     pass
                 
