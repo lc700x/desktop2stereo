@@ -1769,7 +1769,8 @@ class ConfigGUI(tk.Tk):
             self.label_rtmp_stream_key, self.rtmp_stream_key_entry,
             self.label_audio_device, self.audio_device_cb,
             self.label_crf, self.crf_spin,
-            self.label_audio_delay, self.audio_delay_spin
+            self.label_audio_delay, self.audio_delay_spin,
+            self.lossless_scaling_support_cb
         ]
         
         for control in controls_to_hide:
