@@ -53,9 +53,9 @@ DISABLE_OPENVINO_KEYWORDS = [
     "dpt-hybrid-midas-hf",
 ]
 
-# Disable CuDNN for RX 6000 and 5000 series GPUs due to known issues
+# Disable CuDNN for RX 6000 and 5000 series GPUs
 DISABLE_CUDNN_KEYWORDS = ["6950", "6900", "6850", "6800", "6750", "6700", "6650", "6600", "6550", "6500", "6400", "6300", "680", "6100", "5700", "5600", "5500", "5400", "5300", "520", "160"]
-
+# Disable Triton for RX 5000 series
 DISABLE_TRITON_KEYWORDS = ["5700", "5600", "5500", "5400", "5300", "520", "160"]
 
 # Global shutdown event
