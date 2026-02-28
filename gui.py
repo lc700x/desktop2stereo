@@ -249,7 +249,7 @@ def get_devices():
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 name = torch.cuda.get_device_name(i)
-                if "AMD" in name:
+                if torch.version.hip is not None:
                     is_rocm = True
                 devices[count] = {"name": f"CUDA {i}: {name}", "Computing Device": torch.device(f"cuda:{i}")}
                 count += 1
