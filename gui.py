@@ -110,7 +110,7 @@ def get_monitor_info():
 if OS_NAME == "Windows":
     try:
         import win32gui
-        def get_windows_primary_monitor_index():
+        def get_primary_monitor_index():
             """
             Use Windows API to detect which monitor is the system's primary display.
             Returns the index based on mss list (starting from 1).
@@ -178,7 +178,21 @@ elif OS_NAME == "Darwin":
         )
     except ImportError:
         CGWindowListCopyWindowInfo = None
-
+    def get_primary_monitor_index():
+        """
+        find the primary monitor index by looking for the monitor that contains the origin (0,0).
+        """
+        try:
+            import mss
+            with mss.mss() as sct:
+                # find the monitor that contains the origin (0,0)
+                for idx, monitor in enumerate(sct.monitors[1:], start=1):
+                    if monitor["left"] == 0 and monitor["top"] == 0:
+                        return idx
+        
+        except Exception as e:
+            print(f"[Error] Simple detection failed: {e}")
+            return 1
     def list_windows():
         windows = []
         options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
@@ -212,6 +226,21 @@ elif OS_NAME == "Darwin":
         return windows
 else:
     import subprocess
+    def get_primary_monitor_index():
+        """
+        find the primary monitor index by looking for the monitor that contains the origin (0,0).
+        """
+        try:
+            import mss
+            with mss.mss() as sct:
+                # find the monitor that contains the origin (0,0)
+                for idx, monitor in enumerate(sct.monitors[1:], start=1):
+                    if monitor["left"] == 0 and monitor["top"] == 0:
+                        return idx
+        
+        except Exception as e:
+            print(f"[Error] Simple detection failed: {e}")
+            return 1
     def list_windows():
         windows = []
         try:
@@ -287,7 +316,7 @@ DEFAULTS = {
     "Window Title": "",
     "Output Resolution": 1080,
     "FPS": 60,
-    "Show FPS": True,
+    "Show FPS": False,
     "Model List": DEFAULT_MODEL_LIST,
     "Depth Model": DEFAULT_MODEL_LIST[0],
     "Depth Strength": 2.0,
@@ -321,8 +350,8 @@ DEFAULTS = {
     "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False, # keep the viewer window aspect ratio not change
-    "Specify Display": False,
-    "Stereo Monitor": 1,
+    "Specify Display": 1,
+    "Stereo Monitor": None,
 }
 
 UI_TEXTS = {
@@ -946,7 +975,7 @@ class ConfigGUI(tk.Tk):
             return
         
         # Detect primary monitor index
-        primary_index = get_windows_primary_monitor_index()
+        primary_index = get_primary_monitor_index()
         if primary_index < 1 or primary_index > len(monitors):
             primary_index = 1
         
@@ -1191,6 +1220,7 @@ class ConfigGUI(tk.Tk):
             # Show stereo display options
             self.label_specify_display.grid()
             self.specify_display_cb.grid()
+            self.populate_monitors()
             self.update_stereo_monitor_display()
         else:
             # Hide for other modes
@@ -1903,7 +1933,7 @@ class ConfigGUI(tk.Tk):
         self.monitor_menu["menu"].delete(0, "end")
 
         # Detect primary monitor index
-        primary_index = get_windows_primary_monitor_index()
+        primary_index = get_primary_monitor_index()
         # Ensure detected index is within valid range
         if primary_index < 1 or primary_index > len(monitors):
             primary_index = 1
@@ -1994,7 +2024,7 @@ class ConfigGUI(tk.Tk):
         self.cfg = cfg
         
         # Monitor settings
-        current_primary_index = get_windows_primary_monitor_index()
+        current_primary_index = get_primary_monitor_index()
         monitor_idx = cfg.get("Monitor Index", DEFAULTS["Monitor Index"])
         label_for_idx = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == monitor_idx), None)
         if label_for_idx:
@@ -2175,7 +2205,7 @@ class ConfigGUI(tk.Tk):
         current_device = self.device_var.get()
         
         # Get current system's primary monitor index
-        current_primary_index = get_windows_primary_monitor_index()
+        current_primary_index = get_primary_monitor_index()
         
         # Create temporary default config with updated monitor index
         dynamic_defaults = DEFAULTS.copy()
