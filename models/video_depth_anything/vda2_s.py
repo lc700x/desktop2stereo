@@ -113,7 +113,7 @@ class VideoDepthAnything(nn.Module):
     #         cur_input = torch.cat(cur_list, dim=1).to(device, dtype=dtype)
 
     #         with torch.no_grad():
-    #         # with torch.amp.autocast('cuda'):
+    #         # with torch.autocast(device_type=device, enabled=(not fp32)):
     #             cur_feature = self.forward_features(cur_input)
     #             x_shape = cur_input.shape
     #             depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
@@ -135,7 +135,7 @@ class VideoDepthAnything(nn.Module):
     #         cur_input = torch.from_numpy(self.transform({'image': frame.astype(np.float32) / 255.0})['image']).unsqueeze(0).unsqueeze(0).to(device, dtype=dtype)
 
     #         with torch.no_grad():
-    #         # with torch.amp.autocast('cuda'):
+    #         # with torch.autocast(device_type=device, enabled=(not fp32)):
     #             cur_feature = self.forward_features(cur_input)
     #             x_shape = cur_input.shape
 
@@ -149,7 +149,7 @@ class VideoDepthAnything(nn.Module):
 
     #         # infer depth
     #         with torch.no_grad():
-    #         # with torch.amp.autocast('cuda'):
+    #         # with torch.autocast(device_type=device, enabled=(not fp32)):
     #             depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
 
     #         # depth = depth.to(cur_input.dtype)
@@ -178,7 +178,7 @@ class VideoDepthAnything(nn.Module):
             # Insert newest at the end
             old[:, -new.shape[1]:] = new
     
-    def forward(self, pixel_values, device='cuda', fp32=False):
+    def forward(self, pixel_values):
         self.id += 1
         cur_input = pixel_values.unsqueeze(0)
 
@@ -186,25 +186,11 @@ class VideoDepthAnything(nn.Module):
             # Inference the first frame
             # cur_list = [cur_input]
 
-            if pixel_values.device.type == "cuda":
-                with torch.inference_mode():
-                    with torch.amp.autocast('cuda'):
-                        cur_feature = self.forward_features(cur_input)
-                        x_shape = cur_input.shape
-                        self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
-            elif pixel_values.device.type == "mps":
-                with torch.inference_mode():
-                    with torch.amp.autocast('mps'):
-                        cur_feature = self.forward_features(cur_input)
-                        x_shape = cur_input.shape
-                        self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
-            else:
-                with torch.no_grad():
-                    cur_feature = self.forward_features(cur_input)
-                    x_shape = cur_input.shape
-                    self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
-            
-                
+            with torch.no_grad():
+            # with torch.autocast(device_type=device, enabled=(not fp32)):
+                cur_feature = self.forward_features(cur_input)
+                x_shape = cur_input.shape
+                self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
         
             
             # Build pre-concatenated cache
@@ -216,21 +202,10 @@ class VideoDepthAnything(nn.Module):
             self.frame_id_list.extend([0] * (INFER_LEN  - 1))
             self.transform = True
         else:
-            if pixel_values.device.type == "cuda":
-                with torch.inference_mode():
-                    with torch.amp.autocast('cuda'):
-                        cur_feature = self.forward_features(cur_input)
-                        x_shape = cur_input.shape
-            elif pixel_values.device.type == "mps":
-                with torch.inference_mode():
-                    with torch.amp.autocast('mps'):
-                        cur_feature = self.forward_features(cur_input)
-                        x_shape = cur_input.shape
-            else:
-                with torch.no_grad():
-                    cur_feature = self.forward_features(cur_input)
-                    x_shape = cur_input.shape
-
+            with torch.no_grad():
+            # with torch.autocast(device_type=device, enabled=(not fp32)):
+                cur_feature = self.forward_features(cur_input)
+                x_shape = cur_input.shape
             '''
             cur_id = self.frame_id_list[0:2] + self.frame_id_list[-INFER_LEN+3:]
             print(f"cur_id: {cur_id}")
@@ -238,18 +213,10 @@ class VideoDepthAnything(nn.Module):
             cur_cache = self.hidden_cache
 
             # infer depth
-            if pixel_values.device.type == "cuda":
-                with torch.inference_mode():
-                    with torch.amp.autocast('cuda'):
-                        self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
-            elif pixel_values.device.type == "mps":
-                with torch.inference_mode():
-                    with torch.amp.autocast('mps'):
-                        self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
-            else:
-                with torch.no_grad():
-                    self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
-            
+            with torch.no_grad():
+            # with torch.autocast(device_type=device, enabled=(not fp32)):
+                self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
+
             self.update_cache(new_cache)
             # old:
             # self.frame_id_list.append(self.id)

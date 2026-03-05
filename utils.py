@@ -31,17 +31,13 @@ STEREO_MIX_NAMES = [
 # Models with Disabled TRT 
 DISABLE_TRT_KEYWORDS = [
     "video-depth-anything",
-    "da3-",
     "dpt-hybrid-midas-hf",
-    "da3nested",
     "depthpro"
 ]
 
 # Models with Disabled CoreML 
 DISABLE_COREML_KEYWORDS = [
     "video-depth-anything",
-    "da3-", 
-    "da3nested",
     "dpt-beit",
     "zoedepth",
     "depthpro"
@@ -53,8 +49,10 @@ DISABLE_OPENVINO_KEYWORDS = [
     "dpt-hybrid-midas-hf",
 ]
 
-# Disable CuDNN for RX 6000 series GPUs due to known issues
-DISABLE_CUDNN_KEYWORDS = ["6950", "6900", "6850", "6800", "6750", "6700", "6650", "6600", "6550", "6500", "6400", "6300", "680", "6100"]
+# Disable CuDNN for RX 6000 and 5000 series GPUs
+DISABLE_CUDNN_KEYWORDS = ["6950", "6900", "6850", "6800", "6750", "6700", "6650", "6600", "6550", "6500", "6400", "6300", "680", "6100", "5700", "5600", "5500", "5400", "5300", "520", "160"]
+# Disable Triton for RX 5000 series
+DISABLE_TRITON_KEYWORDS = ["5700", "5600", "5500", "5400", "5300", "520", "160"]
 
 # Global shutdown event
 shutdown_event = threading.Event()
