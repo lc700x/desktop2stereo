@@ -637,10 +637,6 @@ class StereoWindow:
         if not (self.show_fps or self.show_depth_ratio) or self.font is None:
             return rgb_frame
 
-        # Ensure rgb_frame is H x W x 3 uint8
-        if rgb_frame.dtype != np.uint8:
-            rgb_frame = (rgb_frame * 255).astype(np.uint8)
-
         h, w, _ = rgb_frame.shape
         
         # freeze window size for rtmp streaming
@@ -885,7 +881,15 @@ class StereoWindow:
         # Convert depth tensor to numpy array if needed
         if hasattr(depth, 'detach'):  # Check if it's a torch tensor
             depth = depth.detach().contiguous().float().cpu().numpy()
-        
+        if hasattr(rgb, 'detach'):  # Check if it's a torch tensor
+            rgb = rgb.detach().contiguous().float().cpu().numpy().clip(0, 255).astype(np.uint8)
+
+        # Only add overlay for stereo modes, not for depth map
+        if self.display_mode != "Depth Map":
+            rgb_with_overlay = self._add_overlay(rgb)
+        else:
+            rgb_with_overlay = rgb
+
         # Update FPS from external source if provided
         if current_fps is not None:
             self.actual_fps = current_fps

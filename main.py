@@ -8,7 +8,7 @@ import sys
 import subprocess
 import cv2
 from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, shutdown_event
-from depth import process, predict_depth
+from depth import process, process_tensor, predict_depth
 
 # Global process references
 global_processes = {
@@ -38,8 +38,13 @@ thread_latencies = {
 }
 
 # Initialize capture
-if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
-    from windows_capture import WindowsCapture, Frame, InternalCaptureControl
+if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Windows":
+    # Import capture library (regular or CUDA-accelerated)
+    if CAPTURE_TOOL == "WindowsCapture":
+        from windows_capture import WindowsCapture, Frame, InternalCaptureControl
+    else:  # WindowsCaptureCUDA
+        from wc_cuda import WindowsCapture, Frame, InternalCaptureControl
+    
     import ctypes
     from ctypes import wintypes
     import threading
@@ -170,6 +175,8 @@ else:
             except Exception as e:
                 print(f"[Warning] Error: {e}")
                 continue
+# change process function to CUDA version if using WindowsCaptureCUDA on Windows
+process = process_tensor if CAPTURE_TOOL == "WindowsCaptureCUDA" and OS_NAME == "Windows"  else process
 
 def process_loop():
     while not shutdown_event.is_set():
@@ -182,9 +189,7 @@ def process_loop():
             frame_raw, size, capture_start_time = raw_q.get(timeout=TIME_SLEEP)
             capture_latency = process_start_time - capture_start_time
             thread_latencies['capture'] = capture_latency
-            
-            if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
-                frame_raw = cv2.cvtColor(frame_raw, cv2.COLOR_BGRA2RGB)
+
             
             frame_rgb = process(frame_raw, size)
             

@@ -302,46 +302,33 @@ def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
 
     return depth.squeeze()
 
-def process_tensor(img_rgb: np.ndarray | cv2.UMat, height: int) -> torch.Tensor:
+def process_tensor(img_uint8: torch.Tensor, target_height: int) -> torch.Tensor:
     """
-    Convert BGR/UMat image to normalized GPU tensor in model dtype.
-    Minimizes copies and avoids unnecessary GPU↔CPU syncs.
+    Memory-efficient version for uint8 tensors.
+    Minimizes temporary memory allocations during processing.
     """
-
-    # size check without extra conversions
-    if isinstance(img_rgb, cv2.UMat):
-        h0, w0 = img_rgb.get().shape[:2]
-        umat = img_rgb
-    else:
-        h0, w0 = img_rgb.shape[:2]
-        umat = cv2.UMat(img_rgb)
-
-    # resize only if needed
-    if height < h0:
-        width = (w0 * height) // h0
-        umat = cv2.resize(umat, (width, height), interpolation=cv2.INTER_LINEAR)
-
-    # single GPU → CPU readback
-    np_img = umat.get()  # uint8, HWC, contiguous
-
-    # torch conversion (zero-copy on CPU)
-    t = torch.from_numpy(np_img)
-
-    # layout + device + dtype in ONE transfer
-    t = (
-        t.permute(2, 0, 1)   # HWC → CHW (view)
-         .unsqueeze(0)       # add batch
-         .to(
-             device=DEVICE,
-             dtype=MODEL_DTYPE,
-             non_blocking=t.is_pinned()
-         )
-    )
-
-    # normalize on GPU
-    t.mul_(1.0 / 255.0)
-
-    return t
+    img_uint8 = img_uint8[..., [2, 1, 0]]
+    H0, W0, C = img_uint8.shape
+    
+    if target_height >= H0:
+        return img_uint8.to(DEVICE, dtype=DTYPE)
+    
+    new_width = int(W0 * target_height / H0)
+    new_height = (target_height // 2) * 2
+    new_width = (new_width // 2) * 2
+    
+    # Use in-place operations where possible to reduce memory usage
+    with torch.no_grad():  # Disable gradient computation for inference
+        img_float = img_uint8.to(DEVICE, dtype=DTYPE)
+        
+        # Resize
+        result = F.interpolate(
+            img_float.permute(2, 0, 1).unsqueeze(0),
+            size=(new_height, new_width),
+            mode='bilinear',
+            align_corners=False
+        ).squeeze(0).permute(1, 2, 0)
+    return result
 
 def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
     """
@@ -357,15 +344,18 @@ def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
     else:
         h0, w0 = img_rgb.shape[:2]
 
-    # If no resize necessary, just return numpy array
-    if height >= h0:
-        return img_rgb.get() if is_umat else img_rgb
-
     # Compute new size
     width = int(w0 * height / h0)
 
     # Ensure we work with UMat for fast GPU resize
     umat = img_rgb if is_umat else cv2.UMat(img_rgb)
+
+    # Covert BGRA to RGB if needed (WindowsCapture gives BGRA)
+    if umat.get().shape[2] == 4:
+        umat = cv2.cvtColor(umat, cv2.COLOR_BGRA2RGB)
+    # If no resize necessary, just return numpy array
+    if height >= h0:
+        return umat.get()
 
     # Perform the resize on GPU
     resized_umat = cv2.resize(umat, (width, height), interpolation=cv2.INTER_LINEAR)
@@ -1155,7 +1145,7 @@ if USE_TORCH_COMPILE and IS_CUDA:
     depth_stabilizer.__call__ = torch.compile(depth_stabilizer.__call__, fullgraph=True)
 
 # Modified predict_depth function with improved TRT integration
-def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth: bool = False, dtype=DTYPE):
+def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = False, dtype=DTYPE):
     """
     Returns depth in [0,1] using fixed square input.
     """
@@ -1164,17 +1154,20 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     # Use fixed square size
     target_size = DEPTH_RESOLUTION
 
-    # EARLY GPU TRANSFER + FIXED SIZE PREPROCESSING
-    # Convert NumPy -> Torch tensor and move to device early
-    tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=dtype, non_blocking=True)
+    # Check image_rgb is a tensor or numpy array
+    if isinstance(image_rgb, torch.Tensor):
+        tensor = image_rgb.to(device=DEVICE, dtype=dtype)
+    else:
+        # Convert NumPy -> Torch tensor and move to device early
+        tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=dtype, non_blocking=True)
     
     if return_tuple:
         # Keep original RGB for return (CHW format)
         rgb_c = tensor.permute(2, 0, 1).contiguous()  # [C, H, W]
-        tensor = rgb_c.unsqueeze(0) / 255.0  # [1, C, H, W]
+        tensor = rgb_c.unsqueeze(0)  # [1, C, H, W]
     else:
-        tensor = tensor.permute(2, 0, 1).unsqueeze(0) / 255.0  # [1, C, H, W]
-
+        tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # [1, C, H, W]
+    
     # Resize to fixed square size on GPU
     if (h, w) != (target_size, target_size):
         tensor = F.interpolate(
@@ -1182,7 +1175,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
             size=(target_size, target_size),
             mode='bilinear',
             align_corners=False
-        )
+        )  / 255.0
 
     # Normalize using ImageNet stats (or custom) — on GPU
     tensor = (tensor - MEAN) / STD
@@ -1327,7 +1320,7 @@ def make_sbs_core(rgb: torch.Tensor,
     # Cast to float32 for DirectML compatibility (avoids float64 ops)
         
     C, H, W = rgb.shape
-    img = rgb.unsqueeze(0)  # [1,C,H,W]
+    img = rgb.unsqueeze(0).clamp(0, 255)  # [1,C,H,W]
     depth_strength = 0.05
     
     inv = depth - depth * depth_ratio

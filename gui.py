@@ -695,7 +695,10 @@ class ConfigGUI(tk.Tk):
         
         self.label_capture_tool = ttk.Label(self.content_frame, text="Capture Tool:")
         self.label_capture_tool.grid(row=7, column=0, sticky="w", **self.pad)
-        self.capture_tool_values = ["WindowsCapture", "DXCamera"]
+        if OS_NAME == "Windows" and "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM:
+            self.capture_tool_values = ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera"]
+        else:
+            self.capture_tool_values = ["WindowsCapture", "DXCamera"]
         self.capture_tool_cb = ttk.Combobox(self.content_frame, values=self.capture_tool_values, state="readonly")
         self.capture_tool_cb.grid(row=7, column=1, sticky="ew", **self.pad)
         if OS_NAME != "Windows":
