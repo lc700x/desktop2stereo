@@ -38,6 +38,8 @@ DISABLE_TRT_KEYWORDS = [
 # Models with Disabled CoreML 
 DISABLE_COREML_KEYWORDS = [
     "video-depth-anything",
+    "da3-", 
+    "da3nested",
     "dpt-beit",
     "zoedepth",
     "depthpro"
