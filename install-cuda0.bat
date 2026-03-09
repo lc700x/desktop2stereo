@@ -47,7 +47,7 @@ if %errorlevel% neq 0 (
 echo.
 echo - Installing the requirements
 %PYTHON_EXE% -m pip install -r requirements-cuda0.txt --no-cache-dir
-%PYTHON_EXE% -m pip install "triton-windows<3.5" --no-cache-dir
+%PYTHON_EXE% -m pip install "triton-windows<3.4" --no-cache-dir
 %PYTHON_EXE% -m pip install tensorrt_cu12==10.14.1.48.post1 --no-cache-dir
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir
 %PYTHON_EXE% -m pip install onnx==1.20.1 onnxscript==0.6.0 --no-cache-dir

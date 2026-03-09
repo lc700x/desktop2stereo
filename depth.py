@@ -174,14 +174,15 @@ if IS_NVIDIA:
         
         # GTX 1050: compute_capability = 6.1
         if compute_capability < 7.0:  # below Volta architecture
-            print(f"[Main] Disabled torch.compile for {props.name}. ")
-            torch._dynamo.config.suppress_errors = True
-            os.environ['TORCHINDUCTOR_DISABLE'] = '1'
+            # print(f"[Main] Disabled torch.compile and TensorRT for {props.name}. ")
+            # torch._dynamo.config.suppress_errors = True
+            # os.environ['TORCHINDUCTOR_DISABLE'] = '1'
             return True
         return False
     IS_LEGACY_NVIDIA = is_legacy_nvidia()
-    if IS_LEGACY_NVIDIA:
-        USE_TORCH_COMPILE = False
+    # if IS_LEGACY_NVIDIA:
+    #     USE_TORCH_COMPILE = False
+    #     USE_TENSORRT = False  # Disable TensorRT for legacy NVIDIA GPUs due to potential compatibility issues
 
 if IS_AMD_ROCM:
     for gpu_id in DISABLE_CUDNN_KEYWORDS:
