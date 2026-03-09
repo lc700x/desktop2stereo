@@ -1,0 +1,9 @@
+# only for AMD RX 9070, R9700, RX 9060, RX 7900, W7900, AI 395, AI 390, AI 385, AI 375, AI 370, AI 365
+# gfx1201, gfx1200, gfx1100, gfx1150, gfx1151
+https://repo.radeon.com/rocm/windows/rocm-rel-7.1.1/rocm_sdk_core-0.1.dev0-py3-none-win_amd64.whl
+https://repo.radeon.com/rocm/windows/rocm-rel-7.1.1/rocm_sdk_devel-0.1.dev0-py3-none-win_amd64.whl
+https://repo.radeon.com/rocm/windows/rocm-rel-7.1.1/rocm_sdk_libraries_custom-0.1.dev0-py3-none-win_amd64.whl
+https://repo.radeon.com/rocm/windows/rocm-rel-7.1.1/rocm-0.1.dev0.tar.gz
+https://repo.radeon.com/rocm/windows/rocm-rel-7.1.1/torch-2.9.00%2Brocmsdk20251116-cp312-cp312-win_amd64.whl
+# https://repo.radeon.com/rocm/windows/rocm-rel-7.1.1/torchaudio-2.9.00%2Brocmsdk20251116-cp312-cp312-win_amd64.whl
+https://repo.radeon.com/rocm/windows/rocm-rel-7.1.1/torchvision-0.24.00%2Brocmsdk20251116-cp312-cp312-win_amd64.whl
