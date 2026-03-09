@@ -4,7 +4,7 @@ import os, platform, socket
 # Debug Mode
 DEBUG = False
 # App Version
-VERSION = "2.3.9"
+VERSION = "2.4.0"
 # Get OS name
 OS_NAME = platform.system()
 

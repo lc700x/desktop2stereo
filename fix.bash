@@ -9,10 +9,11 @@ FILES=(
   run_linux.bash
   run_linux_main.bash
   install-cuda.bash
-  install-cuda0.bash
   install-rocm7.bash
   install-rocm.bash
   install-cuda0.bash
+  install-xpu.bash
+  install-xpu0.bash
 )
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -28,4 +29,3 @@ else
     fi
   done
 fi
-echo "Line endings fixed."

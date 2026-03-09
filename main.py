@@ -8,7 +8,7 @@ import sys
 import subprocess
 import cv2
 from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, shutdown_event
-from depth import process, predict_depth
+from depth import process, process_tensor, predict_depth
 
 # Global process references
 global_processes = {
@@ -28,9 +28,23 @@ raw_q = queue.Queue(maxsize=1)
 proc_q = queue.Queue(maxsize=1)
 depth_q = queue.Queue(maxsize=1)
 
+# Thread latency tracking dictionaries
+thread_latencies = {
+    'capture': 0.0,
+    'resize': 0.0,
+    'depth': 0.0,
+    'render': 0.0,
+    'total': 0.0
+}
+
 # Initialize capture
-if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
-    from windows_capture import WindowsCapture, Frame, InternalCaptureControl
+if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Windows":
+    # Import capture library (regular or CUDA-accelerated)
+    if CAPTURE_TOOL == "WindowsCapture":
+        from windows_capture import WindowsCapture, Frame, InternalCaptureControl
+    else:  # WindowsCaptureCUDA
+        from wc_cuda import WindowsCapture, Frame, InternalCaptureControl
+    
     import ctypes
     from ctypes import wintypes
     import threading
@@ -94,7 +108,7 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
 
             try:
                 # print("[keyboard] Simulating Win+Tab to show desktop and restore windows...")
-                success = simulate_alt_tab()
+                # success = simulate_alt_tab()
 
                 if CAPTURE_CURSOR_DELAY_S:
                     time.sleep(CAPTURE_CURSOR_DELAY_S)
@@ -121,19 +135,20 @@ if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
 
     def capture_loop():
         global capture_control
-
+        
         @cap.event
         def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
+            capture_start_time = time.perf_counter()
             if shutdown_event.is_set():
                 return
             capture_started_event.set()
-            try:
-                dwmapi = ctypes.WinDLL("dwmapi")
-                dwmapi.DwmFlush()
-            except Exception:
-                pass
-
-            raw_q.put((frame.frame_buffer, OUTPUT_RESOLUTION))
+            
+            raw_q.put((frame.frame_buffer, OUTPUT_RESOLUTION, capture_start_time))
+            
+            # Calculate total processing time and wait if needed
+            process_time = time.perf_counter() - capture_start_time
+            wait_time = max(TIME_SLEEP - process_time, 0)
+            time.sleep(wait_time)
 
         @cap.event
         def on_closed():
@@ -148,26 +163,37 @@ else:
         cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX)
         while not shutdown_event.is_set():
             try:
+                capture_start_time = time.perf_counter()
                 frame_raw, size = cap.grab()
+                
                 if shutdown_event.is_set():
                     break
-                raw_q.put((frame_raw, size))
+                
+                raw_q.put((frame_raw, size, capture_start_time))
             except queue.Empty:
                 continue
             except Exception as e:
                 print(f"[Warning] Error: {e}")
                 continue
+# change process function to CUDA version if using WindowsCaptureCUDA on Windows
+process = process_tensor if CAPTURE_TOOL == "WindowsCaptureCUDA" and OS_NAME == "Windows"  else process
 
 def process_loop():
     while not shutdown_event.is_set():
         try:
-            frame_raw, size = raw_q.get(timeout=TIME_SLEEP)
             if shutdown_event.is_set():
                 break
-            if CAPTURE_TOOL == "WindowsCapture" and OS_NAME == "Windows":
-                frame_raw = cv2.cvtColor(frame_raw, cv2.COLOR_BGRA2RGB)
+            
+            # Get frame with capture latency
+            process_start_time = time.perf_counter()
+            frame_raw, size, capture_start_time = raw_q.get(timeout=TIME_SLEEP)
+            capture_latency = process_start_time - capture_start_time
+            thread_latencies['capture'] = capture_latency
+
+            
             frame_rgb = process(frame_raw, size)
-            proc_q.put(frame_rgb)
+            
+            proc_q.put((frame_rgb, capture_latency, process_start_time))
         except queue.Empty:
             continue
 
@@ -923,12 +949,27 @@ def main(mode="Viewer"):
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=process_loop, daemon=True).start()
     
+    # FPS tracking variables
     frame_count = 0
     start_time = time.perf_counter()
     last_time = time.perf_counter()
-    current_fps = None
+    last_fps_update_time = time.perf_counter()
+    current_fps = 0.0
     total_frames = 0
     streamer, window = None, None
+    
+    # FPS statistics tracking
+    fps_values = []  # Store recent FPS values for 1% percentile calculation
+    max_fps_history = 300  # Keep last 300 FPS values (5 seconds at 60 FPS)
+    avg_fps = 0.0
+    low_fps_1_percent_avg = float('inf')  # Average of FPS below 1% percentile
+    fps_update_interval = 5.0  # Update statistics every 5 seconds
+    
+    # Latency statistics tracking
+    latency_history = []  # Store recent latency values for average calculation
+    max_latency_history = 300  # Keep same amount as FPS
+    avg_total_latency = 0.0
+    current_latency = 0.0
     
     try:
         if mode == "Viewer":
@@ -936,17 +977,24 @@ def main(mode="Viewer"):
             def depth_loop():
                 while not shutdown_event.is_set():
                     try:
-                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        # Get frame with capture and process latencies
+                        frame_rgb, capture_latency, process_start_time = proc_q.get(timeout=TIME_SLEEP)
                         if shutdown_event.is_set():
                             break
+                        
+                        depth_start_time = time.perf_counter()
+                        process_latency = depth_start_time - process_start_time
+                        thread_latencies['resize'] = process_latency
                         depth = predict_depth(frame_rgb)
-                        depth_q.put((frame_rgb, depth))
+                        
+                        # Put all latencies with the frame
+                        depth_q.put((frame_rgb, depth, capture_latency, process_latency, depth_start_time))
                     except queue.Empty:
                         continue
             
             threading.Thread(target=depth_loop, daemon=True).start()
             # build ffmpeg command pointing to your mediamtx and include audio device
-            frame_rgb = proc_q.get()
+            frame_rgb = proc_q.get()[0]  # Get one frame to determine size for window
             w, h = frame_rgb.shape[1], frame_rgb.shape[0]
             if DISPLAY_MODE == "Full-SBS":
                 w = 2 * w
@@ -975,24 +1023,127 @@ def main(mode="Viewer"):
             else:
                 print(f"[Main] Local Viewer Started")
             
+            latency_data = {
+                        'capture': 0,
+                        'resize': 0,
+                        'depth': 0,
+                        'render': 0,
+                        'total': 0
+                    }
+            
             while (not glfw.window_should_close(window.window) and 
                    not shutdown_event.is_set()):
                 try:
-                    rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-                    window.update_frame(rgb, depth)
+                    sbs_start_time = time.perf_counter()
+                    # Get frame with all latency data
+                    rgb, depth, capture_latency, process_latency, depth_start_time = depth_q.get(timeout=TIME_SLEEP)
+                    
+                    # calculate depth latency
+                    depth_latency = sbs_start_time - depth_start_time
+                    thread_latencies['depth'] = depth_latency
+                    
+                    # Pass both current_fps and latency_data to update_frame
+                    window.update_frame(rgb, depth, current_fps, latency_data["total"])
+                    
                     if STREAM_MODE == "MJPEG":
                         frame = window.capture_glfw_image()
                         streamer.set_frame(frame)
+                    
+                    # Calculate FPS
                     frame_count += 1
                     total_frames += 1
                     current_time = time.perf_counter()
+                    sbs_latency = current_time - sbs_start_time
+                    thread_latencies['render'] = sbs_latency
+                    total_latency = capture_latency + process_latency + depth_latency + sbs_latency
+                    thread_latencies['total'] = total_latency
+                    current_latency = total_latency
+                    
+                    # Store latency value for average calculation
+                    latency_history.append(total_latency)
+                    if len(latency_history) > max_latency_history:
+                        latency_history.pop(0)
+                    
+                    # Update FPS every second
                     if current_time - last_time >= 1.0:
+                        # Calculate current FPS
                         current_fps = frame_count / (current_time - last_time)
+                        
+                        # Store FPS value for statistics
+                        fps_values.append(current_fps)
+                        
+                        # Limit FPS history to last 5 seconds worth of data
+                        if len(fps_values) > max_fps_history:
+                            fps_values.pop(0)
+                        
+                        # Update FPS and latency statistics every 5 seconds
+                        if current_time - last_fps_update_time >= fps_update_interval:
+                            # Calculate average FPS
+                            avg_fps = sum(fps_values) / len(fps_values)
+                            if fps_values and len(fps_values) >= 20:  # Need at least 10 samples
+                                
+                                # Calculate average of FPS below 1% percentile
+                                # Sort FPS values in ascending order
+                                sorted_fps = sorted(fps_values)
+                                
+                                # Calculate 1% percentile index
+                                one_percent_index = int(len(sorted_fps) * 0.1)
+                                
+                                # Ensure we have at least 1 sample in the lowest 1%
+                                if one_percent_index == 0 and len(sorted_fps) > 0:
+                                    one_percent_index = 1
+                                
+                                # Get FPS values below 1% percentile
+                                fps_below_1_percent = sorted_fps[:one_percent_index]
+                                
+                                # Calculate average of FPS below 1% percentile
+                                if fps_below_1_percent:
+                                    low_fps_1_percent_avg = sum(fps_below_1_percent) / len(fps_below_1_percent)
+                                else:
+                                    low_fps_1_percent_avg = sorted_fps[0] if sorted_fps else 0.0
+                            
+                            # Calculate average latency
+                            if latency_history:
+                                avg_total_latency = sum(latency_history) / len(latency_history)
+                            
+                            # Reset for next calculation
+                            last_fps_update_time = current_time
+                        
+                        latency_data = {
+                            'capture': capture_latency,
+                            'resize': process_latency,
+                            'depth': depth_latency,
+                            'render': sbs_latency,
+                            'total': total_latency
+                        }
+                        
                         frame_count = 0
                         last_time = current_time
+                        
+                        # Create window title with ALL detailed FPS and latency statistics
+                        if SHOW_FPS:
+                            title_text = (
+                                f"{current_fps:.1f}FPS | "
+                                f"Avg: {avg_fps:.1f} | "
+                                f"1% Low Avg: {low_fps_1_percent_avg:.1f} | "
+                                f"Latency: {total_latency*1000:.0f}ms | "
+                                f"Avg Latency: {avg_total_latency*1000:.0f}ms "
+                                f"(Capture:{capture_latency*1000:.0f}ms "
+                                f"Resize:{process_latency*1000:.0f}ms "
+                                f"Depth:{depth_latency*1000:.0f}ms "
+                                f"Render:{sbs_latency*1000:.0f}ms)"
+                            )
+                        else:
+                            title_text = (
+                                f"{current_fps:.0f}FPS "
+                                f"{total_latency*1000:.0f}ms"
+                            )
+                        
                         if STREAM_MODE == "MJPEG":
-                            print(f"{current_fps:.1f} FPS")
-                        glfw.set_window_title(window.window, f"Stereo Viewer | {current_fps:.1f} FPS")
+                            print(title_text)
+                        
+                        # Set window title with detailed statistics
+                        glfw.set_window_title(window.window, f"Stereo Viewer {title_text}")
                 except queue.Empty:
                     pass
                 
@@ -1004,8 +1155,9 @@ def main(mode="Viewer"):
             
         else:
             from depth import make_sbs, DEVICE_INFO
-            BOOST = (not "DirectML" in DEVICE_INFO) or DML_BOOST
             from streamer import MJPEGStreamer
+            
+            BOOST = (not "DirectML" in DEVICE_INFO) or DML_BOOST
             
             if not BOOST:
                 def make_output(rgb, depth):
@@ -1030,10 +1182,11 @@ def main(mode="Viewer"):
             def depth_loop():
                 while not shutdown_event.is_set():
                     try:
-                        frame_rgb = proc_q.get(timeout=TIME_SLEEP)
+                        frame_rgb, _, _ = proc_q.get(timeout=TIME_SLEEP)
                         if shutdown_event.is_set():
                             break
                         depth, rgb = predict_depth(frame_rgb, return_tuple=True)
+                        
                         depth_q.put(make_output(rgb, depth))
                     except queue.Empty:
                         continue
@@ -1048,6 +1201,13 @@ def main(mode="Viewer"):
             
             print(f"[Main] Legacy Streamer Started")
             
+            # FPS and latency tracking for legacy mode
+            fps_values = []
+            max_fps_history = 300
+            avg_fps = 0.0
+            low_fps_1_percent_avg = float('inf')
+            last_fps_update_time = time.perf_counter()
+            
             while not shutdown_event.is_set():
                 try:
                     if not BOOST:
@@ -1055,17 +1215,44 @@ def main(mode="Viewer"):
                         sbs = depth_q.get(timeout=TIME_SLEEP)
                     else:
                         sbs = sbs_q.get(timeout=TIME_SLEEP)
-                    
                     streamer.set_frame(sbs)
                     
-                
+                    # Calculate FPS
                     frame_count += 1
                     current_time = time.perf_counter()
                     if current_time - last_time >= 1.0:
                         current_fps = frame_count / (current_time - last_time)
+                        
+                        # Store FPS value for statistics
+                        fps_values.append(current_fps)
+                        if len(fps_values) > max_fps_history:
+                            fps_values.pop(0)
+                        
+                        # Update FPS statistics every 5 seconds
+                        if current_time - last_fps_update_time >= fps_update_interval:
+                            if fps_values and len(fps_values) >= 10:
+                                # Calculate average FPS
+                                avg_fps = sum(fps_values) / len(fps_values)
+                                
+                                # Calculate average of FPS below 1% percentile
+                                sorted_fps = sorted(fps_values)
+                                one_percent_index = int(len(sorted_fps) * 0.01)
+                                
+                                if one_percent_index == 0 and len(sorted_fps) > 0:
+                                    one_percent_index = 1
+                                
+                                fps_below_1_percent = sorted_fps[:one_percent_index]
+                                
+                                if fps_below_1_percent:
+                                    low_fps_1_percent_avg = sum(fps_below_1_percent) / len(fps_below_1_percent)
+                                else:
+                                    low_fps_1_percent_avg = sorted_fps[0] if sorted_fps else 0.0
+                            
+                            last_fps_update_time = current_time
+                        
                         frame_count = 0
                         last_time = current_time
-                        print(f"{current_fps:.1f} FPS")
+                        print(f"{current_fps:.1f} FPS | Avg: {avg_fps:.1f} | 1% Low Avg: {low_fps_1_percent_avg:.1f}")
                             
                 except queue.Empty:
                     continue
@@ -1085,8 +1272,11 @@ def main(mode="Viewer"):
         
         if SHOW_FPS:
             total_time = time.perf_counter() - start_time
-            avg_fps = total_frames / total_time if total_time > 0 else 0
-            print(f"Average FPS: {avg_fps:.2f}")
+            overall_avg_fps = total_frames / total_time if total_time > 0 else 0
+            print(f"Overall Average FPS: {overall_avg_fps:.2f}")
+            if fps_values:
+                print(f"Recent Average FPS: {avg_fps:.1f}")
+                print(f"Recent 1% Low Average FPS: {low_fps_1_percent_avg:.1f}")
         print(f"[Main] Stopped")
 
 if __name__ == "__main__":

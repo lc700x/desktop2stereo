@@ -1,5 +1,5 @@
 ﻿--index-url https://download.pytorch.org/whl/rocm6.3/
-# -f https://mirrors.aliyun.com/pytorch-wheels/rocm6.3/
+# -f https://mirrors.nju.edu.cn/pytorch/whl/rocm6.3/
 torch==2.8.0
 torchvision==0.23.0
 

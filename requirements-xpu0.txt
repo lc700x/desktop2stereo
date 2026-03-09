@@ -1,5 +1,5 @@
 ﻿--index-url https://download.pytorch.org/whl/xpu
-# -f https://mirrors.aliyun.com/pytorch-wheels/xpu/
+# -f https://mirrors.nju.edu.cn/pytorch/whl/xpu/
 torch==2.8.0
 torchvision==0.23.0
 # torchaudio==2.8.0

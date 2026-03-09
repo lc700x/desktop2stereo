@@ -9,10 +9,151 @@ from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, 
 # Get model lists
 DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
 
+# Get monitor info
+PRIMARY_MONITOR_SUFFIX = " [Main]"
+def get_monitor_info():
+    """
+    Get detailed information about all monitors including names.
+    Returns a list of tuples: (index, width, height, left, top, name)
+    """
+    monitors_info = []
+    
+    if mss:
+        try:
+            with mss.mss() as sct:
+                for idx, mon in enumerate(sct.monitors[1:], start=1):
+                    monitor_name = f"Display {idx}"
+                    
+                    # Try to get monitor name based on platform
+                    if OS_NAME == "Windows":
+                        try:
+                            import win32api
+                            # Get all monitor handles
+                            monitor_handles = win32api.EnumDisplayMonitors()
+                            for hmonitor, _, _ in monitor_handles:
+                                monitor_info = win32api.GetMonitorInfo(hmonitor)
+                                monitor_rect = monitor_info["Monitor"]
+                                # Check if this monitor matches the mss monitor
+                                if (monitor_rect[0] == mon["left"] and 
+                                    monitor_rect[1] == mon["top"] and
+                                    monitor_rect[2] - monitor_rect[0] == mon["width"] and
+                                    monitor_rect[3] - monitor_rect[1] == mon["height"]):
+                                    # Extract device name (e.g., "\\.\DISPLAY1")
+                                    device_name = monitor_info.get("Device", f"\\\\.\\DISPLAY{idx}")
+                                    # Clean up the device name
+                                    monitor_name = device_name.replace("\\\\.\\", "DISPLAY ")
+                                    break
+                        except ImportError:
+                            monitor_name = f"Display {idx}"
+                        except Exception as e:
+                            print(f"[Warning] Could not get monitor name: {e}")
+                            monitor_name = f"Display {idx}"
+                    
+                    elif OS_NAME == "Darwin":  # macOS
+                        # On macOS, we can try to get display names
+                        try:
+                            import subprocess
+                            # Use system_profiler to get display info
+                            result = subprocess.run(
+                                ["system_profiler", "SPDisplaysDataType", "-xml"],
+                                capture_output=True,
+                                text=True
+                            )
+                            if result.returncode == 0:
+                                # Parse output to get display names
+                                # This is simplified - actual parsing would be more complex
+                                monitor_name = f"Display {idx}"
+                        except Exception:
+                            monitor_name = f"Display {idx}"
+                    
+                    else:  # Linux
+                        try:
+                            import subprocess
+                            # Try to get display name using xrandr
+                            result = subprocess.run(
+                                ["xrandr", "--query"],
+                                capture_output=True,
+                                text=True
+                            )
+                            if result.returncode == 0:
+                                lines = result.stdout.split('\n')
+                                display_count = 0
+                                for line in lines:
+                                    if " connected" in line and "primary" in line:
+                                        display_count += 1
+                                        if display_count == idx:
+                                            # Extract display name (e.g., "eDP-1")
+                                            parts = line.split()
+                                            if parts:
+                                                monitor_name = parts[0]
+                                            break
+                        except Exception:
+                            monitor_name = f"Display {idx}"
+                    
+                    monitors_info.append((
+                        idx, 
+                        mon["width"], 
+                        mon["height"], 
+                        mon["left"], 
+                        mon["top"], 
+                        monitor_name
+                    ))
+        except Exception as e:
+            print(f"[Error] Failed to get monitor info: {e}")
+            # Fallback: create basic monitor info
+            for idx in range(1, 3):
+                monitors_info.append((idx, 1920, 1080, 0, 0, f"Display {idx}"))
+    
+    return monitors_info
+
 # Get window lists
 if OS_NAME == "Windows":
     try:
         import win32gui
+        def get_primary_monitor_index():
+            """
+            Use Windows API to detect which monitor is the system's primary display.
+            Returns the index based on mss list (starting from 1).
+            Falls back to index 1 if detection fails.
+            """
+            if OS_NAME != "Windows":
+                return 1  # Non-Windows systems, cannot use this API
+            
+            try:
+                import win32api
+                import win32con
+                
+                # 1. Get handle to the primary monitor (monitor containing point (0,0))
+                primary_monitor_handle = win32api.MonitorFromPoint((0, 0), win32con.MONITOR_DEFAULTTOPRIMARY)
+                
+                # 2. Get detailed information about the primary monitor
+                primary_monitor_info = win32api.GetMonitorInfo(primary_monitor_handle)
+                # primary_monitor_info dict contains: 'Monitor' (monitor rect), 'Work' (work area), 'Device' (device name)
+                primary_rect = primary_monitor_info["Monitor"]  # (left, top, right, bottom)
+                primary_left, primary_top, primary_right, primary_bottom = primary_rect
+                
+                # 3. Get current list of monitors using mss
+                import mss
+                with mss.mss() as sct:
+                    # sct.monitors[0] is virtual desktop, real monitors start from index 1
+                    for idx, monitor in enumerate(sct.monitors[1:], start=1):
+                        # Compare rectangle areas. Primary monitor should align with origin (0,0).
+                        # We match by comparing top-left coordinates.
+                        if monitor["left"] == primary_left and monitor["top"] == primary_top:
+                            # Optional: Can further check width/height match for more accuracy
+                            # if monitor["width"] == (primary_right - primary_left) and monitor["height"] == (primary_bottom - primary_top):
+                            return idx  # Found matching monitor index
+                
+                # 4. If loop completes without match, fall back to index 1
+                print(f"[Warning] Failed to match primary display via Windows API. Using fallback index 1.")
+                return 1
+                
+            except ImportError:
+                print(f"[Warning] win32api module not installed. Cannot use Windows API to detect primary display.")
+                return 1
+            except Exception as e:
+                print(f"[Error] Failed to detect primary display using Windows API: {e}")
+                return 1
     except ImportError:
         win32gui = None
 
@@ -37,7 +178,21 @@ elif OS_NAME == "Darwin":
         )
     except ImportError:
         CGWindowListCopyWindowInfo = None
-
+    def get_primary_monitor_index():
+        """
+        find the primary monitor index by looking for the monitor that contains the origin (0,0).
+        """
+        try:
+            import mss
+            with mss.mss() as sct:
+                # find the monitor that contains the origin (0,0)
+                for idx, monitor in enumerate(sct.monitors[1:], start=1):
+                    if monitor["left"] == 0 and monitor["top"] == 0:
+                        return idx
+        
+        except Exception as e:
+            print(f"[Error] Simple detection failed: {e}")
+            return 1
     def list_windows():
         windows = []
         options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
@@ -71,6 +226,21 @@ elif OS_NAME == "Darwin":
         return windows
 else:
     import subprocess
+    def get_primary_monitor_index():
+        """
+        find the primary monitor index by looking for the monitor that contains the origin (0,0).
+        """
+        try:
+            import mss
+            with mss.mss() as sct:
+                # find the monitor that contains the origin (0,0)
+                for idx, monitor in enumerate(sct.monitors[1:], start=1):
+                    if monitor["left"] == 0 and monitor["top"] == 0:
+                        return idx
+        
+        except Exception as e:
+            print(f"[Error] Simple detection failed: {e}")
+            return 1
     def list_windows():
         windows = []
         try:
@@ -108,7 +278,7 @@ def get_devices():
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 name = torch.cuda.get_device_name(i)
-                if "AMD" in name:
+                if torch.version.hip is not None:
                     is_rocm = True
                 devices[count] = {"name": f"CUDA {i}: {name}", "Computing Device": torch.device(f"cuda:{i}")}
                 count += 1
@@ -146,7 +316,7 @@ DEFAULTS = {
     "Window Title": "",
     "Output Resolution": 1080,
     "FPS": 60,
-    "Show FPS": True,
+    "Show FPS": False,
     "Model List": DEFAULT_MODEL_LIST,
     "Depth Model": DEFAULT_MODEL_LIST[0],
     "Depth Strength": 2.0,
@@ -180,16 +350,16 @@ DEFAULTS = {
     "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False, # keep the viewer window aspect ratio not change
-    "Specify Display": False,
-    "Stereo Monitor": 1,
+    "Specify Display": 1,
+    "Stereo Monitor": None,
 }
 
 UI_TEXTS = {
     "EN": {
-        "Monitor": "Monitor",
-        "Window": "Window",
+        "Monitor": "Input Monitor",
+        "Window": "Input Window",
         "Refresh": "Refresh",
-        "FPS:": "FPS:",
+        "FPS:": "Input FPS:",
         "Show FPS": "Show FPS",
         "Output Resolution:": "Output Resolution:",
         "IPD (m):": "IPD (m):",
@@ -266,10 +436,10 @@ UI_TEXTS = {
         "Stereo Monitor": "Stereoscopy on:",
     },
     "CN": {
-        "Monitor": "显示器",
-        "Window": "窗口",
+        "Monitor": "输入显示器",
+        "Window": "输入窗口",
         "Refresh": "刷新",
-        "FPS:": "帧率:",
+        "FPS:": "输入帧率:",
         "Show FPS": "显示帧率",
         "Output Resolution:": "输出分辨率:",
         "IPD (m):": "瞳距 (米):",
@@ -360,6 +530,7 @@ class ConfigGUI(tk.Tk):
         self._window_objects = []  # Store window objects for reference
         self.audio_devices = []  # Will be populated with available audio devices
         self.cfg = {}  # Store the loaded configuration
+        
         try:
             icon_img = Image.open("icon.ico")
             if OS_NAME == "Windows":
@@ -481,7 +652,9 @@ class ConfigGUI(tk.Tk):
         self.capture_mode_cb.bind("<<ComboboxSelected>>", self.on_capture_mode_change)
         
         # Monitor Index (only shown when capture mode is Monitor)
+        # Add monitor variable trace to update stereo monitor menu
         self.monitor_var = tk.StringVar()
+        self.monitor_var.trace_add('write', lambda *args: self.update_stereo_monitor_menu())
         self.monitor_menu = ttk.OptionMenu(self.content_frame, self.monitor_var, "")
 
         self.window_var = tk.StringVar()
@@ -522,7 +695,10 @@ class ConfigGUI(tk.Tk):
         
         self.label_capture_tool = ttk.Label(self.content_frame, text="Capture Tool:")
         self.label_capture_tool.grid(row=7, column=0, sticky="w", **self.pad)
-        self.capture_tool_values = ["WindowsCapture", "DXCamera"]
+        if OS_NAME == "Windows" and "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM:
+            self.capture_tool_values = ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera"]
+        else:
+            self.capture_tool_values = ["WindowsCapture", "DXCamera"]
         self.capture_tool_cb = ttk.Combobox(self.content_frame, values=self.capture_tool_values, state="readonly")
         self.capture_tool_cb.grid(row=7, column=1, sticky="ew", **self.pad)
         if OS_NAME != "Windows":
@@ -775,6 +951,85 @@ class ConfigGUI(tk.Tk):
         self.stream_protocol_cb["values"] = ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]
         self.stream_protocol_var.set(self.stream_protocol_key)
     
+    def update_stereo_monitor_menu(self):
+        """
+        Update the stereo monitor menu based on currently selected input monitor.
+        Excludes the currently selected input monitor from the stereo monitor dropdown.
+        """
+        if not self.stereo_monitor_menu:
+            return
+        
+        # Get current input monitor selection
+        selected_input_label = self.monitor_var.get()
+        if not selected_input_label:
+            return
+        
+        # Get monitor list
+        monitors = []
+        if mss:
+            try:
+                with mss.mss() as sct:
+                    for mon in sct.monitors[1:]:
+                        monitors.append(mon)
+            except Exception:
+                monitors = []
+        
+        if not monitors:
+            return
+        
+        # Detect primary monitor index
+        primary_index = get_primary_monitor_index()
+        if primary_index < 1 or primary_index > len(monitors):
+            primary_index = 1
+        
+        # Clear current stereo monitor menu
+        self.stereo_monitor_menu["menu"].delete(0, "end")
+        
+        # Get current stereo monitor selection before rebuilding
+        current_stereo_selection = self.stereo_monitor_var.get()
+        new_selection_set = False
+        
+        # Rebuild menu excluding selected input monitor
+        for idx, mon in enumerate(monitors, start=1):
+            is_primary = (idx == primary_index)
+            label_suffix = PRIMARY_MONITOR_SUFFIX if is_primary else ""
+            label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){label_suffix}"
+            
+            # Skip if this is the selected input monitor
+            if label == selected_input_label and self.run_mode_key in ["Local Viewer", "RTMP Streamer"]:
+                continue
+            
+            # Add command to menu
+            self.stereo_monitor_menu["menu"].add_command(
+                label=label,
+                command=lambda v=label: self.stereo_monitor_var.set(v)
+            )
+            
+            # Keep current stereo selection if still valid
+            if not new_selection_set and label == current_stereo_selection:
+                self.stereo_monitor_var.set(label)
+                new_selection_set = True
+        
+        # If previous selection was removed, select first available
+        if not new_selection_set:
+            # Find first monitor that's not the input monitor
+            for idx, mon in enumerate(monitors, start=1):
+                is_primary = (idx == primary_index)
+                label_suffix = PRIMARY_MONITOR_SUFFIX if is_primary else ""
+                label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){label_suffix}"
+                
+                if label != selected_input_label:
+                    self.stereo_monitor_var.set(label)
+                    break
+        
+        # Ensure stereo monitor menu reflects the current specify display state
+        if self.specify_display_var.get():
+            self.label_stereo_monitor.grid()
+            self.stereo_monitor_menu.grid()
+        else:
+            self.label_stereo_monitor.grid_remove()
+            self.stereo_monitor_menu.grid_remove()
+            
     def auto_enable_optimizers_based_on_device(self):
         """Automatically enable appropriate optimizers based on detected device"""
         device_label = self.device_var.get()
@@ -964,10 +1219,11 @@ class ConfigGUI(tk.Tk):
 
     def update_stereo_display_visibility(self):
         """Show/hide stereo display options based on run mode"""
-        if self.run_mode_key in ["RTMP Streamer", "3D Monitor", "Local Viewer"]:
+        if self.run_mode_key in ["RTMP Streamer", "Local Viewer"]:
             # Show stereo display options
             self.label_specify_display.grid()
             self.specify_display_cb.grid()
+            self.populate_monitors()
             self.update_stereo_monitor_display()
         else:
             # Hide for other modes
@@ -1546,7 +1802,8 @@ class ConfigGUI(tk.Tk):
             self.label_rtmp_stream_key, self.rtmp_stream_key_entry,
             self.label_audio_device, self.audio_device_cb,
             self.label_crf, self.crf_spin,
-            self.label_audio_delay, self.audio_delay_spin
+            self.label_audio_delay, self.audio_delay_spin,
+            self.lossless_scaling_support_cb
         ]
         
         for control in controls_to_hide:
@@ -1677,41 +1934,68 @@ class ConfigGUI(tk.Tk):
             monitors = [{"width": 0, "height": 0, "left": 0, "top": 0} for _ in range(2)]
 
         self.monitor_menu["menu"].delete(0, "end")
+
+        # Detect primary monitor index
+        primary_index = get_primary_monitor_index()
+        # Ensure detected index is within valid range
+        if primary_index < 1 or primary_index > len(monitors):
+            primary_index = 1
+        
         for idx, mon in enumerate(monitors, start=1):
-            label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']})"
+            # Build display label. Add "[Main]" suffix for primary monitor.
+            is_primary = (idx == primary_index)
+            label_suffix = PRIMARY_MONITOR_SUFFIX if is_primary else ""
+            label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){label_suffix}"
+
             self.monitor_label_to_index[label] = idx
             self.monitor_menu["menu"].add_command(
                 label=label,
                 command=lambda v=label: self.monitor_var.set(v)
             )
 
-        default_idx = DEFAULTS["Monitor Index"]
-        default_label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == default_idx), None)
-        if default_label:
-            self.monitor_var.set(default_label)
+        # Use detected primary monitor index instead of hardcoded index 1
+        primary_label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == primary_index), None)
+        if primary_label:
+            self.monitor_var.set(primary_label)
         elif self.monitor_label_to_index:
+            # Fallback: select first in list
             self.monitor_var.set(next(iter(self.monitor_label_to_index)))
-            
+        
         # Also populate the stereo monitor menu
         if self.stereo_monitor_menu:
-            self.stereo_monitor_menu["menu"].delete(0, "end")
-            for idx, mon in enumerate(monitors, start=1):
-                label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']})"
-                self.stereo_monitor_menu["menu"].add_command(
-                    label=label,
-                    command=lambda v=label: self.stereo_monitor_var.set(v)
-                )
+            # Use the update function to ensure stereo menu excludes selected input
+            self.update_stereo_monitor_menu()
             
-            # Set default selection for stereo display
-            default_idx = DEFAULTS["Stereo Monitor"]
-            default_label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == default_idx), None)
-            if default_label:
-                self.stereo_monitor_var.set(default_label)
+            # Set default stereo monitor
+            stereo_default_idx = DEFAULTS["Stereo Monitor"]
+            if stereo_default_idx == 1:
+                stereo_default_idx = primary_index
+                
+            # Find label for default stereo index that's not the input monitor
+            selected_input_label = self.monitor_var.get()
+            stereo_default_label = None
+            
+            # First, check if the default index is available and not the selected input
+            for lbl, i in self.monitor_label_to_index.items():
+                if i == stereo_default_idx and lbl != selected_input_label:
+                    stereo_default_label = lbl
+                    break
+            
+            # If default was input monitor or not found, pick any available monitor that's not the input
+            if not stereo_default_label and self.monitor_label_to_index:
+                for lbl, i in self.monitor_label_to_index.items():
+                    if lbl != selected_input_label:
+                        stereo_default_label = lbl
+                        break
+            
+            if stereo_default_label:
+                self.stereo_monitor_var.set(stereo_default_label)
             elif self.monitor_label_to_index:
+                # Final fallback
                 self.stereo_monitor_var.set(next(iter(self.monitor_label_to_index)))
 
         return self.monitor_label_to_index
-
+    
     def read_yaml(self, path):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -1740,15 +2024,23 @@ class ConfigGUI(tk.Tk):
             return False
 
     def apply_config(self, cfg, keep_optional=True):
-        self.cfg = cfg  # Store the config for later use
+        self.cfg = cfg
         
         # Monitor settings
+        current_primary_index = get_primary_monitor_index()
         monitor_idx = cfg.get("Monitor Index", DEFAULTS["Monitor Index"])
         label_for_idx = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == monitor_idx), None)
         if label_for_idx:
             self.monitor_var.set(label_for_idx)
         elif self.monitor_label_to_index:
-            self.monitor_var.set(next(iter(self.monitor_label_to_index)))
+            primary_label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == current_primary_index), None)
+            if primary_label:
+                self.monitor_var.set(primary_label)
+            else:
+                self.monitor_var.set(next(iter(self.monitor_label_to_index)))
+
+        # Update stereo monitor menu based on selected input monitor
+        self.update_stereo_monitor_menu()
 
         # Window settings
         self.selected_window_name = cfg.get("Window Title", DEFAULTS["Window Title"])
@@ -1915,8 +2207,16 @@ class ConfigGUI(tk.Tk):
         current_language = self.language
         current_device = self.device_var.get()
         
-        # Load the hard defaults
-        self.load_defaults()
+        # Get current system's primary monitor index
+        current_primary_index = get_primary_monitor_index()
+        
+        # Create temporary default config with updated monitor index
+        dynamic_defaults = DEFAULTS.copy()
+        dynamic_defaults["Monitor Index"] = current_primary_index
+        
+        # Load the dynamic defaults
+        self.apply_config(dynamic_defaults, keep_optional=False)
+        
         current_model = self.depth_model_var.get()
         # Update TensorRT visibility based on the default model
         self.update_tensorrt_visibility_based_on_model(current_model)

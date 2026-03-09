@@ -58,6 +58,7 @@ set "AMD_MODELS_8000S=8060 8050 8040"
 set "AMD_MODELS_890M=890 880"
 set "AMD_MODELS_860M=860 840"
 set "AMD_MODELS_6000=6950 6900 6850 6800 6750 6700 6650 6600 6550 6500 6400 6300 680 610"
+set "AMD_MODELS_5000=5700 5600 5500 5400 5300 520 160"
 
 call :CheckModel "%GPU_MODEL%" AMD_MODELS_9000 requirements-rocm7-9000.txt
 if %errorlevel% equ 0 goto :InstallDependencies
@@ -77,6 +78,9 @@ if %errorlevel% equ 0 goto :InstallDependencies
 call :CheckModel "%GPU_MODEL%" AMD_MODELS_6000 requirements-rocm7-6000.txt
 if %errorlevel% equ 0 goto :InstallDependencies
 
+call :CheckModel "%GPU_MODEL%" AMD_MODELS_5000 requirements-rocm7-5000.txt
+if %errorlevel% equ 0 goto :InstallDependencies
+
 echo.
 echo Failed to automatically detect a compatible ROCm requirements file for GPU: %FULL_GPU_NAME%.
 echo.
@@ -88,7 +92,8 @@ echo 3. requirements-rocm7-8000S.txt
 echo 4. requirements-rocm7-890M.txt
 echo 5. requirements-rocm7-860M.txt
 echo 6. requirements-rocm7-6000.txt
-echo 7. Cancel
+echo 7. requirements-rocm7-5000.txt
+echo 8. Cancel
 echo.
 set /p USER_CHOICE="Enter your choice (1-7): "
 if "%USER_CHOICE%"=="1" set "REQUIREMENTS_FILE=requirements-rocm7-9000.txt" & goto :InstallDependencies
@@ -97,7 +102,8 @@ if "%USER_CHOICE%"=="3" set "REQUIREMENTS_FILE=requirements-rocm7-8000S.txt" & g
 if "%USER_CHOICE%"=="4" set "REQUIREMENTS_FILE=requirements-rocm7-890M.txt" & goto :InstallDependencies
 if "%USER_CHOICE%"=="5" set "REQUIREMENTS_FILE=requirements-rocm7-860M.txt" & goto :InstallDependencies
 if "%USER_CHOICE%"=="6" set "REQUIREMENTS_FILE=requirements-rocm7-6000.txt" & goto :InstallDependencies
-if "%USER_CHOICE%"=="7" (
+if "%USER_CHOICE%"=="7" set "REQUIREMENTS_FILE=requirements-rocm7-5000.txt" & goto :InstallDependencies
+if "%USER_CHOICE%"=="8" (
   echo Installation cancelled by user.
   pause
   exit /b 1
@@ -131,17 +137,17 @@ echo.
 echo Installing requirements from: %REQUIREMENTS_FILE%
 @REM echo - Installing the requirements from %REQUIREMENTS_FILE%
 echo - Updating pip package
-%PYTHON_EXE% -m pip install --upgrade pip --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install --upgrade pip --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 if %errorlevel% neq 0 (
   echo Failed to update pip
   pause
   exit /b 1
 )
 %PYTHON_EXE% -m pip install -r %REQUIREMENTS_FILE% --no-cache-dir --no-warn-script-location
-%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
-%PYTHON_EXE% -m pip install "triton-windows<3.7" --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
-%PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
-%PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+%PYTHON_EXE% -m pip install "triton-windows<3.7" --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+%PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+%PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 if %errorlevel% neq 0 (
     echo Failed to install requirements
     pause
