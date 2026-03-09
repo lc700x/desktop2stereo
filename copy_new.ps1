@@ -18,7 +18,7 @@ $filesToCopy = @(
     "install-dml.bat","install-dml0.bat","install-dml_standalone.bat","install-dml_standalone0.bat",
     "install-mps","install-rocm.bash","install-rocm7.bash","install-rocm6_standalone.bat","install-rocm7.bat","install-rocm7_official_standalone.bat","install-rocm7_standalone.bat",
     "long_path.reg","main.py","readme.md","readmeCN.md",
-    "requirements-cuda.txt","requirements-cuda0.txt", "requirements-xpu.txt", "requirements-xpu0.txt", "requirements-dml.txt","requirements-mps.txt", "requirements-rocm7-6000.txt",
+    "requirements-cuda.txt","requirements-cuda0.txt", "requirements-xpu.txt", "requirements-xpu0.txt", "requirements-dml.txt","requirements-mps.txt", "requirements-rocm7-6000.txt", "requirements-rocm7-5000.txt"
     "requirements-rocm.txt", "requirements-rocm6.txt", "requirements-rocm7.txt","requirements-rocm7-official.txt",
     "requirements-rocm7-7000.txt", "requirements-rocm7-860M.txt", "requirements-rocm7-890M.txt",  "requirements-rocm7-8000S.txt", "requirements-rocm7-9000.txt", "requirements.txt",
     "run.bat","run_main.bat","run_linux.bash","run_linux_main.bash","run_mac","run_mac_main","run_windows.bat","run_windows_main.bat",
