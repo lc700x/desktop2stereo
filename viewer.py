@@ -219,10 +219,42 @@ DEPTH_FRAGMENT = """
     in vec2 uv;
     out vec4 frag_color;
     uniform sampler2D tex_depth;
+    
+    // Optimized spectral-like colormap without normalization
+    vec3 spectral_r_ultrafast(float t) {
+        // Precomputed key colors for spectral_r approximation
+        // Blue (far) -> Green -> Yellow -> Red (near)
+        
+        // Single branch - optimized for GPU parallelism
+        vec3 color1 = vec3(0.0, 0.298, 0.651);      // Blue
+        vec3 color2 = vec3(0.0, 0.5, 0.0);          // Green
+        vec3 color3 = vec3(1.0, 0.851, 0.0);        // Yellow
+        vec3 color4 = vec3(0.988, 0.0, 0.0);        // Red
+        
+        // Piecewise linear interpolation without conditional branches
+        float w1 = max(0.0, 1.0 - abs(t - 0.125) * 4.0);
+        float w2 = max(0.0, 1.0 - abs(t - 0.375) * 4.0);
+        float w3 = max(0.0, 1.0 - abs(t - 0.625) * 4.0);
+        float w4 = max(0.0, 1.0 - abs(t - 0.875) * 4.0);
+        
+        // Normalize weights
+        float total = w1 + w2 + w3 + w4;
+        if (total > 0.0) {
+            w1 /= total; w2 /= total; w3 /= total; w4 /= total;
+        }
+        
+        return color1 * w1 + color2 * w2 + color3 * w3 + color4 * w4;
+    }
+
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
         float depth = texture(tex_depth, flipped_uv).r;
-        frag_color = vec4(vec3(depth), 1.0);
+        
+        // Depth is already in [0,1] range, no normalization needed
+        // Apply optimized spectral colormap directly
+        vec3 color = spectral_r_ultrafast(depth);
+        
+        frag_color = vec4(color, 1.0);
     }
 """
 
@@ -261,17 +293,21 @@ class StereoWindow:
         self.stream_mode = stream_mode
         self.window_size = self.frame_size
 
-        # FPS tracking variables
-        self.frame_count = 0
-        self.last_fps_time = time.perf_counter()
+        # FPS and latency tracking variables, will be set externally
         self.actual_fps = 0.0
-        self.start_time = time.perf_counter()
-        self.total_frames = 0
+        self.total_latency = 0.0
         
         # Add PBO for streamer
         self._pbo_ids = None
         self._pbo_index = 0
         self._pbo_initialized = False
+        
+        # Add toggle state for depth map mode
+        self.show_original_in_depth_mode = False
+        
+        # Cache for uniforms to avoid redundant updates
+        self._last_eye_offset_set = 0.0
+        self._last_depth_strength_set = 0.0
         
         # Depth ratio display variables
         self.last_depth_change_time = 0
@@ -287,8 +323,18 @@ class StereoWindow:
         self.text_spacing = 5
         self.convergence = 0.4
 
+        # Cache for viewport calculations
+        self._viewport_cache = {
+            'win_size': (0, 0),
+            'tex_size': (0, 0),
+            'display_mode': None,
+            'fill_16_9': None,
+            'viewport': None,
+            'show_original': None
+        }
+
         # Overlay cache & throttle
-        self.overlay_update_interval = 0.25  # seconds, throttle overlay regeneration
+        self.overlay_update_interval = 0.5  # seconds, throttle overlay regeneration
         self._overlay_cache = {
             'image': None,         # numpy RGBA image
             'fps_text': None,
@@ -365,6 +411,10 @@ class StereoWindow:
         self.color_tex = None
         self.depth_tex = None
         
+        # Cache for display mode and original toggle state
+        self._last_display_mode = None
+        self._last_show_original = None
+        
         # Set callbacks
         glfw.set_key_callback(self.window, self.on_key_event)
         glfw.set_window_size_callback(self.window, self._on_window_resize)
@@ -374,9 +424,69 @@ class StereoWindow:
         vidmode = glfw.get_video_mode(glfw.get_monitors()[self.monitor_index])
         self.mon_w, self.mon_h = vidmode.size.width, vidmode.size.height
         
+    def _calculate_depth_map_viewport(self, win_w, win_h, tex_w, tex_h):
+        """Cached viewport calculation for depth map mode"""
+        cache_key = (win_w, win_h, tex_w, tex_h, self.display_mode, 
+                     self.fill_16_9, self.show_original_in_depth_mode)
+        
+        # Check if we can reuse cached viewport
+        if (self._viewport_cache['win_size'] == (win_w, win_h) and
+            self._viewport_cache['tex_size'] == (tex_w, tex_h) and
+            self._viewport_cache['display_mode'] == self.display_mode and
+            self._viewport_cache['fill_16_9'] == self.fill_16_9 and
+            self._viewport_cache['show_original'] == self.show_original_in_depth_mode):
+            return self._viewport_cache['viewport']
+        
+        # Calculate viewport
+        if self.fill_16_9:
+            src_w, src_h = tex_w, tex_h
+            max_w, max_h = win_w, win_h
+            render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+            center_x = win_w / 2.0
+            center_y = win_h / 2.0
+            viewport = (
+                int(center_x - render_w / 2),
+                int(center_y - render_h / 2),
+                render_w, render_h
+            )
+        else:
+            disp_w, disp_h = tex_w, tex_h
+            target_aspect = disp_h / disp_w
+            try:
+                window_aspect = win_h / win_w
+            except ZeroDivisionError:
+                window_aspect = 9/16
+
+            # Scale to fit window, preserving aspect ratio
+            if window_aspect <= target_aspect:
+                # Window is wider than content
+                view_h = win_h
+                view_w = int(view_h / target_aspect)
+            else:
+                # Window is taller than content
+                view_w = win_w
+                view_h = int(view_w * target_aspect)
+
+            offset_x = (win_w - view_w) // 2
+            offset_y = (win_h - view_h) // 2
+            viewport = (offset_x, offset_y, view_w, view_h)
+        
+        # Update cache
+        self._viewport_cache = {
+            'win_size': (win_w, win_h),
+            'tex_size': (tex_w, tex_h),
+            'display_mode': self.display_mode,
+            'fill_16_9': self.fill_16_9,
+            'show_original': self.show_original_in_depth_mode,
+            'viewport': viewport
+        }
+        
+        return viewport
+    
     def update_monitor_size(self):
         vidmode = glfw.get_video_mode(glfw.get_monitors()[self.monitor_index])
         self.mon_w, self.mon_h = vidmode.size.width, vidmode.size.height
+    
     def apply_3d_settings(self):
         if self.monitor_index == self.get_glfw_mon_index(MONITOR_INDEX):
             if OS_NAME == "Windows":
@@ -462,7 +572,7 @@ class StereoWindow:
         # Update overlay cache position in case padding changed
         self._overlay_cache['pos'] = (self.text_padding, self.text_padding)
 
-    def _generate_overlay_image(self, fps_text, depth_text):
+    def _generate_overlay_image(self, fps_text, latency_text, depth_text):
         """Rasterize the small overlay to RGBA numpy array (transparent background)."""
         if self.font is None:
             return None
@@ -471,8 +581,11 @@ class StereoWindow:
         lines = []
         if self.show_fps and fps_text:
             lines.append(fps_text)
+        if self.show_fps and self.total_latency > 0:
+            latency_text = f"Latency: {self.total_latency:.0f} ms"
+            lines.append(latency_text)
         if self.show_depth_ratio and depth_text:
-            lines.append(depth_text)
+            lines.append(depth_text)   
         if not lines:
             return None
 
@@ -524,10 +637,6 @@ class StereoWindow:
         if not (self.show_fps or self.show_depth_ratio) or self.font is None:
             return rgb_frame
 
-        # Ensure rgb_frame is H x W x 3 uint8
-        if rgb_frame.dtype != np.uint8:
-            rgb_frame = (rgb_frame * 255).astype(np.uint8)
-
         h, w, _ = rgb_frame.shape
         
         # freeze window size for rtmp streaming
@@ -536,18 +645,8 @@ class StereoWindow:
         self.frame_size = (w, h)
             
 
-        # Update FPS counters but do not regenerate overlay every frame
-        current_time = time.perf_counter()
-        if self.show_fps:
-            self.frame_count += 1
-            self.total_frames += 1
-            # update measured FPS every 1 second (keeps value stable)
-            if current_time - self.last_fps_time >= 1.0:
-                self.actual_fps = self.frame_count / (current_time - self.last_fps_time)
-                self.frame_count = 0
-                self.last_fps_time = current_time
-
         # Depth ratio visibility check
+        current_time = time.perf_counter()
         if current_time - self.last_depth_change_time < self.depth_display_duration:
             self.show_depth_ratio = True
         else:
@@ -555,12 +654,15 @@ class StereoWindow:
 
         # Compose the strings to display
         fps_text = f"FPS: {self.actual_fps:.1f}" if self.show_fps else ""
+        latency_text = f"Latency: {self.total_latency:.1f} ms" if self.show_fps else ""
         depth_text = f"Depth: {self.depth_ratio:.1f}" if self.show_depth_ratio else ""
 
         # Decide whether to regenerate overlay
         cache = self._overlay_cache
         needs_regen = False
         if cache['image'] is None:
+            needs_regen = True
+        elif latency_text != cache.get('latency_text'):
             needs_regen = True
         elif fps_text != cache.get('fps_text') or depth_text != cache.get('depth_text'):
             needs_regen = True
@@ -569,9 +671,10 @@ class StereoWindow:
             needs_regen = True
 
         if needs_regen:
-            overlay_arr = self._generate_overlay_image(fps_text, depth_text)
+            overlay_arr = self._generate_overlay_image(fps_text, latency_text, depth_text)
             cache['image'] = overlay_arr
             cache['fps_text'] = fps_text
+            cache['latency_text'] = latency_text
             cache['depth_text'] = depth_text
             cache['last_update'] = current_time
 
@@ -606,7 +709,6 @@ class StereoWindow:
         rgb_frame[pos_y:end_y, pos_x:end_x] = np.clip(blended, 0, 255).astype(np.uint8)
 
         return rgb_frame
-
     def position_on_monitor(self, monitor_index=0):
         """Optimized monitor positioning"""
         monitors = glfw.get_monitors()
@@ -731,12 +833,18 @@ class StereoWindow:
                 glfw.set_window_pos(self.window, restore_x, restore_y)
             self._fullscreen = False
         self.window_size = glfw.get_window_size(self.window)
+    
     def on_key_event(self, window, key, scancode, action, mods):
         """Optimized key event handling, disable some keys for rtmp and 3d monitor"""
         if action == glfw.PRESS:
             if key == glfw.KEY_ENTER or key == glfw.KEY_SPACE:
                 if self.stream_mode is None and not self.use_3d:
                     self.toggle_fullscreen()
+            elif key == glfw.KEY_D:
+                 # Toggle between depth map and original RGB when in Depth Map mode
+                if self.display_mode == "Depth Map":
+                    self.show_original_in_depth_mode = not self.show_original_in_depth_mode
+                    # print(f"Depth Map Mode: {'Showing Original RGB' if self.show_original_in_depth_mode else 'Showing Depth Map'}")
             elif key == glfw.KEY_RIGHT:
                 self.move_to_adjacent_monitor(+1)
             elif key == glfw.KEY_LEFT:
@@ -768,13 +876,29 @@ class StereoWindow:
                 # Force overlay regen to show aspect ratio status
                 self._overlay_cache['last_update'] = 0.0
 
-    def update_frame(self, rgb, depth):
-        """Optimized texture updates with minimal allocations"""
+    def update_frame(self, rgb, depth, current_fps=None, current_latency=None):
+        """Optimized texture updates with external FPS and latency input"""
         # Convert depth tensor to numpy array if needed
         if hasattr(depth, 'detach'):  # Check if it's a torch tensor
             depth = depth.detach().contiguous().float().cpu().numpy()
-        
+        if hasattr(rgb, 'detach'):  # Check if it's a torch tensor
+            rgb = rgb.detach().contiguous().float().cpu().numpy().clip(0, 255).astype(np.uint8)
+
         # Only add overlay for stereo modes, not for depth map
+        if self.display_mode != "Depth Map":
+            rgb_with_overlay = self._add_overlay(rgb)
+        else:
+            rgb_with_overlay = rgb
+
+        # Update FPS from external source if provided
+        if current_fps is not None:
+            self.actual_fps = current_fps
+        
+        # Update latency from external source if provided
+        if current_latency is not None:
+            self.total_latency = current_latency * 1000  # ms
+        
+        # Skip overlay for depth map mode
         if self.display_mode != "Depth Map":
             rgb_with_overlay = self._add_overlay(rgb)
         else:
@@ -792,14 +916,29 @@ class StereoWindow:
             self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
             self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
             
+            # Pre-bind texture units for better performance
             self.prog['tex_color'].value = 0
             self.prog['tex_depth'].value = 1
             self._texture_size = (w, h)
         
-        # Upload texture data
-        rgb_u8 = rgb_with_overlay.astype('uint8', copy=False)
-        self.color_tex.write(rgb_u8.tobytes())
-        self.depth_tex.write(depth.tobytes())
+        # Upload texture data with optimized path
+        if self.display_mode == "Depth Map" and not self.show_original_in_depth_mode:
+            # For depth map mode showing depth, we only need to update depth texture
+            self.depth_tex.write(depth.tobytes())
+            # Skip RGB upload if not needed (only upload when switching modes)
+            if self._last_display_mode != "Depth Map" or self._last_show_original != self.show_original_in_depth_mode:
+                # Only upload RGB if we switched from another mode
+                rgb_u8 = rgb_with_overlay.astype('uint8', copy=False)
+                self.color_tex.write(rgb_u8.tobytes())
+        else:
+            # Update both textures for other modes
+            rgb_u8 = rgb_with_overlay.astype('uint8', copy=False)
+            self.color_tex.write(rgb_u8.tobytes())
+            self.depth_tex.write(depth.tobytes())
+        
+        # Cache current state
+        self._last_display_mode = self.display_mode
+        self._last_show_original = self.show_original_in_depth_mode
         
         # Only show window after first frame
         if not self._has_real_frame:
@@ -833,8 +972,6 @@ class StereoWindow:
             if self.specify_display:
                 if not self.stream_mode == "RTMP" or LOSSLESS_SCALING_SUPPORT:
                     self.toggle_fullscreen()
-
-
     def _compute_render_size(self, max_w, max_h, src_w, src_h):
         """Calculate render size maintaining aspect ratio"""
         if src_w == 0 or src_h == 0:
@@ -893,7 +1030,7 @@ class StereoWindow:
         return image
 
     def render(self):
-        """Optimized rendering with reduced GL calls"""
+        """Ultra-optimized rendering with minimal GL calls"""
         if not self.color_tex or not self.depth_tex:
             return
 
@@ -901,6 +1038,50 @@ class StereoWindow:
         win_w, win_h = glfw.get_framebuffer_size(self.window)
         tex_w, tex_h = self._texture_size
         
+        # Early exit for depth map mode - fully optimized path
+        if self.display_mode == "Depth Map":
+            # Fast path - minimal operations for depth map mode
+            
+            # Skip aspect ratio updates for depth map mode if not needed
+            if self.fix_aspect:
+                glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
+            
+            # Clear screen with optimized clear color
+            self.ctx.clear(0.0, 0.0, 0.0)  # Black background for better contrast
+            
+            # Use cached viewport calculation
+            viewport = self._calculate_depth_map_viewport(win_w, win_h, tex_w, tex_h)
+            self.ctx.viewport = viewport
+            
+            # Toggle between depth map and original RGB with minimal state changes
+            if self.show_original_in_depth_mode:
+                # Fast RGB rendering path
+                self.color_tex.use(location=0)
+                
+                # Update uniforms only if changed
+                if self._last_eye_offset_set != 0.0:
+                    self.prog['u_eye_offset'].value = 0.0
+                    self._last_eye_offset_set = 0.0
+                
+                if self._last_depth_strength_set != 0.0:
+                    self.prog['u_depth_strength'].value = 0.0
+                    self._last_depth_strength_set = 0.0
+                
+                # Direct render call without extra state changes
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+            else:
+                # Ultra-fast depth map rendering
+                self.depth_tex.use(location=0)
+                
+                # Direct render call - no uniform updates needed for depth shader
+                self.depth_vao.render(moderngl.TRIANGLE_STRIP)
+            
+            # Skip swap buffers if frame hasn't changed (for headless/streaming modes)
+            if self.stream_mode is None:
+                glfw.poll_events()
+            return
+        
+        # Rest of the rendering for other modes...
         if self.fix_aspect:
             if self.display_mode == "Full-SBS":
                 glfw.set_window_aspect_ratio(self.window, 2*tex_w, tex_h)
@@ -912,46 +1093,7 @@ class StereoWindow:
         # Clear screen once
         self.ctx.clear(0.1, 0.1, 0.1)
         
-        # Early exit for depth map mode
-        if self.display_mode == "Depth Map":
-            if self.fill_16_9:
-                src_w, src_h = tex_w, tex_h
-                max_w, max_h = win_w, win_h
-                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-                center_x = win_w / 2.0
-                center_y = win_h / 2.0
-                self.ctx.viewport = (
-                    int(center_x - render_w / 2),
-                    int(center_y - render_h / 2),
-                    render_w, render_h
-                )
-            else:
-                disp_w, disp_h = tex_w, tex_h
-                target_aspect = disp_h / disp_w
-                try:
-                    window_aspect = win_h / win_w
-                except ZeroDivisionError:
-                    window_aspect = 9/16
-
-                # Scale to fit window, preserving aspect ratio
-                if window_aspect <= target_aspect:
-                    # Window is wider than content
-                    view_h = win_h
-                    view_w = int(view_h / target_aspect)
-                else:
-                    # Window is taller than content
-                    view_w = win_w
-                    view_h = int(view_w * target_aspect)
-
-                offset_x = (win_w - view_w) // 2
-                offset_y = (win_h - view_h) // 2
-                self.ctx.viewport = (offset_x, offset_y, view_w, view_h)
-            
-            # Use depth texture directly
-            self.depth_tex.use(location=0)
-            self.depth_vao.render(moderngl.TRIANGLE_STRIP)
-            return
-        
+        # Handle other display modes...
         if self.fill_16_9:
             if self.display_mode in ["Full-SBS", "Half-SBS", "TAB"]:
                 # Bind textures once
@@ -975,6 +1117,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self._last_eye_offset_set = -self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
                     
                     # Right view
@@ -984,6 +1127,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self._last_eye_offset_set = self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "Half-SBS":
@@ -1000,6 +1144,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self._last_eye_offset_set = -self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
                     
                     # Right view
@@ -1009,6 +1154,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self._last_eye_offset_set = self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "TAB":
@@ -1024,6 +1170,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self._last_eye_offset_set = -self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
                     
                     # Bottom view
@@ -1033,21 +1180,8 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-
+                    self._last_eye_offset_set = self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-            elif self.display_mode == "Depth Map":
-                src_w, src_h = tex_w, tex_h
-                max_w, max_h = win_w, win_h
-                render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-                center_x = win_w / 2.0
-                center_y = win_h / 2.0
-                self.ctx.viewport = (
-                    int(center_x - render_w / 2),
-                    int(center_y - render_h / 2),
-                    render_w, render_h
-                )
-                self.depth_tex.use(location=0)
-                self.depth_vao.render(moderngl.TRIANGLE_STRIP)
         
         else:
             # Determine effective stereo frame size by display mode
@@ -1085,39 +1219,42 @@ class StereoWindow:
                 self.color_tex.use(0)
                 self.depth_tex.use(1)
                 self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+                self._last_depth_strength_set = self.depth_strength * self.depth_ratio
 
                 if self.display_mode == "Full-SBS":
                     # Left eye
                     self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self._last_eye_offset_set = -self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     # Right eye
                     self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self._last_eye_offset_set = self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "Half-SBS":
                     # Same as FULL but both squeezed into width
                     self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self._last_eye_offset_set = -self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self._last_eye_offset_set = self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "TAB":
                     # Top eye
                     self.ctx.viewport = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self._last_eye_offset_set = -self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     # Bottom eye
                     self.ctx.viewport = (offset_x, offset_y, view_w, view_h // 2)
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self._last_eye_offset_set = self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-            elif self.display_mode == "Depth Map":
-                self.depth_tex.use(0)
-                self.ctx.viewport = (offset_x, offset_y, view_w, view_h)
-                self.depth_vao.render(moderngl.TRIANGLE_STRIP)

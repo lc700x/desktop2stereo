@@ -4,7 +4,7 @@ import os, platform, socket
 # Debug Mode
 DEBUG = False
 # App Version
-VERSION = "2.3.9"
+VERSION = "2.4.0"
 # Get OS name
 OS_NAME = platform.system()
 
@@ -38,6 +38,8 @@ DISABLE_TRT_KEYWORDS = [
 # Models with Disabled CoreML 
 DISABLE_COREML_KEYWORDS = [
     "video-depth-anything",
+    "da3-", 
+    "da3nested",
     "dpt-beit",
     "zoedepth",
     "depthpro"
