@@ -19,7 +19,7 @@ if %errorlevel% neq 0 (
 echo.
 echo - Installing the requirements
 @REM reference for ROCm6 Windows: https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/windows/install-pytorch.html
-%PYTHON_EXE% -m pip install -r requirements-rocm6.txt --no-cache-dir --no-warn-script-location
+%PYTHON_EXE% -m pip install -r requirements-rocm6.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 @REM %PYTHON_EXE% -m pip install "triton-windows<3.4" --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 @REM %PYTHON_EXE% -m pip install tensorrt_cu12==10.14.1.48.post1 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/

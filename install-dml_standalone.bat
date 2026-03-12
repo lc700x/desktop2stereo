@@ -16,7 +16,7 @@ if %errorlevel% neq 0 (
 
 @REM --no-cache-dir --no-warn-script-location --no-warn-script-location requirements
 echo.
-echo - --no-cache-dir --no-warn-script-location --no-warn-script-locationing the requirements
+echo - Installing the requirements
 %PYTHON_EXE% -m pip install -r requirements-dml.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
