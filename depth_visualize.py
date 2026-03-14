@@ -1,19 +1,23 @@
 # depth.py
 import torch
+
+# # Support for old AMD GPU with ZLUDA support (hide)
 # try:
-#     import zluda # Support for old AMD GPU with ZLUDA support
+#     import zluda 
 #     torch.backends.cudnn.enabled = False  # Disable cuDNN for ZLUDA compatibility
 # except ImportError:
 #     pass
+
 torch.set_num_threads(1)
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DEBUG
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
-from PIL import Image
 import cv2
 import os, warnings
 
+from PIL import Image
 img  = Image.open("assets/cats.jpg").convert("RGB")
 image_rgb = np.array(img)
 
@@ -24,7 +28,7 @@ DTYPE = torch.float16 if FP16 else torch.float32
 CACHE_PATH = "models"
 DEVICE_ID = 0
 FILL_16_9 = True
-DEPTH_RESOLUTION = 384
+DEPTH_RESOLUTION = 504
 FOREGROUND_SCALE = 0
 
 USE_TORCH_COMPILE = False
@@ -40,9 +44,9 @@ RECOMPILE_OPENVINO = True
 
 # MODEL_ID = "LiheYoung/depth-anything-small-hf"
 # MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
-MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+# MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
-# MODEL_ID = "depth-anything/DA3-SMALL"
+MODEL_ID = "depth-anything/DA3-SMALL"
 # MODEL_ID = "depth-anything/DA3MONO-LARGE"
 # MODEL_ID = "depth-anything/DA3METRIC-LARGE"
 # MODEL_ID = "Intel/dpt-large"
@@ -107,6 +111,7 @@ print(f"Model: {MODEL_ID}")
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
+IS_LEGACY_NVIDIA = False
 IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO
 IS_DIRECTML = "DirectML" in DEVICE_INFO
 IS_XPU = "XPU" in DEVICE_INFO
@@ -168,7 +173,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and ZOEDEPTH_FIX) or IS_XPU:
+if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and ZOEDEPTH_FIX) or IS_XPU or ("da3-" in MODEL_ID.lower() and USE_TENSORRT):
     FP16 = False 
 
 # Optimization for CUDA
@@ -176,12 +181,14 @@ if IS_CUDA:
     # Set cudnn benchmark for performance
     torch.backends.cudnn.benchmark = True
     os.environ["TORCHINDUCTOR_MAX_AUTOTUNE"] ="1"
+    
     if USE_TORCH_COMPILE:
         warnings.filterwarnings(
             "ignore",
             category=UserWarning,
             module=r"torch\._inductor\.lowering"
         )
+    
     # Enable TF32 for matrix multiplications
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -195,11 +202,44 @@ if IS_CUDA:
     except Exception:
         pass
 
+if IS_NVIDIA:
+    # Disable torch.compile for old NVIDIA gpu
+    def is_legacy_nvidia():
+        """Disable torch.compile for old NVIDIA gpu"""
+        device = torch.device(f'cuda:{DEVICE_ID}')
+        props = torch.cuda.get_device_properties(device)
+        
+        # check GPU compute capability
+        major, minor = props.major, props.minor
+        compute_capability = major + minor * 0.1
+        
+        # GTX 1050: compute_capability = 6.1
+        if compute_capability < 7.0:  # below Volta architecture
+            # print(f"[Main] Disabled torch.compile and TensorRT for {props.name}. ")
+            # torch._dynamo.config.suppress_errors = True
+            # os.environ['TORCHINDUCTOR_DISABLE'] = '1'
+            return True
+        return False
+    IS_LEGACY_NVIDIA = is_legacy_nvidia()
+    # if IS_LEGACY_NVIDIA:
+    #     USE_TORCH_COMPILE = False
+    #     USE_TENSORRT = False  # Disable TensorRT for legacy NVIDIA GPUs due to potential compatibility issues
+
 if IS_AMD_ROCM:
-    os.environ["HSA_XNACK"] = "1"  # Enable XNACK for ROCm
+    for gpu_id in DISABLE_CUDNN_KEYWORDS:
+        if gpu_id in DEVICE_INFO:
+            torch.backends.cudnn.enabled = False  # Disable cuDNN for known problematic AMD RX6000 GPUs
+            print(f"[Main] Disabled cuDNN for {DEVICE_INFO}. ")
+            break
+    # disable trition for RX5000 series and older AMD GPUs
+    is_legacy_amd = any(gpu_id in DEVICE_INFO for gpu_id in DISABLE_TRITON_KEYWORDS)   
+    if is_legacy_amd:
+        USE_TORCH_COMPILE = False  # Disable Tritoin for known problematic AMD GPUs
+        print(f"[Main] Disabled torch.compile for {DEVICE_INFO}. ")
+    else:
+        os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
+        os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "TRUE" # Enable flash attention autotune for AMD ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Enable AOTriton for ROCm
-    os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
-    os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "TRUE" # Enable flash attention autotune for AMD ROCm
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -304,46 +344,33 @@ def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
 
     return depth.squeeze()
 
-def process_tensor(img_rgb: np.ndarray | cv2.UMat, height: int) -> torch.Tensor:
+def process_tensor(img_uint8: torch.Tensor, target_height: int) -> torch.Tensor:
     """
-    Convert BGR/UMat image to normalized GPU tensor in model dtype.
-    Minimizes copies and avoids unnecessary GPU↔CPU syncs.
+    Memory-efficient version for uint8 tensors.
+    Minimizes temporary memory allocations during processing.
     """
-
-    # size check without extra conversions
-    if isinstance(img_rgb, cv2.UMat):
-        h0, w0 = img_rgb.get().shape[:2]
-        umat = img_rgb
-    else:
-        h0, w0 = img_rgb.shape[:2]
-        umat = cv2.UMat(img_rgb)
-
-    # resize only if needed
-    if height < h0:
-        width = (w0 * height) // h0
-        umat = cv2.resize(umat, (width, height), interpolation=cv2.INTER_LINEAR)
-
-    # single GPU → CPU readback
-    np_img = umat.get()  # uint8, HWC, contiguous
-
-    # torch conversion (zero-copy on CPU)
-    t = torch.from_numpy(np_img)
-
-    # layout + device + dtype in ONE transfer
-    t = (
-        t.permute(2, 0, 1)   # HWC → CHW (view)
-         .unsqueeze(0)       # add batch
-         .to(
-             device=DEVICE,
-             dtype=MODEL_DTYPE,
-             non_blocking=t.is_pinned()
-         )
-    )
-
-    # normalize on GPU
-    t.mul_(1.0 / 255.0)
-
-    return t
+    img_uint8 = img_uint8[..., [2, 1, 0]]
+    H0, W0, C = img_uint8.shape
+    
+    if target_height >= H0:
+        return img_uint8.to(DEVICE, dtype=DTYPE)
+    
+    new_width = int(W0 * target_height / H0)
+    new_height = (target_height // 2) * 2
+    new_width = (new_width // 2) * 2
+    
+    # Use in-place operations where possible to reduce memory usage
+    with torch.no_grad():  # Disable gradient computation for inference
+        img_float = img_uint8.to(DEVICE, dtype=DTYPE)
+        
+        # Resize
+        result = F.interpolate(
+            img_float.permute(2, 0, 1).unsqueeze(0),
+            size=(new_height, new_width),
+            mode='bilinear',
+            align_corners=False
+        ).squeeze(0).permute(1, 2, 0)
+    return result
 
 def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
     """
@@ -359,15 +386,18 @@ def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
     else:
         h0, w0 = img_rgb.shape[:2]
 
-    # If no resize necessary, just return numpy array
-    if height >= h0:
-        return img_rgb.get() if is_umat else img_rgb
-
     # Compute new size
     width = int(w0 * height / h0)
 
     # Ensure we work with UMat for fast GPU resize
     umat = img_rgb if is_umat else cv2.UMat(img_rgb)
+
+    # Covert BGRA to RGB if needed (WindowsCapture gives BGRA)
+    if umat.get().shape[2] == 4:
+        umat = cv2.cvtColor(umat, cv2.COLOR_BGRA2RGB)
+    # If no resize necessary, just return numpy array
+    if height >= h0:
+        return umat.get()
 
     # Perform the resize on GPU
     resized_umat = cv2.resize(umat, (width, height), interpolation=cv2.INTER_LINEAR)
@@ -469,8 +499,9 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
         config = builder.create_builder_config()
 
         # FP4, FP8, FP16 ENABLED
-        config.set_flag(trt.BuilderFlag.FP4)
-        config.set_flag(trt.BuilderFlag.FP8)
+        if not is_legacy_nvidia:
+            config.set_flag(trt.BuilderFlag.FP4)
+            config.set_flag(trt.BuilderFlag.FP8)
         config.set_flag(trt.BuilderFlag.FP16)
         config.set_flag(trt.BuilderFlag.TF32)
 
@@ -933,7 +964,7 @@ class DepthModelWrapper:
                 weights_only=True
             ).to(DEVICE)
             
-        if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() or USE_TENSORRT):
+        if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() or enable_trt):
             model.half()
             
         # Special setup precision for DA3
@@ -1111,13 +1142,23 @@ def warmup_model(model_wraper, steps: int = 3):
                     dummy = torch.randn(1, 3, target_size, target_size,
                                         device=DEVICE, dtype=MODEL_DTYPE)
                     model_wraper(dummy)
+                    
+    elif IS_XPU:
+        with torch.inference_mode():
+            with torch.amp.autocast('xpu', dtype=DTYPE):
+                for i in range(steps):
+                    dummy = torch.randn(1, 3, target_size, target_size,
+                                        device=DEVICE, dtype=MODEL_DTYPE)
+                    model_wraper(dummy)
     else:
         with torch.no_grad():
             for i in range(steps):
                 dummy = torch.randn(1, 3, target_size, target_size,
                                     device=DEVICE, dtype=MODEL_DTYPE)
                 model_wraper(dummy)
+    return True
 
+# Warmup the model at startup
 warmup_model(model_wraper, steps=3)
 
 lock = Lock()
@@ -1146,7 +1187,7 @@ if USE_TORCH_COMPILE and IS_CUDA:
     depth_stabilizer.__call__ = torch.compile(depth_stabilizer.__call__, fullgraph=True)
 
 # Modified predict_depth function with improved TRT integration
-def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth: bool = True, dtype=DTYPE):
+def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = False, dtype=DTYPE):
     """
     Returns depth in [0,1] using fixed square input.
     """
@@ -1155,17 +1196,20 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     # Use fixed square size
     target_size = DEPTH_RESOLUTION
 
-    # EARLY GPU TRANSFER + FIXED SIZE PREPROCESSING
-    # Convert NumPy -> Torch tensor and move to device early
-    tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=dtype, non_blocking=True)
+    # Check image_rgb is a tensor or numpy array
+    if isinstance(image_rgb, torch.Tensor):
+        tensor = image_rgb.to(device=DEVICE, dtype=dtype)
+    else:
+        # Convert NumPy -> Torch tensor and move to device early
+        tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=dtype, non_blocking=True)
     
     if return_tuple:
         # Keep original RGB for return (CHW format)
         rgb_c = tensor.permute(2, 0, 1).contiguous()  # [C, H, W]
-        tensor = rgb_c.unsqueeze(0) / 255.0  # [1, C, H, W]
+        tensor = rgb_c.unsqueeze(0)  # [1, C, H, W]
     else:
-        tensor = tensor.permute(2, 0, 1).unsqueeze(0) / 255.0  # [1, C, H, W]
-
+        tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # [1, C, H, W]
+    
     # Resize to fixed square size on GPU
     if (h, w) != (target_size, target_size):
         tensor = F.interpolate(
@@ -1173,7 +1217,7 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
             size=(target_size, target_size),
             mode='bilinear',
             align_corners=False
-        )
+        )  / 255.0
 
     # Normalize using ImageNet stats (or custom) — on GPU
     tensor = (tensor - MEAN) / STD
@@ -1187,6 +1231,10 @@ def predict_depth(image_rgb: np.ndarray, return_tuple=False, use_temporal_smooth
     elif IS_MPS:
         with torch.inference_mode():
             with torch.amp.autocast('mps', dtype=dtype):
+                depth = model_wraper(tensor)
+    elif IS_XPU:
+        with torch.inference_mode():
+            with torch.amp.autocast('xpu', dtype=dtype):
                 depth = model_wraper(tensor)
     else:
         with torch.no_grad():
@@ -1314,7 +1362,7 @@ def make_sbs_core(rgb: torch.Tensor,
     # Cast to float32 for DirectML compatibility (avoids float64 ops)
         
     C, H, W = rgb.shape
-    img = rgb.unsqueeze(0)  # [1,C,H,W]
+    img = rgb.unsqueeze(0).clamp(0, 255)  # [1,C,H,W]
     depth_strength = 0.05
     
     inv = depth - depth * depth_ratio
@@ -1410,6 +1458,30 @@ if USE_TORCH_COMPILE and IS_CUDA:
 if __name__ == "__main__":
     depth = predict_depth(image_rgb, dtype=DTYPE).squeeze(0)
     depth = depth.detach().contiguous().float().cpu().numpy()
+
+    # depth = depth.copy()
+    # depth.copy()
+    # valid_mask = depth > 0
+    # depth[valid_mask] = 1 / depth[valid_mask]
+    # depth_min=None
+    # depth_max=None
+    # percentile=2
+    # if depth_min is None:
+    #     if valid_mask.sum() <= 10:
+    #         depth_min = 0
+    #     else:
+    #         depth_min = np.percentile(depth[valid_mask], percentile)
+    # if depth_max is None:
+    #     if valid_mask.sum() <= 10:
+    #         depth_max = 0
+    #     else:
+    #         depth_max = np.percentile(depth[valid_mask], 100 - percentile)
+    # if depth_min == depth_max:
+    #     depth_min = depth_min - 1e-6
+    #     depth_max = depth_max + 1e-6
+
+    # depth = ((depth - depth_min) / (depth_max - depth_min)).clip(0, 1)
+    # depth = 1 - depth
 
     import matplotlib.pyplot as plt
     plt.imshow(depth, cmap='Spectral_r')

@@ -192,9 +192,8 @@ class DinoVisionTransformer(nn.Module):
             raise NotImplementedError
 
         if self.rope_start != -1:
-            # self.rope = RotaryPositionEmbedding2D(frequency=rope_freq) if rope_freq > 0 else None
-            # self.position_getter = PositionGetter() if self.rope is not None else None
-            self.rope = None # Edit by LC700X
+            self.rope = RotaryPositionEmbedding2D(frequency=rope_freq) if rope_freq > 0 else None
+            self.position_getter = PositionGetter() if self.rope is not None else None
         else:
             self.rope = None
         blocks_list = [
