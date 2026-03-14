@@ -1324,7 +1324,7 @@ def make_sbs_core(rgb: torch.Tensor,
     img = rgb.unsqueeze(0).clamp(0, 255)  # [1,C,H,W]
     depth_strength = 0.05
     
-    inv = depth - depth * depth_ratio
+    inv = depth - depth * depth_ratio * 2
     max_px = ipd_uv * W
     shifts = inv * max_px * depth_strength
     
