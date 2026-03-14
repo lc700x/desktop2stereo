@@ -39,15 +39,15 @@ RECOMPILE_TRT = True
 USE_COREML = False
 RECOMPILE_COREML = True
 
-USE_OPENVINO = True
+USE_OPENVINO = False
 RECOMPILE_OPENVINO = True
 
 # MODEL_ID = "LiheYoung/depth-anything-small-hf"
 # MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
 # MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
-MODEL_ID = "depth-anything/DA3-SMALL"
-# MODEL_ID = "depth-anything/DA3MONO-LARGE"
+# MODEL_ID = "depth-anything/DA3-SMALL"
+MODEL_ID = "depth-anything/DA3MONO-LARGE"
 # MODEL_ID = "depth-anything/DA3METRIC-LARGE"
 # MODEL_ID = "Intel/dpt-large"
 # MODEL_ID = "apple/DepthPro-hf"
@@ -1365,7 +1365,7 @@ def make_sbs_core(rgb: torch.Tensor,
     img = rgb.unsqueeze(0).clamp(0, 255)  # [1,C,H,W]
     depth_strength = 0.05
     
-    inv = depth - depth * depth_ratio
+    inv = depth - depth * depth_ratio * 2
     max_px = ipd_uv * W
     shifts = inv * max_px * depth_strength
     
