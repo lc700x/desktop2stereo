@@ -422,7 +422,7 @@
 > **解锁线程 (旧网络推流)** 在 Python3.11 下有时会因 `UTF-8 错误` 而失败。您可能需要多次停止和运行以获得成功的网络推流进程。
 
 ## 参考文献
-BIBTEX
+```BIBTEX
 @article{depthanything3,
   title={Depth Anything 3: Recovering the visual space from any views},
   author={Haotong Lin and Sili Chen极速设置 and Jun Hao Liew and Donny Y. Chen and Zhenyu Li and Guang Shi and Jiashi Feng and Bingyi Kang},
@@ -511,7 +511,7 @@ BIBTEX
       archivePrefix={arXiv},
       primaryClass={cs.CV}
 }
-
+```
 
 ## 感谢
 
