@@ -35,7 +35,7 @@
 
 ### Windows
 
-1.  安装最新的 GPU 驱动程序
+1.  安装最新的 GPU 驱动程序  
     **AMD GPU**:  
         - `Windows`：推荐下载25.9.2版本以获得稳定的ROCm7性能: [AMD Software: Adrenalin Edition 25.9.2 Windows下载](https://drivers.amd.com/drivers/amd-software-adrenalin-edition-25.9.2-win10-win11-sep-rdna.exe)。  
         - `Ubuntu`：从 [AMD 驱动程序和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新 GPU 驱动程序。  
@@ -44,21 +44,21 @@
     **Qualcomm GPU**: 从 [Qualcomm® Adreno™ Windows Graphics Drivers for Snapdragon® X Platform](https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver) 下载最新 GPU 驱动程序。  
     **其他 DirectML 设备**: 请安装相应的最新硬件驱动程序。  
 
-2.  安装Microsoft Visual C++ Redistributable
+2.  安装Microsoft Visual C++ Redistributable  
     下载 [Visual Studio 2017–2026 C++ Redistributable] (https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#latest-supported-redistributable-version) 并安装 (需要重启Windows)。  
 
-3.  开启长路径
+3.  开启长路径  
     双击运行**Desktop2Stereo**文件夹中的`long_path.reg`，并确认弹出的警告。
 
-4.  部署 Desktop2Stereo 环境
-    - **方法 1 (推荐)**: 使用便携版
+4.  部署 Desktop2Stereo 环境  
+    - **方法 1 (推荐)**: 使用便携版  
         下载: [夸克网盘](https://pan.quark.cn/s/9d2bcf039b96) (提取码: `1vcn`)  
         **AMD 7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 由于部署过程特殊便携版不提供，请使用 **方法 2**。   
         **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 下载并解压 `Desktop2Stereo_vX.X.X_AMD_etc_Windows.zip` 到本地磁盘。  
         **NVIDIA GPU**: 下载并解压 `Desktop2Stereo_vX.X.X_NVIDIA_Windows.zip` 到本地磁盘。  
         **Intel GPU**: 下载并解压 `Desktop2Stereo_vX.X.X_Intel_Windows.zip` 到本地磁盘。
 
-    - **方法 2**: 使用内嵌 Python 手动部署
+    - **方法 2**: 使用内嵌 Python 手动部署  
         1.  下载并解压 `Desktop2Stereo_vX.X.X_Python311_Windows.zip` 到本地磁盘。  
         2.  安装 Python 环境  
             **AMD 6000/7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7_standalone.bat`。  
@@ -66,7 +66,7 @@
             **NVIDIA GPU**: 双击 `install-cuda_standalone.bat`。  
             **Intel GPU**: 双击 `install-xpu_standalone.bat`。  
 
-    - **方法 3**: 使用系统 Python 手动部署
+    - **方法 3**: 使用系统 Python 手动部署  
         1.  安装 **Python 3.11**  
             从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) 下载并安装。
 
@@ -81,13 +81,13 @@
 
 ### MacOS
 
-1.  安装 **Python 3.11**
+1.  安装 **Python 3.11**  
     从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-macos11.pkg) 下载并安装。
 
-2.  下载 Desktop2Stereo 应用
+2.  下载 Desktop2Stereo 应用  
     下载 [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
 
-3.  安装 Python 环境
+3.  安装 Python 环境  
     双击 `install-mps` 可执行文件。(请在 **隐私与安全性设置** 中允许打开) 若无法执行，请在终端进入文件夹路径使用以下命令：
     ```bash
     chmod a+x install-mps
@@ -97,21 +97,21 @@
 
 ### Ubuntu
 
-1.  安装最新的 GPU 驱动程序
+1.  安装最新的 GPU 驱动程序  
     **AMD GPU**: 从 [AMD 驱动程序和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新 GPU 驱动程序和 ROCm。
     **NVIDIA GPU**: 从 [NVIDIA GeForce 驱动程序](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新 GPU 驱动程序。
 
-2.  安装 **Python 3.11-dev**
+2.  安装 **Python 3.11-dev**  
     ```bash
     sudo add-apt-repository ppa:savoury1/python
     sudo apt update
     sudo apt-get install python3.11-dev python3.11-venv
     ```
 
-3.  下载 Desktop2Stereo 应用
+3.  下载 Desktop2Stereo 应用  
     下载 [Desktop2Stereo_vX.X.X.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
 
-4.  安装 Python 环境
+4.  安装 Python 环境  
     **AMD 7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 请在此处检查兼容性: [https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)
     ```bash
     bash install-rocm7.bash
