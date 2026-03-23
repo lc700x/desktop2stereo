@@ -74,10 +74,10 @@
             下载 [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
 
         3.  安装 Python 环境
-            **AMD 6000/7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7.bat`。
-            **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml.bat`。
+            **AMD 6000/7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7.bat`。  
+            **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml.bat`。  
             **NVIDIA GPU**: 双击 `install-cuda.bat`。  
-            **Intel GPU**: 双击 `install-xpu.bat`。
+            **Intel GPU**: 双击 `install-xpu.bat`。  
 
 ### MacOS
 
