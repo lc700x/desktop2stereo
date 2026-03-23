@@ -59,21 +59,21 @@
         **Intel GPU**: 下载并解压 `Desktop2Stereo_vX.X.X_Intel_Windows.zip` 到本地磁盘。
 
     - **方法 2**: 使用内嵌 Python 手动部署
-        1.  下载并解压 `Desktop2Stereo_vX.X.X_Python311_Windows.zip` 到本地磁盘。
-        2.  安装 Python 环境
+        1.  下载并解压 `Desktop2Stereo_vX.X.X_Python311_Windows.zip` 到本地磁盘。  
+        2.  安装 Python 环境  
             **AMD 6000/7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7_standalone.bat`。  
             **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml_standalone.bat`。  
             **NVIDIA GPU**: 双击 `install-cuda_standalone.bat`。  
             **Intel GPU**: 双击 `install-xpu_standalone.bat`。  
 
     - **方法 3**: 使用系统 Python 手动部署
-        1.  安装 **Python 3.11**
+        1.  安装 **Python 3.11**  
             从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) 下载并安装。
 
-        2.  下载 Desktop2Stereo 应用
+        2.  下载 Desktop2Stereo 应用  
             下载 [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
 
-        3.  安装 Python 环境
+        3.  安装 Python 环境  
             **AMD 6000/7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7.bat`。  
             **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml.bat`。  
             **NVIDIA GPU**: 双击 `install-cuda.bat`。  
