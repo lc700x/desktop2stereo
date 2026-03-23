@@ -351,7 +351,7 @@ class StereoWindow:
         if not glfw.init():
             raise RuntimeError("Could not initialize GLFW")
         
-        self.monitor_index = self.get_glfw_mon_index(MONITOR_INDEX) if CAPTURE_MODE=="Monitor" else 1
+        self.monitor_index = self.get_glfw_mon_index(MONITOR_INDEX) if CAPTURE_MODE=="Monitor" else 0
         if self.specify_display:
             self.monitor_index = self.get_glfw_mon_index(self.stereo_display_index)
         # Configure window
