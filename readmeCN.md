@@ -35,7 +35,7 @@
 
 ### Windows
 
-1.  安装最新的 GPU 驱动程序  
+1.  安装最新的 GPU 驱动程序
     **AMD GPU**:  
         - `Windows`：推荐下载25.9.2版本以获得稳定的ROCm7性能: [AMD Software: Adrenalin Edition 25.9.2 Windows下载](https://drivers.amd.com/drivers/amd-software-adrenalin-edition-25.9.2-win10-win11-sep-rdna.exe)。  
         - `Ubuntu`：从 [AMD 驱动程序和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新 GPU 驱动程序。  
@@ -44,86 +44,86 @@
     **Qualcomm GPU**: 从 [Qualcomm® Adreno™ Windows Graphics Drivers for Snapdragon® X Platform](https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver) 下载最新 GPU 驱动程序。  
     **其他 DirectML 设备**: 请安装相应的最新硬件驱动程序。  
 
-2.  安装Microsoft Visual C++ Redistributable  
+2.  安装Microsoft Visual C++ Redistributable
     下载 [Visual Studio 2017–2026 C++ Redistributable] (https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#latest-supported-redistributable-version) 并安装 (需要重启Windows)。  
 
-3.  开启长路径  
+3.  开启长路径
     双击运行**Desktop2Stereo**文件夹中的`long_path.reg`，并确认弹出的警告。
 
-4.  部署 Desktop2Stereo 环境  
-    - **方法 1 (推荐)**: 使用便携版  
+4.  部署 Desktop2Stereo 环境
+    - **方法 1 (推荐)**: 使用便携版
         下载: [夸克网盘](https://pan.quark.cn/s/9d2bcf039b96) (提取码: `1vcn`)  
         **AMD 7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 由于部署过程特殊便携版不提供，请使用 **方法 2**。   
         **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 下载并解压 `Desktop2Stereo_vX.X.X_AMD_etc_Windows.zip` 到本地磁盘。  
         **NVIDIA GPU**: 下载并解压 `Desktop2Stereo_vX.X.X_NVIDIA_Windows.zip` 到本地磁盘。  
         **Intel GPU**: 下载并解压 `Desktop2Stereo_vX.X.X_Intel_Windows.zip` 到本地磁盘。
 
-    - **方法 2**: 使用内嵌 Python 手动部署  
-        1.  下载并解压 `Desktop2Stereo_vX.X.X_Python311_Windows.zip` 到本地磁盘。  
-        2.  安装 Python 环境  
+    - **方法 2**: 使用内嵌 Python 手动部署
+        1.  下载并解压 `Desktop2Stereo_vX.X.X_Python311_Windows.zip` 到本地磁盘。
+        2.  安装 Python 环境
             **AMD 6000/7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7_standalone.bat`。  
             **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml_standalone.bat`。  
             **NVIDIA GPU**: 双击 `install-cuda_standalone.bat`。  
             **Intel GPU**: 双击 `install-xpu_standalone.bat`。  
 
-    - **方法 3**: 使用系统 Python 手动部署  
-        1.  安装 **Python 3.11**  
+    - **方法 3**: 使用系统 Python 手动部署
+        1.  安装 **Python 3.11**
             从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) 下载并安装。
 
-        2.  下载 Desktop2Stereo 应用  
+        2.  下载 Desktop2Stereo 应用
             下载 [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
 
-        3.  安装 Python 环境  
-            **AMD 6000/7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7.bat`。  
-            **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml.bat`。  
+        3.  安装 Python 环境
+            **AMD 6000/7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7.bat`。
+            **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml.bat`。
             **NVIDIA GPU**: 双击 `install-cuda.bat`。  
-            **Intel GPU**: 双击 `install-xpu.bat`。  
+            **Intel GPU**: 双击 `install-xpu.bat`。
 
 ### MacOS
 
-1.  安装 **Python 3.11**  
+1.  安装 **Python 3.11**
     从 [Python.org](https://www.python.org/ftp/python/3.10.11/python-3.10.11-macos11.pkg) 下载并安装。
 
-2.  下载 Desktop2Stereo 应用  
-    下载 [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
+2.  下载 Desktop2Stereo 应用
+    下载 [Desktop2Stereo.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 解压到本地磁盘。
 
-3.  安装 Python 环境  
+3.  安装 Python 环境
     双击 `install-mps` 可执行文件。(请在 **隐私与安全性设置** 中允许打开) 若无法执行，请在终端进入文件夹路径使用以下命令：
-    ```bash
+    bash
     chmod a+x install-mps
     chmod a+x run_mac
     chmod a+x update_mac_linux
-    ```
+
 
 ### Ubuntu
 
-1.  安装最新的 GPU 驱动程序  
+1.  安装最新的 GPU 驱动程序
     **AMD GPU**: 从 [AMD 驱动程序和支持](https://www.amd.com/en/support/download/drivers.html) 下载最新 GPU 驱动程序和 ROCm。
     **NVIDIA GPU**: 从 [NVIDIA GeForce 驱动程序](https://www.nvidia.com/en-us/geforce/drivers/) 下载最新 GPU 驱动程序。
 
-2.  安装 **Python 3.11-dev**  
-    ```bash
+2.  安装 **Python 3.11-dev**
+    bash
     sudo add-apt-repository ppa:savoury1/python
     sudo apt update
     sudo apt-get install python3.11-dev python3.11-venv
-    ```
 
-3.  下载 Desktop2Stereo 应用  
+
+3.  下载 Desktop2Stereo 应用
     下载 [Desktop2Stereo_vX.X.X.zip](https://github.com/lc700x/desktop2stereo/releases/latest) 并解压到本地磁盘。
 
-4.  安装 Python 环境  
+4.  安装 Python 环境
     **AMD 7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 请在此处检查兼容性: [https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)
-    ```bash
+    bash
     bash install-rocm7.bash
-    ```
+
     **旧AMD GPU**: 运行 `install-rocm.bash`:
-    ```bash
+    bash
     bash install-rocm.bash
-    ```
+
     **NVIDIA GPU**: 运行 `install-cuda.bash`:
-    ```bash
+    bash
     bash install-cuda.bash
-    ```
+
 
 ## 运行 Desktop2Stereo
 
@@ -132,7 +132,7 @@
 1.  在 Desktop2Stereo 中选择一个 **运行模式**: `本地查看`, `MJPEG推流`, `RTMP推流`, `旧网络推流`, `3D 显示器`
 2.  选择 **计算设备**
 3.  选择目标 **显示器/窗口**
-4.  直接使用默认设置并点击 **运行**。
+4.  直接使用默认极速设置并点击 **运行**。
 
 ![run](./assets/Run.png)  
 
@@ -174,15 +174,15 @@
 > [!Tip]
 > **RTMP推流** 模式通过捕获本地的**Stereo Viewer**窗口，最适合将视频和音频一起无线流式传输到客户端设备/应用程序，如 **VLC 播放器**, **Wolvic 浏览器**等，但可能会有 `1~3` 秒的延迟。
 
-1.  选择运行模式为 **RTMP推流**。
+1.  极速设置运行模式为 **RTMP推流**。
 2.  选择一个 **流协议**: 推荐使用 `HLS`。  
 3.  选择一个音频设备
     - **Windows**
         选择 **立体声混音** 为 `Stereo Mix (Realtek(R))`，并选择 `Realtek(R) HD Audio` 作为系统声音输出设备。  
 
-        ![Windows Sound Output](./assets/audio.png)
+        ![Windows Sound Output](./assets/极速设置audio.png)
 
-        如果您的 Windows 设备没有 `Stereo Mix (Realtek(R))`，请安装 [Screen Capture Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest) 并选择 **立体声混音** 为 `virtual-audio-capturer`。
+        如果您的 Windows 设备没有 `Stereo Mix (Realtek(R))`，请安装 [Screen Capture Recorder](极速设置https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest) 并选择 **立体声混音** 为 `virtual-audio-capturer`。
 
     - **MacOS**
         安装以下包含音频捕获驱动程序的软件之一：
@@ -190,12 +190,12 @@
         b. **Virtual Desktop Streamer**: https://www.vrdesktop.net/
         c. **Loopback**: https://rogueamoeba.com/loopback/ (商业版)
         d. 或其他虚拟音频设备
-        选择 **立体声混音** 为 `BlackHole 2ch` 或 `Virtual Desktop Speakers` 或 `Loopback Audio` 或其他相应的虚拟音频设备，并选择同名的系统 **输出** 设备。  
+        选择 **立体声混音** 为 `BlackHole 2ch`极速设置 或 `Virtual Desktop Speakers` 或 `Loopback Audio` 或其他相应的虚拟音频设备，并选择同名的系统 **输出** 设备。  
 
         ![Mac Sound Output](./assets/audio2.png) 
 
     - **Ubuntu**
-        选择 **立体声混音** 设备名称以 `stereo.monitor` 结尾，例如 `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`，并在系统声音设置中选择**输出设备**为 `Digtial Output(S/PDIF)-xxxx`。  
+        选择 **立体极速设置声混音** 设备名称以 `stereo.monitor` 结尾，例如 `alsa_output.pci-xxxx_xx_1x.x.analog-stereo.monitor`，并在系统声音设置中选择**输出设备**为 `Digtial Output(S/PDIF)-xxxx`。  
 
         ![Linux Sound Output](./assets/audio3.png) 
 
@@ -208,7 +208,7 @@
 > [!Tip]
 > **AR**: 用 **VLC 播放器** 打开 `HLS M3U8` 链接并使用 `Full-SBS` 显示模式。  
 > **VR** / **华为AR**: 用 **Wolvic 浏览器** 打开 `HLS` 链接并使用 `Half_SBS` / `TAB` 显示模式。 
-> 如果是**MacOS**上推流，您也可以使用 `WebRTC` 链接。  
+> 如果是**MacOS**上推流，您也可以使用 `WebRTC极速设置` 链接。  
 > 客户端设备上的其他 `RTSP`, `RTMP`, `HLS M3U8` 协议可能适用于 **VLC 播放器** [例如 AR 眼镜的扩展屏幕模式] / VR视频应用程序 (如**DeoVR**) 。
 > 若使用全宽左右模式 (`Full-SBS`) 输出相同主屏幕的分辨率，您将需要宽度为原始屏幕两倍的屏幕，如主屏幕`4k (3840x2160)`则第二个 (虚拟) 屏幕需要为`8k (7680x2160)`
 
@@ -226,7 +226,7 @@
 4.  在客户端设备上，输入 **流服务器 URL** 以访问视频。
 5.  对于音频，请使用连接到您的 PC 或 Mac 的 **蓝牙** 或 **耳机**。
 
-### **旧网络推流** 模式
+### **旧网络推流** 极速设置模式
 
 ![Legacy Streamer](./assets/legacy.png)
 
@@ -250,11 +250,11 @@
 | 按键              | 动作描述                                       | 支持的运行模式                   |
 | ----------------- | ---------------------------------------------- | ------------------------------ |
 | `回车键` / `空格键` | 切换全屏                                       | 本地查看 |
-| `← 左`            | 将窗口移动到相邻显示器（上一个）                  | 本地查看 / RTMP推流 / 3D 显示器  |
+| `← 极速设置左`            | 将窗口移动到相邻显示器（上一个）                  | 本地查看 / RTMP推流 / 3D 显示器  |
 | `→ 右`            | 将窗口移动到相邻显示器（下一个）                  | 本地查看 / RTMP推流 / 3D 显示器 |
 | `Esc`             | 关闭应用程序窗口                                | 本地查看 / RTMP推流 / 3D 显示器 |
 | `↑ 上`            | 深度强度增加 0.5 (最大 10)                     | 本地查看 / RTMP推流 / 3D 显示器 |
-| `↓ 下`            | 深度强度减少 0.5 (最小 0)                      | 本地查看 / RTMP推流 / 3D 显示器 |
+| `↓ 下`            | 深度强度减少 极速设置0.5 (最小 0)                      | 本地查看 / RTMP推流 / 3D 显示器 |
 | `0`               | 重置深度强度为原始值                           | 本地查看 / RTMP推流 / 3D 显示器 |
 | `Tab`             | 循环切换到下一个显示模式                       | 本地查看 / RTMP推流 / 3D 显示器 |
 | `F`               | 切换 FPS 显示                                  | 本地查看 / RTMP推流 / 3D 显示器 |
@@ -286,13 +286,13 @@
     在 **Stereo Viewer** 的标题栏和输出左右眼画面的画面上显示 FPS 指示器。
 7. **捕获工具** (仅限 Windows)  
 
-    - **DXCamera**: 基于 [wincam](https://github.com/lovettchris/wincam) 使用 `DXGI Desktop Duplication API`，具有最高的 FPS 但 CPU 温度较高。
+    - **DXCamera**: 基于 [wincam](https://github.com/l极速设置ovettchris/wincam) 使用 `DXGI Desktop Duplication API`，具有最高的 FPS 但 CPU 温度较高。
     - **WindowsCapture**: 基于 [Windows-Capture Python](https://github.com/NiiightmareXD/windows-capture/tree/main/windows-capture-python) 使用 `Graphics Capture API`，FPS 稍低但 CPU 使用率和温度较低。它需要...
 8. **FPS** (每秒帧数)  
     FPS 可以设置为您的显示器刷新率，默认输入 FPS 是 `60`。
     它决定了屏幕捕获过程的频率和流服务器模式的流帧率（更高的 FPS 不保证更流畅的输出，取决于您的设备）。
 9. **输出分辨率**  
-    默认为 `1080` (即 **1080p**, `1920x1080`) 以获得更流畅的体验。如果您的设备性能强大，也可以选择 `2160` (**4K**, 即 `3840x2160`) 和 `1440` (**2K**, 即 `2560x1440`) 分辨率。
+    默认为 `1080` (即 **1080p**, `1920x1080`) 以获得更流畅的体验。如果您的设备性能强大，也可以选择 `216极速设置0` (**4K**, 即 `3840x2160`) 和 `1440` (**2K**, 即 `2560x1440`) 分辨率。
     如果输入源的分辨率小于输出分辨率，则 **输出分辨率** 将应用与较小者相同的分辨率。
     **输出分辨率** 默认保持输入源的宽高比。
 10. **填充 16:9**  
@@ -306,9 +306,9 @@
     **深度强度**越高，物体的 3D 深度效果越强。然而，过高的值可能会导致可见的伪影和失真。
     默认设置为 `2.0`。推荐的深度强度范围是 `(1, 5)`。
 14. **抗锯齿**  
-    这可以有效减少在高 **深度强度** 下的锯齿边缘和伪影，默认值设置为 `1` 适用于大多数情况。更高的值可能会减少深度细节。
+    这可以有效减少在高 **深度强度** 下的锯齿边缘和伪影，默认值设置为 `1` 适用于大多数情况。更高的极速设置值可能会减少深度极速设置细节。
 15. **前景缩放**  
-    默认值为 `1.0`。`正值` 表示前景更近，背景更远。`负值` 表示前景更平，背景更近。`0` 表示前景和背景强度不变。
+    默认值为 `1.0`。`正值` 表示前景更近，背景更远。`负极速设置值` 表示前景更平，背景更近。`0` 表示前景和背景强度不变。
 16. **显示模式**  
     它决定了左右眼画面在输出中的排列方式。默认为大多数 VR 设备使用 `Half-SBS`，`TAB` 也是一种选择；`Full-SBS` 主要用于 AR 眼镜。
 
@@ -330,7 +330,7 @@
     瞳距 (IPD) 是您瞳孔中心之间的距离，它影响您的大脑如何解读立体 3D。  
     默认瞳距为 `0.064` (米)，这是人类的平均瞳距值。  
 18. **串流协议**（仅限 **RTMP Streamer**）  
-    默认使用 `HLS` 以获得最佳兼容性，`HLS M3U8` 可在移动端 **VLC Player** 中使用。支持的协议包括 `RTMP`、`RTSP`、`HLS`、`HLS M3U8` 和 `WebRTC`。你可以切换协议以显示目标 URL，当 **RTMP Streamer** 正常工作时，所有 URL 都可直接使用。  
+    默认使用 `HLS` 以获得最佳兼容性，`HLS M3U8` 可在移动端 **VLC Player** 中使用。支持的协议包括 `RTMP`、`RTSP`、`HLS`、`HLS M3极速设置U8` 和 `WebRTC`。你可以切换协议以显示目标 URL，当 **RTMP Streamer** 正常工作时，所有 URL 都可直接使用。  
 19. **串流地址**（仅限 **RTMP Streamer**、**MJPEG Streamer**、**Legacy Streamer**）  
     只读，由所选串流协议和本地 IP 动态生成。  
 20. **串流密钥**（仅限 **RTMP Streamer**）  
@@ -340,21 +340,21 @@
 22. **立体声混音**（仅限 **RTMP Streamer**）  
     这是用于捕捉系统播放音频的 **立体声混音（Stereo Mix）** 设备。  
     在 Windows 上，通常使用 `Stereo Mix (Realtek(R))`，并在 Windows 音频设置中将输出设备设置为 `Realtek(R) HD Audio`。也可以使用来自 [Screen Capture Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest) 的虚拟音频设备。  
-    在 macOS 上，可以选择 [BlackHole](https://existential.audio/blackhole/)、[Virtual Desktop Speakers](https://www.vrdesktop.net/)、[Loopback] 或其他虚拟音频设备。请确保在 macOS 音频设置中使用相同的输出设备。  
+    在 macOS 上，可以选择 [BlackHole](https://existential.audio/blackhole/)、[Virtual Desktop Speakers](https://www.vrdesktop.net/)、[Loopback] 或其他虚拟音频设备。请确保在 macOS 音频极速设置设置中使用相同的输出设备。  
 23. **音频延迟**（仅限 **RTMP Streamer**）  
     默认值为 `-0.15` 秒，用于对齐处理后音频与视频的时间戳。`负值` 表示音频会比视频提前播放，`正值` 表示音频会比视频延后播放。  
 24. **下载路径**   
-    默认下载路径是工作目录下的 `models` 文件夹。
+    默认下载路径是工作目录下的 `models` 极速设置文件夹。
 25. **深度模型**  
     从 [HuggingFace](https://huggingface.co/) 修改深度模型 ID，`depth_model` 下的模型 ID 大多应以 `-hf` 结尾。
     大模型会导致更高的 GPU 使用率和延迟。
     默认深度模型: `depth-anything/Depth-Anything-V2-Small-hf`。
-    您也可以在 `settings.yaml` 中手动添加 Hugging Face 模型，这些模型包含 `model.safetensors`, `config.json`, `preprocessor_config.json` 文件，可在 [HuggingFace](https://huggingface.co/) 找到。
+    您也可以在 `settings.yaml` 中手动添加 Hugging Face 模型，这些模型包含 `model.safetensors`, `config.json`, `preprocessor_config.json` 极速设置文件，可在 [HuggingFace](https://huggingface.co/) 找到。
     **当前支持的模型**:  
 
       - depth-anything/Depth-Anything-V2-Small-hf
       - depth-anything/Depth-Anything-V2-Base-hf
-      - depth-anything/Depth-Anything-V2-Large-hf
+      - depth-anything/Depth-Anything极速设置-V2-Large-hf
       - depth-anything/Video-Depth-Anything-Small
       - depth-anything/Video-Depth-Anything-Base
       - depth-anything/Video-Depth-Anything-Large
@@ -367,7 +367,7 @@
       - depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf
       - depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf
       - depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf
-      - depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
+     极速设置 - depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf
       - depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf
       - depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf
       - depth-anything/Metric-Video-Depth-Anything-Small
@@ -377,12 +377,12 @@
       - LiheYoung/depth-anything-base-hf
       - LiheYoung/depth-anything-large-hf
       - xingyang1/Distill-Any-Depth-Small-hf
-      - lc700x/Distill-Any-Depth-Base-hf
+      - lc700x/Distill-极速设置Any-Depth-Base-hf
       - xingyang1/Distill-Any-Depth-Large-hf
       - facebook/dpt-dinov2-small-kitti
-      - lc700x/dpt-dinov2-base-kitti-hf
+      - lc700x/dpt-dinov2-base-kitti-h极速设置f
       - lc700x/dpt-dinov2-large-kitti-hf
-      - lc700x/dpt-dinov2-giant-kitti-hf
+      - l极速设置c700x/dpt-dinov2-giant-kitti-hf
       - lc700x/dpt-dinov2-small-nyu-hf
       - lc700x/dpt-dinov2-base-nyu-hf
       - lc700x/dpt-dinov2-large-nyu-hf
@@ -412,7 +412,7 @@
 
     **Apple Silicon (MPS)**:
 
-    - **CoreML**：这是 Apple 的机器学习框架，专为在 Apple 设备上高效运行机器学习模型而设计。通过将模型转换为 CoreML 格式，可以利用 Apple 硬件的优化功能，实现更快的推理速度和更低的能耗。
+    - **CoreML**：这是 Apple 的机器学习框架，专为极速设置在 Apple 设备上高效运行机器学习模型而设计。通过将模型转换为 CoreML 格式，可以利用 Apple 硬件的优化功能，实现更快的推理速度和更低的能耗。
 
     **DirectML** (**AMD GPU** 等):
 
@@ -420,15 +420,12 @@
 
 > [!Warning]
 > **解锁线程 (旧网络推流)** 在 Python3.11 下有时会因 `UTF-8 错误` 而失败。您可能需要多次停止和运行以获得成功的网络推流进程。
->
-> > [!Warning]
-> **解锁线程 (旧网络推流)** 在 Python3.11 下有时会因 `UTF-8 错误` 而失败。您可能需要多次停止和运行以获得成功的网络推流进程。
 
 ## 参考文献
-```BIBTEX
+BIBTEX
 @article{depthanything3,
   title={Depth Anything 3: Recovering the visual space from any views},
-  author={Haotong Lin and Sili Chen and Jun Hao Liew and Donny Y. Chen and Zhenyu Li and Guang Shi and Jiashi Feng and Bingyi Kang},
+  author={Haotong Lin and Sili Chen极速设置 and Jun Hao Liew and Donny Y. Chen and Zhenyu Li and Guang Shi and Jiashi Feng and Bingyi Kang},
   journal={arXiv preprint arXiv:2511.10647},
   year={2025}
 }
@@ -443,11 +440,11 @@
 @article{depth_anything_v2,
   title={Depth Anything V2},
   author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Zhao, Zhen and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
-  journal={arXiv:2406.09414},
+  journal={arXiv:极速设置2406.09414},
   year={2024}
 }
 
-@inproceedings{depth_anything_v1,
+@inproceedings{depth_anything_v极速设置1,
   title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data}, 
   author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
   booktitle={CVPR},
@@ -474,7 +471,7 @@
     journal = "IEEE Transactions on Pattern Analysis and Machine Intelligence",
     year    = "2022",
     volume  = "44",
-    number  = "3"
+    number  = "44"
 }
 
 @article{birkl2023midas,
@@ -486,7 +483,7 @@
 
 @article{bhat2023zoedepth,
   title={Zoedepth: Zero-shot transfer by combining relative and metric depth},
-  author={Bhat, Shariq Farooq and Birkl, Reiner and Wofk, Diana and Wonka, Peter and M{\"u}ller, Matthias},
+  author={Bhat, Shariq Farooq and Birkl, Reiner and W极速设置ofk, Diana and Wonka, Peter and M{\"u}ller, Matthias},
   journal={arXiv preprint arXiv:2302.12288},
   year={2023}
 }
@@ -500,32 +497,31 @@
 }
 
 @article{Ranftl2020,
-	author    = {Ren\'{e} Ranftl and Katrin Lasinger and David Hafner and Konrad Schindler and Vladlen Koltun},
+	author    = {Ren\'{e} Ranftl and Katrin Lasinger and David Hafner and Konrad Sch极速设置indler and Vladlen Koltun},
 	title     = {Towards Robust Monocular Depth Estimation: Mixing Datasets for Zero-shot Cross-dataset Transfer},
 	journal   = {IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI)},
-	year      = {2020},
+	year     极速设置= {2020},
 }
 
 @misc{oquab2023dinov2,
       title={DINOv2: Learning Robust Visual Features without Supervision}, 
-      author={Maxime Oquab and Timothée Darcet and Théo Moutakanni and Huy Vo and Marc Szafraniec and Vasil Khalidov and Pierre Fernandez and Daniel Haziza and Francisco Massa and Alaaeldin El-Nouby and Mahmoud Assran and Nicolas Ballas and Wojciech Galuba and Russell Howes and Po-Yao Huang and Shang-Wen Li and Ishan Misra and Michael Rabbat and Vasu Sharma and Gabriel Synnaeve and Hu Xu and Hervé Jegou and Julien Mairal and Patrick Labatut and Armand Joulin and Piotr Bojanowski},
+      author={Maxime Oquab and Timothée Darcet and Théo Moutakanni and Huy Vo and Marc Szafraniec and Vasil Khalid极速设置ov and Pierre Fernandez and Daniel Haziza and Francisco Massa and Alaaeldin El-Nouby and Mahmoud Assran and Nicolas Ballas极速设置 and Wojciech Galuba and Russell Howes and Po-Yao Huang and Shang-Wen Li and Ishan Misra and Michael Rabbat and Vasu Sharma and Gabriel Synnaeve and Hu Xu and Hervé Jegou and Julien Mairal and Patrick Labatut and Armand Joulin and Piotr Bojanowski},
       year={2023},
       eprint={2304.07193},
       archivePrefix={arXiv},
       primaryClass={cs.CV}
 }
 
-```
 
 ## 感谢
 
 - [lovettchris/wincam](https://github.com/lovettchris/wincam/)  
 - [NiiightmareXD/windows-capture](https://github.com/NiiightmareXD/windows-capture)  
 - [BoboTiG/python-mss](https://github.com/BoboTiG/python-mss)  
-- [nagadomi/nunif](https://github.com/nagadomi/nunif)  
+- [nagadomi/nunif极速设置](https://github.com/nagadomi/nunif)  
 - [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)  
 - [waydabber/BetterDisplay](https://github.com/waydabber/BetterDisplay) 
 - [guinmoon/rocm7_builds](https://github.com/guinmoon/rocm7_builds)
 - [woct0rdho/triton-windows](https://github.com/woct0rdho/triton-windows) 
 - 其他相关的工具和库
-- 所有用户的反馈
+- 所有用户的反馈  
