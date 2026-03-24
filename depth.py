@@ -1,4 +1,5 @@
 # depth.py
+import os
 import torch
 
 # # Support for old AMD GPU with ZLUDA support (hide)
@@ -9,41 +10,7 @@ import torch
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DEBUG
-import torch.nn.functional as F
-from transformers import AutoModelForDepthEstimation
-import numpy as np
-from threading import Lock
-import cv2
-import os, warnings
-
-if not DEBUG:
-    warnings.filterwarnings('ignore') # disable for debug
-
-# Try import OpenVINO runtime
-try:
-    import openvino as ov
-    OPENVINO_AVAILABLE = True
-except Exception:
-    ov = None
-    OPENVINO_AVAILABLE = False
-    USE_OPENVINO = False
-
-# Decide OpenVINO device (prefer GPU)
-OPENVINO_DEVICE = None
-if USE_OPENVINO and OPENVINO_AVAILABLE:
-    try:
-        core_tmp = ov.Core()
-        devices_tmp = core_tmp.available_devices
-        if any("GPU" in d for d in devices_tmp):
-            OPENVINO_DEVICE = "GPU"
-        elif any("CPU" in d for d in devices_tmp):
-            OPENVINO_DEVICE = "CPU"
-        else:
-            OPENVINO_DEVICE = devices_tmp[0] if len(devices_tmp) > 0 else None
-    except Exception:
-        OPENVINO_DEVICE = None
-
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG
 # Initialize DirectML Device
 def get_device(index=0):
     try:
@@ -76,6 +43,49 @@ IS_DIRECTML = "DirectML" in DEVICE_INFO
 IS_XPU = "XPU" in DEVICE_INFO
 IS_MPS = "MPS" in DEVICE_INFO
 IS_CPU = "CPU" in DEVICE_INFO
+
+USE_TORCH_COMPILE = False if not IS_CUDA else USE_TORCH_COMPILE
+USE_TENSORRT = False if not IS_NVIDIA else USE_TENSORRT
+USE_COREML = False if not IS_MPS else USE_COREML
+USE_OPENVINO = False if not IS_XPU else USE_OPENVINO
+
+
+import torch.nn.functional as F
+from transformers import AutoModelForDepthEstimation
+import numpy as np
+from threading import Lock
+import cv2
+import os, warnings
+
+if not DEBUG:
+    warnings.filterwarnings('ignore') # disable for debug
+
+# Try import OpenVINO runtime
+try:
+    import openvino as ov
+    OPENVINO_AVAILABLE = True
+    # Disable OpenVivo
+    USE_OPENVINO = False if any(x in MODEL_ID.lower()  for x in DISABLE_OPENVINO_KEYWORDS) else True
+    USE_TORCH_COMPILE = False
+except Exception:
+    ov = None
+    OPENVINO_AVAILABLE = False
+    USE_OPENVINO = False
+
+# Decide OpenVINO device (prefer GPU)
+OPENVINO_DEVICE = None
+if USE_OPENVINO and OPENVINO_AVAILABLE:
+    try:
+        core_tmp = ov.Core()
+        devices_tmp = core_tmp.available_devices
+        if any("GPU" in d for d in devices_tmp):
+            OPENVINO_DEVICE = "GPU"
+        elif any("CPU" in d for d in devices_tmp):
+            OPENVINO_DEVICE = "CPU"
+        else:
+            OPENVINO_DEVICE = devices_tmp[0] if len(devices_tmp) > 0 else None
+    except Exception:
+        OPENVINO_DEVICE = None
 
 # Correction for ZoeDepth models
 ZOEDEPTH_FIX = False
@@ -132,7 +142,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and ZOEDEPTH_FIX) or IS_XPU or ("da3-" in MODEL_ID.lower() and USE_TENSORRT):
+if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and ZOEDEPTH_FIX) or ("da3-" in MODEL_ID.lower() and USE_TENSORRT) or (("da3" in MODEL_ID.lower() or "video-depth-any" in MODEL_ID.lower()) and IS_XPU):
     FP16 = False 
 
 # Optimization for CUDA
@@ -180,9 +190,13 @@ if IS_NVIDIA:
             return True
         return False
     IS_LEGACY_NVIDIA = is_legacy_nvidia()
-    # if IS_LEGACY_NVIDIA:
-    #     USE_TORCH_COMPILE = False
-    #     USE_TENSORRT = False  # Disable TensorRT for legacy NVIDIA GPUs due to potential compatibility issues
+    if IS_LEGACY_NVIDIA:
+        USE_TORCH_COMPILE = False
+        # USE_TENSORRT = False  # Disable TensorRT for legacy NVIDIA GPUs due to potential compatibility issues
+
+    # Disable TRT for unsupported models
+    if MODEL_ID in DISABLE_TRT_KEYWORDS:
+        USE_TENSORRT = False
 
 if IS_AMD_ROCM:
     for gpu_id in DISABLE_CUDNN_KEYWORDS:
@@ -193,7 +207,7 @@ if IS_AMD_ROCM:
     # disable trition for RX5000 series and older AMD GPUs
     is_legacy_amd = any(gpu_id in DEVICE_INFO for gpu_id in DISABLE_TRITON_KEYWORDS)   
     if is_legacy_amd:
-        USE_TORCH_COMPILE = False  # Disable Tritoin for known problematic AMD GPUs
+        USE_TORCH_COMPILE = False  # Disable Triton for known problematic AMD GPUs
         print(f"[Main] Disabled torch.compile for {DEVICE_INFO}. ")
     else:
         os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
@@ -652,7 +666,7 @@ def _ensure_openvino_cache_dir():
     """
     Return path to OpenVINO cache directory and ensure it exists.
     """
-    cache_dir = os.path.join(MODEL_FOLDER, "openvino_cache")
+    cache_dir = os.path.join(MODEL_FOLDER, f"openvino_cache_{DEPTH_RESOLUTION}" + ("_fp16" if FP16 else "_fp32"))
     os.makedirs(cache_dir, exist_ok=True)
     return cache_dir
 
@@ -1409,7 +1423,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
         rgb = overlay_fps(rgb, fps)  # your existing overlay function
 
     sbs_tensor = make_sbs_core(rgb, depth, ipd_uv, depth_ratio, display_mode)
-    return sbs_tensor.to(torch.uint8).permute(1,2,0).contiguous().cpu().numpy()
+    return sbs_tensor.detach().cpu().to(torch.uint8).permute(1, 2, 0).contiguous().numpy()
 
 if USE_TORCH_COMPILE and IS_CUDA:
     make_sbs_core = torch.compile(make_sbs_core)

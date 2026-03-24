@@ -47,7 +47,7 @@ DISABLE_COREML_KEYWORDS = [
 
 # Models with Disabled OpenVINO 
 DISABLE_OPENVINO_KEYWORDS = [
-    "da3",
+    "da3-",
     "dpt-hybrid-midas-hf",
 ]
 

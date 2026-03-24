@@ -290,7 +290,7 @@ class DinoVisionTransformer(nn.Module):
             pos_nodiff = torch.zeros_like(pos).to(pos.dtype)
             if self.patch_start_idx > 0:
                 pos = pos + 1
-                pos_special = torch.zeros(B * S, self.patch_start_idx, 2).to(device).to(pos.dtype)
+                pos_special = torch.zeros(B * S, self.patch_start_idx, 2).to(device, dtype=pos.dtype)
                 pos_special = rearrange(pos_special, "(b s) n c -> b s n c", b=B)
                 pos = torch.cat([pos_special, pos], dim=2)
                 pos_nodiff = pos_nodiff + 1

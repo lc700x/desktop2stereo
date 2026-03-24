@@ -880,9 +880,9 @@ class StereoWindow:
         """Optimized texture updates with external FPS and latency input"""
         # Convert depth tensor to numpy array if needed
         if hasattr(depth, 'detach'):  # Check if it's a torch tensor
-            depth = depth.detach().contiguous().float().cpu().numpy()
+            depth = depth.detach().cpu().contiguous().float().numpy()
         if hasattr(rgb, 'detach'):  # Check if it's a torch tensor
-            rgb = rgb.detach().contiguous().float().cpu().numpy().clip(0, 255).astype(np.uint8)
+            rgb = rgb.detach().cpu().contiguous().float().numpy().clip(0, 255).astype(np.uint8)
 
         # Only add overlay for stereo modes, not for depth map
         if self.display_mode != "Depth Map":

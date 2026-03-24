@@ -1472,7 +1472,6 @@ class ConfigGUI(tk.Tk):
             self.check_recompile_coreml.grid_remove()
             self.check_openvino.grid()
             self.check_recompile_openvino.grid()
-            self.fp16_cb.grid_remove()
             self.update_recompile_openvino_visibility()
             self.update_openvino_visibility_based_on_model(current_model)
             
