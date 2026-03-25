@@ -4,7 +4,7 @@ import os, platform, socket
 # Debug Mode
 DEBUG = False
 # App Version
-VERSION = "2.4.0"
+VERSION = "2.4.1"
 # Get OS name
 OS_NAME = platform.system()
 
@@ -154,13 +154,13 @@ if OS_NAME == "Windows":
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     def hide_window_from_capture(glfw_window):
         """Set display affinity to exclude window from screen capture (Windows only)."""
-        WDA_EXCLUDEFROMCAPTURE = 0x00000011
+        WDA_MONITOR = 0x00000011
         hwnd = glfw.get_win32_window(glfw_window)
         SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
         SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
         SetWindowDisplayAffinity.restype = wintypes.BOOL
 
-        result = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+        result = SetWindowDisplayAffinity(hwnd, WDA_MONITOR)
         if result:
             print("StereoWindow is now hidden from screen capture.")
         else:

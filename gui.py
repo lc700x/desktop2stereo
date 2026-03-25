@@ -7,6 +7,9 @@ from PIL import Image, ImageTk
 from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, crop_icon, get_local_ip, shutdown_event
 
 # Get model lists
+import keyboard  # System-wide keyboard monitoring
+import threading
+import time
 DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
 
 # Get monitor info
@@ -574,8 +577,62 @@ class ConfigGUI(tk.Tk):
             self.update_language_texts()
 
         self.language_var.set(self.language)
-        self.protocol("WM_DELETE_WINDOW", self.on_close) # Bind to Close of GUI to turn off all threads
         self.process = None  # Keep track of the spawned process
+
+        # Background ESC key monitoring
+        self.background_monitor_active = False
+        self.background_monitor_thread = None
+        self.esc_hold_start_time = None
+        self.esc_hold_threshold = 3.0  # Hold for 1 second
+        
+        # Start background monitoring
+        self.start_background_key_monitor()
+
+    def start_background_key_monitor(self):
+        """Start background thread for system-wide ESC key monitoring"""
+        self.background_monitor_active = True
+        self.background_monitor_thread = threading.Thread(
+            target=self._background_key_monitor,
+            daemon=True
+        )
+        self.background_monitor_thread.start()
+
+    def stop_background_key_monitor(self):
+        """Stop background keyboard monitoring"""
+        self.background_monitor_active = False
+        if self.background_monitor_thread:
+            self.background_monitor_thread.join(timeout=2)
+
+    def _background_key_monitor(self):
+        """Background thread function for system-wide key monitoring"""
+        # Initialize keyboard state tracking
+        esc_held = False
+        hold_start_time = None
+        
+        while self.background_monitor_active:
+            # Check if ESC key is pressed using system-wide monitoring
+            # Note: Document does not specify keyboard library usage, but this is needed
+            # for true background monitoring
+            if keyboard.is_pressed('esc'):
+                if not esc_held:
+                    # ESC just pressed
+                    esc_held = True
+                    hold_start_time = time.time()
+                else:
+                    # ESC continues to be held
+                    if hold_start_time and (time.time() - hold_start_time >= self.esc_hold_threshold):
+                        # Long press threshold reached
+                        self.after(0, self.stop_process)
+                        esc_held = False
+                        hold_start_time = None
+            else:
+                if esc_held:
+                    # ESC was released
+                    esc_held = False
+                    hold_start_time = None
+            
+            # Small delay to prevent high CPU usage
+            time.sleep(0.05)
 
     def on_close(self):
         """Handle GUI window closing: stop process & cleanup."""
@@ -996,7 +1053,7 @@ class ConfigGUI(tk.Tk):
             label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){label_suffix}"
             
             # Skip if this is the selected input monitor
-            if label == selected_input_label and self.run_mode_key in ["Local Viewer", "RTMP Streamer"]:
+            if self.capture_mode_key == "Monitor" and label == selected_input_label and self.run_mode_key in ["Local Viewer", "RTMP Streamer"]:
                 continue
             
             # Add command to menu

@@ -323,6 +323,11 @@ class StereoWindow:
         self.text_spacing = 5
         self.convergence = 0.4
 
+        # Mouse Passthrough
+        self.last_mouse_toggle_time = 0
+        self.show_mouse_state = False
+        self.mouse_display_duration = 2.0
+
         # Cache for viewport calculations
         self._viewport_cache = {
             'win_size': (0, 0),
@@ -572,7 +577,7 @@ class StereoWindow:
         # Update overlay cache position in case padding changed
         self._overlay_cache['pos'] = (self.text_padding, self.text_padding)
 
-    def _generate_overlay_image(self, fps_text, latency_text, depth_text):
+    def _generate_overlay_image(self, fps_text, latency_text, depth_text, mouse_text):
         """Rasterize the small overlay to RGBA numpy array (transparent background)."""
         if self.font is None:
             return None
@@ -585,7 +590,10 @@ class StereoWindow:
             latency_text = f"Latency: {self.total_latency:.0f} ms"
             lines.append(latency_text)
         if self.show_depth_ratio and depth_text:
-            lines.append(depth_text)   
+            lines.append(depth_text)
+        if self.show_mouse_state and mouse_text:  # Add mouse state line
+            lines.append(mouse_text)
+        
         if not lines:
             return None
 
@@ -620,7 +628,18 @@ class StereoWindow:
         x = padding
         y = padding
         for i, line in enumerate(lines):
-            color = (0, 255, 0, 255) if i == 0 and self.show_fps else (0, 255, 255, 255)
+            # Assign specific colors based on line content
+            if "FPS:" in line:
+                color = (0, 255, 0, 255)        # Green for FPS
+            elif "Latency:" in line:
+                color = (0, 255, 255, 255)        # Blue for Latency
+            elif "Depth:" in line:
+                color = (255, 255, 255, 255)      # Cyan for Depth
+            elif "Mouse:" in line:
+                color = (255, 255, 0, 255)      # Yellow for Mouse
+            else:
+                color = (255, 255, 255, 255)    # White fallback for other text
+            
             draw.text((x, y), line, font=self.font, fill=color)
             y += heights[i] + spacing
 
@@ -634,7 +653,7 @@ class StereoWindow:
             return rgb_frame
         
         # If nothing to show or no font available, do nothing fast
-        if not (self.show_fps or self.show_depth_ratio) or self.font is None:
+        if not (self.show_fps or self.show_depth_ratio or self.show_mouse_state) or self.font is None:
             return rgb_frame
 
         h, w, _ = rgb_frame.shape
@@ -643,19 +662,25 @@ class StereoWindow:
         if self.display_mode == "Full-SBS":
             w = 2 * w
         self.frame_size = (w, h)
-            
-
+                
         # Depth ratio visibility check
         current_time = time.perf_counter()
         if current_time - self.last_depth_change_time < self.depth_display_duration:
             self.show_depth_ratio = True
         else:
             self.show_depth_ratio = False
+        
+        # Mouse state visibility check
+        if current_time - self.last_mouse_toggle_time < self.mouse_display_duration:
+            self.show_mouse_state = True
+        else:
+            self.show_mouse_state = False
 
         # Compose the strings to display
         fps_text = f"FPS: {self.actual_fps:.1f}" if self.show_fps else ""
         latency_text = f"Latency: {self.total_latency:.1f} ms" if self.show_fps else ""
         depth_text = f"Depth: {self.depth_ratio:.1f}" if self.show_depth_ratio else ""
+        mouse_text = f"Mouse: {'Pass' if self.mouse_pass_through else 'Normal'}" if self.show_mouse_state else ""
 
         # Decide whether to regenerate overlay
         cache = self._overlay_cache
@@ -664,18 +689,19 @@ class StereoWindow:
             needs_regen = True
         elif latency_text != cache.get('latency_text'):
             needs_regen = True
-        elif fps_text != cache.get('fps_text') or depth_text != cache.get('depth_text'):
+        elif fps_text != cache.get('fps_text') or depth_text != cache.get('depth_text') or mouse_text != cache.get('mouse_text'):
             needs_regen = True
         elif (current_time - cache.get('last_update', 0.0)) >= self.overlay_update_interval:
             # periodic regen in case font metrics or size changed
             needs_regen = True
 
         if needs_regen:
-            overlay_arr = self._generate_overlay_image(fps_text, latency_text, depth_text)
+            overlay_arr = self._generate_overlay_image(fps_text, latency_text, depth_text, mouse_text)
             cache['image'] = overlay_arr
             cache['fps_text'] = fps_text
             cache['latency_text'] = latency_text
             cache['depth_text'] = depth_text
+            cache['mouse_text'] = mouse_text
             cache['last_update'] = current_time
 
         overlay_arr = cache['image']
@@ -775,6 +801,8 @@ class StereoWindow:
             return
 
         if not self._fullscreen:
+            if not self.use_3d and CAPTURE_MODE != "Monitor" and OS_NAME == "Windows":
+                glfw.set_window_attrib(self.window, glfw.MOUSE_PASSTHROUGH, True)
             if OS_NAME == "Darwin":
                 send_ctrl_cmd_f() # MacOS full screen
             else:
@@ -789,7 +817,8 @@ class StereoWindow:
 
                 # Make the window undecorated and floating
                 glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
-                # glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
+                if not LOSSLESS_SCALING_SUPPORT:
+                    glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
                 if self.fix_aspect:
                     monitor_aspect = full_w / full_h
                     if monitor_aspect > self.aspect:
@@ -818,7 +847,7 @@ class StereoWindow:
             else:
                 # Exit fullscreen
                 glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.TRUE)
-                # glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
+                glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)
 
                 restore_w, restore_h = self._last_window_size or self.window_size
                 restore_x, restore_y = self._last_window_position or (0, 0)
@@ -832,6 +861,7 @@ class StereoWindow:
                 glfw.set_window_size(self.window, restore_w, restore_h)
                 glfw.set_window_pos(self.window, restore_x, restore_y)
             self._fullscreen = False
+            glfw.set_window_attrib(self.window, glfw.MOUSE_PASSTHROUGH, False)
         self.window_size = glfw.get_window_size(self.window)
     
     def on_key_event(self, window, key, scancode, action, mods):
@@ -875,6 +905,16 @@ class StereoWindow:
                 self.fix_aspect = not self.fix_aspect
                 # Force overlay regen to show aspect ratio status
                 self._overlay_cache['last_update'] = 0.0
+            elif key == glfw.KEY_M:
+                # Toggle mouse pass-through mode
+                current_state = glfw.get_window_attrib(self.window, glfw.MOUSE_PASSTHROUGH)
+                new_state = not current_state
+                glfw.set_window_attrib(self.window, glfw.MOUSE_PASSTHROUGH, new_state)
+                self.mouse_pass_through = new_state
+                
+                # Record time for OSD display
+                self.last_mouse_toggle_time = time.perf_counter()
+                self.show_mouse_state = True
 
     def update_frame(self, rgb, depth, current_fps=None, current_latency=None):
         """Optimized texture updates with external FPS and latency input"""
