@@ -803,6 +803,7 @@ class StereoWindow:
         if not self._fullscreen:
             if not self.use_3d and CAPTURE_MODE != "Monitor" and OS_NAME == "Windows":
                 glfw.set_window_attrib(self.window, glfw.MOUSE_PASSTHROUGH, True)
+                glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
             if OS_NAME == "Darwin":
                 send_ctrl_cmd_f() # MacOS full screen
             else:
@@ -817,8 +818,6 @@ class StereoWindow:
 
                 # Make the window undecorated and floating
                 glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
-                if not LOSSLESS_SCALING_SUPPORT:
-                    glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
                 if self.fix_aspect:
                     monitor_aspect = full_w / full_h
                     if monitor_aspect > self.aspect:
