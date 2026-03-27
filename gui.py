@@ -317,7 +317,7 @@ DEFAULTS = {
     "Capture Mode": "Monitor",  # "Monitor" or "Window"
     "Monitor Index": 1,
     "Window Title": "",
-    "Output Resolution": 1080,
+    "Output Resolution": 1440,
     "FPS": 60,
     "Show FPS": False,
     "Model List": DEFAULT_MODEL_LIST,
