@@ -128,9 +128,9 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
 
     # Initialize capture object and capture loop
     cap = (
-        WindowsCapture(window_name=WINDOW_TITLE)
+        WindowsCapture(window_name=WINDOW_TITLE, minimum_update_interval= 1000 // FPS)
         if CAPTURE_MODE == "Window"
-        else WindowsCapture(monitor_index=MONITOR_INDEX)
+        else WindowsCapture(monitor_index=MONITOR_INDEX, minimum_update_interval= 1000 // FPS)
     )
 
     def capture_loop():
@@ -144,11 +144,6 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
             capture_started_event.set()
             
             raw_q.put((frame.frame_buffer, OUTPUT_RESOLUTION, capture_start_time))
-            
-            # Calculate total processing time and wait if needed
-            process_time = time.perf_counter() - capture_start_time
-            wait_time = max(TIME_SLEEP - process_time, 0)
-            time.sleep(wait_time)
 
         @cap.event
         def on_closed():
@@ -186,7 +181,7 @@ def process_loop():
             
             # Get frame with capture latency
             process_start_time = time.perf_counter()
-            frame_raw, size, capture_start_time = raw_q.get(timeout=TIME_SLEEP)
+            frame_raw, size, capture_start_time = raw_q.get(timeout=0.001)
             capture_latency = process_start_time - capture_start_time
             thread_latencies['capture'] = capture_latency
 
@@ -249,7 +244,7 @@ def cleanup_all_resources():
     for q in queues:
         while not q.empty():
             try:
-                q.get(timeout=TIME_SLEEP)
+                q.get(timeout=0.001)
             except:
                 pass
 
@@ -978,7 +973,7 @@ def main(mode="Viewer"):
                 while not shutdown_event.is_set():
                     try:
                         # Get frame with capture and process latencies
-                        frame_rgb, capture_latency, process_start_time = proc_q.get(timeout=TIME_SLEEP)
+                        frame_rgb, capture_latency, process_start_time = proc_q.get(timeout=0.001)
                         if shutdown_event.is_set():
                             break
                         
@@ -1036,7 +1031,7 @@ def main(mode="Viewer"):
                 try:
                     sbs_start_time = time.perf_counter()
                     # Get frame with all latency data
-                    rgb, depth, capture_latency, process_latency, depth_start_time = depth_q.get(timeout=TIME_SLEEP)
+                    rgb, depth, capture_latency, process_latency, depth_start_time = depth_q.get(timeout=0.001)
                     
                     # calculate depth latency
                     depth_latency = sbs_start_time - depth_start_time
@@ -1171,7 +1166,7 @@ def main(mode="Viewer"):
                 def sbs_loop():
                     while not shutdown_event.is_set():
                         try:
-                            rgb, depth = depth_q.get(timeout=TIME_SLEEP)
+                            rgb, depth = depth_q.get(timeout=0.001)
                             if shutdown_event.is_set():
                                 break
                             sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
@@ -1182,7 +1177,7 @@ def main(mode="Viewer"):
             def depth_loop():
                 while not shutdown_event.is_set():
                     try:
-                        frame_rgb, _, _ = proc_q.get(timeout=TIME_SLEEP)
+                        frame_rgb, _, _ = proc_q.get(timeout=0.001)
                         if shutdown_event.is_set():
                             break
                         depth, rgb = predict_depth(frame_rgb, return_tuple=True)
@@ -1212,9 +1207,9 @@ def main(mode="Viewer"):
                 try:
                     if not BOOST:
                         # Fix for unstable dml runtime error
-                        sbs = depth_q.get(timeout=TIME_SLEEP)
+                        sbs = depth_q.get(timeout=0.001)
                     else:
-                        sbs = sbs_q.get(timeout=TIME_SLEEP)
+                        sbs = sbs_q.get(timeout=0.001)
                     streamer.set_frame(sbs)
                     
                     # Calculate FPS

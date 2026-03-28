@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: None
+Monitor Index: none
 Window Title: ''
 FPS: 60
 Show FPS: false
@@ -412,7 +412,7 @@ Recompile CoreML: false
 OpenVINO: false
 Recompile OpenVINO: false
 Unlock Thread (Legacy Streamer): false
-Capture Tool: DXCamera
+Capture Tool: none
 Fill 16:9: true
 Fix Viewer Aspect: false
 Lossless Scaling Support: false
@@ -421,4 +421,4 @@ Stereo Mix: ''
 CRF: 20
 Audio Delay: -0.15
 Specify Display: true
-Stereo Monitor: None
+Stereo Monitor: none

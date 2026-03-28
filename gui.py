@@ -350,7 +350,7 @@ DEFAULTS = {
     "CRF": 20,
     "Audio Delay": -0.15,
     "Lossless Scaling Support": False,
-    "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
+    "Capture Tool": "WindowsCaptureCUDA" if "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM else "WindowsCapture",  # "WindowsCaptureCUDA" for NVIDIA GPU, "WindowsCapture", "DXCamera"
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False, # keep the viewer window aspect ratio not change
     "Specify Display": 1,
@@ -588,6 +588,27 @@ class ConfigGUI(tk.Tk):
         # Start background monitoring
         self.start_background_key_monitor()
 
+    def _get_capture_tool_options(self, device_label):
+        """
+        Get available capture tool options based on the selected computing device.
+        
+        Args:
+            device_label: The currently selected device name from the "Computing Device" dropdown.
+        
+        Returns:
+            List of available capture tool names.
+        """
+        if OS_NAME != "Windows":
+            return ["WindowsCapture", "DXCamera"]
+        
+        # Check if the current device is NVIDIA CUDA (not ROCm)
+        is_nvidia_cuda = "CUDA" in device_label.upper() and not IS_ROCM
+        
+        if is_nvidia_cuda:
+            return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera"]
+        else:
+            return ["WindowsCapture", "DXCamera"]
+
     def start_background_key_monitor(self):
         """Start background thread for system-wide ESC key monitoring"""
         self.background_monitor_active = True
@@ -749,13 +770,9 @@ class ConfigGUI(tk.Tk):
             self.showfps_cb.grid(row=6, column=3, sticky="w", **self.pad)
         
         # Capture Tool
-        
         self.label_capture_tool = ttk.Label(self.content_frame, text="Capture Tool:")
         self.label_capture_tool.grid(row=7, column=0, sticky="w", **self.pad)
-        if OS_NAME == "Windows" and "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM:
-            self.capture_tool_values = ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera"]
-        else:
-            self.capture_tool_values = ["WindowsCapture", "DXCamera"]
+        self.capture_tool_values = self._get_capture_tool_options(DEVICES.get(0, {}).get("name", ""))
         self.capture_tool_cb = ttk.Combobox(self.content_frame, values=self.capture_tool_values, state="readonly")
         self.capture_tool_cb.grid(row=7, column=1, sticky="ew", **self.pad)
         if OS_NAME != "Windows":
@@ -1491,6 +1508,27 @@ class ConfigGUI(tk.Tk):
     def on_device_change(self, *args):
         """Update UI visibility based on the selected device."""
         device_label = self.device_var.get()
+
+        # Check for Windows
+        if OS_NAME == "Windows":
+            # get current list of capture tools
+            self.capture_tool_values = self._get_capture_tool_options(device_label)
+            # Update the values
+            self.capture_tool_cb['values'] = self.capture_tool_values
+            # Check if the current device is NVIDIA CUDA
+            is_nvidia_cuda = "CUDA" in device_label.upper() and not IS_ROCM
+            if is_nvidia_cuda:
+                # For NVIDIA CUDA devices, auto-select WindowsCaptureCUDA
+                if "WindowsCaptureCUDA" in self.capture_tool_cb['values']:
+                    self.capture_tool_cb.set("WindowsCaptureCUDA")
+                elif self.capture_tool_cb['values']:  # If WindowsCaptureCUDA is not in the list but other options exist
+                    self.capture_tool_cb.set(self.capture_tool_cb['values'][0])
+            else:
+                # For non-NVIDIA CUDA devices
+                current_value = self.capture_tool_cb.get()
+                if current_value not in self.capture_tool_cb['values'] and self.capture_tool_cb['values']:
+                    # If the current value is not in the new list, set to the first available option
+                    self.capture_tool_cb.set(self.capture_tool_cb['values'][0])
 
         # Determine device type
         if "CUDA" in device_label:
