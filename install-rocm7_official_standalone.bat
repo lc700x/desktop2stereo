@@ -3,7 +3,8 @@ echo --- Desktop2Stereo Installer (With ROCm for AMD 7000/9000/AI series GPU/APU
 echo - Setting up the virtual environment
 
 @REM Set paths, acutually using Python 3.12
-Set "PYTHON_EXE=.\Python311\python.exe"
+set "VIRTUAL_ENV=Python311"
+Set "PYTHON_EXE=.\%VIRTUAL_ENV%\python.exe"
 
 
 @REM Update pip
@@ -30,5 +31,32 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+
+REM Check if the archive file exists
+if exist ".\%VIRTUAL_ENV%\Lib\site-packages\rocm_sdk_devel\_devel.tar" (
+    echo Found _devel.tar archive, extracting to python\Lib\site-packages\_rocm_sdk_devel...
+    
+    REM Extract the archive
+    echo Extracting _devel.tar, this may take a moment ...
+    cd ".\%VIRTUAL_ENV%\Lib\site-packages\rocm_sdk_devel"
+    tar -xf _devel.tar -C "..\."
+    
+    if %errorlevel% equ 0 (
+        echo ROCm SDK development files extracted successfully.
+        REM Remove the archive file after successful extraction
+        echo Removing the archive file _devel.tar...
+        del _devel.tar
+    ) else (
+        echo Failed to extract ROCm SDK development files.
+    )
+) else (
+    echo Warning: _devel.tar archive not found in .\python\Lib\site-packages\rocm_sdk_devel\
+    echo Skipping ROCm SDK development files extraction.
+)
+
+cd "..\..\..\.."
+echo.
+
 echo Python environment deployed successfully.
 pause
+exit /b 0

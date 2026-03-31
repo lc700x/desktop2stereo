@@ -57,6 +57,7 @@ set "AMD_MODELS_7000=7900 7800 7700 7600 7500 7650 780 760 740"
 set "AMD_MODELS_8000S=8060 8050 8040"
 set "AMD_MODELS_890M=890 880"
 set "AMD_MODELS_860M=860 840"
+set "AMD_MODELS_860M=820"
 set "AMD_MODELS_6000=6950 6900 6850 6800 6750 6700 6650 6600 6550 6500 6400 6300 680 610"
 set "AMD_MODELS_5000=5700 5600 5500 5400 5300 520 160"
 
@@ -75,6 +76,9 @@ if %errorlevel% equ 0 goto :InstallDependencies
 call :CheckModel "%GPU_MODEL%" AMD_MODELS_860M requirements-rocm7-860M.txt
 if %errorlevel% equ 0 goto :InstallDependencies
 
+call :CheckModel "%GPU_MODEL%" AMD_MODELS_820M requirements-rocm7-860M.txt
+if %errorlevel% equ 0 goto :InstallDependencies
+
 call :CheckModel "%GPU_MODEL%" AMD_MODELS_6000 requirements-rocm7-6000.txt
 if %errorlevel% equ 0 goto :InstallDependencies
 
@@ -91,9 +95,10 @@ echo 2. requirements-rocm7-7000.txt
 echo 3. requirements-rocm7-8000S.txt
 echo 4. requirements-rocm7-890M.txt
 echo 5. requirements-rocm7-860M.txt
-echo 6. requirements-rocm7-6000.txt
-echo 7. requirements-rocm7-5000.txt
-echo 8. Cancel
+echo 6. requirements-rocm7-820M.txt
+echo 7. requirements-rocm7-6000.txt
+echo 8. requirements-rocm7-5000.txt
+echo 9. Cancel
 echo.
 set /p USER_CHOICE="Enter your choice (1-7): "
 if "%USER_CHOICE%"=="1" set "REQUIREMENTS_FILE=requirements-rocm7-9000.txt" & goto :InstallDependencies
@@ -101,9 +106,10 @@ if "%USER_CHOICE%"=="2" set "REQUIREMENTS_FILE=requirements-rocm7-7000.txt" & go
 if "%USER_CHOICE%"=="3" set "REQUIREMENTS_FILE=requirements-rocm7-8000S.txt" & goto :InstallDependencies
 if "%USER_CHOICE%"=="4" set "REQUIREMENTS_FILE=requirements-rocm7-890M.txt" & goto :InstallDependencies
 if "%USER_CHOICE%"=="5" set "REQUIREMENTS_FILE=requirements-rocm7-860M.txt" & goto :InstallDependencies
-if "%USER_CHOICE%"=="6" set "REQUIREMENTS_FILE=requirements-rocm7-6000.txt" & goto :InstallDependencies
-if "%USER_CHOICE%"=="7" set "REQUIREMENTS_FILE=requirements-rocm7-5000.txt" & goto :InstallDependencies
-if "%USER_CHOICE%"=="8" (
+if "%USER_CHOICE%"=="6" set "REQUIREMENTS_FILE=requirements-rocm7-820M.txt" & goto :InstallDependencies
+if "%USER_CHOICE%"=="7" set "REQUIREMENTS_FILE=requirements-rocm7-6000.txt" & goto :InstallDependencies
+if "%USER_CHOICE%"=="8" set "REQUIREMENTS_FILE=requirements-rocm7-5000.txt" & goto :InstallDependencies
+if "%USER_CHOICE%"=="9" (
   echo Installation cancelled by user.
   pause
   exit /b 1
@@ -120,7 +126,6 @@ call set "MODEL_LIST=%%%2%%"
 for %%a in (%MODEL_LIST%) do (
   if /I "%~1"=="%%a" (
     set "REQUIREMENTS_FILE=%~3"
-    echo Installing %REQUIREMENTS_FILE% ...
     exit /b 0
   )
 )
@@ -131,7 +136,8 @@ exit /b 1
 :InstallDependencies
 echo - Setting up the virtual environment
 REM Set paths
-Set "PYTHON_EXE=.\Python311\python.exe"
+set "VIRTUAL_ENV=Python311"
+Set "PYTHON_EXE=.\%VIRTUAL_ENV%\python.exe"
 
 echo.
 echo Installing requirements from: %REQUIREMENTS_FILE%
@@ -144,9 +150,9 @@ if %errorlevel% neq 0 (
   exit /b 1
 )
 %PYTHON_EXE% -m pip install -r %REQUIREMENTS_FILE% --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
-%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install "triton-windows<3.7" --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 if %errorlevel% neq 0 (
     echo Failed to install requirements
@@ -154,6 +160,33 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+
+REM Check if the archive file exists
+if exist ".\%VIRTUAL_ENV%\Lib\site-packages\rocm_sdk_devel\_devel.tar" (
+    echo Found _devel.tar archive, extracting to python\Lib\site-packages\_rocm_sdk_devel...
+    
+    REM Extract the archive
+    echo Extracting _devel.tar, this may take a moment ...
+    cd ".\%VIRTUAL_ENV%\Lib\site-packages\rocm_sdk_devel"
+    tar -xf _devel.tar -C "..\."
+    
+    if %errorlevel% equ 0 (
+        echo ROCm SDK development files extracted successfully.
+        REM Remove the archive file after successful extraction
+        echo Removing the archive file _devel.tar...
+        @REM del _devel.tar
+    ) else (
+        echo Failed to extract ROCm SDK development files.
+    )
+) else (
+    echo Warning: _devel.tar archive not found in .\python\Lib\site-packages\rocm_sdk_devel\
+    echo Skipping ROCm SDK development files extraction.
+)
+
+cd "..\..\..\.."
+echo.
+
 echo Python environment deployed successfully.
 pause
 exit /b 0
+
