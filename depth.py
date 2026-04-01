@@ -61,33 +61,36 @@ if not DEBUG:
     warnings.filterwarnings('ignore') # disable for debug
 
 # Try import OpenVINO runtime
-if USE_OPENVINO:
-    try:
-        import openvino as ov
-        OPENVINO_AVAILABLE = True
-        # Disable OpenVivo
-        USE_OPENVINO = False if any(x in MODEL_ID.lower()  for x in DISABLE_OPENVINO_KEYWORDS) else True
-        USE_TORCH_COMPILE = False
-    except Exception:
-        ov = None
-        OPENVINO_AVAILABLE = False
-        USE_OPENVINO = False
+if IS_XPU:
+    if USE_OPENVINO:
+        try:
+            import openvino as ov
+            OPENVINO_AVAILABLE = True
+            # Disable OpenVivo
+            USE_OPENVINO = False if any(x in MODEL_ID.lower()  for x in DISABLE_OPENVINO_KEYWORDS) else True
+            USE_TORCH_COMPILE = False
+        except Exception:
+            ov = None
+            OPENVINO_AVAILABLE = False
+            USE_OPENVINO = False
 
-# Decide OpenVINO device (prefer GPU)
-OPENVINO_DEVICE = None
-if USE_OPENVINO and OPENVINO_AVAILABLE:
-    try:
-        core_tmp = ov.Core()
-        devices_tmp = core_tmp.available_devices
-        if any("GPU" in d for d in devices_tmp):
-            OPENVINO_DEVICE = "GPU"
-        elif any("CPU" in d for d in devices_tmp):
-            OPENVINO_DEVICE = "CPU"
-        else:
-            OPENVINO_DEVICE = devices_tmp[0] if len(devices_tmp) > 0 else None
-    except Exception:
-        OPENVINO_DEVICE = None
-
+    # Decide OpenVINO device (prefer GPU)
+    OPENVINO_DEVICE = None
+    if USE_OPENVINO and OPENVINO_AVAILABLE:
+        try:
+            core_tmp = ov.Core()
+            devices_tmp = core_tmp.available_devices
+            if any("GPU" in d for d in devices_tmp):
+                OPENVINO_DEVICE = "GPU"
+            elif any("CPU" in d for d in devices_tmp):
+                OPENVINO_DEVICE = "CPU"
+            else:
+                OPENVINO_DEVICE = devices_tmp[0] if len(devices_tmp) > 0 else None
+        except Exception:
+            OPENVINO_DEVICE = None
+else:
+    USE_OPENVINO = False
+    
 # Correction for ZoeDepth models
 ZOEDEPTH_FIX = False
 if MODEL_ID in ("Intel/zoedepth-nyu", "Intel/zoedepth-kitti", "Intel/zoedepth-nyu-kitti"):
