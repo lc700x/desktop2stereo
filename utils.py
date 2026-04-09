@@ -189,6 +189,82 @@ if OS_NAME == "Windows":
         if hwnd:
             win32gui.SetWindowPos(hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
 
+# Model Mapping Dict
+MODEL_MAPPING = {
+    # Depth-Anything V2
+    "Depth-Anything-V2-Small-hf": "depth-anything/Depth-Anything-V2-Small-hf",
+    "Depth-Anything-V2-Base-hf": "depth-anything/Depth-Anything-V2-Base-hf",
+    "Depth-Anything-V2-Large-hf": "depth-anything/Depth-Anything-V2-Large-hf",
+    
+    # Video-Depth-Anything
+    "Video-Depth-Anything-Small": "depth-anything/Video-Depth-Anything-Small",
+    "Video-Depth-Anything-Base": "depth-anything/Video-Depth-Anything-Base",
+    "Video-Depth-Anything-Large": "depth-anything/Video-Depth-Anything-Large",
+    
+    # DA3
+    "DA3-SMALL": "depth-anything/DA3-SMALL",
+    "DA3-BASE": "depth-anything/DA3-BASE",
+    "DA3-LARGE-1.1": "depth-anything/DA3-LARGE-1.1",
+    "DA3-GIANT-1.1": "depth-anything/DA3-GIANT-1.1",
+    "DA3METRIC-LARGE": "depth-anything/DA3METRIC-LARGE",
+    "DA3NESTED-GIANT-LARGE-1.1": "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
+    
+    # Depth-Anything-V2 Metric Outdoor
+    "Depth-Anything-V2-Metric-Outdoor-Small-hf": "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf",
+    "Depth-Anything-V2-Metric-Outdoor-Base-hf": "depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf",
+    "Depth-Anything-V2-Metric-Outdoor-Large-hf": "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf",
+    
+    # Depth-Anything-V2 Metric Indoor
+    "Depth-Anything-V2-Metric-Indoor-Small-hf": "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf",
+    "Depth-Anything-V2-Metric-Indoor-Base-hf": "depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf",
+    "Depth-Anything-V2-Metric-Indoor-Large-hf": "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf",
+    
+    # Metric-Video-Depth-Anything
+    "Metric-Video-Depth-Anything-Small": "depth-anything/Metric-Video-Depth-Anything-Small",
+    "Metric-Video-Depth-Anything-Base": "depth-anything/Metric-Video-Depth-Anything-Base",
+    "Metric-Video-Depth-Anything-Large": "depth-anything/Metric-Video-Depth-Anything-Large",
+    
+    # LiheYoung/depth-anything
+    "depth-anything-small-hf": "LiheYoung/depth-anything-small-hf",
+    "depth-anything-base-hf": "LiheYoung/depth-anything-base-hf",
+    "depth-anything-large-hf": "LiheYoung/depth-anything-large-hf",
+    
+    # Distill-Any-Depth
+    "Distill-Any-Depth-Small-hf": "xingyang1/Distill-Any-Depth-Small-hf",
+    "Distill-Any-Depth-Base-hf": "lc700x/Distill-Any-Depth-Base-hf",
+    "Distill-Any-Depth-Large-hf": "xingyang1/Distill-Any-Depth-Large-hf",
+    
+    # DPT-DINOv2 KITTI
+    "dpt-dinov2-small-kitti": "facebook/dpt-dinov2-small-kitti",
+    "dpt-dinov2-base-kitti-hf": "lc700x/dpt-dinov2-base-kitti-hf",
+    "dpt-dinov2-large-kitti-hf": "lc700x/dpt-dinov2-large-kitti-hf",
+    "dpt-dinov2-giant-kitti-hf": "lc700x/dpt-dinov2-giant-kitti-hf",
+    
+    # DPT-DINOv2 NYU
+    "dpt-dinov2-small-nyu-hf": "lc700x/dpt-dinov2-small-nyu-hf",
+    "dpt-dinov2-base-nyu-hf": "lc700x/dpt-dinov2-base-nyu-hf",
+    "dpt-dinov2-large-nyu-hf": "lc700x/dpt-dinov2-large-nyu-hf",
+    "dpt-dinov2-giant-nyu": "facebook/dpt-dinov2-giant-nyu",
+    
+    # Other
+    "depth-ai-hf": "lc700x/depth-ai-hf",
+    "dpt-hybrid-midas-hf": "lc700x/dpt-hybrid-midas-hf",
+    
+    # Intel/DPT
+    "dpt-beit-base-384": "Intel/dpt-beit-base-384",
+    "dpt-beit-large-512": "Intel/dpt-beit-large-512",
+    "dpt-large": "Intel/dpt-large",
+    "dpt-large-redesign-hf": "lc700x/dpt-large-redesign-hf",
+    
+    # Intel/ZoeDepth
+    "zoedepth-nyu-kitti": "Intel/zoedepth-nyu-kitti",
+    "zoedepth-nyu": "Intel/zoedepth-nyu",
+    "zoedepth-kitti": "Intel/zoedepth-kitti",
+
+    # Apple/DepthPro
+    "DepthPro-hf": "apple/DepthPro-hf"
+}
+
 # Streamer Settings
 DEFAULT_PORT = 1122
 STREAM_QUALITY = settings["Stream Quality"]
@@ -203,7 +279,8 @@ STREAM_MODE = None
 
 # Add for FrameGen
 LOSSLESS_SCALING_SUPPORT = False
-MODEL_ID = settings["Depth Model"]
+MODEL = settings["Depth Model"]
+MODEL_ID = MODEL_MAPPING[MODEL]
 ALL_MODELS = settings["Model List"]
 CACHE_PATH = settings["Download Path"]
 DEPTH_RESOLUTION = settings["Depth Resolution"]
@@ -212,7 +289,7 @@ FP16 = False if OS_NAME == "Darwin" else settings["FP16"]
 MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
 SHOW_FPS, FPS, DEPTH_STRENGTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 IPD = settings["IPD"]
-CONVERGENCE = 1
+CONVERGENCE = settings["Convergence"]
 CAPTURE_MODE = settings["Capture Mode"]
 WINDOW_TITLE = settings["Window Title"]
 

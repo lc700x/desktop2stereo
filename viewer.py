@@ -187,7 +187,7 @@ FRAGMENT_SHADER = """
 
         // Sample depth
         float depth = texture(tex_depth, flipped_uv).r;
-        float depth_inv = - depth;
+        float depth_inv = -depth;
 
         // Calculate parallax shift
         float shift = (depth_inv + u_convergence);

@@ -327,6 +327,7 @@ DEFAULTS = {
     "Anti-aliasing": 2,
     "Foreground Scale": 0.5,
     "IPD": 0.064,
+    "Convergence": 0.0,
     "Display Mode": "Half-SBS",
     "FP16": True,
     "torch.compile": False,
@@ -366,6 +367,7 @@ UI_TEXTS = {
         "Show FPS": "Show FPS",
         "Output Resolution:": "Output Resolution:",
         "IPD (m):": "IPD (m):",
+        "Convergence:": "Convergence:",
         "Display Mode:": "Display Mode:",
         "Depth Model:": "Depth Model:",
         "Depth Strength:": "Depth Strength:",
@@ -446,6 +448,7 @@ UI_TEXTS = {
         "Show FPS": "显示帧率",
         "Output Resolution:": "输出分辨率:",
         "IPD (m):": "瞳距 (米):",
+        "Convergence:": "会聚点:",
         "Display Mode:": "显示模式",
         "Depth Model:": "深度模型:",
         "Depth Strength:": "深度强度:",
@@ -866,70 +869,78 @@ class ConfigGUI(tk.Tk):
             state="normal"
         )
         self.ipd_spin.grid(row=11, column=3, sticky="ew", **self.pad)
-        
-        # Download path
-        self.label_download = ttk.Label(self.content_frame, text="Download Path:")
-        self.label_download.grid(row=12, column=0, sticky="w", **self.pad)
-        self.download_var = tk.StringVar()
-        self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
-        self.download_entry.grid(row=12, column=1, columnspan=2, sticky="ew", **self.pad)
-        self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
-        self.btn_browse.grid(row=12, column=3, sticky="ew", **self.pad)
-        
+
         # Depth Model
         self.label_depth_model = ttk.Label(self.content_frame, text="Depth Model:")
-        self.label_depth_model.grid(row=13, column=0, sticky="w", **self.pad)
+        self.label_depth_model.grid(row=12, column=0, sticky="w", **self.pad)
         self.depth_model_var = tk.StringVar()
         self.depth_model_cb = ttk.Combobox(self.content_frame, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
-        self.depth_model_cb.grid(row=13, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.depth_model_cb.grid(row=12, column=1, columnspan=1, sticky="ew", **self.pad)
         self.depth_model_cb.bind("<<ComboboxSelected>>", self.on_depth_model_change)
+
+        # Convergence
+        self.label_convergence = ttk.Label(self.content_frame, text="Convergence:")
+        self.label_convergence.grid(row=12, column=2, sticky="w", **self.pad)
+        self.convergence_values = ["-0.5", "-0.25", "0.0", "0.25", "0.5", "0.75", "1.0"]
+        self.convergence_cb = ttk.Combobox(self.content_frame, values=self.convergence_values, state="normal")
+        self.convergence_cb.grid(row=12, column=3, sticky="ew", **self.pad)
+        self.convergence_cb.set("0.0")
+
+        # Download path
+        self.label_download = ttk.Label(self.content_frame, text="Download Path:")
+        self.label_download.grid(row=13, column=0, sticky="w", **self.pad)
+        self.download_var = tk.StringVar()
+        self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
+        self.download_entry.grid(row=13, column=1, sticky="ew", **self.pad)
+        self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
+        self.btn_browse.grid(row=13, column=2, sticky="ew", **self.pad)
 
         # Add Inference Optimizer dropdown after Device selection
         self.use_torch_compile = tk.BooleanVar()
         self.use_tensorrt = tk.BooleanVar()
         self.unlock_streamer_thread = tk.BooleanVar()
         self.label_inference_optimizer = ttk.Label(self.content_frame, text="Inference Optimizer:")
-        self.label_inference_optimizer.grid(row=14, column=0, sticky="w", **self.pad)
+        self.label_inference_optimizer.grid(row=15, column=0, sticky="w", **self.pad)
 
         # Torch Compile
         self.check_torch_compile = ttk.Checkbutton(self.content_frame, text="torch.compile", variable=self.use_torch_compile)
-        self.check_torch_compile.grid(row=14, column=1, sticky="w", **self.pad)
+        self.check_torch_compile.grid(row=15, column=1, sticky="w", **self.pad)
 
         # TensorRT
         self.check_tensorrt = ttk.Checkbutton(self.content_frame, text="TensorRT", variable=self.use_tensorrt)
-        self.check_tensorrt.grid(row=14, column=2, sticky="w", **self.pad)
+        self.check_tensorrt.grid(row=15, column=2, sticky="w", **self.pad)
 
         # Unlock Thread (Legacy Streamer)
         self.check_unlock_streamer_thread = ttk.Checkbutton(self.content_frame, text="Unlock Thread (Legacy Streamer)", variable=self.unlock_streamer_thread)
-        self.check_unlock_streamer_thread.grid(row=14, column=1, sticky="w", **self.pad)
+        self.check_unlock_streamer_thread.grid(row=15, column=1, sticky="w", **self.pad)
         self.use_tensorrt.trace_add("write", self.update_recompile_trt_visibility)
         
         # Recompile TensorRT (only visible when TensorRT is selected)
         self.recompile_trt_var = tk.BooleanVar()
         self.check_recompile_trt = ttk.Checkbutton(self.content_frame, text="Recompile TensorRT", variable=self.recompile_trt_var)
-        self.check_recompile_trt.grid(row=14, column=3, sticky="w", **self.pad)
+        self.check_recompile_trt.grid(row=15, column=3, sticky="w", **self.pad)
         
         # CoreML (for MPS devices)
         self.use_coreml = tk.BooleanVar()
         self.check_coreml = ttk.Checkbutton(self.content_frame, text="CoreML", variable=self.use_coreml)
-        self.check_coreml.grid(row=14, column=1, sticky="w", **self.pad)
+        self.check_coreml.grid(row=15, column=1, sticky="w", **self.pad)
         self.use_coreml.trace_add("write", self.update_recompile_coreml_visibility)  # Add trace
 
         # Recompile CoreML (only visible when CoreML is selected)
         self.recompile_coreml_var = tk.BooleanVar()
         self.check_recompile_coreml = ttk.Checkbutton(self.content_frame, text="Recompile CoreML", variable=self.recompile_coreml_var)
-        self.check_recompile_coreml.grid(row=14, column=2, sticky="w", **self.pad)  # Changed row to 15
+        self.check_recompile_coreml.grid(row=15, column=2, sticky="w", **self.pad)  # Changed row to 15
         
         # OpenVINO (for XPU devices)
         self.use_openvino = tk.BooleanVar()
         self.check_openvino = ttk.Checkbutton(self.content_frame, text="OpenVINO", variable=self.use_openvino)
-        self.check_openvino.grid(row=14, column=1, sticky="w", **self.pad)
+        self.check_openvino.grid(row=15, column=1, sticky="w", **self.pad)
         self.use_openvino.trace_add("write", self.update_recompile_openvino_visibility)
 
         # Recompile OpenVINO (only visible when OpenVINO is selected)
         self.recompile_openvino_var = tk.BooleanVar()
         self.check_recompile_openvino = ttk.Checkbutton(self.content_frame, text="Recompile OpenVINO", variable=self.recompile_openvino_var)
-        self.check_recompile_openvino.grid(row=14, column=2, sticky="w", **self.pad)
+        self.check_recompile_openvino.grid(row=15, column=2, sticky="w", **self.pad)
         
         # Add these instance variables
         self.specify_display_var = tk.BooleanVar()
@@ -938,34 +949,34 @@ class ConfigGUI(tk.Tk):
         
         # Specify Display (checkbox)
         self.label_specify_display = ttk.Label(self.content_frame, text="Stereo Display Settings:")
-        self.label_specify_display.grid(row=15, column=0, sticky="w", **self.pad)
+        self.label_specify_display.grid(row=16, column=0, sticky="w", **self.pad)
         self.specify_display_cb = ttk.Checkbutton(
             self.content_frame, 
             text="Specify Display",
             variable=self.specify_display_var
         )
         # Initially hidden, will be shown for specific modes
-        self.specify_display_cb.grid(row=15, column=1, sticky="w", **self.pad)
+        self.specify_display_cb.grid(row=16, column=1, sticky="w", **self.pad)
         self.specify_display_cb.grid_remove()
         
         # Stereo Monitor (monitor dropdown)
         self.label_stereo_monitor = ttk.Label(self.content_frame, text="Stereo Monitor:")
-        self.label_stereo_monitor.grid(row=15, column=2, sticky="w", **self.pad)
+        self.label_stereo_monitor.grid(row=16, column=2, sticky="w", **self.pad)
         self.label_stereo_monitor.grid_remove()
         
         self.stereo_monitor_menu = ttk.OptionMenu(self.content_frame, self.stereo_monitor_var, "")
-        self.stereo_monitor_menu.grid(row=15, column=3, sticky="ew", **self.pad)
+        self.stereo_monitor_menu.grid(row=16, column=3, sticky="ew", **self.pad)
         self.stereo_monitor_menu.grid_remove()
         self.specify_display_var.trace_add("write", self.update_stereo_monitor_display)
         
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
-        self.label_hf_endpoint.grid(row=16, column=0, sticky="w", **self.pad)
+        self.label_hf_endpoint.grid(row=17, column=0, sticky="w", **self.pad)
         self.hf_endpoint_var = tk.StringVar()
         self.hf_endpoint_cb = ttk.Combobox(self.content_frame, textvariable=self.hf_endpoint_var, state="normal")
         self.hf_endpoint_cb["values"] = ["https://huggingface.co", "https://hf-mirror.com"]
-        self.hf_endpoint_cb.grid(row=16, column=1, sticky="ew", **self.pad)
-        
+        self.hf_endpoint_cb.grid(row=17, column=1, sticky="ew", **self.pad)
+
         # Streamer Port (only visible when run mode is streamer)
         self.label_streamer_port = ttk.Label(self.content_frame, text="Streamer Port:")
         self.streamer_port_var = tk.StringVar()
@@ -1016,10 +1027,10 @@ class ConfigGUI(tk.Tk):
         self.btn_reset.grid(row=13, column=3, sticky="ew", **self.pad)
         
         self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
-        self.btn_stop.grid(row=16, column=2, sticky="ew", **self.pad)
+        self.btn_stop.grid(row=17, column=2, sticky="ew", **self.pad)
         
         self.btn_run = ttk.Button(self.content_frame, text="Run", command=self.save_settings)
-        self.btn_run.grid(row=16, column=3, sticky="ew", **self.pad)
+        self.btn_run.grid(row=17, column=3, sticky="ew", **self.pad)
         
         # Column weights inside content frame
         for col in range(5):
@@ -1754,6 +1765,7 @@ class ConfigGUI(tk.Tk):
         self.showfps_cb.config(text=texts["Show FPS"])
         self.label_res.config(text=texts["Output Resolution:"])
         self.label_ipd.config(text=texts["IPD (m):"])
+        self.label_convergence.config(text=texts.get("Convergence:", "Convergence:"))
         self.label_display_mode.config(text=texts["Display Mode:"])
         self.label_depth_model.config(text=texts["Depth Model:"])
         self.label_depth_res.config(text=texts["Depth Resolution:"])
@@ -2161,6 +2173,7 @@ class ConfigGUI(tk.Tk):
         self.fps_cb.set(str(cfg.get("FPS", DEFAULTS["FPS"])))
         self.res_cb.set(str(cfg.get("Output Resolution", DEFAULTS["Output Resolution"])))
         self.ipd_var.set(str(cfg.get("IPD", DEFAULTS["IPD"])))
+        self.convergence_cb.set(str(cfg.get("Convergence", DEFAULTS["Convergence"])))
 
         # Apply depth model settings
         model_list = DEFAULT_MODEL_LIST
@@ -2381,6 +2394,7 @@ class ConfigGUI(tk.Tk):
             "Show FPS": self.showfps_var.get(),
             "Output Resolution": int(self.res_cb.get()),
             "IPD": float(self.ipd_var.get()),
+            "Convergence": float(self.convergence_cb.get()),
             "Display Mode": self.display_mode_cb.get(),
             "Model List": ALL_MODELS,  # Preserve existing model list structure
             "Depth Model": self.depth_model_var.get(),

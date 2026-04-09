@@ -55,7 +55,7 @@ from threading import Lock
 import cv2
 
 print(f"{DEVICE_INFO}")
-print(f"Model: {MODEL_ID}")
+print(f"Model: {MODEL_ID.split('/')[-1]}")
 
 if not DEBUG:
     warnings.filterwarnings('ignore') # disable for debug
