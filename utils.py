@@ -208,6 +208,7 @@ MODEL_MAPPING = {
     "DA3-GIANT-1.1": "depth-anything/DA3-GIANT-1.1",
     "DA3METRIC-LARGE": "depth-anything/DA3METRIC-LARGE",
     "DA3NESTED-GIANT-LARGE-1.1": "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
+    "DA3MONO-LARGE": "depth-anything/DA3MONO-LARGE",
     
     # Depth-Anything-V2 Metric Outdoor
     "Depth-Anything-V2-Metric-Outdoor-Small-hf": "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf",
