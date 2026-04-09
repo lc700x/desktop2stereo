@@ -212,6 +212,7 @@ FP16 = False if OS_NAME == "Darwin" else settings["FP16"]
 MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
 SHOW_FPS, FPS, DEPTH_STRENGTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 IPD = settings["IPD"]
+CONVERGENCE = 1
 CAPTURE_MODE = settings["Capture Mode"]
 WINDOW_TITLE = settings["Window Title"]
 

@@ -6,7 +6,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 from OpenGL.GL import *
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, get_font_type, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, MONITOR_INDEX, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, LOSSLESS_SCALING_SUPPORT
+from utils import OS_NAME, crop_icon, get_font_type
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture, show_window_in_capture
@@ -187,10 +187,10 @@ FRAGMENT_SHADER = """
 
         // Sample depth
         float depth = texture(tex_depth, flipped_uv).r;
-        float depth_inv = 1.0 - depth;
+        float depth_inv = - depth;
 
         // Calculate parallax shift
-        float shift = (depth_inv - u_convergence);
+        float shift = (depth_inv + u_convergence);
         vec2 shifted_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength, 0.0);
 
         vec4 color;
@@ -268,13 +268,15 @@ def add_logo(window):
 
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
-    
-    def __init__(self, ipd=0.064, depth_ratio=1.0, display_mode="Half-SBS", fill_16_9=FILL_16_9, show_fps=True, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT, stream_mode=None, frame_size=(1280, 720)):
+
+    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, frame_size=(1280, 720)):
         # Initialize with default values
         # Viewer visibility control
         self._has_real_frame = False
         self.use_3d = use_3d
         self.title = "Stereo Viewer"
+        self.capture_mode = capture_mode
+        self.input_monitor_index = monitor_index
         self.ipd_uv = ipd
         self.depth_strength = 0.1
         self._last_window_position = None
@@ -292,6 +294,8 @@ class StereoWindow:
         self.show_fps = show_fps
         self.stream_mode = stream_mode
         self.window_size = self.frame_size
+        self.convergence = convergence
+        self.lossless_scaling = lossless_scaling
 
         # FPS and latency tracking variables, will be set externally
         self.actual_fps = 0.0
@@ -321,7 +325,6 @@ class StereoWindow:
         self.current_font_size = self.base_font_size
         self.text_padding = 10
         self.text_spacing = 5
-        self.convergence = 0.4
 
         # Mouse Passthrough
         self.last_mouse_toggle_time = 0
@@ -349,14 +352,14 @@ class StereoWindow:
         }
         
         # Stereo Display Settings
-        self.specify_display = STEREO_DISPLAY_SELECTION
-        self.stereo_display_index = STEREO_DISPLAY_INDEX 
-        
+        self.specify_display = specify_display
+        self.stereo_display_index = stereo_display_index
+
         # Initialize GLFW
         if not glfw.init():
             raise RuntimeError("Could not initialize GLFW")
-        
-        self.monitor_index = self.get_glfw_mon_index(MONITOR_INDEX) if CAPTURE_MODE=="Monitor" else 0
+
+        self.monitor_index = self.get_glfw_mon_index(self.input_monitor_index) if self.capture_mode=="Monitor" else 0
         if self.specify_display:
             self.monitor_index = self.get_glfw_mon_index(self.stereo_display_index)
         # Configure window
@@ -493,7 +496,7 @@ class StereoWindow:
         self.mon_w, self.mon_h = vidmode.size.width, vidmode.size.height
     
     def apply_3d_settings(self):
-        if self.monitor_index == self.get_glfw_mon_index(MONITOR_INDEX):
+        if self.monitor_index == self.get_glfw_mon_index(self.input_monitor_index):
             if OS_NAME == "Windows":
                 hide_window_from_capture(self.window)
             glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)    # Always on top
@@ -801,7 +804,7 @@ class StereoWindow:
             return
 
         if not self._fullscreen:
-            if not self.use_3d and CAPTURE_MODE != "Monitor" and OS_NAME == "Windows":
+            if not self.use_3d and self.capture_mode != "Monitor" and OS_NAME == "Windows":
                 glfw.set_window_attrib(self.window, glfw.MOUSE_PASSTHROUGH, True)
                 glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
             if OS_NAME == "Darwin":
@@ -997,7 +1000,7 @@ class StereoWindow:
                 if not self.specify_display:
                     self.move_to_adjacent_monitor(direction=1)
                 if OS_NAME != "Darwin":
-                    if not LOSSLESS_SCALING_SUPPORT: # need to check for Linux
+                    if not self.lossless_scaling: # need to check for Linux
                         glfw.set_window_opacity(self.window, 0.0)
                     glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
                 else:
@@ -1009,7 +1012,7 @@ class StereoWindow:
                         self.toggle_fullscreen()
                 
             if self.specify_display:
-                if not self.stream_mode == "RTMP" or LOSSLESS_SCALING_SUPPORT:
+                if not self.stream_mode == "RTMP" or self.lossless_scaling:
                     self.toggle_fullscreen()
     def _compute_render_size(self, max_w, max_h, src_w, src_h):
         """Calculate render size maintaining aspect ratio"""

@@ -1,5 +1,5 @@
 # depth.py
-import os
+import os, warnings
 import torch
 
 # # Support for old AMD GPU with ZLUDA support (hide)
@@ -32,8 +32,6 @@ def get_device(index=0):
         return torch.device("cpu"), "Using CPU device"
     
 DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
-print(f"{DEVICE_INFO}")
-print(f"Model: {MODEL_ID}")
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -55,39 +53,44 @@ from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
-import os, warnings
+
+print(f"{DEVICE_INFO}")
+print(f"Model: {MODEL_ID}")
 
 if not DEBUG:
     warnings.filterwarnings('ignore') # disable for debug
 
 # Try import OpenVINO runtime
-if USE_OPENVINO:
-    try:
-        import openvino as ov
-        OPENVINO_AVAILABLE = True
-        # Disable OpenVivo
-        USE_OPENVINO = False if any(x in MODEL_ID.lower()  for x in DISABLE_OPENVINO_KEYWORDS) else True
-        USE_TORCH_COMPILE = False
-    except Exception:
-        ov = None
-        OPENVINO_AVAILABLE = False
-        USE_OPENVINO = False
+if IS_XPU:
+    if USE_OPENVINO:
+        try:
+            import openvino as ov
+            OPENVINO_AVAILABLE = True
+            # Disable OpenVivo
+            USE_OPENVINO = False if any(x in MODEL_ID.lower()  for x in DISABLE_OPENVINO_KEYWORDS) else True
+            USE_TORCH_COMPILE = False
+        except Exception:
+            ov = None
+            OPENVINO_AVAILABLE = False
+            USE_OPENVINO = False
 
-# Decide OpenVINO device (prefer GPU)
-OPENVINO_DEVICE = None
-if USE_OPENVINO and OPENVINO_AVAILABLE:
-    try:
-        core_tmp = ov.Core()
-        devices_tmp = core_tmp.available_devices
-        if any("GPU" in d for d in devices_tmp):
-            OPENVINO_DEVICE = "GPU"
-        elif any("CPU" in d for d in devices_tmp):
-            OPENVINO_DEVICE = "CPU"
-        else:
-            OPENVINO_DEVICE = devices_tmp[0] if len(devices_tmp) > 0 else None
-    except Exception:
-        OPENVINO_DEVICE = None
-
+    # Decide OpenVINO device (prefer GPU)
+    OPENVINO_DEVICE = None
+    if USE_OPENVINO and OPENVINO_AVAILABLE:
+        try:
+            core_tmp = ov.Core()
+            devices_tmp = core_tmp.available_devices
+            if any("GPU" in d for d in devices_tmp):
+                OPENVINO_DEVICE = "GPU"
+            elif any("CPU" in d for d in devices_tmp):
+                OPENVINO_DEVICE = "CPU"
+            else:
+                OPENVINO_DEVICE = devices_tmp[0] if len(devices_tmp) > 0 else None
+        except Exception:
+            OPENVINO_DEVICE = None
+else:
+    USE_OPENVINO = False
+    
 # Correction for ZoeDepth models
 ZOEDEPTH_FIX = False
 if MODEL_ID in ("Intel/zoedepth-nyu", "Intel/zoedepth-kitti", "Intel/zoedepth-nyu-kitti"):
@@ -1315,13 +1318,30 @@ def overlay_fps(rgb: torch.Tensor, fps: float):
     return rgb * (1 - alpha) + color * alpha
 
 
+# Aspect pad helper
+def pad_to_aspect_tensor(tensor, target_ratio=(16, 9)):
+    _, h, w = tensor.shape
+    t_w, t_h = target_ratio
+    r_img, r_t = w / h, t_w / t_h
+    if abs(r_img - r_t) < 1e-3:
+        return tensor
+    if r_img > r_t:  # too wide -> pad height
+        new_h = int(round(w / r_t))
+        pad_top = (new_h - h) // 2
+        return F.pad(tensor, (0, 0, pad_top, new_h - h - pad_top))
+    else:  # too tall -> pad width
+        new_w = int(round(h * r_t))
+        pad_left = (new_w - w) // 2
+        return F.pad(tensor, (pad_left, new_w - w - pad_left, 0, 0))
+
 # generate left and right eye view for streamer 
 def make_sbs_core(rgb: torch.Tensor,
                   depth: torch.Tensor,
                   ipd_uv=0.064,
-                  depth_ratio=1.0,
+                  depth_ratio=2.0,
                   display_mode="Half-SBS",
                   fill_16_9=FILL_16_9,
+                  convergence=0.0,
                   device=DEVICE) -> torch.Tensor:
     """
     Core tensor operations for side-by-side stereo.
@@ -1338,8 +1358,8 @@ def make_sbs_core(rgb: torch.Tensor,
     C, H, W = rgb.shape
     img = rgb.unsqueeze(0).clamp(0, 255)  # [1,C,H,W]
     depth_strength = 0.05
-    
-    inv = depth - depth * depth_ratio * 2
+    depth = depth - convergence
+    inv = - depth * depth_ratio
     max_px = ipd_uv * W
     shifts = inv * max_px * depth_strength
     
@@ -1368,22 +1388,6 @@ def make_sbs_core(rgb: torch.Tensor,
         gather_idx_right = coords_right.unsqueeze(0).expand(C, H, W).unsqueeze(0)
         right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
     
-    # Aspect pad helper
-    def pad_to_aspect_tensor(tensor, target_ratio=(16, 9)):
-        _, h, w = tensor.shape
-        t_w, t_h = target_ratio
-        r_img, r_t = w / h, t_w / t_h
-        if abs(r_img - r_t) < 1e-3:
-            return tensor
-        if r_img > r_t:  # too wide -> pad height
-            new_h = int(round(w / r_t))
-            pad_top = (new_h - h) // 2
-            return F.pad(tensor, (0, 0, pad_top, new_h - h - pad_top))
-        else:  # too tall -> pad width
-            new_w = int(round(h * r_t))
-            pad_left = (new_w - w) // 2
-            return F.pad(tensor, (pad_left, new_w - w - pad_left, 0, 0))
-    
     # Aspect pad & arrange SBS/TAB
     if fill_16_9:
         left = pad_to_aspect_tensor(left)
@@ -1396,7 +1400,7 @@ def make_sbs_core(rgb: torch.Tensor,
         out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
     return out.clamp(0, 255)
 
-def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS", fps=None):
+def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=0.0, display_mode="Half-SBS", fps=None):
     """
     Full function: adds optional FPS overlay and converts output to numpy uint8.
     Calls `make_sbs_core` for tensor computations (torch.compile compatible).
@@ -1423,7 +1427,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
     if fps is not None:
         rgb = overlay_fps(rgb, fps)  # your existing overlay function
 
-    sbs_tensor = make_sbs_core(rgb, depth, ipd_uv, depth_ratio, display_mode)
+    sbs_tensor = make_sbs_core(rgb, depth, ipd_uv, depth_ratio, convergence, display_mode)
     return sbs_tensor.detach().cpu().to(torch.uint8).permute(1, 2, 0).contiguous().numpy()
 
 if USE_TORCH_COMPILE and IS_CUDA:

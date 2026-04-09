@@ -1,4 +1,5 @@
 # depth.py
+import os, warnings
 import torch
 
 # # Support for old AMD GPU with ZLUDA support (hide)
@@ -9,18 +10,54 @@ import torch
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DEBUG
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG
+# Initialize DirectML Device
+def get_device(index=0):
+    try:
+        try:
+            import torch_directml
+            if torch_directml.is_available():
+                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
+        except ImportError:
+            pass
+        if torch.backends.mps.is_available() and index==0:
+            return torch.device("mps"), "Using Apple Silicon (MPS) device"
+        if torch.cuda.is_available():
+            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+        if torch.xpu.is_available():
+            return torch.device("xpu"), f"Using XPU device: {torch.xpu.get_device_name(index)}"
+        else:
+            return torch.device("cpu"), "Using CPU device"
+    except:
+        return torch.device("cpu"), "Using CPU device"
+    
+DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
+
+IS_CUDA = "CUDA" in DEVICE_INFO
+IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
+IS_LEGACY_NVIDIA = False
+IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO
+IS_DIRECTML = "DirectML" in DEVICE_INFO
+IS_XPU = "XPU" in DEVICE_INFO
+IS_MPS = "MPS" in DEVICE_INFO
+IS_CPU = "CPU" in DEVICE_INFO
+
+USE_TORCH_COMPILE = False if not IS_CUDA else USE_TORCH_COMPILE
+USE_TENSORRT = False if not IS_NVIDIA else USE_TENSORRT
+USE_COREML = False if not IS_MPS else USE_COREML
+USE_OPENVINO = False if not IS_XPU else USE_OPENVINO
+
+
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
 import numpy as np
 from threading import Lock
 import cv2
-import os, warnings
 
+# debug constants
 from PIL import Image
 img  = Image.open("assets/cats.jpg").convert("RGB")
 image_rgb = np.array(img)
-
 DEBUG = True
 AA_STRENGTH = 2
 FP16 = False
@@ -44,10 +81,10 @@ RECOMPILE_OPENVINO = True
 
 # MODEL_ID = "LiheYoung/depth-anything-small-hf"
 # MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
-# MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
 # MODEL_ID = "depth-anything/DA3-SMALL"
-MODEL_ID = "depth-anything/DA3MONO-LARGE"
+# MODEL_ID = "depth-anything/DA3MONO-LARGE"
 # MODEL_ID = "depth-anything/DA3METRIC-LARGE"
 # MODEL_ID = "Intel/dpt-large"
 # MODEL_ID = "apple/DepthPro-hf"
@@ -58,66 +95,43 @@ MODEL_ID = "depth-anything/DA3MONO-LARGE"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 # MODEL_ID = "Intel/dpt-beit-base-384"
 
+print(f"{DEVICE_INFO}")
+print(f"Model: {MODEL_ID}")
+
 if not DEBUG:
     warnings.filterwarnings('ignore') # disable for debug
 
 # Try import OpenVINO runtime
-try:
-    import openvino as ov
-    OPENVINO_AVAILABLE = True
-except Exception:
-    ov = None
-    OPENVINO_AVAILABLE = False
-    USE_OPENVINO = False
-
-# Decide OpenVINO device (prefer GPU)
-OPENVINO_DEVICE = None
-if USE_OPENVINO and OPENVINO_AVAILABLE:
-    try:
-        core_tmp = ov.Core()
-        devices_tmp = core_tmp.available_devices
-        if any("GPU" in d for d in devices_tmp):
-            OPENVINO_DEVICE = "GPU"
-        elif any("CPU" in d for d in devices_tmp):
-            OPENVINO_DEVICE = "CPU"
-        else:
-            OPENVINO_DEVICE = devices_tmp[0] if len(devices_tmp) > 0 else None
-    except Exception:
-        OPENVINO_DEVICE = None
-
-# Initialize DirectML Device
-def get_device(index=0):
-    try:
+if IS_XPU:
+    if USE_OPENVINO:
         try:
-            import torch_directml
-            if torch_directml.is_available():
-                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
-        except ImportError:
-            pass
-        if torch.backends.mps.is_available() and index==0:
-            return torch.device("mps"), "Using Apple Silicon (MPS) device"
-        if torch.cuda.is_available():
-            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
-        if torch.xpu.is_available():
-            return torch.device("xpu"), f"Using XPU device: {torch.xpu.get_device_name(index)}"
-        else:
-            return torch.device("cpu"), "Using CPU device"
-    except:
-        return torch.device("cpu"), "Using CPU device"
+            import openvino as ov
+            OPENVINO_AVAILABLE = True
+            # Disable OpenVivo
+            USE_OPENVINO = False if any(x in MODEL_ID.lower()  for x in DISABLE_OPENVINO_KEYWORDS) else True
+            USE_TORCH_COMPILE = False
+        except Exception:
+            ov = None
+            OPENVINO_AVAILABLE = False
+            USE_OPENVINO = False
+
+    # Decide OpenVINO device (prefer GPU)
+    OPENVINO_DEVICE = None
+    if USE_OPENVINO and OPENVINO_AVAILABLE:
+        try:
+            core_tmp = ov.Core()
+            devices_tmp = core_tmp.available_devices
+            if any("GPU" in d for d in devices_tmp):
+                OPENVINO_DEVICE = "GPU"
+            elif any("CPU" in d for d in devices_tmp):
+                OPENVINO_DEVICE = "CPU"
+            else:
+                OPENVINO_DEVICE = devices_tmp[0] if len(devices_tmp) > 0 else None
+        except Exception:
+            OPENVINO_DEVICE = None
+else:
+    USE_OPENVINO = False
     
-DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
-print(f"{DEVICE_INFO}")
-print(f"Model: {MODEL_ID}")
-
-IS_CUDA = "CUDA" in DEVICE_INFO
-IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
-IS_LEGACY_NVIDIA = False
-IS_AMD_ROCM = "CUDA" in DEVICE_INFO and "AMD" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO
-IS_DIRECTML = "DirectML" in DEVICE_INFO
-IS_XPU = "XPU" in DEVICE_INFO
-IS_MPS = "MPS" in DEVICE_INFO
-IS_CPU = "CPU" in DEVICE_INFO
-
 # Correction for ZoeDepth models
 ZOEDEPTH_FIX = False
 if MODEL_ID in ("Intel/zoedepth-nyu", "Intel/zoedepth-kitti", "Intel/zoedepth-nyu-kitti"):
@@ -173,7 +187,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and ZOEDEPTH_FIX) or IS_XPU or ("da3-" in MODEL_ID.lower() and USE_TENSORRT):
+if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and ZOEDEPTH_FIX) or ("da3-" in MODEL_ID.lower() and USE_TENSORRT) or (("da3" in MODEL_ID.lower() or "video-depth-any" in MODEL_ID.lower()) and IS_XPU) or IS_CPU:
     FP16 = False 
 
 # Optimization for CUDA
@@ -221,9 +235,13 @@ if IS_NVIDIA:
             return True
         return False
     IS_LEGACY_NVIDIA = is_legacy_nvidia()
-    # if IS_LEGACY_NVIDIA:
-    #     USE_TORCH_COMPILE = False
-    #     USE_TENSORRT = False  # Disable TensorRT for legacy NVIDIA GPUs due to potential compatibility issues
+    if IS_LEGACY_NVIDIA:
+        USE_TORCH_COMPILE = False
+        # USE_TENSORRT = False  # Disable TensorRT for legacy NVIDIA GPUs due to potential compatibility issues
+
+    # Disable TRT for unsupported models
+    if MODEL_ID in DISABLE_TRT_KEYWORDS:
+        USE_TENSORRT = False
 
 if IS_AMD_ROCM:
     for gpu_id in DISABLE_CUDNN_KEYWORDS:
@@ -234,7 +252,7 @@ if IS_AMD_ROCM:
     # disable trition for RX5000 series and older AMD GPUs
     is_legacy_amd = any(gpu_id in DEVICE_INFO for gpu_id in DISABLE_TRITON_KEYWORDS)   
     if is_legacy_amd:
-        USE_TORCH_COMPILE = False  # Disable Tritoin for known problematic AMD GPUs
+        USE_TORCH_COMPILE = False  # Disable Triton for known problematic AMD GPUs
         print(f"[Main] Disabled torch.compile for {DEVICE_INFO}. ")
     else:
         os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
@@ -693,7 +711,7 @@ def _ensure_openvino_cache_dir():
     """
     Return path to OpenVINO cache directory and ensure it exists.
     """
-    cache_dir = os.path.join(MODEL_FOLDER, "openvino_cache")
+    cache_dir = os.path.join(MODEL_FOLDER, f"openvino_cache_{DEPTH_RESOLUTION}" + ("_fp16" if FP16 else "_fp32"))
     os.makedirs(cache_dir, exist_ok=True)
     return cache_dir
 
@@ -1341,13 +1359,30 @@ def overlay_fps(rgb: torch.Tensor, fps: float):
     return rgb * (1 - alpha) + color * alpha
 
 
+# Aspect pad helper
+def pad_to_aspect_tensor(tensor, target_ratio=(16, 9)):
+    _, h, w = tensor.shape
+    t_w, t_h = target_ratio
+    r_img, r_t = w / h, t_w / t_h
+    if abs(r_img - r_t) < 1e-3:
+        return tensor
+    if r_img > r_t:  # too wide -> pad height
+        new_h = int(round(w / r_t))
+        pad_top = (new_h - h) // 2
+        return F.pad(tensor, (0, 0, pad_top, new_h - h - pad_top))
+    else:  # too tall -> pad width
+        new_w = int(round(h * r_t))
+        pad_left = (new_w - w) // 2
+        return F.pad(tensor, (pad_left, new_w - w - pad_left, 0, 0))
+
 # generate left and right eye view for streamer 
 def make_sbs_core(rgb: torch.Tensor,
                   depth: torch.Tensor,
                   ipd_uv=0.064,
-                  depth_ratio=1.0,
+                  depth_ratio=2.0,
                   display_mode="Half-SBS",
                   fill_16_9=FILL_16_9,
+                  convergence=0.0,
                   device=DEVICE) -> torch.Tensor:
     """
     Core tensor operations for side-by-side stereo.
@@ -1364,8 +1399,8 @@ def make_sbs_core(rgb: torch.Tensor,
     C, H, W = rgb.shape
     img = rgb.unsqueeze(0).clamp(0, 255)  # [1,C,H,W]
     depth_strength = 0.05
-    
-    inv = depth - depth * depth_ratio * 2
+    depth = depth - convergence
+    inv = - depth * depth_ratio
     max_px = ipd_uv * W
     shifts = inv * max_px * depth_strength
     
@@ -1394,22 +1429,6 @@ def make_sbs_core(rgb: torch.Tensor,
         gather_idx_right = coords_right.unsqueeze(0).expand(C, H, W).unsqueeze(0)
         right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
     
-    # Aspect pad helper
-    def pad_to_aspect_tensor(tensor, target_ratio=(16, 9)):
-        _, h, w = tensor.shape
-        t_w, t_h = target_ratio
-        r_img, r_t = w / h, t_w / t_h
-        if abs(r_img - r_t) < 1e-3:
-            return tensor
-        if r_img > r_t:  # too wide -> pad height
-            new_h = int(round(w / r_t))
-            pad_top = (new_h - h) // 2
-            return F.pad(tensor, (0, 0, pad_top, new_h - h - pad_top))
-        else:  # too tall -> pad width
-            new_w = int(round(h * r_t))
-            pad_left = (new_w - w) // 2
-            return F.pad(tensor, (pad_left, new_w - w - pad_left, 0, 0))
-    
     # Aspect pad & arrange SBS/TAB
     if fill_16_9:
         left = pad_to_aspect_tensor(left)
@@ -1422,7 +1441,7 @@ def make_sbs_core(rgb: torch.Tensor,
         out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
     return out.clamp(0, 255)
 
-def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS", fps=None):
+def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=0.0, display_mode="Half-SBS", fps=None):
     """
     Full function: adds optional FPS overlay and converts output to numpy uint8.
     Calls `make_sbs_core` for tensor computations (torch.compile compatible).
@@ -1449,14 +1468,15 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=1.0, display_mode="Half-SBS
     if fps is not None:
         rgb = overlay_fps(rgb, fps)  # your existing overlay function
 
-    sbs_tensor = make_sbs_core(rgb, depth, ipd_uv, depth_ratio, display_mode)
-    return sbs_tensor.to(torch.uint8).permute(1,2,0).contiguous().cpu().numpy()
+    sbs_tensor = make_sbs_core(rgb, depth, ipd_uv, depth_ratio, convergence, display_mode)
+    return sbs_tensor.detach().cpu().to(torch.uint8).permute(1, 2, 0).contiguous().numpy()
 
 if USE_TORCH_COMPILE and IS_CUDA:
     make_sbs_core = torch.compile(make_sbs_core)
     
 if __name__ == "__main__":
     depth = predict_depth(image_rgb, dtype=DTYPE).squeeze(0)
+    sbs = make_sbs(image_rgb, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=-0.5, display_mode="Half-SBS", fps=None)
     depth = depth.detach().contiguous().float().cpu().numpy()
 
     # depth = depth.copy()
@@ -1491,3 +1511,72 @@ if __name__ == "__main__":
     plt.imshow(depth, cmap='Spectral_r')
     plt.colorbar()
     plt.savefig("test.png", dpi=300)
+    plt.close()
+
+    import cv2
+    import mss
+
+    def show_fullscreen_opencv(image, window_name="Fullscreen Image"):
+        """
+        True fullscreen display with OpenCV (no UI elements).
+        """
+        with mss.mss() as sct:
+            # Get primary monitor
+            monitors = sct.monitors
+            monitor = monitors[1] if len(monitors) > 1 else monitors[0]
+            screen_width, screen_height = monitor['width'], monitor['height']
+        
+        # Get image dimensions
+        img_height, img_width = image.shape[:2]
+        
+        # Calculate scaling to maintain aspect ratio
+        width_ratio = screen_width / img_width
+        height_ratio = screen_height / img_height
+        scale_factor = min(width_ratio, height_ratio)
+        
+        # Calculate new dimensions
+        new_width = int(img_width * scale_factor)
+        new_height = int(img_height * scale_factor)
+        
+        # Resize image
+        resized = cv2.resize(image, (new_width, new_height), 
+                            interpolation=cv2.INTER_LINEAR)
+        
+        # Create black canvas matching screen resolution
+        if len(image.shape) == 3:  # Color image
+            # Convert to 3 channels for consistent display
+            resized = cv2.cvtColor(resized, cv2.COLOR_RGB2BGR)
+            canvas = np.zeros((screen_height, screen_width, image.shape[2]), dtype=image.dtype)
+        else:  # Grayscale
+            # Convert to 3 channels for consistent display
+            resized = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR) if len(resized.shape) == 2 else resized
+            canvas = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
+        
+        # Center the image on canvas
+        x_offset = (screen_width - new_width) // 2
+        y_offset = (screen_height - new_height) // 2
+        canvas[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = resized
+        
+        # Create fullscreen window
+        cv2.namedWindow(window_name, cv2.WND_PROP_FULLSCREEN)
+        cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        
+        # Display image
+        cv2.imshow(window_name, canvas)
+        
+        # Instructions
+        print("Fullscreen mode active. Press any key to exit, ESC to close.")
+        
+        # Wait for key press
+        key = cv2.waitKey(0)
+        
+        # Close window
+        cv2.destroyAllWindows()
+        
+        return key
+
+    show_fullscreen_opencv(sbs)
+    plt.imshow(sbs)
+    plt.axis('off')
+    plt.savefig("test_sbs.png", dpi=300, bbox_inches='tight', pad_inches=0)
+    plt.close()

@@ -6,8 +6,8 @@ import time
 import signal
 import sys
 import subprocess
-import cv2
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, shutdown_event
+
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event
 from depth import process, process_tensor, predict_depth
 
 # Global process references
@@ -997,7 +997,7 @@ def main(mode="Viewer"):
                 # For local viewer only
                 h = int(1280 / w * h)
                 w = 1280
-            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS, stream_mode=STREAM_MODE, frame_size = (w,h))
+            window = StereoWindow(capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX, ipd=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fill_16_9=FILL_16_9, show_fps=SHOW_FPS, use_3d=USE_3D_MONITOR, fix_aspect=FIX_VIEWER_ASPECT, stream_mode=STREAM_MODE, lossless_scaling=LOSSLESS_SCALING_SUPPORT, specify_display=STEREO_DISPLAY_SELECTION, stereo_display_index=STEREO_DISPLAY_INDEX, frame_size=(w,h))
             if STREAM_MODE == "RTMP":
                 if OS_NAME == "Windows":
                     from utils import set_window_to_bottom
@@ -1156,7 +1156,7 @@ def main(mode="Viewer"):
             
             if not BOOST:
                 def make_output(rgb, depth):
-                    return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
+                    return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fps=current_fps)
             else:
                 sbs_q = queue.Queue(maxsize=1)
                 
@@ -1169,7 +1169,7 @@ def main(mode="Viewer"):
                             rgb, depth = depth_q.get(timeout=0.001)
                             if shutdown_event.is_set():
                                 break
-                            sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
+                            sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fps=current_fps)
                             sbs_q.put(sbs)
                         except queue.Empty:
                             continue
