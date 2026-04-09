@@ -10,7 +10,7 @@ import torch
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, FILL_16_9, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG
 # Initialize DirectML Device
 def get_device(index=0):
     try:
@@ -1340,7 +1340,7 @@ def make_sbs_core(rgb: torch.Tensor,
                   ipd_uv=0.064,
                   depth_ratio=2.0,
                   display_mode="Half-SBS",
-                  fill_16_9=FILL_16_9,
+                  fill_16_9=False,
                   convergence=0.0,
                   device=DEVICE) -> torch.Tensor:
     """
@@ -1400,7 +1400,7 @@ def make_sbs_core(rgb: torch.Tensor,
         out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
     return out.clamp(0, 255)
 
-def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=0.0, display_mode="Half-SBS", fps=None):
+def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=0.0, fill_16_9=False, display_mode="Half-SBS", fps=None):
     """
     Full function: adds optional FPS overlay and converts output to numpy uint8.
     Calls `make_sbs_core` for tensor computations (torch.compile compatible).
@@ -1427,7 +1427,15 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=0.0, displ
     if fps is not None:
         rgb = overlay_fps(rgb, fps)  # your existing overlay function
 
-    sbs_tensor = make_sbs_core(rgb, depth, ipd_uv, depth_ratio, convergence, display_mode)
+    sbs_tensor = make_sbs_core(
+        rgb=rgb, 
+        depth=depth, 
+        ipd_uv=ipd_uv, 
+        depth_ratio=depth_ratio, 
+        convergence=convergence, 
+        fill_16_9=fill_16_9,
+        display_mode=display_mode
+    )
     return sbs_tensor.detach().cpu().to(torch.uint8).permute(1, 2, 0).contiguous().numpy()
 
 if USE_TORCH_COMPILE and IS_CUDA:

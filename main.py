@@ -1156,7 +1156,7 @@ def main(mode="Viewer"):
             
             if not BOOST:
                 def make_output(rgb, depth):
-                    return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fps=current_fps)
+                    return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fill_16_9=FILL_16_9, fps=current_fps)
             else:
                 sbs_q = queue.Queue(maxsize=1)
                 
@@ -1169,7 +1169,7 @@ def main(mode="Viewer"):
                             rgb, depth = depth_q.get(timeout=0.001)
                             if shutdown_event.is_set():
                                 break
-                            sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fps=current_fps)
+                            sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fill_16_9=FILL_16_9, fps=current_fps)
                             sbs_q.put(sbs)
                         except queue.Empty:
                             continue
