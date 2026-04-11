@@ -707,7 +707,7 @@ elif OS_NAME.startswith("Linux"):
                 
             monitor = {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
             shot = self._mss.grab(monitor)
-            arr = cv2.UMat(np.asarray(shot))
+            arr = np.asarray(shot)
             frame_rgb = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
             return frame_rgb, self.scaled_height
 

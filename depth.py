@@ -366,21 +366,18 @@ def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
     # Compute new size
     width = int(w0 * height / h0)
 
-    # Ensure we work with UMat for fast GPU resize
-    umat = img_rgb if is_umat else cv2.UMat(img_rgb)
+    # Convert BGRA to RGB if needed (WindowsCapture gives BGRA)
+    if img_rgb.shape[2] == 4:
+        img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_BGRA2RGB)
 
-    # Covert BGRA to RGB if needed (WindowsCapture gives BGRA)
-    if umat.get().shape[2] == 4:
-        umat = cv2.cvtColor(umat, cv2.COLOR_BGRA2RGB)
-    # If no resize necessary, just return numpy array
+    # If no resize necessary, return as-is
     if height >= h0:
-        return umat.get()
+        return img_rgb
 
-    # Perform the resize on GPU
-    resized_umat = cv2.resize(umat, (width, height), interpolation=cv2.INTER_LINEAR)
+    # Resize using CPU
+    resized = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_LINEAR)
 
-    # Return numpy array
-    return resized_umat.get()
+    return resized
 
 def apply_gamma(depth, gamma=1.2):
     return torch.pow(depth, gamma)

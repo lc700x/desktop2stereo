@@ -1,4 +1,4 @@
-import yaml, threading
+import yaml, threading, time
 import os, platform, socket
 
 # Debug Mode
@@ -7,7 +7,6 @@ DEBUG = False
 VERSION = "2.4.1"
 # Get OS name
 OS_NAME = platform.system()
-
 # Define StereoMix devices
 STEREO_MIX_NAMES = [
 # English
@@ -148,39 +147,22 @@ if OS_NAME == "Windows":
     except:
         ctypes.windll.user32.SetProcessDPIAware()
 
-    import glfw
-    from ctypes import wintypes
-    
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    def hide_window_from_capture(glfw_window):
-        """Set display affinity to exclude window from screen capture (Windows only)."""
-        WDA_MONITOR = 0x00000011
-        hwnd = glfw.get_win32_window(glfw_window)
-        SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
-        SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
-        SetWindowDisplayAffinity.restype = wintypes.BOOL
+    import ctypes, glfw
 
-        result = SetWindowDisplayAffinity(hwnd, WDA_MONITOR)
-        if result:
-            print("StereoWindow is now hidden from screen capture.")
-        else:
-            print(f"Failed to set display affinity. Error code: {ctypes.get_last_error()}")
+    user32 = ctypes.windll.user32
+    SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
+    WDA_EXCLUDEFROMCAPTURE = 0x00000011   # Windows 10 2004+
+
+    def hide_window_from_capture(glfw_window):
+        hwnd = glfw.get_win32_window(glfw_window)
+        SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+        print("StereoWindow is now hidden from screen capture.")
 
     def show_window_in_capture(glfw_window):
-        """Remove display affinity so the window can appear in screen capture (Windows only)."""
-        WDA_NONE = 0x00000000
         hwnd = glfw.get_win32_window(glfw_window)
+        SetWindowDisplayAffinity(hwnd, 0)
+        print("StereoWindow is now visible to screen capture.")
 
-        SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
-        SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
-        SetWindowDisplayAffinity.restype = wintypes.BOOL
-
-        result = SetWindowDisplayAffinity(hwnd, WDA_NONE)
-        if result:
-            print("StereoWindow is now visible to screen capture.")
-        else:
-            print(f"Failed to clear display affinity. Error code: {ctypes.get_last_error()}")
-    
     def set_window_to_bottom(glfw_window):
         """
         Finds a window by its title and sets its Z-order to the bottom.

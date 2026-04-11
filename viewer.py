@@ -355,23 +355,27 @@ class StereoWindow:
         self.specify_display = specify_display
         self.stereo_display_index = stereo_display_index
 
+        # Fullscreen mode
+        self._fullscreen = False
+
         # Initialize GLFW
         if not glfw.init():
             raise RuntimeError("Could not initialize GLFW")
 
-        self.monitor_index = self.get_glfw_mon_index(self.input_monitor_index) if self.capture_mode=="Monitor" else 0
+        self.monitor_index = self.get_glfw_mon_index_mss(self.input_monitor_index)
         if self.specify_display:
-            self.monitor_index = self.get_glfw_mon_index(self.stereo_display_index)
+            self.monitor_index = self.get_glfw_mon_index_mss(self.stereo_display_index)
         # Configure window
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.RESIZABLE, True)
         glfw.window_hint(glfw.DECORATED, glfw.TRUE) # window decoration
-        
-        if self.use_3d:
+
+        if (self.use_3d or self.capture_mode == "Window" and self.specify_display) and self.input_monitor_index == self.stereo_display_index:
             glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)  # clicks pass through
             glfw.window_hint(glfw.DECORATED, glfw.FALSE) # remove window decoration
+            glfw.window_hint(glfw.FLOATING, glfw.TRUE)  # enable fullscreen
         elif self.stream_mode == "RTMP":
             glfw.window_hint(glfw.RESIZABLE, False)  # Disable resizing
         elif self.stream_mode == "MJPEG":
@@ -385,6 +389,9 @@ class StereoWindow:
         if not self.window:
             glfw.terminate()
             raise RuntimeError("Could not create window")
+        
+        # Hide OS cursor inside GLFW window but DO NOT disable it globally
+        glfw.set_input_mode(self.window, glfw.CURSOR, glfw.CURSOR_HIDDEN)
 
         # Set up OpenGL context
         glfw.make_context_current(self.window)
@@ -496,8 +503,8 @@ class StereoWindow:
         self.mon_w, self.mon_h = vidmode.size.width, vidmode.size.height
     
     def apply_3d_settings(self):
-        if self.monitor_index == self.get_glfw_mon_index(self.input_monitor_index):
-            if OS_NAME == "Windows":
+        if self.monitor_index == self.get_glfw_mon_index_mss(self.input_monitor_index):
+            if OS_NAME == "Windows" and self.capture_mode == "Monitor":
                 hide_window_from_capture(self.window)
             glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)    # Always on top
         else:
@@ -505,7 +512,7 @@ class StereoWindow:
                 show_window_in_capture(self.window)
             glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.FALSE)    # Disable
 
-    def get_glfw_mon_index(self, mss_monitor_index=1):
+    def get_glfw_mon_index_mss(self, mss_monitor_index=1):
         """
         Map an MSS monitor index (1-based) to a GLFW monitor handle.
 
@@ -796,7 +803,15 @@ class StereoWindow:
         if self.use_3d:
             self.apply_3d_settings()
         self.update_monitor_size()
-    
+
+    def get_glfw_monitor_index(self, monitor):
+        """Get the GLFW monitor index for a given monitor."""
+        monitors = glfw.get_monitors()
+        for idx, mon in enumerate(monitors):
+            if mon == monitor:
+                return idx
+        return -1
+
     def toggle_fullscreen(self):
         """Optimized fullscreen toggle with reduced GLFW calls"""
         current_monitor = self.get_current_monitor()
@@ -804,7 +819,7 @@ class StereoWindow:
             return
 
         if not self._fullscreen:
-            if not self.use_3d and self.capture_mode != "Monitor" and OS_NAME == "Windows":
+            if not self.use_3d and self.capture_mode == "Window" and self.get_glfw_mon_index_mss(self.input_monitor_index) == self.get_glfw_monitor_index(current_monitor):
                 glfw.set_window_attrib(self.window, glfw.MOUSE_PASSTHROUGH, True)
                 glfw.set_window_attrib(self.window, glfw.FLOATING, glfw.TRUE)
             if OS_NAME == "Darwin":
