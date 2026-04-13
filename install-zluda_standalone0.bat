@@ -52,7 +52,8 @@ echo - Installing other necessary packages
 %PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location
 echo.
 echo - Patching ZLUDA (Zluda 3.9.5 for HIP SDK 6)
-%SystemRoot%\system32\curl -sL --ssl-no-revoke https://github.com/lshqqytiger/ZLUDA/releases/download/rel.5e717459179dc272b7d7d23391f0fad66c7459cf/ZLUDA-windows-rocm6-amd64.zip > zluda.zip
+@REM %SystemRoot%\system32\curl -sL --ssl-no-revoke https://github.com/lshqqytiger/ZLUDA/releases/download/rel.5e717459179dc272b7d7d23391f0fad66c7459cf/ZLUDA-windows-rocm5-amd64.zip > zluda.zip
+%SystemRoot%\system32\curl -sL --ssl-no-revoke https://github.com/lshqqytiger/ZLUDA/releases/download/rel.854c58e1565c3597e17046d7cc2b1eab96fcdf55/ZLUDA-windows-rocm5-amd64.zip > zluda.zip
 %SystemRoot%\system32\tar -xf zluda.zip
 del zluda.zip
 copy zluda\cublas.dll %VIRTUAL_ENV%\Lib\site-packages\torch\lib\cublas64_11.dll /y >NUL

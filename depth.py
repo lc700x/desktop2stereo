@@ -2,7 +2,7 @@
 import os, warnings
 import torch
 
-# # Support for old AMD GPU with ZLUDA support (hide)
+# Support for old AMD GPU with ZLUDA support (hide)
 # try:
 #     import zluda 
 #     torch.backends.cudnn.enabled = False  # Disable cuDNN for ZLUDA compatibility

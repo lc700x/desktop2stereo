@@ -1496,24 +1496,16 @@ class ConfigGUI(tk.Tk):
 
         # Check for Windows
         if OS_NAME == "Windows":
-            # get current list of capture tools
+            # Get current list of capture tools
             self.capture_tool_values = self._get_capture_tool_options(device_label)
             # Update the values
             self.capture_tool_cb['values'] = self.capture_tool_values
-            # Check if the current device is NVIDIA CUDA
-            is_nvidia_cuda = "CUDA" in device_label.upper() and not IS_ROCM
-            if is_nvidia_cuda:
-                # For NVIDIA CUDA devices, auto-select WindowsCaptureCUDA
-                if "WindowsCaptureCUDA" in self.capture_tool_cb['values']:
-                    self.capture_tool_cb.set("WindowsCaptureCUDA")
-                elif self.capture_tool_cb['values']:  # If WindowsCaptureCUDA is not in the list but other options exist
-                    self.capture_tool_cb.set(self.capture_tool_cb['values'][0])
-            else:
-                # For non-NVIDIA CUDA devices
-                current_value = self.capture_tool_cb.get()
-                if current_value not in self.capture_tool_cb['values'] and self.capture_tool_cb['values']:
-                    # If the current value is not in the new list, set to the first available option
-                    self.capture_tool_cb.set(self.capture_tool_cb['values'][0])
+            
+            # Check if the current selection is still valid
+            current_value = self.capture_tool_cb.get()
+            if current_value not in self.capture_tool_cb['values'] and self.capture_tool_cb['values']:
+                # If the current value is not in the new list, select the first available option
+                self.capture_tool_cb.set(self.capture_tool_cb['values'][0])
 
         # Determine device type
         if "CUDA" in device_label:
