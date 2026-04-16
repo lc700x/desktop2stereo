@@ -1,8 +1,8 @@
 import cv2, time
 from time import sleep
-from utils import WINDOW_TITLE, CAPTURE_MODE, MONITOR_INDEX, OUTPUT_RESOLUTION, FPS, SHOW_FPS
+from utils import WINDOW_TITLE, CAPTURE_MODE, MONITOR_INDEX, OUTPUT_RESOLUTION, FPS
 from capture import DesktopGrabber
-
+SHOW_FPS = True
 
 def main():
     grabber = DesktopGrabber(

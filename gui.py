@@ -1094,7 +1094,7 @@ class ConfigGUI(tk.Tk):
         device_label = self.device_var.get()
         
         # Reset all optimizers first
-        self.use_torch_compile.set(False)
+        # self.use_torch_compile.set(False)
         self.use_tensorrt.set(False)
         self.use_coreml.set(False)
         self.use_openvino.set(False)
@@ -1105,7 +1105,7 @@ class ConfigGUI(tk.Tk):
         # Enable based on device type
         if "CUDA" in device_label:
             # Auto-enable torch.compile for CUDA
-            self.use_torch_compile.set(True)
+            # self.use_torch_compile.set(True)
             
             # Auto-enable TensorRT for NVIDIA CUDA (not ROCm) with model compatibility
             if not IS_ROCM:
