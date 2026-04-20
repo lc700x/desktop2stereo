@@ -49,7 +49,7 @@ echo.
 echo - Installing other necessary packages
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location
-%PYTHON_EXE% -m pip install windows-capture==1.5.0 --no-cache-dir --no-warn-script-location
+%PYTHON_EXE% -m pip install windows-capture==2.0.0 --no-cache-dir --no-warn-script-location
 echo.
 echo - Patching ZLUDA (Zluda 3.9.5 for HIP SDK 6)
 @REM %SystemRoot%\system32\curl -sL --ssl-no-revoke https://github.com/lshqqytiger/ZLUDA/releases/download/rel.5e717459179dc272b7d7d23391f0fad66c7459cf/ZLUDA-windows-rocm5-amd64.zip > zluda.zip

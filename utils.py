@@ -170,16 +170,6 @@ if OS_NAME == "Windows":
         hwnd = glfw.get_win32_window(glfw_window)
         if hwnd:
             win32gui.SetWindowPos(hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
-
-    def is_windows_11_24h2_or_newer():
-        if sys.platform != "win32":
-            return False
-
-        ver = sys.getwindowsversion()
-        build = ver.build
-
-        # Windows 11 24H2 ≈ build 26100+
-        return build >= 26100
     
 # Model Mapping Dict
 MODEL_MAPPING = {
@@ -311,6 +301,9 @@ AUDIO_DELAY = settings["Audio Delay"]
 CRF = settings["CRF"]
 
 # Determin the run mode and stream mode
+VR_MODE_ENABLED = False
+RUN_MODE = "VR Mode"
+
 if RUN_MODE == "Local Viewer":
     RUN_MODE = "Viewer"
 elif RUN_MODE == "3D Monitor" and OS_NAME == "Windows":
@@ -325,6 +318,11 @@ elif RUN_MODE == "RTMP Streamer":
     if OS_NAME == "Windows":
         # Frame Generation Settings for RTMP, Local Viewer not requried
         LOSSLESS_SCALING_SUPPORT = settings["Lossless Scaling Support"]
+elif RUN_MODE == "VR Mode": # add VR mode
+    RUN_MODE = "Viewer"
+    VR_MODE_ENABLED = True
+    USE_3D_MONITOR = False
+    STREAM_MODE = None
 else:
     RUN_MODE = "Streamer"
 

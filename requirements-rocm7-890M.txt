@@ -1,5 +1,5 @@
 ﻿# AMD Ryze AI 890M 880M (Strix Point)
---index-url https://rocm.nightlies.amd.com/v2-staging/gfx1150/ --pre
+--index-url https://rocm.nightlies.amd.com/v2-staging/gfx1150/
 torch==2.11.0a0+rocm7.12.0a20260206
 torchvision==0.26.0a0+rocm7.12.0a20260217
 # torchaudio==2.11.0a0+rocm7.12.0a20260206
