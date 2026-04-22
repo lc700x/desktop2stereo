@@ -1,5 +1,5 @@
 # viewer.py
-import glfw
+import glfw, torch
 import moderngl
 import numpy as np
 import time
@@ -12,6 +12,93 @@ if OS_NAME == "Windows":
     from utils import hide_window_from_capture, show_window_in_capture
 elif OS_NAME == "Darwin":
     from utils import send_ctrl_cmd_f
+
+import ctypes, os, sys
+class CUDART_GL:
+    """CUDA-OpenGL interop helper (based on local_viewer.py)."""
+    def __init__(self, device_id=0):
+        # Locate cudart library
+        torch_dir = os.path.dirname(torch.__file__)
+        site_packages = os.path.dirname(torch_dir)
+        candidates = [
+            os.path.join(torch_dir, "lib"),
+            os.path.join(site_packages, "nvidia", "cuda_runtime", "lib"),
+            os.path.join(site_packages, "nvidia", "cuda_runtime", "bin"),
+        ]
+        cudart_path = None
+        for lib_dir in candidates:
+            if not os.path.exists(lib_dir):
+                continue
+            for f in os.listdir(lib_dir):
+                if sys.platform == "win32":
+                    if f.startswith("cudart64") and f.endswith(".dll"):
+                        cudart_path = os.path.join(lib_dir, f)
+                        break
+                else:
+                    if f.startswith("libcudart") and ".so" in f:
+                        cudart_path = os.path.join(lib_dir, f)
+                        break
+            if cudart_path:
+                break
+        if not cudart_path:
+            raise RuntimeError("Could not find cudart in torch/lib or nvidia/cuda_runtime/lib")
+
+        # Load library
+        if sys.platform == "win32":
+            self.lib = ctypes.WinDLL(cudart_path)
+        else:
+            self.lib = ctypes.CDLL(cudart_path)
+
+        # Set argument types
+        self.lib.cudaSetDevice.argtypes = [ctypes.c_int]
+        self.lib.cudaGraphicsGLRegisterBuffer.argtypes = [
+            ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.c_uint
+        ]
+        self.lib.cudaGraphicsUnregisterResource.argtypes = [ctypes.c_void_p]
+        self.lib.cudaGraphicsMapResources.argtypes = [
+            ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
+        ]
+        self.lib.cudaGraphicsUnmapResources.argtypes = [
+            ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
+        ]
+        self.lib.cudaGraphicsResourceGetMappedPointer.argtypes = [
+            ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p
+        ]
+        self.lib.cudaMemcpy.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int
+        ]
+        self.lib.cudaSetDevice(device_id)
+
+    def register_buffer(self, pbo_id):
+        resource = ctypes.c_void_p()
+        res = self.lib.cudaGraphicsGLRegisterBuffer(ctypes.byref(resource), pbo_id, 1)  # 1 = cudaGraphicsRegisterFlagsNone
+        if res != 0:
+            raise RuntimeError(f"cudaGraphicsGLRegisterBuffer failed: {res}")
+        return resource
+
+    def unregister_resource(self, resource):
+        self.lib.cudaGraphicsUnregisterResource(resource)
+
+    def map_resource(self, resource):
+        res = self.lib.cudaGraphicsMapResources(1, ctypes.byref(resource), None)
+        if res != 0:
+            raise RuntimeError(f"cudaGraphicsMapResources failed: {res}")
+        ptr = ctypes.c_void_p()
+        size = ctypes.c_size_t()
+        res = self.lib.cudaGraphicsResourceGetMappedPointer(ctypes.byref(ptr), ctypes.byref(size), resource)
+        if res != 0:
+            self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), None)
+            raise RuntimeError(f"cudaGraphicsResourceGetMappedPointer failed: {res}")
+        return ptr.value
+
+    def unmap_resource(self, resource):
+        self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), None)
+
+    def memcpy_d2d(self, dst_ptr, src_ptr, size):
+        # cudaMemcpyDeviceToDevice = 3
+        res = self.lib.cudaMemcpy(dst_ptr, src_ptr, size, 3)
+        if res != 0:
+            raise RuntimeError(f"cudaMemcpy failed: {res}")
 
 # Shaders as constants (unchanged)
 VERTEX_SHADER = """
@@ -46,9 +133,9 @@ FRAGMENT_SHADER = """
 
     vec2 pixel_size = 1.0 / u_resolution;
 
-    // ------------------------------------------------------------------
+    //-------------------------------------------------------------
     // FAST DISOCCLUSION DETECTION
-    // ------------------------------------------------------------------
+    //-------------------------------------------------------------
     bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
         // Bounds check
         if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
@@ -67,10 +154,10 @@ FRAGMENT_SHADER = """
         return false;
     }
 
-    // ------------------------------------------------------------------
+    //-------------------------------------------------------------
     // OPTIMIZED PUSH-PULL INPAINTING (Horizontal Priority)
     // Uses directional search to find background pixels efficiently
-    // ------------------------------------------------------------------
+    //-------------------------------------------------------------
     vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
         vec4 best_color = vec4(0.0);
         float best_weight = 0.0;
@@ -150,9 +237,9 @@ FRAGMENT_SHADER = """
         return texture(tex_color, uv_coord);
     }
 
-    // ------------------------------------------------------------------
+    //-------------------------------------------------------------
     // ALTERNATIVE: FAST SEPARABLE BLUR (Uncomment to use instead)
-    // ------------------------------------------------------------------
+    //-------------------------------------------------------------
     /*
     vec4 separable_inpaint(vec2 uv_coord, float center_depth_inv) {
         vec4 accum = vec4(0.0);
@@ -179,9 +266,9 @@ FRAGMENT_SHADER = """
     }
     */
 
-    // ------------------------------------------------------------------
+    //-------------------------------------------------------------
     // MAIN
-    // ------------------------------------------------------------------
+    //-------------------------------------------------------------
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
 
@@ -269,9 +356,8 @@ def add_logo(window):
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
 
-    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, frame_size=(1280, 720)):
+    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, **kwargs):
         # Initialize with default values
-        # Viewer visibility control
         self._has_real_frame = False
         self.use_3d = use_3d
         self.title = "Stereo Viewer"
@@ -438,7 +524,93 @@ class StereoWindow:
         self._update_font()
         vidmode = glfw.get_video_mode(glfw.get_monitors()[self.monitor_index])
         self.mon_w, self.mon_h = vidmode.size.width, vidmode.size.height
-        
+
+        self.use_cuda = use_cuda
+        self.cuda_device_id = cuda_device_id
+        self._cudart = None
+        self._pbo_color = None        # PBO ID for colour texture
+        self._pbo_depth = None        # PBO ID for depth texture
+        self._cuda_resource_color = None
+        self._cuda_resource_depth = None
+
+    def __del__(self):
+        self.cleanup_cuda()
+
+    def _init_cuda_pbos(self, width, height):
+        """Create PBOs and register them with CUDA. Disable CUDA on failure."""
+        if not self.use_cuda or self._cudart is not None:
+            return
+        try:
+            self._cudart = CUDART_GL(self.cuda_device_id)
+
+            # Colour PBO (RGB8, 3 bytes/pixel)
+            self._pbo_color = glGenBuffers(1)
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
+            glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 3, None, GL_STREAM_DRAW)
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+            self._cuda_resource_color = self._cudart.register_buffer(self._pbo_color)
+
+            # Depth PBO (float32, 4 bytes/pixel)
+            self._pbo_depth = glGenBuffers(1)
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_depth)
+            glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 4, None, GL_STREAM_DRAW)
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+            self._cuda_resource_depth = self._cudart.register_buffer(self._pbo_depth)
+
+            print(f"[Main] Enabled CUDA-GL interop acceleration (CUDA: {self.cuda_device_id})")
+        except Exception as e:
+            print(f"[Main] CUDA-GL interop initialization failed: {e}")
+            print("[Main] Falling back to CPU-GL interop.")
+            self.use_cuda = False
+            self.cleanup_cuda()   # clean up any partial allocations
+
+    def _upload_color_cuda(self, rgb_gpu):
+        """Upload a GPU tensor (H,W,3) uint8 to colour texture using PBO."""
+        h, w, _ = rgb_gpu.shape
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
+        ptr = self._cudart.map_resource(self._cuda_resource_color)
+        try:
+            self._cudart.memcpy_d2d(ptr, rgb_gpu.data_ptr(), rgb_gpu.nbytes)
+        finally:
+            self._cudart.unmap_resource(self._cuda_resource_color)
+
+        # Update ModernGL texture from the PBO
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                        GL_RGB, GL_UNSIGNED_BYTE, None)
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+
+    def _upload_depth_cuda(self, depth_gpu):
+        """Upload a GPU tensor (H,W) float32 to depth texture using PBO."""
+        h, w = depth_gpu.shape
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_depth)
+        ptr = self._cudart.map_resource(self._cuda_resource_depth)
+        try:
+            self._cudart.memcpy_d2d(ptr, depth_gpu.data_ptr(), depth_gpu.nbytes)
+        finally:
+            self._cudart.unmap_resource(self._cuda_resource_depth)
+
+        # Update ModernGL texture from the PBO
+        glActiveTexture(GL_TEXTURE1)
+        glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                        GL_RED, GL_FLOAT, None)
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+
+    def cleanup_cuda(self):
+        """Release CUDA resources and delete PBOs."""
+        if self._cudart:
+            if self._cuda_resource_color:
+                self._cudart.unregister_resource(self._cuda_resource_color)
+            if self._cuda_resource_depth:
+                self._cudart.unregister_resource(self._cuda_resource_depth)
+            if self._pbo_color:
+                glDeleteBuffers(1, [self._pbo_color])
+            if self._pbo_depth:
+                glDeleteBuffers(1, [self._pbo_depth])
+            self._cudart = None
+    
     def _calculate_depth_map_viewport(self, win_w, win_h, tex_w, tex_h):
         """Cached viewport calculation for depth map mode"""
         cache_key = (win_w, win_h, tex_w, tex_h, self.display_mode, 
@@ -934,101 +1106,113 @@ class StereoWindow:
                 self.show_mouse_state = True
 
     def update_frame(self, rgb, depth, current_fps=None, current_latency=None):
-        """Optimized texture updates with external FPS and latency input"""
-        # Convert depth tensor to numpy array if needed
-        if hasattr(depth, 'detach'):  # Check if it's a torch tensor
-            depth = depth.detach().cpu().contiguous().float().numpy()
-        if hasattr(rgb, 'detach'):  # Check if it's a torch tensor
-            rgb = rgb.detach().cpu().contiguous().float().numpy().clip(0, 255).astype(np.uint8)
-
-        # Only add overlay for stereo modes, not for depth map
-        if self.display_mode != "Depth Map":
-            rgb_with_overlay = self._add_overlay(rgb)
+        """Optimized frame update – tries CUDA zero‑copy, falls back to CPU."""
+        # Convert tensors to numpy for overlay (always CPU)
+        if hasattr(depth, 'detach'):
+            depth_np = depth.detach().cpu().contiguous().float().numpy()
         else:
-            rgb_with_overlay = rgb
+            depth_np = depth
 
-        # Update FPS from external source if provided
+        if hasattr(rgb, 'detach'):
+            rgb_np = rgb.permute(1, 2, 0).detach().contiguous().clamp(0, 255).to(torch.uint8).cpu().numpy()
+        else:
+            rgb_np = rgb
+
+        # Add overlay (CPU only)
+        if self.display_mode != "Depth Map":
+            rgb_with_overlay = self._add_overlay(rgb_np)
+        else:
+            rgb_with_overlay = rgb_np
+
+        # Update FPS/Latency
         if current_fps is not None:
             self.actual_fps = current_fps
-        
-        # Update latency from external source if provided
         if current_latency is not None:
-            self.total_latency = current_latency * 1000  # ms
-        
-        # Skip overlay for depth map mode
-        if self.display_mode != "Depth Map":
-            rgb_with_overlay = self._add_overlay(rgb)
-        else:
-            rgb_with_overlay = rgb
-        
+            self.total_latency = current_latency * 1000
+
         h, w, _ = rgb_with_overlay.shape
-        
-        # Only recreate textures if size actually changed
+
+        # Recreate textures and PBOs if size changed
         if self._texture_size != (w, h):
             if self.color_tex:
                 self.color_tex.release()
             if self.depth_tex:
                 self.depth_tex.release()
-                
             self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
             self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
-            
-            # Pre-bind texture units for better performance
             self.prog['tex_color'].value = 0
             self.prog['tex_depth'].value = 1
             self._texture_size = (w, h)
-        
-        # Upload texture data with optimized path
-        if self.display_mode == "Depth Map" and not self.show_original_in_depth_mode:
-            # For depth map mode showing depth, we only need to update depth texture
-            self.depth_tex.write(depth.tobytes())
-            # Skip RGB upload if not needed (only upload when switching modes)
-            if self._last_display_mode != "Depth Map" or self._last_show_original != self.show_original_in_depth_mode:
-                # Only upload RGB if we switched from another mode
+
+            # Reinit CUDA PBOs if needed (may disable CUDA on failure)
+            if self.use_cuda:
+                self.cleanup_cuda()
+                self._init_cuda_pbos(w, h)
+
+        # Try CUDA zero‑copy path first
+        cuda_success = False
+        if self.use_cuda and self._cudart is not None:
+            try:
+                # Check that tensors are on GPU and compatible
+                if not (hasattr(rgb, 'is_cuda') and rgb.is_cuda and
+                        hasattr(depth, 'is_cuda') and depth.is_cuda):
+                    raise RuntimeError("Tensors not on GPU")
+
+                # Convert overlay (CPU) to GPU tensor (uint8)
+                rgb_gpu = torch.from_numpy(rgb_with_overlay).cuda(self.cuda_device_id).contiguous()
+                depth_gpu = depth.contiguous().float()
+
+                # Upload using PBOs
+                self._upload_color_cuda(rgb_gpu)
+                self._upload_depth_cuda(depth_gpu)
+                cuda_success = True
+            except Exception as e:
+                self.use_cuda = False   # permanently disable CUDA for this instance
+                self.cleanup_cuda()
+
+        # Fallback to CPU path if CUDA failed or not available
+        if not cuda_success:
+            if self.display_mode == "Depth Map" and not self.show_original_in_depth_mode:
+                self.depth_tex.write(depth_np.tobytes())
+                if self._last_display_mode != "Depth Map" or self._last_show_original != self.show_original_in_depth_mode:
+                    rgb_u8 = rgb_with_overlay.astype('uint8', copy=False)
+                    self.color_tex.write(rgb_u8.tobytes())
+            else:
                 rgb_u8 = rgb_with_overlay.astype('uint8', copy=False)
                 self.color_tex.write(rgb_u8.tobytes())
-        else:
-            # Update both textures for other modes
-            rgb_u8 = rgb_with_overlay.astype('uint8', copy=False)
-            self.color_tex.write(rgb_u8.tobytes())
-            self.depth_tex.write(depth.tobytes())
-        
+                self.depth_tex.write(depth_np.tobytes())
+
         # Cache current state
         self._last_display_mode = self.display_mode
         self._last_show_original = self.show_original_in_depth_mode
-        
-        # Only show window after first frame
+
+        # Show window after first frame (unchanged – keep as is)
         if not self._has_real_frame:
             self._has_real_frame = True
             if self.stream_mode != "MJPEG":
                 glfw.show_window(self.window)
-
             self.position_on_monitor(self.monitor_index)
-        
-            # Hide window for 3D monitor, but cannot be captured by other apps as well
             if self.use_3d:
                 if not self.specify_display:
                     self.toggle_fullscreen()
                 self.apply_3d_settings()
-            
             if self.stream_mode == "RTMP":
                 if not self.specify_display:
                     self.move_to_adjacent_monitor(direction=1)
                 if OS_NAME != "Darwin":
-                    if not self.lossless_scaling: # need to check for Linux
+                    if not self.lossless_scaling:
                         glfw.set_window_opacity(self.window, 0.0)
                     glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
                 else:
                     self.fix_aspect = True
-                          
                     if (self._texture_size == (self.mon_w, self.mon_h) and self.display_mode != "Full-SBS") or (self._texture_size == (self.mon_w // 2, self.mon_h) and self.display_mode == "Full-SBS"):
-                        glfw.set_window_attrib(self.window, glfw.RESIZABLE, True)  # Enable resizing
+                        glfw.set_window_attrib(self.window, glfw.RESIZABLE, True)
                         glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
                         self.toggle_fullscreen()
-                
             if self.specify_display:
                 if not self.stream_mode == "RTMP" or self.lossless_scaling:
                     self.toggle_fullscreen()
+
     def _compute_render_size(self, max_w, max_h, src_w, src_h):
         """Calculate render size maintaining aspect ratio"""
         if src_w == 0 or src_h == 0:

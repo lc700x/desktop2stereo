@@ -299,7 +299,6 @@ DEFAULTS = {
     "Recompile TensorRT": False,
     "CoreML": False,
     "Recompile CoreML": False,
-    "Unlock Thread (Legacy Streamer)": False,
     "Recompile TensorRT": False,
     "Download Path": "models",
     "HF Endpoint": "https://hf-mirror.com",
@@ -318,7 +317,7 @@ DEFAULTS = {
     "Capture Tool": "WindowsCaptureCUDA" if "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM else "WindowsCapture",  # "WindowsCaptureCUDA" for NVIDIA GPU, "WindowsCapture", "DXCamera"
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False, # keep the viewer window aspect ratio not change
-    "Specify Display": 1,
+    "Specify Display": False,
     "Stereo Monitor": None,
 }
 
@@ -343,7 +342,6 @@ UI_TEXTS = {
         "Recompile TensorRT": "Recompile TensorRT",
         "Recompile CoreML": "Recompile CoreML",
         "Recompile OpenVINO": "Recompile OpenVINO",
-        "Unlock Thread (Legacy Streamer)": "Unlock Thread (Legacy Streamer)",
         "Download Path:": "Download Path:",
         "Browse...": "Browse...",
         "Stop": "Stop",
@@ -424,7 +422,6 @@ UI_TEXTS = {
         "Recompile TensorRT": "重新编译TensorRT",
         "Recompile CoreML": "重新编译CoreML",
         "Recompile OpenVINO": "重新编译OpenVINO",
-        "Unlock Thread (Legacy Streamer)": "解锁线程 (旧网络推流)",
         "Download Path:": "下载路径:",
         "Browse...": "浏览...",
         "Stop": "停止",
@@ -862,7 +859,6 @@ class ConfigGUI(tk.Tk):
         # Add Inference Optimizer dropdown after Device selection
         self.use_torch_compile = tk.BooleanVar()
         self.use_tensorrt = tk.BooleanVar()
-        self.unlock_streamer_thread = tk.BooleanVar()
         self.label_inference_optimizer = ttk.Label(self.content_frame, text="Inference Optimizer:")
         self.label_inference_optimizer.grid(row=15, column=0, sticky="w", **self.pad)
 
@@ -873,10 +869,6 @@ class ConfigGUI(tk.Tk):
         # TensorRT
         self.check_tensorrt = ttk.Checkbutton(self.content_frame, text="TensorRT", variable=self.use_tensorrt)
         self.check_tensorrt.grid(row=15, column=2, sticky="w", **self.pad)
-
-        # Unlock Thread (Legacy Streamer)
-        self.check_unlock_streamer_thread = ttk.Checkbutton(self.content_frame, text="Unlock Thread (Legacy Streamer)", variable=self.unlock_streamer_thread)
-        self.check_unlock_streamer_thread.grid(row=15, column=1, sticky="w", **self.pad)
         self.use_tensorrt.trace_add("write", self.update_recompile_trt_visibility)
         
         # Recompile TensorRT (only visible when TensorRT is selected)
@@ -1298,7 +1290,7 @@ class ConfigGUI(tk.Tk):
         else:
             self.label_stereo_monitor.grid_remove()
             self.stereo_monitor_menu.grid_remove()
-    
+        
     def update_stream_url(self, *args):
         """Update the stream URL based on selected protocol, port, and stream key"""
         protocol = self.stream_protocol_var.get()
@@ -1523,8 +1515,7 @@ class ConfigGUI(tk.Tk):
         current_model = self.depth_model_var.get()
         
         if device_type == "DirectML":
-            self.label_inference_optimizer.grid()
-            self.check_unlock_streamer_thread.grid()
+            self.label_inference_optimizer.grid_remove()
             self.check_torch_compile.grid_remove()
             self.check_tensorrt.grid_remove()
             self.check_recompile_trt.grid_remove()
@@ -1536,7 +1527,6 @@ class ConfigGUI(tk.Tk):
             
         elif device_type == "XPU":
             self.label_inference_optimizer.grid()
-            self.check_unlock_streamer_thread.grid_remove()
             self.check_torch_compile.grid_remove()
             self.check_tensorrt.grid_remove()
             self.check_recompile_trt.grid_remove()
@@ -1549,7 +1539,6 @@ class ConfigGUI(tk.Tk):
             
         elif device_type == "CUDA":
             self.label_inference_optimizer.grid()
-            self.check_unlock_streamer_thread.grid_remove()
             self.check_torch_compile.grid()
             self.check_coreml.grid_remove()
             self.check_recompile_coreml.grid_remove()
@@ -1565,7 +1554,6 @@ class ConfigGUI(tk.Tk):
                 
         elif device_type == "MPS":
             self.label_inference_optimizer.grid()
-            self.check_unlock_streamer_thread.grid_remove()
             self.check_torch_compile.grid_remove()
             self.check_tensorrt.grid_remove()
             self.check_recompile_trt.grid_remove()
@@ -1578,7 +1566,6 @@ class ConfigGUI(tk.Tk):
             
         else:  # CPU or other
             self.label_inference_optimizer.grid_remove()
-            self.check_unlock_streamer_thread.grid_remove()
             self.check_torch_compile.grid_remove()
             self.check_tensorrt.grid_remove()
             self.check_recompile_trt.grid_remove()
@@ -1742,7 +1729,6 @@ class ConfigGUI(tk.Tk):
         self.label_inference_optimizer.config(text=texts.get("Inference Optimizer:", "Inference Optimizer:"))
         self.check_recompile_trt.config(text=texts.get("Recompile TensorRT", "Recompile TensorRT"))
         self.check_recompile_coreml.config(text=texts.get("Recompile CoreML", "Recompile CoreML"))
-        self.check_unlock_streamer_thread.config(text=texts.get("Unlock Thread (Legacy Streamer)", "Unlock Thread (Legacy Streamer)"))
         # Select the appropriate label
         if self.run_mode_key == "Local Viewer":
             self.run_mode_var_label.set(localized_run_vals[0])
@@ -2234,7 +2220,6 @@ class ConfigGUI(tk.Tk):
         # Check if saved optimizer is valid for current device
         self.use_torch_compile.set(cfg.get("torch.compile", False))
         self.use_tensorrt.set(cfg.get("TensorRT", False))
-        self.unlock_streamer_thread.set(cfg.get("Unlock Thread (Legacy Streamer)", False))
         
         # Trigger device change to update optimizer options
         self.recompile_trt_var.set(cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"]))
@@ -2393,7 +2378,6 @@ class ConfigGUI(tk.Tk):
             "Recompile CoreML": self.recompile_coreml_var.get(),
             "OpenVINO": self.use_openvino.get(),
             "Recompile OpenVINO": self.recompile_openvino_var.get(),
-            "Unlock Thread (Legacy Streamer)": self.unlock_streamer_thread.get(),
             "Capture Tool": self.capture_tool_cb.get(),
             "Fill 16:9": self.fill_16_9_var.get(),
             "Fix Viewer Aspect": self.fix_viewer_aspect_var.get(),

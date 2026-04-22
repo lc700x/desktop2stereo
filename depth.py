@@ -10,28 +10,7 @@ import torch
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG
-# Initialize DirectML Device
-def get_device(index=0):
-    try:
-        try:
-            import torch_directml
-            if torch_directml.is_available():
-                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
-        except ImportError:
-            pass
-        if torch.backends.mps.is_available() and index==0:
-            return torch.device("mps"), "Using Apple Silicon (MPS) device"
-        if torch.cuda.is_available():
-            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
-        if torch.xpu.is_available():
-            return torch.device("xpu"), f"Using XPU device: {torch.xpu.get_device_name(index)}"
-        else:
-            return torch.device("cpu"), "Using CPU device"
-    except:
-        return torch.device("cpu"), "Using CPU device"
-    
-DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -325,9 +304,16 @@ def process_tensor(img_uint8: torch.Tensor, target_height: int) -> torch.Tensor:
     """
     Memory-efficient version for uint8 tensors.
     Minimizes temporary memory allocations during processing.
+    img_uint8: Input image tensor (HWC format)
+    target_height: Desired height for the output tensor
+    output: Processed tensor (CHW format)
     """
-    img_uint8 = img_uint8[..., [2, 1, 0]]
-    H0, W0, C = img_uint8.shape
+    # check if input is numpy
+    if isinstance(img_uint8, np.ndarray):
+        img_uint8 = torch.from_numpy(img_uint8).to(DEVICE)
+
+    img_uint8 = img_uint8[..., [2, 1, 0]].permute(2, 0, 1).contiguous()
+    _, H0, W0 = img_uint8.shape
     
     if target_height >= H0:
         return img_uint8.to(DEVICE, dtype=DTYPE)
@@ -342,12 +328,16 @@ def process_tensor(img_uint8: torch.Tensor, target_height: int) -> torch.Tensor:
         
         # Resize
         result = F.interpolate(
-            img_float.permute(2, 0, 1).unsqueeze(0),
+            img_float.unsqueeze(0),
             size=(new_height, new_width),
             mode='bilinear',
             align_corners=False
-        ).squeeze(0).permute(1, 2, 0)
+        ).squeeze(0)
     return result
+
+def chw_tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
+    hwc_tensor = tensor.permute(1, 2, 0).contiguous()
+    return hwc_tensor.detach().cpu().numpy()
 
 def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
     """
@@ -1165,24 +1155,21 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Fal
     """
     Returns depth in [0,1] using fixed square input.
     """
-    h, w = image_rgb.shape[:2]
     
     # Use fixed square size
     target_size = DEPTH_RESOLUTION
 
     # Check image_rgb is a tensor or numpy array
     if isinstance(image_rgb, torch.Tensor):
-        tensor = image_rgb.to(device=DEVICE, dtype=dtype)
+        rgb_tensor = image_rgb.to(device=DEVICE, dtype=dtype)
+        h, w = rgb_tensor.shape[1:]
     else:
         # Convert NumPy -> Torch tensor and move to device early
-        tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=dtype, non_blocking=True)
+        h, w = image_rgb.shape[:2]
+        rgb_tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=dtype, non_blocking=True).permute(2, 0, 1).contiguous()
     
-    if return_tuple:
-        # Keep original RGB for return (CHW format)
-        rgb_c = tensor.permute(2, 0, 1).contiguous()  # [C, H, W]
-        tensor = rgb_c.unsqueeze(0)  # [1, C, H, W]
-    else:
-        tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # [1, C, H, W]
+
+    tensor = rgb_tensor.unsqueeze(0)  # [1, C, H, W]
     
     # Resize to fixed square size on GPU
     if (h, w) != (target_size, target_size):
@@ -1232,7 +1219,7 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Fal
 
     # Return
     if return_tuple:
-        return depth, rgb_c
+        return depth, rgb_tensor
     else:
         return depth
 # Global cache (module-level)
@@ -1415,7 +1402,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=0.0, fill_
         rgb = torch.from_numpy(rgb_c).to(device=depth.device, dtype=depth.dtype)
         # Convert from HWC to CHW format
         if rgb.ndim == 3 and rgb.shape[2] == 3:
-            rgb = rgb.permute(2, 0, 1)
+            rgb = rgb.permute(2, 0, 1).contiguous()
     else:
         # Ensure tensor is on correct device and dtype
         rgb = rgb_c.to(device=depth.device, dtype=depth.dtype)
@@ -1433,7 +1420,8 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=0.0, fill_
         fill_16_9=fill_16_9,
         display_mode=display_mode
     )
-    return sbs_tensor.detach().cpu().to(torch.uint8).permute(1, 2, 0).contiguous().numpy()
+
+    return chw_tensor_to_numpy(sbs_tensor)
 
 if USE_TORCH_COMPILE and IS_CUDA:
     make_sbs_core = torch.compile(make_sbs_core)

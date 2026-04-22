@@ -1,5 +1,5 @@
 import yaml, threading, time
-import os, sys, platform, socket
+import os, platform, socket
 
 # Debug Mode
 DEBUG = False
@@ -281,7 +281,6 @@ FOREGROUND_SCALE = settings["Foreground Scale"] / 10 # 0-10
 AA_STRENGTH = settings["Anti-aliasing"] * 2
 
 # Experimental Settings
-DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer
 USE_TORCH_COMPILE = settings["torch.compile"]
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
@@ -301,9 +300,6 @@ AUDIO_DELAY = settings["Audio Delay"]
 CRF = settings["CRF"]
 
 # Determin the run mode and stream mode
-VR_MODE_ENABLED = False
-RUN_MODE = "VR Mode"
-
 if RUN_MODE == "Local Viewer":
     RUN_MODE = "Viewer"
 elif RUN_MODE == "3D Monitor" and OS_NAME == "Windows":
@@ -318,14 +314,33 @@ elif RUN_MODE == "RTMP Streamer":
     if OS_NAME == "Windows":
         # Frame Generation Settings for RTMP, Local Viewer not requried
         LOSSLESS_SCALING_SUPPORT = settings["Lossless Scaling Support"]
-elif RUN_MODE == "VR Mode": # add VR mode
-    RUN_MODE = "Viewer"
-    VR_MODE_ENABLED = True
-    USE_3D_MONITOR = False
-    STREAM_MODE = None
 else:
     RUN_MODE = "Streamer"
 
 # Specify the Stereo Display for output
 STEREO_DISPLAY_SELECTION = settings["Specify Display"]
 STEREO_DISPLAY_INDEX = settings["Stereo Monitor"]
+
+
+# Initialize Device
+import torch
+def get_device(index=0):
+    try:
+        try:
+            import torch_directml
+            if torch_directml.is_available():
+                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
+        except ImportError:
+            pass
+        if torch.backends.mps.is_available() and index==0:
+            return torch.device("mps"), "Using Apple Silicon (MPS) device"
+        if torch.cuda.is_available():
+            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+        if torch.xpu.is_available():
+            return torch.device("xpu"), f"Using XPU device: {torch.xpu.get_device_name(index)}"
+        else:
+            return torch.device("cpu"), "Using CPU device"
+    except:
+        return torch.device("cpu"), "Using CPU device"
+    
+DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
