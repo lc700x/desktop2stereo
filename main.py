@@ -283,8 +283,6 @@ def cleanup_all_resources():
     
     # Clear all queues to unblock threads
     queues = [raw_q, depth_q]
-    if 'sbs_q' in globals():
-        queues.append(sbs_q)
     
     for q in queues:
         while not q.empty():
@@ -1189,25 +1187,6 @@ def main(mode="Viewer"):
         else:
             from depth import make_sbs, DEVICE_INFO
             from streamer import MJPEGStreamer
-            
-            BOOST = (not "DirectML" in DEVICE_INFO) or DML_BOOST
-            
-            if BOOST:
-                sbs_q = queue.Queue(maxsize=1)
-                def sbs_loop():
-                    while not shutdown_event.is_set():
-                        try:
-                            rgb, depth, _ = depth_q.get(timeout=TIME_SLEEP)
-                            if shutdown_event.is_set():
-                                break
-                            sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fill_16_9=FILL_16_9, fps=current_fps)
-                            sbs_q.put(sbs)
-                        except queue.Empty:
-                            continue
-            
-
-
-                threading.Thread(target=sbs_loop, daemon=True).start()
 
             streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
             streamer.start()
@@ -1223,12 +1202,9 @@ def main(mode="Viewer"):
             
             while not shutdown_event.is_set():
                 try:
-                    if not BOOST:
-                        # Fix for unstable dml runtime error
-                        rgb, depth, _ = depth_q.get(timeout=TIME_SLEEP)
-                        sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fill_16_9=FILL_16_9, fps=current_fps)
-                    else:
-                        sbs = sbs_q.get(timeout=TIME_SLEEP)
+                    # Fix for unstable dml runtime error
+                    rgb, depth, _ = depth_q.get(timeout=TIME_SLEEP)
+                    sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fill_16_9=FILL_16_9, fps=current_fps)
                     streamer.set_frame(sbs)
                     
                     # Calculate FPS

@@ -551,6 +551,7 @@ class ConfigGUI(tk.Tk):
         
         # Start background monitoring
         self.start_background_key_monitor()
+        self.on_run_mode_change()
 
     def _get_capture_tool_options(self, device_label):
         """
@@ -563,15 +564,15 @@ class ConfigGUI(tk.Tk):
             List of available capture tool names.
         """
         if OS_NAME != "Windows":
-            return ["WindowsCapture", "DXCamera"]
+            return ["WindowsCapture", "DXCamera", "DesktopDuplication"]
         
         # Check if the current device is NVIDIA CUDA (not ROCm)
         is_nvidia_cuda = "CUDA" in device_label.upper() and not IS_ROCM
         
         if is_nvidia_cuda:
-            return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera"]
+            return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera", "DesktopDuplication"]
         else:
-            return ["WindowsCapture", "DXCamera"]
+            return ["WindowsCapture", "DXCamera", "DesktopDuplication"]
 
     def start_background_key_monitor(self):
         """Start background thread for system-wide ESC key monitoring"""
@@ -752,6 +753,9 @@ class ConfigGUI(tk.Tk):
         if OS_NAME != "Windows":
             self.label_capture_tool.grid_remove()
             self.capture_tool_cb.grid_remove()
+        else:
+            # handle capture tool changes
+            self.capture_tool_cb.bind("<<ComboboxSelected>>", self.on_capture_tool_change)
             
         # FPS
         self.label_fps = ttk.Label(self.content_frame, text="FPS:")
@@ -1002,6 +1006,32 @@ class ConfigGUI(tk.Tk):
         self.stream_protocol_cb["values"] = ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]
         self.stream_protocol_var.set(self.stream_protocol_key)
     
+    def on_capture_tool_change(self, event=None):
+        """
+        Handle capture tool selection changes.
+        Disable 'Window' capture mode when DesktopDuplication is selected.
+        """
+        selected_tool = self.capture_tool_cb.get()
+        
+        # If DesktopDuplication is selected, force Monitor mode and disable Window mode
+        if selected_tool == "DesktopDuplication":
+            # Force capture mode to Monitor
+            self.capture_mode_key = "Monitor"
+            self.capture_mode_var_label.set(UI_TEXTS[self.language]["Monitor"])
+            
+            # Update the capture mode combobox to show Monitor is selected
+            self.on_capture_mode_change()
+            
+            # Disable the capture mode combobox to prevent switching to Window
+            self.capture_mode_cb.config(state="disabled")
+            
+            # Optionally, show a status message
+            self.update_status("DesktopDuplication selected: Window capture mode disabled.")
+        else:
+            # Re-enable the capture mode combobox for other tools
+            self.capture_mode_cb.config(state="readonly")
+            self.update_status("")
+
     def update_stereo_monitor_menu(self):
         """
         Update the stereo monitor menu based on currently selected input monitor.
@@ -1574,8 +1604,8 @@ class ConfigGUI(tk.Tk):
             self.check_openvino.grid_remove()
             self.check_recompile_openvino.grid_remove()
         self.auto_enable_optimizers_based_on_device()
-                
-    
+        self.on_capture_tool_change()
+
     def refresh_window_list(self):
         """Refresh the list of available windows"""
         try:

@@ -331,7 +331,8 @@ def process_tensor(img_uint8: torch.Tensor, target_height: int) -> torch.Tensor:
             img_float.unsqueeze(0),
             size=(new_height, new_width),
             mode='bilinear',
-            align_corners=False
+            align_corners=False,
+            antialias=True
         ).squeeze(0)
     return result
 
