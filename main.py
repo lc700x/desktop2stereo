@@ -145,7 +145,6 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
         global capture_control
 
         next_frame_time = time.perf_counter()
-        frame_interval = TIME_SLEEP  # seconds per frame
 
         @cap.event
         def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
@@ -163,8 +162,7 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
                     return
 
                 # Prevent timing drift if system lags temporarily
-                while next_frame_time <= now:
-                    next_frame_time += frame_interval
+                next_frame_time += TIME_SLEEP
 
                 source_frame = frame.frame_buffer
                 raw_q.put((source_frame, OUTPUT_RESOLUTION, now))
@@ -209,8 +207,11 @@ else:
 process = process_tensor  if "DirectML" not in DEVICE_INFO and "CPU" not in DEVICE_INFO else process
 
 # Combined processing + depth thread (replaces process_loop and depth_loop)
+
 def process_depth_loop():
+    target_time = time.perf_counter()
     while not shutdown_event.is_set():
+        target_time += TIME_SLEEP
         try:
             if shutdown_event.is_set():
                 break
@@ -233,7 +234,11 @@ def process_depth_loop():
             
             # Send to render queue
             depth_q.put((frame_rgb, depth, capture_start_time))
-            
+
+            sleep = target_time - time.perf_counter()
+            if sleep > 0:
+                time.sleep(sleep)
+
         except queue.Empty:
             continue
 
@@ -1073,12 +1078,13 @@ def main(mode="Viewer"):
             thread_latencies['total'] = total_latency
             
             # Main render loop
+            next_render_time = time.perf_counter()
             while (not glfw.window_should_close(window.window) and 
                    not shutdown_event.is_set()):
 
                 try:
                     # Get next frame (already processed + depth)
-                    rgb, depth, capture_start_time = depth_q.get(timeout=TIME_SLEEP)
+                    rgb, depth, capture_start_time = depth_q.get(timeout=0.001)
                     
                     # Render
                     render_start_time = time.perf_counter()
@@ -1177,7 +1183,12 @@ def main(mode="Viewer"):
                         glfw.set_window_title(window.window, f"Stereo Viewer {title_text}")
                 except queue.Empty:
                     pass
-                
+                now = time.perf_counter()
+
+                if now < next_render_time:
+                    time.sleep(next_render_time - now)
+
+                next_render_time += TIME_SLEEP
                 window.render()
                 glfw.swap_buffers(window.window)
                 glfw.poll_events()
