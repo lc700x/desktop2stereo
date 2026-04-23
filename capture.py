@@ -494,6 +494,15 @@ elif OS_NAME == "Darwin":
                     return int(bounds.get("X",0)), int(bounds.get("Y",0)), int(bounds.get("Width",0)), int(bounds.get("Height",0))
         return None, None, None, None
     
+    # Cursor cache to avoid redundant processing
+    _cursor_cache = {
+        'bgra': None,
+        'hotspot': None,
+        'alpha_f32': None,
+        'premultiplied_bgr_f32': None,
+        'last_cursor': None  # Store cursor object reference to detect changes
+    }
+    
     # Cursor loader with caching & precomputation
     def get_cursor_image_and_hotspot():
         """
@@ -509,6 +518,15 @@ elif OS_NAME == "Darwin":
             cursor = NSCursor.currentSystemCursor()
             if cursor is None:
                 return None, None, None, None
+
+            # Return cached data if cursor hasn't changed (major performance boost)
+            if (cursor == _cursor_cache['last_cursor'] and 
+                _cursor_cache['bgra'] is not None):
+                return (_cursor_cache['bgra'], _cursor_cache['hotspot'], 
+                       _cursor_cache['alpha_f32'], _cursor_cache['premultiplied_bgr_f32'])
+
+            # Update cache reference
+            _cursor_cache['last_cursor'] = cursor
 
             ns_image = cursor.image()
             if ns_image is None:
@@ -543,6 +561,12 @@ elif OS_NAME == "Darwin":
             alpha = bgra[:, :, 3].astype(np.float32) / 255.0
             premultiplied_bgr = bgra[:, :, :3].astype(np.float32) * alpha[:, :, None]
 
+            # Store in cache
+            _cursor_cache['bgra'] = bgra
+            _cursor_cache['hotspot'] = hotspot
+            _cursor_cache['alpha_f32'] = alpha
+            _cursor_cache['premultiplied_bgr_f32'] = premultiplied_bgr
+
             return bgra, hotspot, alpha, premultiplied_bgr
 
         except Exception:
@@ -553,8 +577,12 @@ elif OS_NAME == "Darwin":
         ev = CG.CGEventCreate(None)
         loc = CG.CGEventGetLocation(ev)
         return loc.x, loc.y
+    
+    def is_cursor_visible():
+        """Check if cursor is visible (cached check for performance)."""
+        return CGCursorIsVisible()
 
-    # Fast overlay using cached premultiplied data
+    # Fast overlay using cached premultiplied data with optimized blending
     def overlay_cursor_on_frame(frame_bgr, cursor_bgra, hotspot, cursor_pos,
                                 alpha_f32=None, premultiplied_bgr_f32=None):
         """
@@ -621,7 +649,7 @@ elif OS_NAME == "Darwin":
             alpha_roi = src_region[:, :, 3].astype(np.float32, copy=False) / 255.0
             src_premult = src_region[:, :, :3].astype(np.float32, copy=False) * alpha_roi[..., None]
 
-        # quick checks
+        # quick checks for optimization paths
         a_min = float(alpha_roi.min())
         a_max = float(alpha_roi.max())
 
@@ -629,6 +657,10 @@ elif OS_NAME == "Darwin":
             # fully transparent ROI -> nothing to do
             return frame_bgr
 
+        # Optimized blend using single numpy operation with broadcasting
+        # res = src_premult + dst * (1 - alpha)
+        alpha_3ch = alpha_roi[..., None]  # Expand to HxWx1 for broadcasting
+        
         if a_min >= 0.999:
             # fully opaque ROI -> direct copy (fastest path)
             if src_region is not None:
@@ -638,20 +670,13 @@ elif OS_NAME == "Darwin":
                 np.copyto(dst_region, np.clip(src_premult + 0.5, 0, 255).astype(np.uint8))
             return frame_bgr
 
-        # General blending:
-        # res = src_premult + dst * (1 - alpha)
-        # Avoid cv2.merge; use broadcasting
+        # General blending: single vectorized operation
         dst_f32 = dst_region.astype(np.float32, copy=False)
-
-        one_minus = (1.0 - alpha_roi)[..., None]   # shape HxWx1 float32
-        # compute dst * (1-alpha) in-place into a temporary f32 array
-        res_f32 = dst_f32 * one_minus             # broadcasting, new array
-        # Add src_premult (float32) into res_f32
-        np.add(res_f32, src_premult, out=res_f32)
-
+        blended = src_premult + dst_f32 * (1.0 - alpha_3ch)
+        
         # clip + cast back to uint8
-        np.clip(res_f32, 0, 255, out=res_f32)
-        res_uint8 = res_f32.astype(np.uint8, copy=False)
+        np.clip(blended, 0, 255, out=blended)
+        res_uint8 = blended.astype(np.uint8, copy=False)
 
         # For pixels that are effectively opaque, ensure exact copy (avoid rounding differences)
         if a_max >= 0.999 or np.any(alpha_roi >= 0.999):
@@ -667,7 +692,20 @@ elif OS_NAME == "Darwin":
         np.copyto(dst_region, res_uint8)
         return frame_bgr
 
-
+    # Convenience function that checks cursor visibility before overlaying
+    def overlay_cursor_if_visible(frame_bgr, cursor_bgra, hotspot, cursor_pos,
+                                  alpha_f32=None, premultiplied_bgr_f32=None):
+        """
+        Overlay cursor only if it's visible. Combines visibility check with overlay.
+        
+        Parameters: Same as overlay_cursor_on_frame
+        
+        Returns: frame_bgr with cursor blended in (or unchanged if cursor hidden)
+        """
+        if not CGCursorIsVisible():
+            return frame_bgr
+        return overlay_cursor_on_frame(frame_bgr, cursor_bgra, hotspot, cursor_pos, alpha_f32, premultiplied_bgr_f32)
+    
     class DesktopGrabber:
         def __init__(self, output_resolution=1080, fps=60, window_title=None, capture_mode="Monitor", monitor_index=1, with_cursor=True):
             self.scaled_height = output_resolution
@@ -786,9 +824,8 @@ elif OS_NAME == "Darwin":
                 self.cursor_hotspot = (0, 0)
                 self.cursor_alpha = None
                 self.cursor_premultiplied = None
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            return frame_rgb, self.scaled_height
-        
+            return frame_bgr, self.scaled_height
+
         def stop(self):
             """Stop the capture and clean up resources."""
             if hasattr(self, '_mss'):
@@ -953,8 +990,7 @@ elif OS_NAME.startswith("Linux"):
             monitor = {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
             shot = self._mss.grab(monitor)
             arr = np.asarray(shot)
-            frame_rgb = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
-            return frame_rgb, self.scaled_height
+            return arr, self.scaled_height
 
         def stop(self):
             """Stop the capture and clean up resources."""

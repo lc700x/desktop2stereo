@@ -120,40 +120,75 @@ elif OS_NAME == "Darwin":
         options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
         window_info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
         # System UI processes we want to ignore
-        blacklist = {
+        blacklist = [
             "Window Server",
             "ControlCenter",
             "NotificationCenter",
             "Spotlight",
             "Dock",
+            "FocusModes",
+            "WiFi",
+            "Sound",
+            "UserSwitcher",
+            "Clock",
+            "BentoBox",
+            "Bluetooth",
+            "popdown",
+            "AudioVideoModule",
+            "ScreenMirroring",
             "SystemUIServer",
             "CoreServicesUIAgent",
             "TextInputMenuAgent",
-        }
+            # Additional known menu‑bar item owners (add any you discover)
+            "com.apple.controlcenter",   # sometimes the bundle ID appears
+            "loginwindow",               # the lockscreen / login screen
+        ]
         for win in window_info:
             title = win.get("kCGWindowName", "") or ""
             owner = win.get("kCGWindowOwnerName", "")
             layer = win.get("kCGWindowLayer", 0)
             bounds = win.get("kCGWindowBounds", {})
-            # Filtering rules
+
+            # Skip windows without a title (often menu extras have empty names)
             if not title.strip():
                 continue
-            if owner in blacklist:
+
+            # Skip if owner is a known system UI process
+            if owner in blacklist or title in blacklist:
                 continue
-            if title.strip().lower().startswith("item-"):
+
+            # Skip windows that are extremely high in the window stack
+            # kCGStatusWindowLevel = 1000; anything ≥ that is a status/overlay element.
+            if layer >= 1000:
                 continue
+
+            # Skip invisible windows (alpha = 0)
+            if win.get("kCGWindowAlpha", 1.0) == 0.0:
+                continue
+
+            # Skip menu‑bar extras that use a generic internal naming convention
+            # (many start with "item-" or "window‑" when exposed by SystemUIServer)
+            if title.strip().lower().startswith(("item-", "window-")):
+                continue
+
             # bounds dictionary: X, Y, Width, Height
             if "X" in bounds and "Y" in bounds and "Width" in bounds and "Height" in bounds:
                 x = bounds["X"]
                 y = bounds["Y"]
                 w = bounds["Width"]
                 h = bounds["Height"]
+
+                # Optional: discard extremely tiny “windows” that are likely icons
+                if w < 10 or h < 10:
+                    continue
+
                 rect = (x, y, w, h)
                 windows.append({
                     "title": title.strip(),
                     "handle": win["kCGWindowNumber"],
                     "rect": rect
                 })
+
         return windows
 else:
     import subprocess
