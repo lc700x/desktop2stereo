@@ -1,13 +1,12 @@
-import yaml, threading
+import yaml, threading, time
 import os, platform, socket
 
 # Debug Mode
 DEBUG = False
 # App Version
-VERSION = "2.4.0"
+VERSION = "2.4.1"
 # Get OS name
 OS_NAME = platform.system()
-
 # Define StereoMix devices
 STEREO_MIX_NAMES = [
 # English
@@ -47,14 +46,15 @@ DISABLE_COREML_KEYWORDS = [
 
 # Models with Disabled OpenVINO 
 DISABLE_OPENVINO_KEYWORDS = [
-    "da3",
+    "da3-",
     "dpt-hybrid-midas-hf",
 ]
 
 # Disable CuDNN for RX 6000 and 5000 series GPUs
 DISABLE_CUDNN_KEYWORDS = ["6950", "6900", "6850", "6800", "6750", "6700", "6650", "6600", "6550", "6500", "6400", "6300", "680", "6100", "5700", "5600", "5500", "5400", "5300", "520", "160"]
 # Disable Triton for RX 5000 series
-DISABLE_TRITON_KEYWORDS = ["5700", "5600", "5500", "5400", "5300", "520", "160"]
+DISABLE_TRITON_KEYWORDS = ["520", "160"]
+# DISABLE_TRITON_KEYWORDS = ["5700", "5600", "5500", "5400", "5300", "520", "160"]
 
 # Global shutdown event
 shutdown_event = threading.Event()
@@ -148,39 +148,22 @@ if OS_NAME == "Windows":
     except:
         ctypes.windll.user32.SetProcessDPIAware()
 
-    import glfw
-    from ctypes import wintypes
-    
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    def hide_window_from_capture(glfw_window):
-        """Set display affinity to exclude window from screen capture (Windows only)."""
-        WDA_EXCLUDEFROMCAPTURE = 0x00000011
-        hwnd = glfw.get_win32_window(glfw_window)
-        SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
-        SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
-        SetWindowDisplayAffinity.restype = wintypes.BOOL
+    import ctypes, glfw
 
-        result = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
-        if result:
-            print("StereoWindow is now hidden from screen capture.")
-        else:
-            print(f"Failed to set display affinity. Error code: {ctypes.get_last_error()}")
+    user32 = ctypes.windll.user32
+    SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
+    WDA_EXCLUDEFROMCAPTURE = 0x00000011   # Windows 10 2004+
+
+    def hide_window_from_capture(glfw_window):
+        hwnd = glfw.get_win32_window(glfw_window)
+        SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+        print("StereoWindow is now hidden from screen capture.")
 
     def show_window_in_capture(glfw_window):
-        """Remove display affinity so the window can appear in screen capture (Windows only)."""
-        WDA_NONE = 0x00000000
         hwnd = glfw.get_win32_window(glfw_window)
+        SetWindowDisplayAffinity(hwnd, 0)
+        print("StereoWindow is now visible to screen capture.")
 
-        SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
-        SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
-        SetWindowDisplayAffinity.restype = wintypes.BOOL
-
-        result = SetWindowDisplayAffinity(hwnd, WDA_NONE)
-        if result:
-            print("StereoWindow is now visible to screen capture.")
-        else:
-            print(f"Failed to clear display affinity. Error code: {ctypes.get_last_error()}")
-    
     def set_window_to_bottom(glfw_window):
         """
         Finds a window by its title and sets its Z-order to the bottom.
@@ -188,6 +171,83 @@ if OS_NAME == "Windows":
         hwnd = glfw.get_win32_window(glfw_window)
         if hwnd:
             win32gui.SetWindowPos(hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
+    
+# Model Mapping Dict
+MODEL_MAPPING = {
+    # Depth-Anything V2
+    "Depth-Anything-V2-Small-hf": "depth-anything/Depth-Anything-V2-Small-hf",
+    "Depth-Anything-V2-Base-hf": "depth-anything/Depth-Anything-V2-Base-hf",
+    "Depth-Anything-V2-Large-hf": "depth-anything/Depth-Anything-V2-Large-hf",
+    
+    # Video-Depth-Anything
+    "Video-Depth-Anything-Small": "depth-anything/Video-Depth-Anything-Small",
+    "Video-Depth-Anything-Base": "depth-anything/Video-Depth-Anything-Base",
+    "Video-Depth-Anything-Large": "depth-anything/Video-Depth-Anything-Large",
+    
+    # DA3
+    "DA3-SMALL": "depth-anything/DA3-SMALL",
+    "DA3-BASE": "depth-anything/DA3-BASE",
+    "DA3-LARGE-1.1": "depth-anything/DA3-LARGE-1.1",
+    "DA3-GIANT-1.1": "depth-anything/DA3-GIANT-1.1",
+    "DA3METRIC-LARGE": "depth-anything/DA3METRIC-LARGE",
+    "DA3NESTED-GIANT-LARGE-1.1": "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
+    "DA3MONO-LARGE": "depth-anything/DA3MONO-LARGE",
+    
+    # Depth-Anything-V2 Metric Outdoor
+    "Depth-Anything-V2-Metric-Outdoor-Small-hf": "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf",
+    "Depth-Anything-V2-Metric-Outdoor-Base-hf": "depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf",
+    "Depth-Anything-V2-Metric-Outdoor-Large-hf": "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf",
+    
+    # Depth-Anything-V2 Metric Indoor
+    "Depth-Anything-V2-Metric-Indoor-Small-hf": "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf",
+    "Depth-Anything-V2-Metric-Indoor-Base-hf": "depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf",
+    "Depth-Anything-V2-Metric-Indoor-Large-hf": "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf",
+    
+    # Metric-Video-Depth-Anything
+    "Metric-Video-Depth-Anything-Small": "depth-anything/Metric-Video-Depth-Anything-Small",
+    "Metric-Video-Depth-Anything-Base": "depth-anything/Metric-Video-Depth-Anything-Base",
+    "Metric-Video-Depth-Anything-Large": "depth-anything/Metric-Video-Depth-Anything-Large",
+    
+    # LiheYoung/depth-anything
+    "depth-anything-small-hf": "LiheYoung/depth-anything-small-hf",
+    "depth-anything-base-hf": "LiheYoung/depth-anything-base-hf",
+    "depth-anything-large-hf": "LiheYoung/depth-anything-large-hf",
+    
+    # Distill-Any-Depth
+    "Distill-Any-Depth-Small-hf": "xingyang1/Distill-Any-Depth-Small-hf",
+    "Distill-Any-Depth-Base-hf": "lc700x/Distill-Any-Depth-Base-hf",
+    "Distill-Any-Depth-Large-hf": "xingyang1/Distill-Any-Depth-Large-hf",
+    
+    # DPT-DINOv2 KITTI
+    "dpt-dinov2-small-kitti": "facebook/dpt-dinov2-small-kitti",
+    "dpt-dinov2-base-kitti-hf": "lc700x/dpt-dinov2-base-kitti-hf",
+    "dpt-dinov2-large-kitti-hf": "lc700x/dpt-dinov2-large-kitti-hf",
+    "dpt-dinov2-giant-kitti-hf": "lc700x/dpt-dinov2-giant-kitti-hf",
+    
+    # DPT-DINOv2 NYU
+    "dpt-dinov2-small-nyu-hf": "lc700x/dpt-dinov2-small-nyu-hf",
+    "dpt-dinov2-base-nyu-hf": "lc700x/dpt-dinov2-base-nyu-hf",
+    "dpt-dinov2-large-nyu-hf": "lc700x/dpt-dinov2-large-nyu-hf",
+    "dpt-dinov2-giant-nyu": "facebook/dpt-dinov2-giant-nyu",
+    
+    # Other
+    "depth-ai-hf": "lc700x/depth-ai-hf",
+    "dpt-hybrid-midas-hf": "lc700x/dpt-hybrid-midas-hf",
+    
+    # Intel/DPT
+    "dpt-beit-base-384": "Intel/dpt-beit-base-384",
+    "dpt-beit-large-512": "Intel/dpt-beit-large-512",
+    "dpt-large": "Intel/dpt-large",
+    "dpt-large-redesign-hf": "lc700x/dpt-large-redesign-hf",
+    
+    # Intel/ZoeDepth
+    "zoedepth-nyu-kitti": "Intel/zoedepth-nyu-kitti",
+    "zoedepth-nyu": "Intel/zoedepth-nyu",
+    "zoedepth-kitti": "Intel/zoedepth-kitti",
+
+    # Apple/DepthPro
+    "DepthPro-hf": "apple/DepthPro-hf"
+}
 
 # Streamer Settings
 DEFAULT_PORT = 1122
@@ -203,7 +263,8 @@ STREAM_MODE = None
 
 # Add for FrameGen
 LOSSLESS_SCALING_SUPPORT = False
-MODEL_ID = settings["Depth Model"]
+MODEL = settings["Depth Model"]
+MODEL_ID = MODEL_MAPPING[MODEL]
 ALL_MODELS = settings["Model List"]
 CACHE_PATH = settings["Download Path"]
 DEPTH_RESOLUTION = settings["Depth Resolution"]
@@ -212,6 +273,7 @@ FP16 = False if OS_NAME == "Darwin" else settings["FP16"]
 MONITOR_INDEX, OUTPUT_RESOLUTION, DISPLAY_MODE = settings["Monitor Index"], settings["Output Resolution"], settings["Display Mode"]
 SHOW_FPS, FPS, DEPTH_STRENGTH = settings["Show FPS"], settings["FPS"], settings["Depth Strength"]
 IPD = settings["IPD"]
+CONVERGENCE = settings["Convergence"]
 CAPTURE_MODE = settings["Capture Mode"]
 WINDOW_TITLE = settings["Window Title"]
 
@@ -220,7 +282,6 @@ FOREGROUND_SCALE = settings["Foreground Scale"] / 10 # 0-10
 AA_STRENGTH = settings["Anti-aliasing"] * 2
 
 # Experimental Settings
-DML_BOOST = settings["Unlock Thread (Legacy Streamer)"] # Unlock thread for DirectML streamer
 USE_TORCH_COMPILE = settings["torch.compile"]
 USE_TENSORRT = settings["TensorRT"] # use TensorRT for CUDA
 RECOMPILE_TRT = settings["Recompile TensorRT"] # recompile TensorRT engine
@@ -260,3 +321,27 @@ else:
 # Specify the Stereo Display for output
 STEREO_DISPLAY_SELECTION = settings["Specify Display"]
 STEREO_DISPLAY_INDEX = settings["Stereo Monitor"]
+
+
+# Initialize Device
+import torch
+def get_device(index=0):
+    try:
+        try:
+            import torch_directml
+            if torch_directml.is_available():
+                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
+        except ImportError:
+            pass
+        if torch.backends.mps.is_available() and index==0:
+            return torch.device("mps"), "Using Apple Silicon (MPS) device"
+        if torch.cuda.is_available():
+            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
+        if torch.xpu.is_available():
+            return torch.device("xpu"), f"Using XPU device: {torch.xpu.get_device_name(index)}"
+        else:
+            return torch.device("cpu"), "Using CPU device"
+    except:
+        return torch.device("cpu"), "Using CPU device"
+    
+DEVICE, DEVICE_INFO = get_device(DEVICE_ID)

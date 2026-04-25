@@ -32,7 +32,7 @@ del "%ZIP_FILE%"
 echo Latest Desktop2Stereo downloaded and extracted to current folder.
 endlocal
 @REM Set paths
-call .env\Scripts\activate
+call activate.cmd
 Set "PYTHON_EXE=python"
 
 
@@ -49,7 +49,7 @@ if %errorlevel% neq 0 (
 @REM Install new requirements
 echo.
 echo - Installing new requirements
-%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --trusted-host  http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 if %errorlevel% neq 0 (
     echo Failed to install requirements
     pause

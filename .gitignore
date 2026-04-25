@@ -18,4 +18,5 @@ models/models--*
 *.jpg
 assets
 Python31*
-rocm6000
+python3*
+*venv*
