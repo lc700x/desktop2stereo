@@ -23,8 +23,8 @@ reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /
 cd /d "%~dp0"
 
 echo - Setting up the virtual enviroment
-Set "VIRTUAL_ENV=.\Python311"
-Set "PYTHON_EXE=.\Python311\python.exe"
+Set "VIRTUAL_ENV=.\python3"
+Set "PYTHON_EXE=.\python3\python.exe"
 
 echo - Updating the pip package 
 %PYTHON_EXE% -m pip install --upgrade pip --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/

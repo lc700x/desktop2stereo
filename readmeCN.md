@@ -59,7 +59,7 @@
         **Intel GPU**: 下载并解压 `Desktop2Stereo_vX.X.X_Intel_Windows.zip` 到本地磁盘。
 
     - **方法 2**: 使用内嵌 Python 手动部署
-        1.  下载并解压 `Desktop2Stereo_vX.X.X_Python311_Windows.zip` 到本地磁盘。
+        1.  下载并解压 `Desktop2Stereo_vX.X.X_python3_Windows.zip` 到本地磁盘。
         2.  安装 Python 环境
             **AMD 6000/7000/9000/Ryzen AI (Max)等支持ROCm7的GPU**: 双击 `install-rocm7_standalone.bat`。  
             **旧AMD/Intel/Qualcomm GPU 及其他 DirectML 设备**: 双击 `install-dml_standalone.bat`。  

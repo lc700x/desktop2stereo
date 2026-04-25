@@ -1,6 +1,6 @@
 ﻿# AMD Ryze AI 820M (Medusa Point)
 --index-url https://rocm.nightlies.amd.com/v2-staging/gfx1153/
-torch==2.11.0a0+rocm7.12.0a20260206
-torchvision==0.26.0a0+rocm7.12.0a20260217
-# torchaudio==2.11.0a0+rocm7.12.0a20260206
-rocm_sdk_devel==7.12.0a20260206
+torch==2.10.0+rocm7.13.0a20260313
+torchvision==0.25.0+rocm7.13.0a20260313
+# torchaudio==2.10.0+rocm7.13.0a20260313
+rocm_sdk_devel==7.13.0a20260313

@@ -3,7 +3,7 @@ echo --- Desktop2Stereo Installer (With ROCm for AMD 7000/9000/AI series GPU/APU
 echo - Setting up the virtual environment
 
 @REM Set paths, acutually using Python 3.12
-set "VIRTUAL_ENV=Python311"
+set "VIRTUAL_ENV=python3"
 Set "PYTHON_EXE=.\%VIRTUAL_ENV%\python.exe"
 
 

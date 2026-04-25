@@ -3,7 +3,7 @@ echo --- Desktop2Stereo Installer (With Windows DirectML for AMD GPUs and etc.) 
 echo - Setting up the virtual environment
 
 @REM Set paths
-Set "PYTHON_EXE=.\Python311\python.exe"
+Set "PYTHON_EXE=.\python3\python.exe"
 
 @REM Update pip
 echo - Updating the pip package

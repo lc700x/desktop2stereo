@@ -75,7 +75,7 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 
 - **Method 2**: Manual Deployment with embedded Python
 
-    1. Download and unzip `Desktop2Stereo_vX.X.X_Python311_Windows.zip` to local disk.
+    1. Download and unzip `Desktop2Stereo_vX.X.X_python3_Windows.zip` to local disk.
     2. Install Python environment
 
         **AMD 6000/7000/9000/Ryzen AI (Max)/etc. Series GPUs with ROCm7 Support**: Double click `install-rocm7_standalone.bat`. (Check compatibility here: https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)

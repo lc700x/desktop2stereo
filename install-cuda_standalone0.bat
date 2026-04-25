@@ -3,7 +3,7 @@ echo --- Desktop2Stereo Installer (With CUDA for NVIDIA GPUs.) ---
 echo - Setting up the virtual environment
 
 @REM Set paths
-Set "PYTHON_EXE=.\Python311\python.exe"
+Set "PYTHON_EXE=.\python3\python.exe"
 
 
 @REM Update pip

@@ -3,7 +3,7 @@ echo --- Desktop2Stereo Installer (With XPU for Intel GPUs.) ---
 echo - Setting up the virtual environment
 @REM torch compile: https://www.intel.com/content/www/us/en/developer/articles/technical/boost-pytorch-inductor-performance-on-windows.html
 @REM Set paths
-Set "PYTHON_EXE=.\Python311\python.exe"
+Set "PYTHON_EXE=.\python3\python.exe"
 
 
 @REM Update pip

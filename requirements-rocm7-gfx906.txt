@@ -1,5 +1,5 @@
-﻿# AMD Radeon RX 6000 Series Graphics Cards (GFX103X)
---index-url https://rocm.nightlies.amd.com/v2-staging/gfx103X-all/
+﻿# AMD Radeon VII/MI50/MI60 Series Graphics Cards (GFX906)
+--index-url https://rocm.nightlies.amd.com/v2-staging/gfx906/
 torch==2.10.0+rocm7.13.0a20260424
 torchvision==0.25.0+rocm7.13.0a20260424
 # torchaudio==2.10.0+rocm7.13.0a20260424

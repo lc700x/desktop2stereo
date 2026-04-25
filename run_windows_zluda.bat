@@ -10,7 +10,7 @@ set "MIOPEN_LOG_LEVEL=3"
 set PYTORCH_TUNABLEOP_ENABLED=1 
 set MIOPEN_FIND_MODE=FAST
 
-set "PYTHON=%~d0Python311\python.exe"
+set "PYTHON=%~d0python3\python.exe"
 set "GIT="
 
 :: in the comfyui-user.bat remove the dots on the line below and change the gfx1030 to your gpu's specific code. 
