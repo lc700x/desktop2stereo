@@ -4,111 +4,28 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
+import ctypes
 from utils import VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES, DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, crop_icon, get_local_ip, shutdown_event
 
 # Get model lists
+from pynput import keyboard
+import threading
+import time
+
+
 DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
 
 # Get monitor info
 PRIMARY_MONITOR_SUFFIX = " [Main]"
-def get_monitor_info():
-    """
-    Get detailed information about all monitors including names.
-    Returns a list of tuples: (index, width, height, left, top, name)
-    """
-    monitors_info = []
-    
-    if mss:
-        try:
-            with mss.mss() as sct:
-                for idx, mon in enumerate(sct.monitors[1:], start=1):
-                    monitor_name = f"Display {idx}"
-                    
-                    # Try to get monitor name based on platform
-                    if OS_NAME == "Windows":
-                        try:
-                            import win32api
-                            # Get all monitor handles
-                            monitor_handles = win32api.EnumDisplayMonitors()
-                            for hmonitor, _, _ in monitor_handles:
-                                monitor_info = win32api.GetMonitorInfo(hmonitor)
-                                monitor_rect = monitor_info["Monitor"]
-                                # Check if this monitor matches the mss monitor
-                                if (monitor_rect[0] == mon["left"] and 
-                                    monitor_rect[1] == mon["top"] and
-                                    monitor_rect[2] - monitor_rect[0] == mon["width"] and
-                                    monitor_rect[3] - monitor_rect[1] == mon["height"]):
-                                    # Extract device name (e.g., "\\.\DISPLAY1")
-                                    device_name = monitor_info.get("Device", f"\\\\.\\DISPLAY{idx}")
-                                    # Clean up the device name
-                                    monitor_name = device_name.replace("\\\\.\\", "DISPLAY ")
-                                    break
-                        except ImportError:
-                            monitor_name = f"Display {idx}"
-                        except Exception as e:
-                            print(f"[Warning] Could not get monitor name: {e}")
-                            monitor_name = f"Display {idx}"
-                    
-                    elif OS_NAME == "Darwin":  # macOS
-                        # On macOS, we can try to get display names
-                        try:
-                            import subprocess
-                            # Use system_profiler to get display info
-                            result = subprocess.run(
-                                ["system_profiler", "SPDisplaysDataType", "-xml"],
-                                capture_output=True,
-                                text=True
-                            )
-                            if result.returncode == 0:
-                                # Parse output to get display names
-                                # This is simplified - actual parsing would be more complex
-                                monitor_name = f"Display {idx}"
-                        except Exception:
-                            monitor_name = f"Display {idx}"
-                    
-                    else:  # Linux
-                        try:
-                            import subprocess
-                            # Try to get display name using xrandr
-                            result = subprocess.run(
-                                ["xrandr", "--query"],
-                                capture_output=True,
-                                text=True
-                            )
-                            if result.returncode == 0:
-                                lines = result.stdout.split('\n')
-                                display_count = 0
-                                for line in lines:
-                                    if " connected" in line and "primary" in line:
-                                        display_count += 1
-                                        if display_count == idx:
-                                            # Extract display name (e.g., "eDP-1")
-                                            parts = line.split()
-                                            if parts:
-                                                monitor_name = parts[0]
-                                            break
-                        except Exception:
-                            monitor_name = f"Display {idx}"
-                    
-                    monitors_info.append((
-                        idx, 
-                        mon["width"], 
-                        mon["height"], 
-                        mon["left"], 
-                        mon["top"], 
-                        monitor_name
-                    ))
-        except Exception as e:
-            print(f"[Error] Failed to get monitor info: {e}")
-            # Fallback: create basic monitor info
-            for idx in range(1, 3):
-                monitors_info.append((idx, 1920, 1080, 0, 0, f"Display {idx}"))
-    
-    return monitors_info
 
 # Get window lists
 if OS_NAME == "Windows":
     try:
+        # Handle Windows Hi-DPI scaling
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI awareness
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()
         import win32gui
         def get_primary_monitor_index():
             """
@@ -129,7 +46,7 @@ if OS_NAME == "Windows":
                 # 2. Get detailed information about the primary monitor
                 primary_monitor_info = win32api.GetMonitorInfo(primary_monitor_handle)
                 # primary_monitor_info dict contains: 'Monitor' (monitor rect), 'Work' (work area), 'Device' (device name)
-                primary_rect = primary_monitor_info["Monitor"]  # (left, top, right, bottom)
+                primary_rect = primary_monitor_info["Monitor"]  # (left, top, width, height)
                 primary_left, primary_top, primary_right, primary_bottom = primary_rect
                 
                 # 3. Get current list of monitors using mss
@@ -163,9 +80,14 @@ if OS_NAME == "Windows":
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd)
                 if title:
-                    windows.append((title, hwnd))
+                    client_rect = win32gui.GetClientRect(hwnd)
+                    left, top = win32gui.ClientToScreen(hwnd, (client_rect[0], client_rect[1]))  # (left, top, width, height)
+                    windows.append({
+                        "title": title,
+                        "handle": hwnd,
+                        "rect": (left, top, client_rect[2], top+client_rect[3])
+                    })
             return True
-
         win32gui.EnumWindows(callback, None)
         return windows
 elif OS_NAME == "Darwin":
@@ -198,31 +120,75 @@ elif OS_NAME == "Darwin":
         options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
         window_info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
         # System UI processes we want to ignore
-        blacklist = {
+        blacklist = [
             "Window Server",
             "ControlCenter",
             "NotificationCenter",
             "Spotlight",
             "Dock",
+            "FocusModes",
+            "WiFi",
+            "Sound",
+            "UserSwitcher",
+            "Clock",
+            "BentoBox",
+            "Bluetooth",
+            "popdown",
+            "AudioVideoModule",
+            "ScreenMirroring",
             "SystemUIServer",
             "CoreServicesUIAgent",
             "TextInputMenuAgent",
-        }
+            # Additional known menu‑bar item owners (add any you discover)
+            "com.apple.controlcenter",   # sometimes the bundle ID appears
+            "loginwindow",               # the lockscreen / login screen
+        ]
         for win in window_info:
             title = win.get("kCGWindowName", "") or ""
             owner = win.get("kCGWindowOwnerName", "")
             layer = win.get("kCGWindowLayer", 0)
             bounds = win.get("kCGWindowBounds", {})
-            # Filtering rules
+
+            # Skip windows without a title (often menu extras have empty names)
             if not title.strip():
                 continue
-            if owner in blacklist:
+
+            # Skip if owner is a known system UI process
+            if owner in blacklist or title in blacklist:
                 continue
-            if title.strip().lower().startswith("item-"):
+
+            # Skip windows that are extremely high in the window stack
+            # kCGStatusWindowLevel = 1000; anything ≥ that is a status/overlay element.
+            if layer >= 1000:
                 continue
-            if bounds.get("Y", 1) == 0:
+
+            # Skip invisible windows (alpha = 0)
+            if win.get("kCGWindowAlpha", 1.0) == 0.0:
                 continue
-            windows.append((title.strip(), win["kCGWindowNumber"]))
+
+            # Skip menu‑bar extras that use a generic internal naming convention
+            # (many start with "item-" or "window‑" when exposed by SystemUIServer)
+            if title.strip().lower().startswith(("item-", "window-")):
+                continue
+
+            # bounds dictionary: X, Y, Width, Height
+            if "X" in bounds and "Y" in bounds and "Width" in bounds and "Height" in bounds:
+                x = bounds["X"]
+                y = bounds["Y"]
+                w = bounds["Width"]
+                h = bounds["Height"]
+
+                # Optional: discard extremely tiny “windows” that are likely icons
+                if w < 10 or h < 10:
+                    continue
+
+                rect = (x, y, w, h)
+                windows.append({
+                    "title": title.strip(),
+                    "handle": win["kCGWindowNumber"],
+                    "rect": rect
+                })
+
         return windows
 else:
     import subprocess
@@ -241,19 +207,55 @@ else:
         except Exception as e:
             print(f"[Error] Simple detection failed: {e}")
             return 1
+
     def list_windows():
         windows = []
         try:
-            result = subprocess.check_output(["wmctrl", "-l"]).decode("utf-8").splitlines()
+            # Use -G to get geometry: ID, desktop, X, Y, width, height, host, title
+            result = subprocess.check_output(["wmctrl", "-lG"]).decode("utf-8").splitlines()
             for line in result:
-                parts = line.split(None, 3)
-                if len(parts) >= 4:
-                    _, _, _, title = parts
-                    if title.strip():
-                        windows.append((title.strip(), None))
+                parts = line.split(None, 7)  # max 8 parts
+                if len(parts) >= 8:
+                    _, _, x_str, y_str, w_str, h_str, _, title = parts
+                    try:
+                        x = int(x_str)
+                        y = int(y_str)
+                        w = int(w_str)
+                        h = int(h_str)
+                        rect = (x, y, w, h)
+                        if title.strip():
+                            windows.append({
+                                "title": title.strip(),
+                                "handle": None,
+                                "rect": rect
+                            })
+                    except ValueError:
+                        continue
         except Exception as e:
             print("Linux window listing error:", e)
         return windows
+    
+def get_monitor_index_for_point(x, y):
+    """
+    Returns the index (starting from 1) of the monitor that contains the point (x, y).
+    Uses mss monitors (excluding virtual desktop at index 0).
+    Falls back to primary monitor index if point is not found on any monitor.
+    """
+    try:
+        import mss
+        with mss.mss() as sct:
+            # sct.monitors[0] is the virtual desktop, real monitors start at 1
+            for idx, mon in enumerate(sct.monitors[1:], start=1):
+                left = mon["left"]
+                top = mon["top"]
+                right = left + mon["width"]
+                bottom = top + mon["height"]
+                if left <= x <= right and top <= y <= bottom:
+                    return idx
+    except Exception as e:
+        print(f"[Error] Failed to detect monitor for point ({x},{y}): {e}")
+    # Fallback to primary monitor index
+    return get_primary_monitor_index()
 
 # List all available devices
 
@@ -314,7 +316,7 @@ DEFAULTS = {
     "Capture Mode": "Monitor",  # "Monitor" or "Window"
     "Monitor Index": 1,
     "Window Title": "",
-    "Output Resolution": 1080,
+    "Output Resolution": 1440,
     "FPS": 60,
     "Show FPS": False,
     "Model List": DEFAULT_MODEL_LIST,
@@ -324,6 +326,7 @@ DEFAULTS = {
     "Anti-aliasing": 2,
     "Foreground Scale": 0.5,
     "IPD": 0.064,
+    "Convergence": 0.0,
     "Display Mode": "Half-SBS",
     "FP16": True,
     "torch.compile": False,
@@ -331,7 +334,6 @@ DEFAULTS = {
     "Recompile TensorRT": False,
     "CoreML": False,
     "Recompile CoreML": False,
-    "Unlock Thread (Legacy Streamer)": False,
     "Recompile TensorRT": False,
     "Download Path": "models",
     "HF Endpoint": "https://hf-mirror.com",
@@ -347,10 +349,10 @@ DEFAULTS = {
     "CRF": 20,
     "Audio Delay": -0.15,
     "Lossless Scaling Support": False,
-    "Capture Tool": "DXCamera",  # "WindowsCapture" or "DXCamera"
+    "Capture Tool": "WindowsCaptureCUDA" if "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM else "WindowsCapture",  # "WindowsCaptureCUDA" for NVIDIA GPU, "WindowsCapture", "DXCamera"
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False, # keep the viewer window aspect ratio not change
-    "Specify Display": 1,
+    "Specify Display": False,
     "Stereo Monitor": None,
 }
 
@@ -363,6 +365,7 @@ UI_TEXTS = {
         "Show FPS": "Show FPS",
         "Output Resolution:": "Output Resolution:",
         "IPD (m):": "IPD (m):",
+        "Convergence:": "Convergence:",
         "Display Mode:": "Display Mode:",
         "Depth Model:": "Depth Model:",
         "Depth Strength:": "Depth Strength:",
@@ -374,7 +377,6 @@ UI_TEXTS = {
         "Recompile TensorRT": "Recompile TensorRT",
         "Recompile CoreML": "Recompile CoreML",
         "Recompile OpenVINO": "Recompile OpenVINO",
-        "Unlock Thread (Legacy Streamer)": "Unlock Thread (Legacy Streamer)",
         "Download Path:": "Download Path:",
         "Browse...": "Browse...",
         "Stop": "Stop",
@@ -391,7 +393,7 @@ UI_TEXTS = {
         "Failed to save settings.yaml:": "Failed to save settings.yaml:",
         "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.",
         "Loaded settings.yaml at startup": "Loaded settings.yaml at startup",
-        "Running": "Running...",
+        "Running": "Running... (Press and hold 'ESC' to Stop)",
         "Stopped": "Stopped.",
         "Countdown": "Settings saved to settings.yaml, starting...",
         "A thread already running!": "A thread already running!",
@@ -436,13 +438,14 @@ UI_TEXTS = {
         "Stereo Monitor": "Stereoscopy on:",
     },
     "CN": {
-        "Monitor": "输入显示器",
+        "Monitor": "输入屏幕",
         "Window": "输入窗口",
         "Refresh": "刷新",
         "FPS:": "输入帧率:",
         "Show FPS": "显示帧率",
         "Output Resolution:": "输出分辨率:",
         "IPD (m):": "瞳距 (米):",
+        "Convergence:": "会聚点:",
         "Display Mode:": "显示模式",
         "Depth Model:": "深度模型:",
         "Depth Strength:": "深度强度:",
@@ -454,7 +457,6 @@ UI_TEXTS = {
         "Recompile TensorRT": "重新编译TensorRT",
         "Recompile CoreML": "重新编译CoreML",
         "Recompile OpenVINO": "重新编译OpenVINO",
-        "Unlock Thread (Legacy Streamer)": "解锁线程 (旧网络推流)",
         "Download Path:": "下载路径:",
         "Browse...": "浏览...",
         "Stop": "停止",
@@ -471,7 +473,7 @@ UI_TEXTS = {
         "Failed to save settings.yaml:": "保存 settings.yaml 失败：",
         "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "无法获取显示器列表。\n回退到索引1和2。",
         "Loaded settings.yaml at startup": "启动时已加载 settings.yaml",
-        "Running": "运行中...",
+        "Running": "运行中...（长按ESC停止）",
         "Stopped": "已停止。",
         "Countdown": "设置已保存到 settings.yaml，启动中...",
         "A thread already running!": "一个进程已经运行！",
@@ -574,8 +576,94 @@ class ConfigGUI(tk.Tk):
             self.update_language_texts()
 
         self.language_var.set(self.language)
-        self.protocol("WM_DELETE_WINDOW", self.on_close) # Bind to Close of GUI to turn off all threads
         self.process = None  # Keep track of the spawned process
+
+        # Background ESC key monitoring
+        self.background_monitor_active = False
+        self.background_monitor_thread = None
+        self.esc_hold_start_time = None
+        self.esc_hold_threshold = 3.0  # Hold for 1 second
+        
+        # Start background monitoring
+        self.start_background_key_monitor()
+        self.on_run_mode_change()
+
+    def _get_capture_tool_options(self, device_label):
+        """
+        Get available capture tool options based on the selected computing device.
+        
+        Args:
+            device_label: The currently selected device name from the "Computing Device" dropdown.
+        
+        Returns:
+            List of available capture tool names.
+        """
+        if OS_NAME != "Windows":
+            return ["WindowsCapture", "DXCamera", "DesktopDuplication"]
+        
+        # Check if the current device is NVIDIA CUDA (not ROCm)
+        is_nvidia_cuda = "CUDA" in device_label.upper() and not IS_ROCM
+        
+        if is_nvidia_cuda:
+            return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera", "DesktopDuplication"]
+        else:
+            return ["WindowsCapture", "DXCamera", "DesktopDuplication"]
+
+    def start_background_key_monitor(self):
+        """Start background thread for system-wide ESC key monitoring"""
+        self.background_monitor_active = True
+        self.background_monitor_thread = threading.Thread(
+            target=self._background_key_monitor,
+            daemon=True
+        )
+        self.background_monitor_thread.start()
+
+    def stop_background_key_monitor(self):
+        """Stop background keyboard monitoring"""
+        self.background_monitor_active = False
+        if self.background_monitor_thread:
+            self.background_monitor_thread.join(timeout=2)
+
+    def _background_key_monitor(self):
+        """Background thread function for system-wide key monitoring using pynput"""
+
+        esc_held = False
+        hold_start_time = None
+
+        def on_press(key):
+            nonlocal esc_held, hold_start_time
+
+            if key == keyboard.Key.esc:
+                if not esc_held:
+                    # ESC just pressed
+                    esc_held = True
+                    hold_start_time = time.time()
+
+        def on_release(key):
+            nonlocal esc_held, hold_start_time
+
+            if key == keyboard.Key.esc:
+                # ESC released before threshold
+                esc_held = False
+                hold_start_time = None
+
+        listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        listener.start()
+
+        try:
+            while self.background_monitor_active:
+                if esc_held and hold_start_time:
+                    if time.time() - hold_start_time >= self.esc_hold_threshold:
+                        # Long press threshold reached
+                        self.after(0, self.stop_process)
+
+                        esc_held = False
+                        hold_start_time = None
+
+                time.sleep(0.05)
+
+        finally:
+            listener.stop()
 
     def on_close(self):
         """Handle GUI window closing: stop process & cleanup."""
@@ -692,18 +780,17 @@ class ConfigGUI(tk.Tk):
             self.showfps_cb.grid(row=6, column=3, sticky="w", **self.pad)
         
         # Capture Tool
-        
         self.label_capture_tool = ttk.Label(self.content_frame, text="Capture Tool:")
         self.label_capture_tool.grid(row=7, column=0, sticky="w", **self.pad)
-        if OS_NAME == "Windows" and "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM:
-            self.capture_tool_values = ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera"]
-        else:
-            self.capture_tool_values = ["WindowsCapture", "DXCamera"]
+        self.capture_tool_values = self._get_capture_tool_options(DEVICES.get(0, {}).get("name", ""))
         self.capture_tool_cb = ttk.Combobox(self.content_frame, values=self.capture_tool_values, state="readonly")
         self.capture_tool_cb.grid(row=7, column=1, sticky="ew", **self.pad)
         if OS_NAME != "Windows":
             self.label_capture_tool.grid_remove()
             self.capture_tool_cb.grid_remove()
+        else:
+            # handle capture tool changes
+            self.capture_tool_cb.bind("<<ComboboxSelected>>", self.on_capture_tool_change)
             
         # FPS
         self.label_fps = ttk.Label(self.content_frame, text="FPS:")
@@ -782,70 +869,73 @@ class ConfigGUI(tk.Tk):
             state="normal"
         )
         self.ipd_spin.grid(row=11, column=3, sticky="ew", **self.pad)
-        
-        # Download path
-        self.label_download = ttk.Label(self.content_frame, text="Download Path:")
-        self.label_download.grid(row=12, column=0, sticky="w", **self.pad)
-        self.download_var = tk.StringVar()
-        self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
-        self.download_entry.grid(row=12, column=1, columnspan=2, sticky="ew", **self.pad)
-        self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
-        self.btn_browse.grid(row=12, column=3, sticky="ew", **self.pad)
-        
+
         # Depth Model
         self.label_depth_model = ttk.Label(self.content_frame, text="Depth Model:")
-        self.label_depth_model.grid(row=13, column=0, sticky="w", **self.pad)
+        self.label_depth_model.grid(row=12, column=0, sticky="w", **self.pad)
         self.depth_model_var = tk.StringVar()
         self.depth_model_cb = ttk.Combobox(self.content_frame, textvariable=self.depth_model_var, values=self.loaded_model_list, state="normal")
-        self.depth_model_cb.grid(row=13, column=1, columnspan=2, sticky="ew", **self.pad)
+        self.depth_model_cb.grid(row=12, column=1, columnspan=1, sticky="ew", **self.pad)
         self.depth_model_cb.bind("<<ComboboxSelected>>", self.on_depth_model_change)
+
+        # Convergence
+        self.label_convergence = ttk.Label(self.content_frame, text="Convergence:")
+        self.label_convergence.grid(row=12, column=2, sticky="w", **self.pad)
+        self.convergence_values = ["-0.5", "-0.25", "0.0", "0.25", "0.5", "0.75", "1.0"]
+        self.convergence_cb = ttk.Combobox(self.content_frame, values=self.convergence_values, state="normal")
+        self.convergence_cb.grid(row=12, column=3, sticky="ew", **self.pad)
+        self.convergence_cb.set("0.0")
+
+        # Download path
+        self.label_download = ttk.Label(self.content_frame, text="Download Path:")
+        self.label_download.grid(row=13, column=0, sticky="w", **self.pad)
+        self.download_var = tk.StringVar()
+        self.download_entry = ttk.Entry(self.content_frame, textvariable=self.download_var)
+        self.download_entry.grid(row=13, column=1, sticky="ew", **self.pad)
+        self.btn_browse = ttk.Button(self.content_frame, text="Browse...", command=self.browse_download)
+        self.btn_browse.grid(row=13, column=2, sticky="ew", **self.pad)
 
         # Add Inference Optimizer dropdown after Device selection
         self.use_torch_compile = tk.BooleanVar()
         self.use_tensorrt = tk.BooleanVar()
-        self.unlock_streamer_thread = tk.BooleanVar()
         self.label_inference_optimizer = ttk.Label(self.content_frame, text="Inference Optimizer:")
-        self.label_inference_optimizer.grid(row=14, column=0, sticky="w", **self.pad)
+        self.label_inference_optimizer.grid(row=15, column=0, sticky="w", **self.pad)
 
         # Torch Compile
         self.check_torch_compile = ttk.Checkbutton(self.content_frame, text="torch.compile", variable=self.use_torch_compile)
-        self.check_torch_compile.grid(row=14, column=1, sticky="w", **self.pad)
+        self.check_torch_compile.grid(row=15, column=1, sticky="w", **self.pad)
 
         # TensorRT
         self.check_tensorrt = ttk.Checkbutton(self.content_frame, text="TensorRT", variable=self.use_tensorrt)
-        self.check_tensorrt.grid(row=14, column=2, sticky="w", **self.pad)
-
-        # Unlock Thread (Legacy Streamer)
-        self.check_unlock_streamer_thread = ttk.Checkbutton(self.content_frame, text="Unlock Thread (Legacy Streamer)", variable=self.unlock_streamer_thread)
-        self.check_unlock_streamer_thread.grid(row=14, column=1, sticky="w", **self.pad)
+        self.check_tensorrt.grid(row=15, column=2, sticky="w", **self.pad)
         self.use_tensorrt.trace_add("write", self.update_recompile_trt_visibility)
         
         # Recompile TensorRT (only visible when TensorRT is selected)
         self.recompile_trt_var = tk.BooleanVar()
         self.check_recompile_trt = ttk.Checkbutton(self.content_frame, text="Recompile TensorRT", variable=self.recompile_trt_var)
-        self.check_recompile_trt.grid(row=14, column=3, sticky="w", **self.pad)
+        self.check_recompile_trt.grid(row=15, column=3, sticky="w", **self.pad)
         
         # CoreML (for MPS devices)
         self.use_coreml = tk.BooleanVar()
         self.check_coreml = ttk.Checkbutton(self.content_frame, text="CoreML", variable=self.use_coreml)
-        self.check_coreml.grid(row=14, column=1, sticky="w", **self.pad)
+        self.check_coreml.grid(row=15, column=1, sticky="w", **self.pad)
         self.use_coreml.trace_add("write", self.update_recompile_coreml_visibility)  # Add trace
 
         # Recompile CoreML (only visible when CoreML is selected)
         self.recompile_coreml_var = tk.BooleanVar()
         self.check_recompile_coreml = ttk.Checkbutton(self.content_frame, text="Recompile CoreML", variable=self.recompile_coreml_var)
-        self.check_recompile_coreml.grid(row=14, column=2, sticky="w", **self.pad)  # Changed row to 15
+        self.check_recompile_coreml.grid(row=15, column=2, sticky="w", **self.pad)  # Changed row to 15
         
         # OpenVINO (for XPU devices)
         self.use_openvino = tk.BooleanVar()
         self.check_openvino = ttk.Checkbutton(self.content_frame, text="OpenVINO", variable=self.use_openvino)
-        self.check_openvino.grid(row=14, column=1, sticky="w", **self.pad)
+        self.check_openvino.grid(row=15, column=1, sticky="w", **self.pad)
         self.use_openvino.trace_add("write", self.update_recompile_openvino_visibility)
 
         # Recompile OpenVINO (only visible when OpenVINO is selected)
         self.recompile_openvino_var = tk.BooleanVar()
         self.check_recompile_openvino = ttk.Checkbutton(self.content_frame, text="Recompile OpenVINO", variable=self.recompile_openvino_var)
-        self.check_recompile_openvino.grid(row=14, column=2, sticky="w", **self.pad)
+        self.check_recompile_openvino.grid(row=15, column=2, sticky="w", **self.pad)
         
         # Add these instance variables
         self.specify_display_var = tk.BooleanVar()
@@ -854,34 +944,34 @@ class ConfigGUI(tk.Tk):
         
         # Specify Display (checkbox)
         self.label_specify_display = ttk.Label(self.content_frame, text="Stereo Display Settings:")
-        self.label_specify_display.grid(row=15, column=0, sticky="w", **self.pad)
+        self.label_specify_display.grid(row=16, column=0, sticky="w", **self.pad)
         self.specify_display_cb = ttk.Checkbutton(
             self.content_frame, 
             text="Specify Display",
             variable=self.specify_display_var
         )
         # Initially hidden, will be shown for specific modes
-        self.specify_display_cb.grid(row=15, column=1, sticky="w", **self.pad)
+        self.specify_display_cb.grid(row=16, column=1, sticky="w", **self.pad)
         self.specify_display_cb.grid_remove()
         
         # Stereo Monitor (monitor dropdown)
         self.label_stereo_monitor = ttk.Label(self.content_frame, text="Stereo Monitor:")
-        self.label_stereo_monitor.grid(row=15, column=2, sticky="w", **self.pad)
+        self.label_stereo_monitor.grid(row=16, column=2, sticky="w", **self.pad)
         self.label_stereo_monitor.grid_remove()
         
         self.stereo_monitor_menu = ttk.OptionMenu(self.content_frame, self.stereo_monitor_var, "")
-        self.stereo_monitor_menu.grid(row=15, column=3, sticky="ew", **self.pad)
+        self.stereo_monitor_menu.grid(row=16, column=3, sticky="ew", **self.pad)
         self.stereo_monitor_menu.grid_remove()
         self.specify_display_var.trace_add("write", self.update_stereo_monitor_display)
         
         # HF Endpoint
         self.label_hf_endpoint = ttk.Label(self.content_frame, text="HF Endpoint:")
-        self.label_hf_endpoint.grid(row=16, column=0, sticky="w", **self.pad)
+        self.label_hf_endpoint.grid(row=17, column=0, sticky="w", **self.pad)
         self.hf_endpoint_var = tk.StringVar()
         self.hf_endpoint_cb = ttk.Combobox(self.content_frame, textvariable=self.hf_endpoint_var, state="normal")
         self.hf_endpoint_cb["values"] = ["https://huggingface.co", "https://hf-mirror.com"]
-        self.hf_endpoint_cb.grid(row=16, column=1, sticky="ew", **self.pad)
-        
+        self.hf_endpoint_cb.grid(row=17, column=1, sticky="ew", **self.pad)
+
         # Streamer Port (only visible when run mode is streamer)
         self.label_streamer_port = ttk.Label(self.content_frame, text="Streamer Port:")
         self.streamer_port_var = tk.StringVar()
@@ -932,10 +1022,10 @@ class ConfigGUI(tk.Tk):
         self.btn_reset.grid(row=13, column=3, sticky="ew", **self.pad)
         
         self.btn_stop = ttk.Button(self.content_frame, text="Stop", command=self.stop_process)
-        self.btn_stop.grid(row=16, column=2, sticky="ew", **self.pad)
+        self.btn_stop.grid(row=17, column=2, sticky="ew", **self.pad)
         
         self.btn_run = ttk.Button(self.content_frame, text="Run", command=self.save_settings)
-        self.btn_run.grid(row=16, column=3, sticky="ew", **self.pad)
+        self.btn_run.grid(row=17, column=3, sticky="ew", **self.pad)
         
         # Column weights inside content frame
         for col in range(5):
@@ -951,6 +1041,32 @@ class ConfigGUI(tk.Tk):
         self.stream_protocol_cb["values"] = ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]
         self.stream_protocol_var.set(self.stream_protocol_key)
     
+    def on_capture_tool_change(self, event=None):
+        """
+        Handle capture tool selection changes.
+        Disable 'Window' capture mode when DesktopDuplication is selected.
+        """
+        selected_tool = self.capture_tool_cb.get()
+        
+        # If DesktopDuplication is selected, force Monitor mode and disable Window mode
+        if selected_tool == "DesktopDuplication":
+            # Force capture mode to Monitor
+            self.capture_mode_key = "Monitor"
+            self.capture_mode_var_label.set(UI_TEXTS[self.language]["Monitor"])
+            
+            # Update the capture mode combobox to show Monitor is selected
+            self.on_capture_mode_change()
+            
+            # Disable the capture mode combobox to prevent switching to Window
+            self.capture_mode_cb.config(state="disabled")
+            
+            # Optionally, show a status message
+            self.update_status("DesktopDuplication selected: Window capture mode disabled.")
+        else:
+            # Re-enable the capture mode combobox for other tools
+            self.capture_mode_cb.config(state="readonly")
+            self.update_status("")
+
     def update_stereo_monitor_menu(self):
         """
         Update the stereo monitor menu based on currently selected input monitor.
@@ -996,7 +1112,7 @@ class ConfigGUI(tk.Tk):
             label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){label_suffix}"
             
             # Skip if this is the selected input monitor
-            if label == selected_input_label and self.run_mode_key in ["Local Viewer", "RTMP Streamer"]:
+            if self.capture_mode_key == "Monitor" and label == selected_input_label and self.run_mode_key in ["Local Viewer", "RTMP Streamer"]:
                 continue
             
             # Add command to menu
@@ -1035,7 +1151,7 @@ class ConfigGUI(tk.Tk):
         device_label = self.device_var.get()
         
         # Reset all optimizers first
-        self.use_torch_compile.set(False)
+        # self.use_torch_compile.set(False)
         self.use_tensorrt.set(False)
         self.use_coreml.set(False)
         self.use_openvino.set(False)
@@ -1046,7 +1162,7 @@ class ConfigGUI(tk.Tk):
         # Enable based on device type
         if "CUDA" in device_label:
             # Auto-enable torch.compile for CUDA
-            self.use_torch_compile.set(True)
+            # self.use_torch_compile.set(True)
             
             # Auto-enable TensorRT for NVIDIA CUDA (not ROCm) with model compatibility
             if not IS_ROCM:
@@ -1219,7 +1335,7 @@ class ConfigGUI(tk.Tk):
 
     def update_stereo_display_visibility(self):
         """Show/hide stereo display options based on run mode"""
-        if self.run_mode_key in ["RTMP Streamer", "Local Viewer"]:
+        if self.run_mode_key in ["RTMP Streamer", "Local Viewer", "3D Monitor"]:
             # Show stereo display options
             self.label_specify_display.grid()
             self.specify_display_cb.grid()
@@ -1239,7 +1355,7 @@ class ConfigGUI(tk.Tk):
         else:
             self.label_stereo_monitor.grid_remove()
             self.stereo_monitor_menu.grid_remove()
-    
+        
     def update_stream_url(self, *args):
         """Update the stream URL based on selected protocol, port, and stream key"""
         protocol = self.stream_protocol_var.get()
@@ -1435,6 +1551,19 @@ class ConfigGUI(tk.Tk):
         """Update UI visibility based on the selected device."""
         device_label = self.device_var.get()
 
+        # Check for Windows
+        if OS_NAME == "Windows":
+            # Get current list of capture tools
+            self.capture_tool_values = self._get_capture_tool_options(device_label)
+            # Update the values
+            self.capture_tool_cb['values'] = self.capture_tool_values
+            
+            # Check if the current selection is still valid
+            current_value = self.capture_tool_cb.get()
+            if current_value not in self.capture_tool_cb['values'] and self.capture_tool_cb['values']:
+                # If the current value is not in the new list, select the first available option
+                self.capture_tool_cb.set(self.capture_tool_cb['values'][0])
+
         # Determine device type
         if "CUDA" in device_label:
             device_type = "CUDA"
@@ -1451,8 +1580,7 @@ class ConfigGUI(tk.Tk):
         current_model = self.depth_model_var.get()
         
         if device_type == "DirectML":
-            self.label_inference_optimizer.grid()
-            self.check_unlock_streamer_thread.grid()
+            self.label_inference_optimizer.grid_remove()
             self.check_torch_compile.grid_remove()
             self.check_tensorrt.grid_remove()
             self.check_recompile_trt.grid_remove()
@@ -1464,7 +1592,6 @@ class ConfigGUI(tk.Tk):
             
         elif device_type == "XPU":
             self.label_inference_optimizer.grid()
-            self.check_unlock_streamer_thread.grid_remove()
             self.check_torch_compile.grid_remove()
             self.check_tensorrt.grid_remove()
             self.check_recompile_trt.grid_remove()
@@ -1472,13 +1599,11 @@ class ConfigGUI(tk.Tk):
             self.check_recompile_coreml.grid_remove()
             self.check_openvino.grid()
             self.check_recompile_openvino.grid()
-            self.fp16_cb.grid_remove()
             self.update_recompile_openvino_visibility()
             self.update_openvino_visibility_based_on_model(current_model)
             
         elif device_type == "CUDA":
             self.label_inference_optimizer.grid()
-            self.check_unlock_streamer_thread.grid_remove()
             self.check_torch_compile.grid()
             self.check_coreml.grid_remove()
             self.check_recompile_coreml.grid_remove()
@@ -1494,7 +1619,6 @@ class ConfigGUI(tk.Tk):
                 
         elif device_type == "MPS":
             self.label_inference_optimizer.grid()
-            self.check_unlock_streamer_thread.grid_remove()
             self.check_torch_compile.grid_remove()
             self.check_tensorrt.grid_remove()
             self.check_recompile_trt.grid_remove()
@@ -1507,7 +1631,6 @@ class ConfigGUI(tk.Tk):
             
         else:  # CPU or other
             self.label_inference_optimizer.grid_remove()
-            self.check_unlock_streamer_thread.grid_remove()
             self.check_torch_compile.grid_remove()
             self.check_tensorrt.grid_remove()
             self.check_recompile_trt.grid_remove()
@@ -1516,8 +1639,8 @@ class ConfigGUI(tk.Tk):
             self.check_openvino.grid_remove()
             self.check_recompile_openvino.grid_remove()
         self.auto_enable_optimizers_based_on_device()
-                
-    
+        self.on_capture_tool_change()
+
     def refresh_window_list(self):
         """Refresh the list of available windows"""
         try:
@@ -1533,21 +1656,18 @@ class ConfigGUI(tk.Tk):
             window_list = []
             self._window_objects = []
 
-            for title, handle in windows:
-                window_list.append(title)
-                self._window_objects.append((title, handle))
-
+            for win in windows:
+                window_list.append(win["title"])
+                self._window_objects.append(win)
             self.window_cb["values"] = window_list
             
             # Try to select the saved window by name
             if self.selected_window_name:
                 find_window = False
-                for i, (title, _) in enumerate(self._window_objects):
-                    if title == self.selected_window_name:
+                for i, win_info in enumerate(self._window_objects):
+                    if win_info["title"] == self.selected_window_name:
                         self.window_cb.current(i)
-                        self.update_status(
-                            f"{UI_TEXTS[self.language]['Selected window:']} {title}"
-                        )
+                        self.update_status(f"{UI_TEXTS[self.language]['Selected window:']} {win_info['title']}")
                         find_window = True
                         break
                 if not find_window:
@@ -1571,6 +1691,7 @@ class ConfigGUI(tk.Tk):
         if self.run_mode_key == "RTMP Streamer":
             self.populate_audio_devices()
             self.auto_select_stereo_mix()
+        self.update_stereo_display_visibility()
                 
     def copy_url_to_clipboard(self):
         """Copy the streamer URL to clipboard"""
@@ -1607,23 +1728,16 @@ class ConfigGUI(tk.Tk):
         """Handle window selection from the combobox"""
         if not hasattr(self, "_window_objects") or not self._window_objects:
             return
-
         selected_text = self.window_var.get()
         if not selected_text:
             return
-
-        selected_index = None
-        for i, (title, handle) in enumerate(self._window_objects):
-            if selected_text == title:
-                selected_index = i
+        for win in self._window_objects:
+            if selected_text == win["title"]:
+                self.selected_window_name = win["title"]
+                # Optionally store the rect for later use (we can also fetch from list when saving)
+                self.selected_window_rect = win.get("rect")
+                self.update_status(f"{UI_TEXTS[self.language]['Selected window:']} {win['title']}")
                 break
-
-        if selected_index is not None:
-            title, handle = self._window_objects[selected_index]
-            self.selected_window_name = title
-            self.update_status(
-                f"{UI_TEXTS[self.language]['Selected window:']} {title}"
-            )
 
     def on_capture_mode_change(self, *args):
         """Show/hide monitor or window controls based on capture mode"""
@@ -1643,6 +1757,8 @@ class ConfigGUI(tk.Tk):
             # Refresh window list automatically when switching to Window mode
             self.refresh_window_list()
 
+        self.populate_monitors()
+
     def update_language_texts(self):
         texts = UI_TEXTS[self.language]
         self.btn_refresh.config(text=texts["Refresh"])
@@ -1650,6 +1766,7 @@ class ConfigGUI(tk.Tk):
         self.showfps_cb.config(text=texts["Show FPS"])
         self.label_res.config(text=texts["Output Resolution:"])
         self.label_ipd.config(text=texts["IPD (m):"])
+        self.label_convergence.config(text=texts.get("Convergence:", "Convergence:"))
         self.label_display_mode.config(text=texts["Display Mode:"])
         self.label_depth_model.config(text=texts["Depth Model:"])
         self.label_depth_res.config(text=texts["Depth Resolution:"])
@@ -1677,7 +1794,6 @@ class ConfigGUI(tk.Tk):
         self.label_inference_optimizer.config(text=texts.get("Inference Optimizer:", "Inference Optimizer:"))
         self.check_recompile_trt.config(text=texts.get("Recompile TensorRT", "Recompile TensorRT"))
         self.check_recompile_coreml.config(text=texts.get("Recompile CoreML", "Recompile CoreML"))
-        self.check_unlock_streamer_thread.config(text=texts.get("Unlock Thread (Legacy Streamer)", "Unlock Thread (Legacy Streamer)"))
         # Select the appropriate label
         if self.run_mode_key == "Local Viewer":
             self.run_mode_var_label.set(localized_run_vals[0])
@@ -1785,6 +1901,8 @@ class ConfigGUI(tk.Tk):
         elif label == monitor3d_label:
             self.run_mode_key = "3D Monitor"
             self.show_viewer_controls()
+            # Set stereo monitor to match input monitor (default for 3D mode)
+            self.stereo_monitor_var.set(self.monitor_var.get())
         
         # Update display mode options based on run mode
         self.update_display_mode_options()
@@ -1966,33 +2084,38 @@ class ConfigGUI(tk.Tk):
             # Use the update function to ensure stereo menu excludes selected input
             self.update_stereo_monitor_menu()
             
-            # Set default stereo monitor
-            stereo_default_idx = DEFAULTS["Stereo Monitor"]
-            if stereo_default_idx == 1:
-                stereo_default_idx = primary_index
+            # Set default stereo monitor based on run mode
+            if self.run_mode_key == "3D Monitor" or self.capture_mode_key == "Window":
+                # In 3D Monitor mode, default to the same monitor as input
+                self.stereo_monitor_var.set(self.monitor_var.get())
+            else:
+                # For other modes, find a monitor that is NOT the input monitor
+                stereo_default_idx = DEFAULTS.get("Stereo Monitor", 1)
+                if stereo_default_idx == 1:
+                    stereo_default_idx = primary_index
+                    
+                # Find label for default stereo index that's not the input monitor
+                selected_input_label = self.monitor_var.get()
+                stereo_default_label = None
                 
-            # Find label for default stereo index that's not the input monitor
-            selected_input_label = self.monitor_var.get()
-            stereo_default_label = None
-            
-            # First, check if the default index is available and not the selected input
-            for lbl, i in self.monitor_label_to_index.items():
-                if i == stereo_default_idx and lbl != selected_input_label:
-                    stereo_default_label = lbl
-                    break
-            
-            # If default was input monitor or not found, pick any available monitor that's not the input
-            if not stereo_default_label and self.monitor_label_to_index:
+                # First, check if the default index is available and not the selected input
                 for lbl, i in self.monitor_label_to_index.items():
-                    if lbl != selected_input_label:
+                    if i == stereo_default_idx and lbl != selected_input_label:
                         stereo_default_label = lbl
                         break
-            
-            if stereo_default_label:
-                self.stereo_monitor_var.set(stereo_default_label)
-            elif self.monitor_label_to_index:
-                # Final fallback
-                self.stereo_monitor_var.set(next(iter(self.monitor_label_to_index)))
+                
+                # If default was input monitor or not found, pick any available monitor that's not the input
+                if not stereo_default_label and self.monitor_label_to_index:
+                    for lbl, i in self.monitor_label_to_index.items():
+                        if lbl != selected_input_label:
+                            stereo_default_label = lbl
+                            break
+                
+                if stereo_default_label:
+                    self.stereo_monitor_var.set(stereo_default_label)
+                elif self.monitor_label_to_index:
+                    # Final fallback
+                    self.stereo_monitor_var.set(next(iter(self.monitor_label_to_index)))
 
         return self.monitor_label_to_index
     
@@ -2057,6 +2180,7 @@ class ConfigGUI(tk.Tk):
         self.fps_cb.set(str(cfg.get("FPS", DEFAULTS["FPS"])))
         self.res_cb.set(str(cfg.get("Output Resolution", DEFAULTS["Output Resolution"])))
         self.ipd_var.set(str(cfg.get("IPD", DEFAULTS["IPD"])))
+        self.convergence_cb.set(str(cfg.get("Convergence", DEFAULTS["Convergence"])))
 
         # Apply depth model settings
         model_list = DEFAULT_MODEL_LIST
@@ -2161,7 +2285,6 @@ class ConfigGUI(tk.Tk):
         # Check if saved optimizer is valid for current device
         self.use_torch_compile.set(cfg.get("torch.compile", False))
         self.use_tensorrt.set(cfg.get("TensorRT", False))
-        self.unlock_streamer_thread.set(cfg.get("Unlock Thread (Legacy Streamer)", False))
         
         # Trigger device change to update optimizer options
         self.recompile_trt_var.set(cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"]))
@@ -2260,23 +2383,43 @@ class ConfigGUI(tk.Tk):
             
             # Verify the window still exists
             windows = list_windows()
-            window_exists = any(title == window_title for title, _ in windows)
+            window_exists = False
+            window_rect = None
+
+            for win in windows:
+                if win["title"] == window_title:
+                    window_exists = True
+                    window_rect = win.get("rect")
+                    break
+
             if not window_exists:
                 messagebox.showerror(
                     UI_TEXTS[self.language]["Error"],
                     UI_TEXTS[self.language]["The selected window no longer exists. Please refresh and select a valid window."]
                 )
                 return
+            # Determine monitor index from window's top-left corner
+            if window_rect:
+                # window_rect is (left, top, width, height))
+                window_center = (window_rect[0] + window_rect[2] // 2, window_rect[1] + window_rect[3] // 2)
+                monitor_idx = get_monitor_index_for_point(window_center[0], window_center[1])
+            else:
+                # fallback: primary monitor
+                monitor_idx = get_primary_monitor_index()
+        else:
+            # Monitor capture mode – use selected monitor from dropdown
+            monitor_idx = self.monitor_label_to_index.get(self.monitor_var.get(), DEFAULTS["Monitor Index"])
 
         
         self.cfg = {
             "Capture Mode": self.capture_mode_key,
-            "Monitor Index": self.monitor_label_to_index.get(self.monitor_var.get(), DEFAULTS["Monitor Index"]),
+            "Monitor Index": monitor_idx,
             "Window Title": self.selected_window_name if self.capture_mode_key == "Window" else "",
             "FPS": int(self.fps_cb.get()),
             "Show FPS": self.showfps_var.get(),
             "Output Resolution": int(self.res_cb.get()),
             "IPD": float(self.ipd_var.get()),
+            "Convergence": float(self.convergence_cb.get()),
             "Display Mode": self.display_mode_cb.get(),
             "Model List": ALL_MODELS,  # Preserve existing model list structure
             "Depth Model": self.depth_model_var.get(),
@@ -2300,7 +2443,6 @@ class ConfigGUI(tk.Tk):
             "Recompile CoreML": self.recompile_coreml_var.get(),
             "OpenVINO": self.use_openvino.get(),
             "Recompile OpenVINO": self.recompile_openvino_var.get(),
-            "Unlock Thread (Legacy Streamer)": self.unlock_streamer_thread.get(),
             "Capture Tool": self.capture_tool_cb.get(),
             "Fill 16:9": self.fill_16_9_var.get(),
             "Fix Viewer Aspect": self.fix_viewer_aspect_var.get(),

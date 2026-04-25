@@ -1,13 +1,14 @@
 Capture Mode: Monitor
-Monitor Index: None
+Monitor Index: none
 Window Title: ''
 FPS: 60
 Show FPS: false
 Output Resolution: 1440
 IPD: 0.064
+Convergence: 0.0
 Display Mode: Half-SBS
 Model List:
-  depth-anything/Depth-Anything-V2-Small-hf:
+  Depth-Anything-V2-Small-hf:
     resolutions:
     - 196
     - 238
@@ -16,7 +17,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Depth-Anything-V2-Base-hf:
+  Depth-Anything-V2-Base-hf:
     resolutions:
     - 196
     - 238
@@ -25,7 +26,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Depth-Anything-V2-Large-hf:
+  Depth-Anything-V2-Large-hf:
     resolutions:
     - 196
     - 238
@@ -34,7 +35,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Video-Depth-Anything-Small:
+  Video-Depth-Anything-Small:
     resolutions:
     - 196
     - 238
@@ -43,7 +44,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Video-Depth-Anything-Base:
+  Video-Depth-Anything-Base:
     resolutions:
     - 196
     - 238
@@ -52,7 +53,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Video-Depth-Anything-Large:
+  Video-Depth-Anything-Large:
     resolutions:
     - 196
     - 238
@@ -61,7 +62,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/DA3-SMALL:
+  DA3-SMALL:
     resolutions:
     - 182
     - 224
@@ -70,7 +71,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3-BASE:
+  DA3-BASE:
     resolutions:
     - 182
     - 224
@@ -79,7 +80,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3-LARGE-1.1:
+  DA3-LARGE-1.1:
     resolutions:
     - 182
     - 224
@@ -88,7 +89,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3-GIANT-1.1:
+  DA3-GIANT-1.1:
     resolutions:
     - 182
     - 224
@@ -97,7 +98,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3NESTED-GIANT-LARGE-1.1:
+  DA3NESTED-GIANT-LARGE-1.1:
     resolutions:
     - 182
     - 224
@@ -106,7 +107,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3MONO-LARGE:
+  DA3MONO-LARGE:
     resolutions:
     - 182
     - 224
@@ -115,7 +116,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/DA3METRIC-LARGE:
+  DA3METRIC-LARGE:
     resolutions:
     - 182
     - 224
@@ -124,7 +125,7 @@ Model List:
     - 378
     - 434
     - 504
-  depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf:
+  Depth-Anything-V2-Metric-Outdoor-Small-hf:
     resolutions:
     - 196
     - 238
@@ -133,7 +134,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf:
+  Depth-Anything-V2-Metric-Outdoor-Base-hf:
     resolutions:
     - 196
     - 238
@@ -142,7 +143,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf:
+  Depth-Anything-V2-Metric-Outdoor-Large-hf:
     resolutions:
     - 196
     - 238
@@ -151,7 +152,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf:
+  Depth-Anything-V2-Metric-Indoor-Small-hf:
     resolutions:
     - 196
     - 238
@@ -160,7 +161,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf:
+  Depth-Anything-V2-Metric-Indoor-Base-hf:
     resolutions:
     - 196
     - 238
@@ -169,7 +170,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf:
+  Depth-Anything-V2-Metric-Indoor-Large-hf:
     resolutions:
     - 196
     - 238
@@ -178,7 +179,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Metric-Video-Depth-Anything-Small:
+  Metric-Video-Depth-Anything-Small:
     resolutions:
     - 196
     - 238
@@ -187,7 +188,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Metric-Video-Depth-Anything-Base:
+  Metric-Video-Depth-Anything-Base:
     resolutions:
     - 196
     - 238
@@ -196,7 +197,7 @@ Model List:
     - 392
     - 448
     - 518
-  depth-anything/Metric-Video-Depth-Anything-Large:
+  Metric-Video-Depth-Anything-Large:
     resolutions:
     - 196
     - 238
@@ -205,7 +206,7 @@ Model List:
     - 392
     - 448
     - 518
-  LiheYoung/depth-anything-small-hf:
+  depth-anything-small-hf:
     resolutions:
     - 196
     - 238
@@ -214,7 +215,7 @@ Model List:
     - 392
     - 448
     - 518
-  LiheYoung/depth-anything-base-hf:
+  depth-anything-base-hf:
     resolutions:
     - 196
     - 238
@@ -223,7 +224,7 @@ Model List:
     - 392
     - 448
     - 518
-  LiheYoung/depth-anything-large-hf:
+  depth-anything-large-hf:
     resolutions:
     - 196
     - 238
@@ -232,7 +233,7 @@ Model List:
     - 392
     - 448
     - 518
-  xingyang1/Distill-Any-Depth-Small-hf:
+  Distill-Any-Depth-Small-hf:
     resolutions:
     - 196
     - 238
@@ -241,7 +242,7 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/Distill-Any-Depth-Base-hf:
+  Distill-Any-Depth-Base-hf:
     resolutions:
     - 196
     - 238
@@ -250,7 +251,7 @@ Model List:
     - 392
     - 448
     - 518
-  xingyang1/Distill-Any-Depth-Large-hf:
+  Distill-Any-Depth-Large-hf:
     resolutions:
     - 196
     - 238
@@ -259,7 +260,7 @@ Model List:
     - 392
     - 448
     - 518
-  facebook/dpt-dinov2-small-kitti:
+  dpt-dinov2-small-kitti:
     resolutions:
     - 196
     - 238
@@ -268,7 +269,7 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/dpt-dinov2-base-kitti-hf:
+  dpt-dinov2-base-kitti-hf:
     resolutions:
     - 196
     - 238
@@ -277,7 +278,7 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/dpt-dinov2-large-kitti-hf:
+  dpt-dinov2-large-kitti-hf:
     resolutions:
     - 196
     - 238
@@ -286,7 +287,7 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/dpt-dinov2-giant-kitti-hf:
+  dpt-dinov2-giant-kitti-hf:
     resolutions:
     - 196
     - 238
@@ -295,7 +296,7 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/dpt-dinov2-small-nyu-hf:
+  dpt-dinov2-small-nyu-hf:
     resolutions:
     - 196
     - 238
@@ -304,7 +305,7 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/dpt-dinov2-base-nyu-hf:
+  dpt-dinov2-base-nyu-hf:
     resolutions:
     - 196
     - 238
@@ -313,7 +314,7 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/dpt-dinov2-large-nyu-hf:
+  dpt-dinov2-large-nyu-hf:
     resolutions:
     - 196
     - 238
@@ -322,7 +323,7 @@ Model List:
     - 392
     - 448
     - 518
-  facebook/dpt-dinov2-giant-nyu:
+  dpt-dinov2-giant-nyu:
     resolutions:
     - 196
     - 238
@@ -331,70 +332,70 @@ Model List:
     - 392
     - 448
     - 518
-  lc700x/depth-ai-hf:
+  depth-ai-hf:
     resolutions:
     - 192
     - 224
-  lc700x/dpt-hybrid-midas-hf:
+  dpt-hybrid-midas-hf:
     resolutions:
     - 384
-  Intel/dpt-beit-base-384:
+  dpt-beit-base-384:
     resolutions:
     - 192
     - 240
     - 288
     - 336
     - 384
-  Intel/dpt-beit-large-512:
+  dpt-beit-large-512:
     resolutions:
     - 192
     - 288
     - 384
     - 448
     - 512
-  Intel/dpt-large:
+  dpt-large:
     resolutions:
     - 192
     - 240
     - 288
     - 336
     - 384
-  lc700x/dpt-large-redesign-hf:
+  dpt-large-redesign-hf:
     resolutions:
     - 192
     - 240
     - 288
     - 336
     - 384
-  Intel/zoedepth-nyu-kitti:
+  zoedepth-nyu-kitti:
     resolutions:
     - 192
     - 240
     - 288
     - 336
     - 384
-  Intel/zoedepth-nyu:
+  zoedepth-nyu:
     resolutions:
     - 192
     - 240
     - 288
     - 336
     - 384
-  Intel/zoedepth-kitti:
+  zoedepth-kitti:
     resolutions:
     - 192
     - 240
     - 288
     - 336
     - 384
-  apple/DepthPro-hf:
+  DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: depth-anything/Depth-Anything-V2-Small-hf
+Depth Model: Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 0.5
-Depth Resolution: 392
+Depth Resolution: 336
 FP16: true
 Download Path: models
 HF Endpoint: https://hf-mirror.com
@@ -404,15 +405,14 @@ Run Mode: Local Viewer
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: true
-TensorRT: true
+torch.compile: false
+TensorRT: false
 Recompile TensorRT: false
 CoreML: false
 Recompile CoreML: false
 OpenVINO: false
 Recompile OpenVINO: false
-Unlock Thread (Legacy Streamer): false
-Capture Tool: DXCamera
+Capture Tool: none
 Fill 16:9: true
 Fix Viewer Aspect: false
 Lossless Scaling Support: false
@@ -421,4 +421,4 @@ Stereo Mix: ''
 CRF: 20
 Audio Delay: -0.15
 Specify Display: true
-Stereo Monitor: None
+Stereo Monitor: none

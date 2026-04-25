@@ -156,6 +156,8 @@ class DepthAnything3Net(nn.Module):
         self, output: Dict[str, torch.Tensor]
     ) -> Dict[str, torch.Tensor]:
         """Process mono sky estimation."""
+        if hasattr(torch, "xpu") and torch.xpu.is_available(): # disable for XPU device
+            return output
         if "sky" not in output:
             return output
         non_sky_mask = compute_sky_mask(output.sky, threshold=0.3)

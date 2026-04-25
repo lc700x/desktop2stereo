@@ -49,6 +49,7 @@ fi
 echo
 echo "- Installing the requirements"
 sudo apt-get install python3-tk wmctrl mesa-utils portaudio19-dev ffmpeg xdotool -y
+sudo ln -s /usr/lib/x86_64-linux-gnu/libGL.so.1 /usr/lib/x86_64-linux-gnu/libGL.so
 $PYTHON_EXE -m pip install python_xlib --no-cache-dir
 # $PYTHON_EXE -m pip install -r requirements-rocm.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/  
 $PYTHON_EXE -m pip install -r requirements-rocm7.txt --no-cache-dir

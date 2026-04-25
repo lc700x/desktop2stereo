@@ -32,7 +32,7 @@ del "%ZIP_FILE%"
 echo Latest Desktop2Stereo downloaded and extracted to current folder.
 endlocal
 @REM Set paths
-call .env\Scripts\activate
+call activate.cmd
 Set "PYTHON_EXE=python"
 
 

@@ -51,7 +51,7 @@ sudo apt-get install python3-tk wmctrl mesa-utils portaudio19-dev ffmpeg xdotool
 $PYTHON_EXE -m pip install python_xlib --no-cache-dir
 $PYTHON_EXE -m pip install -r requirements-xpu.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 $PYTHON_EXE -m pip install onnx==1.20.1 onnxscript==0.6.0 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
-$PYTHON_EXE -m pip install openvino==2025.4.1 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
+$PYTHON_EXE -m pip install openvino==2026.0.0 --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 $PYTHON_EXE -m pip install -r requirements.txt --no-cache-dir --trusted-host http://mirrors.aliyun.com/pypi/simple/
 if [ $? -ne 0 ]; then
     echo "Failed to install requirements"

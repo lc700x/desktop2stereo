@@ -75,7 +75,7 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 
 - **Method 2**: Manual Deployment with embedded Python
 
-    1. Download and unzip `Desktop2Stereo_vX.X.X_Python311_Windows.zip` to local disk.
+    1. Download and unzip `Desktop2Stereo_vX.X.X_python3_Windows.zip` to local disk.
     2. Install Python environment
 
         **AMD 6000/7000/9000/Ryzen AI (Max)/etc. Series GPUs with ROCm7 Support**: Double click `install-rocm7_standalone.bat`. (Check compatibility here: https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)
@@ -369,33 +369,37 @@ All optional settings can be modified on the GUI window and saved to the [settin
       Left and right eye images are stacked vertically: one on top, one on bottom. Each image is compressed vertically to fit the frame. Common in streaming and broadcast formats; quality similar to Half-SBS.
 
 17. **IPD** (Interpupillary Distance)  
-    IPD is the distance between the centers of your pupils, it affects how your brain interprets stereoscopic 3D. The default IPD is `0.064` meter (m), which is the average human IPD value.
+    IPD is the distance between the centers of your pupils, it affects how your brain interprets stereoscopic 3D. The default IPD is `0.064` meter (m), which is the average human IPD value.  
 
-18. **Stream Protocol** (RTMP Streamer Only)  
+18. Convergence Point   
+    The convergence point refers to the point where the lines of sight from both eyes intersect, affecting the depth perception in stereoscopic vision. A smaller convergence point enhances the "out-of-screen" effect but may cause blurriness or ghosting at the screen edges.  
+    The default convergence point is set to `0.0` for a balanced 3D effect and screen-edge clarity.
+
+19. **Stream Protocol** (RTMP Streamer Only)  
     Default is `HLS` for best compatibility, and `HLS M3U8` can be used in mobile **VLC Player**. [RTMP](http://_vscodecontentref_/4), `RTSP`, `HLS`, `HLS M3U8`, `WebRTC` are provided. You can toggle the protocol to show the target URL, all URLs are ready to use when the **RTMP Streamer** is working.
 
-19. **Streamer URL** (RTMP Streamer, MJPEG Streamer, Legacy Streamer Only)  
+20. **Streamer URL** (RTMP Streamer, MJPEG Streamer, Legacy Streamer Only)  
     Read only, dynamically determined by the streaming protocol and your local IP.
 
-20. **Streamer Key** (RTMP Streamer Only)  
+21. **Streamer Key** (RTMP Streamer Only)  
     The private key string set for **RTMP Streamer**, which will be applied in the **Streamer URL**.
 
-21. **CRF** (RTMP Streamer Only)  
+22. **CRF** (RTMP Streamer Only)  
     Default is `20`, you can set it in the range of `18~23`. It refers to **Constant Rate Factor** that controls the video bitrate. A **lower value** is a **higher quality**.
 
-22. **Stereo Mix** (RTMP Streamer Only)  
+23. **Stereo Mix** (RTMP Streamer Only)  
     This is the **Stereo Mix** device to capture the system playback audio.
 
     - On Windows, **Stereo Mix** device is mostly `Stereo Mix (Realtek(R))` to be used with `Realtek(R) HD Audio` as the output device in Windows audio settings. Or use the virtual audio device from [Screen Capture Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest).
     - On MacOS, you can choose **Stereo Mix** device [BlackHole](https://existential.audio/blackhole/) or [Virtual Desktop Speakers](https://www.vrdesktop.net/) or [Loopback](https://rogueamoeba.com/loopback/) or other virtual audio devices. Please use the same audio output device in MacOS audio settings.
 
-23. **Audio Delay** (RTMP Streamer Only)  
+24. **Audio Delay** (RTMP Streamer Only)  
     Default is `-0.15` seconds, which is used to align the processed audio and video timestamp. A `negative value` will make the audio earlier than the video, whereas a `positive value` will make the audio later than the video.
 
-24. **Download Path**  
+25. **Download Path**  
     Default download path is the [models](http://_vscodecontentref_/5) folder under the working directory.
 
-25. **Depth Model**  
+26. **Depth Model**  
     Modify the depth model id from [HuggingFace](https://huggingface.co/), the model id under `depth_model` mostly shall end with `-hf`. Large model can cause higher GPU usage and latency. Default depth model: `depth-anything/Depth-Anything-V2-Small-hf`. You can also manually add the hugging face models in the [settings.yaml](http://_vscodecontentref_/6) which include `model.safetensors`, `config.json`, `preprocessor_config.json` files on [HuggingFace](https://huggingface.co/).
 
     Currently supported models include (partial list):
@@ -445,10 +449,10 @@ All optional settings can be modified on the GUI window and saved to the [settin
     - Intel/zoedepth-kitti
     - apple/DepthPro-hf  # Slow, NOT recommended
 
-26. **HF Endpoint** (Hugging Face)  
+27. **HF Endpoint** (Hugging Face)  
     [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run.
 
-27. **Inference Optimizer** (Windows/Ubuntu Only)  
+28. **Inference Optimizer** (Windows/Ubuntu Only)  
     These optimizers can typically increase the output FPS by `30%~50%`. However, not all models support **Inference Optimizer**, if the optimization fails, the inference process will fall back to PyTorch.  
 
     **AMD GPUs (ROCm7)**:
@@ -459,7 +463,10 @@ All optional settings can be modified on the GUI window and saved to the [settin
     - **TensorRT**: NVIDIA’s high-performance deep learning inference SDK. It optimizes trained models for deployment, especially on NVIDIA GPUs, and provides significant speedups and high inference efficiency.
 
     **Apple Silicon (MPS)**:
-    - **CoreML**:  CoreML is optimized to leverage Apple silicon's CPU, GPU, and Neural Engine for fast, private, and offline predictions. 
+    - **CoreML**:  CoreML is optimized to leverage Apple silicon's CPU, GPU, and Neural Engine for fast, private, and offline predictions.
+
+    **Intel GPUs**:
+    - **OpenVINO**: This is Intel's deep learning inference optimization toolkit designed to improve inference performance on Intel hardware. By optimizing and accelerating models, it can significantly increase inference speed.
 
     **AMD GPUs, etc. DirectML devices**:
     - **Unlock Threads (Legacy Streamer)**: unlock the multithreads for **Legacy Streamer** mode.

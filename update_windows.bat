@@ -31,7 +31,7 @@ del "%ZIP_FILE%"
 echo Latest Desktop2Stereo downloaded and extracted to current folder.
 endlocal
 @REM Set paths
-Set "PYTHON_EXE=.\Python311\python.exe"
+Set "PYTHON_EXE=.\python3\python.exe"
 
 
 @REM Update pip

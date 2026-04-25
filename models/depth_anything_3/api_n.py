@@ -110,6 +110,9 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             elif pixel_values.device.type == "mps":
                 with torch.autocast(device_type="mps", dtype=pixel_values.dtype):
                     return self.forward(pixel_values)
+            elif pixel_values.device.type == "xpu":
+                with torch.autocast(device_type="xpu", dtype=pixel_values.dtype):
+                    return self.forward(pixel_values)
             else:
                 return self.forward(pixel_values)
 

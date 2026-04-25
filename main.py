@@ -6,9 +6,14 @@ import time
 import signal
 import sys
 import subprocess
-import cv2
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, DML_BOOST, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, shutdown_event
+
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO
 from depth import process, process_tensor, predict_depth
+
+if "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO:
+    USE_CUDA = True
+else:
+    USE_CUDA = False
 
 # Global process references
 global_processes = {
@@ -25,7 +30,6 @@ TIME_SLEEP = 1.0 / FPS
 
 # Queues with size=1 (latest-frame-only logic)
 raw_q = queue.Queue(maxsize=1)
-proc_q = queue.Queue(maxsize=1)
 depth_q = queue.Queue(maxsize=1)
 
 # Thread latency tracking dictionaries
@@ -108,7 +112,9 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
 
             try:
                 # print("[keyboard] Simulating Win+Tab to show desktop and restore windows...")
-                # success = simulate_alt_tab()
+                simulate_alt_tab()
+                time.sleep(0.1)
+                simulate_alt_tab()
 
                 if CAPTURE_CURSOR_DELAY_S:
                     time.sleep(CAPTURE_CURSOR_DELAY_S)
@@ -126,35 +132,57 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
     alt_tab_thread = threading.Thread(target=_keyboard, name="CursorWorker", daemon=True)
     alt_tab_thread.start()
 
-    # Initialize capture object and capture loop
+    # Initialize capture object and capture loop for 24H2
     cap = (
         WindowsCapture(window_name=WINDOW_TITLE)
         if CAPTURE_MODE == "Window"
         else WindowsCapture(monitor_index=MONITOR_INDEX)
     )
 
+    frame_lock = threading.Lock()
+
     def capture_loop():
         global capture_control
-        
+
+        next_frame_time = time.perf_counter()
+
         @cap.event
         def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
-            capture_start_time = time.perf_counter()
-            if shutdown_event.is_set():
-                return
-            capture_started_event.set()
-            
-            raw_q.put((frame.frame_buffer, OUTPUT_RESOLUTION, capture_start_time))
-            
-            # Calculate total processing time and wait if needed
-            process_time = time.perf_counter() - capture_start_time
-            wait_time = max(TIME_SLEEP - process_time, 0)
-            time.sleep(wait_time)
+            nonlocal next_frame_time
+
+            try:
+                if shutdown_event.is_set():
+                    capture_control.stop()
+                    return
+
+                now = time.perf_counter()
+
+                # Skip frames arriving too early (keeps FPS stable)
+                if now < next_frame_time:
+                    return
+
+                # Prevent timing drift if system lags temporarily
+                next_frame_time += TIME_SLEEP
+
+                source_frame = frame.frame_buffer
+                raw_q.put((source_frame, OUTPUT_RESOLUTION, now))
+
+                capture_started_event.set()
+
+            except Exception as e:
+                print(f"[capture_loop] Exception during frame arrival: {e}")
 
         @cap.event
         def on_closed():
             print("[capture_loop] Capture session closed")
+            capture_control.stop()
+            capture_started_event.clear()
 
-        cap.start()
+        try:
+            cap.start()
+        finally:
+            capture_started_event.clear()
+            time.sleep(0.1)
 else:
     # DXCamera based wincam
     from capture import DesktopGrabber
@@ -176,24 +204,41 @@ else:
                 print(f"[Warning] Error: {e}")
                 continue
 # change process function to CUDA version if using WindowsCaptureCUDA on Windows
-process = process_tensor if CAPTURE_TOOL == "WindowsCaptureCUDA" and OS_NAME == "Windows"  else process
+process = process_tensor  if "DirectML" not in DEVICE_INFO and "CPU" not in DEVICE_INFO else process
 
-def process_loop():
+# Combined processing + depth thread (replaces process_loop and depth_loop)
+
+def process_depth_loop():
+    target_time = time.perf_counter()
     while not shutdown_event.is_set():
+        target_time += TIME_SLEEP
         try:
             if shutdown_event.is_set():
                 break
             
-            # Get frame with capture latency
-            process_start_time = time.perf_counter()
+            # Get raw frame with capture timestamp
             frame_raw, size, capture_start_time = raw_q.get(timeout=TIME_SLEEP)
-            capture_latency = process_start_time - capture_start_time
-            thread_latencies['capture'] = capture_latency
-
             
+            # Process: resize / color conversion
+            process_start_time = time.perf_counter()
             frame_rgb = process(frame_raw, size)
+            process_latency = process_start_time - capture_start_time
+            thread_latencies['capture'] = process_latency  # capture latency
             
-            proc_q.put((frame_rgb, capture_latency, process_start_time))
+            # Depth inference
+            depth_start_time = time.perf_counter()
+            depth = predict_depth(frame_rgb)
+            depth_latency = time.perf_counter() - depth_start_time
+            thread_latencies['resize'] = process_latency   # resize latency
+            thread_latencies['depth'] = depth_latency      # depth latency
+            
+            # Send to render queue
+            depth_q.put((frame_rgb, depth, capture_start_time))
+
+            sleep = target_time - time.perf_counter()
+            if sleep > 0:
+                time.sleep(sleep)
+
         except queue.Empty:
             continue
 
@@ -242,9 +287,7 @@ def cleanup_all_resources():
         print(f"[Cleanup] Error stopping streamer: {e}")
     
     # Clear all queues to unblock threads
-    queues = [raw_q, proc_q, depth_q]
-    if 'sbs_q' in globals():
-        queues.append(sbs_q)
+    queues = [raw_q, depth_q]
     
     for q in queues:
         while not q.empty():
@@ -947,7 +990,8 @@ def rtmp_stream(window):
 def main(mode="Viewer"):
     # Start capture and processing threads
     threading.Thread(target=capture_loop, daemon=True).start()
-    threading.Thread(target=process_loop, daemon=True).start()
+    # Replace separate process_loop and depth_loop with combined thread
+    threading.Thread(target=process_depth_loop, daemon=True).start()
     
     # FPS tracking variables
     frame_count = 0
@@ -969,40 +1013,42 @@ def main(mode="Viewer"):
     latency_history = []  # Store recent latency values for average calculation
     max_latency_history = 300  # Keep same amount as FPS
     avg_total_latency = 0.0
-    current_latency = 0.0
     
     try:
         if mode == "Viewer":
             from viewer import StereoWindow
-            def depth_loop():
-                while not shutdown_event.is_set():
-                    try:
-                        # Get frame with capture and process latencies
-                        frame_rgb, capture_latency, process_start_time = proc_q.get(timeout=TIME_SLEEP)
-                        if shutdown_event.is_set():
-                            break
-                        
-                        depth_start_time = time.perf_counter()
-                        process_latency = depth_start_time - process_start_time
-                        thread_latencies['resize'] = process_latency
-                        depth = predict_depth(frame_rgb)
-                        
-                        # Put all latencies with the frame
-                        depth_q.put((frame_rgb, depth, capture_latency, process_latency, depth_start_time))
-                    except queue.Empty:
-                        continue
-            
-            threading.Thread(target=depth_loop, daemon=True).start()
-            # build ffmpeg command pointing to your mediamtx and include audio device
-            frame_rgb = proc_q.get()[0]  # Get one frame to determine size for window
-            w, h = frame_rgb.shape[1], frame_rgb.shape[0]
+            # Get initial frame to determine window size (block until first frame arrives)
+            rgb, depth, capture_start_time = depth_q.get()
+            import torch
+            if isinstance(rgb, torch.Tensor):
+                w, h = rgb.shape[2], rgb.shape[1] # CUDA Tensor, (C, H, W)
+            else:
+                w, h = rgb.shape[1], rgb.shape[0] # (H, W, C)
             if DISPLAY_MODE == "Full-SBS":
                 w = 2 * w
             if not STREAM_MODE:
                 # For local viewer only
                 h = int(1280 / w * h)
                 w = 1280
-            window = StereoWindow(ipd=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, show_fps=SHOW_FPS, stream_mode=STREAM_MODE, frame_size = (w,h))
+                
+            window = StereoWindow(
+                capture_mode=CAPTURE_MODE, 
+                monitor_index=MONITOR_INDEX, 
+                ipd=IPD, depth_ratio=DEPTH_STRENGTH, 
+                convergence=CONVERGENCE, 
+                display_mode=DISPLAY_MODE, 
+                fill_16_9=FILL_16_9, 
+                show_fps=SHOW_FPS, 
+                use_3d=USE_3D_MONITOR, 
+                fix_aspect=FIX_VIEWER_ASPECT, 
+                stream_mode=STREAM_MODE, 
+                lossless_scaling=LOSSLESS_SCALING_SUPPORT, 
+                specify_display=STEREO_DISPLAY_SELECTION, 
+                stereo_display_index=STEREO_DISPLAY_INDEX, 
+                frame_size=(w,h),
+                use_cuda=USE_CUDA,
+                cuda_device_id=DEVICE_ID)
+
             if STREAM_MODE == "RTMP":
                 if OS_NAME == "Windows":
                     from utils import set_window_to_bottom
@@ -1023,39 +1069,38 @@ def main(mode="Viewer"):
             else:
                 print(f"[Main] Local Viewer Started")
             
-            latency_data = {
-                        'capture': 0,
-                        'resize': 0,
-                        'depth': 0,
-                        'render': 0,
-                        'total': 0
-                    }
+            # Process the first frame we already retrieved
+            render_start_time = time.perf_counter()
+            window.update_frame(rgb, depth, current_fps, 0.0)  # initial latency unknown
+            render_latency = time.perf_counter() - render_start_time
+            total_latency = (render_start_time - capture_start_time) + render_latency
+            thread_latencies['render'] = render_latency
+            thread_latencies['total'] = total_latency
             
+            # Main render loop
+            next_render_time = time.perf_counter()
             while (not glfw.window_should_close(window.window) and 
                    not shutdown_event.is_set()):
+
                 try:
-                    sbs_start_time = time.perf_counter()
-                    # Get frame with all latency data
-                    rgb, depth, capture_latency, process_latency, depth_start_time = depth_q.get(timeout=TIME_SLEEP)
+                    # Get next frame (already processed + depth)
+                    rgb, depth, capture_start_time = depth_q.get(timeout=0.001)
                     
-                    # calculate depth latency
-                    depth_latency = sbs_start_time - depth_start_time
-                    thread_latencies['depth'] = depth_latency
-                    
-                    # Pass both current_fps and latency_data to update_frame
-                    window.update_frame(rgb, depth, current_fps, latency_data["total"])
+                    # Render
+                    render_start_time = time.perf_counter()
+                    window.update_frame(rgb, depth, current_fps, total_latency)
                     
                     if STREAM_MODE == "MJPEG":
                         frame = window.capture_glfw_image()
                         streamer.set_frame(frame)
                     
-                    # Calculate FPS
+                    # Calculate FPS and latencies
                     frame_count += 1
                     total_frames += 1
                     current_time = time.perf_counter()
-                    sbs_latency = current_time - sbs_start_time
-                    thread_latencies['render'] = sbs_latency
-                    total_latency = capture_latency + process_latency + depth_latency + sbs_latency
+                    render_latency = current_time - render_start_time
+                    thread_latencies['render'] = render_latency
+                    total_latency = (current_time - capture_start_time)
                     thread_latencies['total'] = total_latency
                     current_latency = total_latency
                     
@@ -1109,14 +1154,6 @@ def main(mode="Viewer"):
                             # Reset for next calculation
                             last_fps_update_time = current_time
                         
-                        latency_data = {
-                            'capture': capture_latency,
-                            'resize': process_latency,
-                            'depth': depth_latency,
-                            'render': sbs_latency,
-                            'total': total_latency
-                        }
-                        
                         frame_count = 0
                         last_time = current_time
                         
@@ -1128,10 +1165,10 @@ def main(mode="Viewer"):
                                 f"1% Low Avg: {low_fps_1_percent_avg:.1f} | "
                                 f"Latency: {total_latency*1000:.0f}ms | "
                                 f"Avg Latency: {avg_total_latency*1000:.0f}ms "
-                                f"(Capture:{capture_latency*1000:.0f}ms "
-                                f"Resize:{process_latency*1000:.0f}ms "
-                                f"Depth:{depth_latency*1000:.0f}ms "
-                                f"Render:{sbs_latency*1000:.0f}ms)"
+                                f"(Capture:{thread_latencies['capture']*1000:.0f}ms "
+                                f"Resize:{thread_latencies['resize']*1000:.0f}ms "
+                                f"Depth:{thread_latencies['depth']*1000:.0f}ms "
+                                f"Render:{render_latency*1000:.0f}ms)"
                             )
                         else:
                             title_text = (
@@ -1146,7 +1183,12 @@ def main(mode="Viewer"):
                         glfw.set_window_title(window.window, f"Stereo Viewer {title_text}")
                 except queue.Empty:
                     pass
-                
+                now = time.perf_counter()
+
+                if now < next_render_time:
+                    time.sleep(next_render_time - now)
+
+                next_render_time += TIME_SLEEP
                 window.render()
                 glfw.swap_buffers(window.window)
                 glfw.poll_events()
@@ -1156,46 +1198,7 @@ def main(mode="Viewer"):
         else:
             from depth import make_sbs, DEVICE_INFO
             from streamer import MJPEGStreamer
-            
-            BOOST = (not "DirectML" in DEVICE_INFO) or DML_BOOST
-            
-            if not BOOST:
-                def make_output(rgb, depth):
-                    return make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
-            else:
-                sbs_q = queue.Queue(maxsize=1)
-                
-                def make_output(rgb, depth):
-                    return (rgb, depth)
-                
-                def sbs_loop():
-                    while not shutdown_event.is_set():
-                        try:
-                            rgb, depth = depth_q.get(timeout=TIME_SLEEP)
-                            if shutdown_event.is_set():
-                                break
-                            sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, display_mode=DISPLAY_MODE, fps=current_fps)
-                            sbs_q.put(sbs)
-                        except queue.Empty:
-                            continue
-            
-            def depth_loop():
-                while not shutdown_event.is_set():
-                    try:
-                        frame_rgb, _, _ = proc_q.get(timeout=TIME_SLEEP)
-                        if shutdown_event.is_set():
-                            break
-                        depth, rgb = predict_depth(frame_rgb, return_tuple=True)
-                        
-                        depth_q.put(make_output(rgb, depth))
-                    except queue.Empty:
-                        continue
-            
-            threading.Thread(target=depth_loop, daemon=True).start()
-            
-            if BOOST:
-                threading.Thread(target=sbs_loop, daemon=True).start()
-            
+
             streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
             streamer.start()
             
@@ -1210,11 +1213,9 @@ def main(mode="Viewer"):
             
             while not shutdown_event.is_set():
                 try:
-                    if not BOOST:
-                        # Fix for unstable dml runtime error
-                        sbs = depth_q.get(timeout=TIME_SLEEP)
-                    else:
-                        sbs = sbs_q.get(timeout=TIME_SLEEP)
+                    # Fix for unstable dml runtime error
+                    rgb, depth, _ = depth_q.get(timeout=TIME_SLEEP)
+                    sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fill_16_9=FILL_16_9, fps=current_fps)
                     streamer.set_frame(sbs)
                     
                     # Calculate FPS

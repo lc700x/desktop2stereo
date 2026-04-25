@@ -103,8 +103,11 @@ class RotaryPositionEmbedding2D(nn.Module):
         cache_key = (dim, seq_len, device, dtype)
         if cache_key not in self.frequency_cache:
             # Compute frequency bands
-            exponents = torch.arange(0, dim, 2, device=device).float() / dim
-            inv_freq = 1.0 / (self.base_frequency**exponents)
+            exponents = torch.arange(0, dim, 2).float().to(device) / dim
+            inv_freq = 1.0 / torch.pow(
+                torch.tensor(self.base_frequency, dtype=exponents.dtype, device=exponents.device),
+                exponents
+            )
 
             # Generate position-dependent frequencies
             positions = torch.arange(seq_len, device=device, dtype=inv_freq.dtype)
