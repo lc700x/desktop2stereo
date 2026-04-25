@@ -176,7 +176,6 @@ if IS_NVIDIA:
     if IS_LEGACY_NVIDIA:
         USE_TORCH_COMPILE = False
         # USE_TENSORRT = False  # Disable TensorRT for legacy NVIDIA GPUs due to potential compatibility issues
-
     # Disable TRT for unsupported models
     if MODEL_ID in DISABLE_TRT_KEYWORDS:
         USE_TENSORRT = False
@@ -196,6 +195,10 @@ if IS_AMD_ROCM:
         os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
         os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "TRUE" # Enable flash attention autotune for AMD ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Enable AOTriton for ROCm
+
+
+if USE_TORCH_COMPILE:
+    torch._dynamo.reset()
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
