@@ -174,7 +174,7 @@ if exist ".\%VIRTUAL_ENV%\Lib\site-packages\rocm_sdk_devel\_devel.tar" (
         echo ROCm SDK development files extracted successfully.
         REM Remove the archive file after successful extraction
         echo Removing the archive file _devel.tar...
-        @REM del _devel.tar
+        del _devel.tar
     ) else (
         echo Failed to extract ROCm SDK development files.
     )

@@ -156,14 +156,6 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
                     return
 
                 now = time.perf_counter()
-
-                # Skip frames arriving too early (keeps FPS stable)
-                if now < next_frame_time:
-                    return
-
-                # Prevent timing drift if system lags temporarily
-                next_frame_time += TIME_SLEEP
-
                 source_frame = frame.frame_buffer
                 raw_q.put((source_frame, OUTPUT_RESOLUTION, now))
 
