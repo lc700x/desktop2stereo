@@ -22,7 +22,7 @@ $filesToCopy = @(
     "requirements-rocm.txt", "requirements-rocm6.txt", "requirements-rocm7.txt","requirements-rocm7-official.txt",
     "requirements-rocm7-7000.txt", "requirements-rocm7-860M.txt", "requirements-rocm7-890M.txt",  "requirements-rocm7-8000S.txt", "requirements-rocm7-9000.txt", "requirements.txt",
     "run.bat","run_main.bat","run_linux.bash","run_linux_main.bash","run_mac","run_mac_main","run_windows.bat","run_windows_main.bat",
-    "settings.yaml","streamer.py","update.bat","update_mac_linux","update_windows.bat",
+    "settings.yaml","streamer.py","update.bat","update_mac_linux","update_windows.bat", "clean_cache.bat"
     "utils.py","viewer.py"
 )
 
