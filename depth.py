@@ -10,7 +10,7 @@ import torch
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, CAPTURE_TOOL
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -303,75 +303,80 @@ def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
 
     return depth.squeeze()
 
-def process_tensor(img_uint8: torch.Tensor, target_height: int) -> torch.Tensor:
-    """
-    Memory-efficient version for uint8 tensors.
-    Minimizes temporary memory allocations during processing.
-    img_uint8: Input image tensor (HWC format)
-    target_height: Desired height for the output tensor
-    output: Processed tensor (CHW format)
-    """
-    # check if input is numpy
-    if isinstance(img_uint8, np.ndarray):
-        img_uint8 = torch.from_numpy(img_uint8).to(DEVICE)
 
-    img_uint8 = img_uint8[..., [2, 1, 0]].permute(2, 0, 1).contiguous()
-    _, H0, W0 = img_uint8.shape
-    
-    if target_height >= H0:
-        return img_uint8.to(DEVICE, dtype=DTYPE)
-    
-    new_width = int(W0 * target_height / H0)
-    new_height = (target_height // 2) * 2
-    new_width = (new_width // 2) * 2
-    
-    # Use in-place operations where possible to reduce memory usage
-    with torch.no_grad():  # Disable gradient computation for inference
-        img_float = img_uint8.to(DEVICE, dtype=DTYPE)
+if IS_CUDA:
+    def process(img_uint8: torch.Tensor, target_height: int) -> torch.Tensor:
+        """
+        Memory-efficient version for uint8 tensors.
+        Minimizes temporary memory allocations during processing.
+        img_uint8: Input image tensor (HWC format)
+        target_height: Desired height for the output tensor
+        output: Processed tensor (CHW format)
+        """
+        # check if input is numpy
+        if isinstance(img_uint8, np.ndarray):
+            img_uint8 = torch.from_numpy(img_uint8).to(DEVICE)
+
+        img_uint8 = img_uint8[..., [2, 1, 0]].permute(2, 0, 1).contiguous()
+        _, H0, W0 = img_uint8.shape
         
-        # Resize
-        result = F.interpolate(
-            img_float.unsqueeze(0),
-            size=(new_height, new_width),
-            mode='bilinear',
-            align_corners=False,
-            antialias=True
-        ).squeeze(0)
-    return result
+        if target_height >= H0:
+            return img_uint8.to(DEVICE, dtype=DTYPE)
+        
+        new_width = int(W0 * target_height / H0)
+        new_height = (target_height // 2) * 2
+        new_width = (new_width // 2) * 2
+        
+        # Use in-place operations where possible to reduce memory usage
+        with torch.no_grad():  # Disable gradient computation for inference
+            img_float = img_uint8.to(DEVICE, dtype=DTYPE)
+            
+            # Resize
+            result = F.interpolate(
+                img_float.unsqueeze(0),
+                size=(new_height, new_width),
+                mode='bilinear',
+                align_corners=False,
+                antialias=True
+            ).squeeze(0)
+        return result
+    
+else:
+    def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
+        """
+        Resize BGR/UMat image to target height, keeping aspect ratio.
+        Uses cv2.UMat for GPU acceleration when possible.
+        """
+        # Determine if input is UMat
+        is_umat = isinstance(img_rgb, cv2.UMat)
+
+        # Get original size
+        if is_umat:
+            h0, w0 = img_rgb.get().shape[:2]
+        else:
+            h0, w0 = img_rgb.shape[:2]
+
+        # Compute new size
+        width = int(w0 * height / h0)
+
+        # Convert BGRA to RGB if needed (WindowsCapture gives BGRA)
+        if img_rgb.shape[2] == 4:
+            img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_BGRA2RGB)
+        elif img_rgb.shape[2] == 3:
+            img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB)
+
+        # If no resize necessary, return as-is
+        if height >= h0:
+            return img_rgb
+
+        # Resize using CPU
+        resized = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_LINEAR)
+
+        return resized
 
 def chw_tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
     hwc_tensor = tensor.permute(1, 2, 0).contiguous()
     return hwc_tensor.detach().cpu().numpy()
-
-def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
-    """
-    Resize BGR/UMat image to target height, keeping aspect ratio.
-    Uses cv2.UMat for GPU acceleration when possible.
-    """
-    # Determine if input is UMat
-    is_umat = isinstance(img_rgb, cv2.UMat)
-
-    # Get original size
-    if is_umat:
-        h0, w0 = img_rgb.get().shape[:2]
-    else:
-        h0, w0 = img_rgb.shape[:2]
-
-    # Compute new size
-    width = int(w0 * height / h0)
-
-    # Convert BGRA to RGB if needed (WindowsCapture gives BGRA)
-    if img_rgb.shape[2] == 4:
-        img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_BGRA2RGB)
-
-    # If no resize necessary, return as-is
-    if height >= h0:
-        return img_rgb
-
-    # Resize using CPU
-    resized = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_LINEAR)
-
-    return resized
 
 def apply_gamma(depth, gamma=1.2):
     return torch.pow(depth, gamma)

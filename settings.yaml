@@ -1,9 +1,9 @@
 Capture Mode: Monitor
-Monitor Index: none
+Monitor Index: 1
 Window Title: ''
 FPS: 60
 Show FPS: false
-Output Resolution: 1440
+Output Resolution: 2160
 IPD: 0.064
 Convergence: 0.0
 Display Mode: Half-SBS
@@ -391,12 +391,12 @@ Model List:
   DepthPro-hf:
     resolutions:
     - 1536
-Depth Model: Depth-Anything-V2-Small-hf
+Depth Model: DA3-SMALL
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 0.5
-Depth Resolution: 336
-FP16: true
+Depth Resolution: 322
+FP16: false
 Download Path: models
 HF Endpoint: https://hf-mirror.com
 Computing Device: 0
@@ -405,14 +405,14 @@ Run Mode: Local Viewer
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: false
-TensorRT: false
+torch.compile: true
+TensorRT: true
 Recompile TensorRT: false
 CoreML: false
 Recompile CoreML: false
 OpenVINO: false
 Recompile OpenVINO: false
-Capture Tool: none
+Capture Tool: DesktopDuplication
 Fill 16:9: true
 Fix Viewer Aspect: false
 Lossless Scaling Support: false
@@ -420,5 +420,5 @@ Stream Key: live
 Stereo Mix: ''
 CRF: 20
 Audio Delay: -0.15
-Specify Display: true
-Stereo Monitor: none
+Specify Display: false
+Stereo Monitor: 1
