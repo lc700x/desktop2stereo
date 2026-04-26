@@ -362,6 +362,8 @@ else:
         # Convert BGRA to RGB if needed (WindowsCapture gives BGRA)
         if img_rgb.shape[2] == 4:
             img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_BGRA2RGB)
+        elif img_rgb.shape[2] == 3:
+            img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB)
 
         # If no resize necessary, return as-is
         if height >= h0:
