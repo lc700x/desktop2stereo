@@ -604,10 +604,17 @@ class ConfigGUI(tk.Tk):
         # Check if the current device is NVIDIA CUDA (not ROCm)
         is_nvidia_cuda = "CUDA" in device_label.upper() and not IS_ROCM
         
+        # Base options
+        base_options = ["WindowsCapture", "DXCamera", "DesktopDuplication"]
         if is_nvidia_cuda:
-            return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera", "DesktopDuplication"]
-        else:
-            return ["WindowsCapture", "DXCamera", "DesktopDuplication"]
+            base_options.insert(0, "WindowsCaptureCUDA")
+
+        # Disable DesktopDuplication for 3D Monitor mode
+        if self.run_mode_key == "3D Monitor":
+            if "DesktopDuplication" in base_options:
+                base_options.remove("DesktopDuplication")
+        
+        return base_options
 
     def start_background_key_monitor(self):
         """Start background thread for system-wide ESC key monitoring"""
@@ -1334,19 +1341,37 @@ class ConfigGUI(tk.Tk):
             self.display_mode_cb.set("")
 
     def update_stereo_display_visibility(self):
-        """Show/hide stereo display options based on run mode"""
-        if self.run_mode_key in ["RTMP Streamer", "Local Viewer", "3D Monitor"]:
-            # Show stereo display options
-            self.label_specify_display.grid()
-            self.specify_display_cb.grid()
-            self.populate_monitors()
-            self.update_stereo_monitor_display()
-        else:
-            # Hide for other modes
-            self.label_specify_display.grid_remove()
-            self.specify_display_cb.grid_remove()
-            self.label_stereo_monitor.grid_remove()
-            self.stereo_monitor_menu.grid_remove()
+        """Show/hide stereo display options based on run mode and monitor count"""
+        # Hide all stereo display options by default
+        self.label_specify_display.grid_remove()
+        self.specify_display_cb.grid_remove()
+        self.label_stereo_monitor.grid_remove()
+        self.stereo_monitor_menu.grid_remove()
+        
+        # Check if the current run mode supports stereo display
+        if self.run_mode_key not in ["RTMP Streamer", "Local Viewer", "3D Monitor"]:
+            return
+
+        # Get the current monitor count
+        monitor_count = 0
+        if mss:
+            try:
+                with mss.mss() as sct:
+                    monitor_count = len(sct.monitors) - 1
+            except Exception:
+                monitor_count = 0
+
+        # If there is only one monitor, do not show the options
+        if monitor_count <= 1:
+            # Ensure the checkbox is unchecked if it was previously checked
+            self.specify_display_var.set(False)
+            return
+
+        # If more than one monitor, show the options
+        self.label_specify_display.grid()
+        self.specify_display_cb.grid()
+        self.populate_monitors()
+        self.update_stereo_monitor_display()
     
     def update_stereo_monitor_display(self, *args):
         if self.specify_display_var.get():
@@ -1903,11 +1928,27 @@ class ConfigGUI(tk.Tk):
             self.show_viewer_controls()
             # Set stereo monitor to match input monitor (default for 3D mode)
             self.stereo_monitor_var.set(self.monitor_var.get())
+            # Explicitly disable DesktopDuplication for 3D Monitor mode
+            current_tools = list(self.capture_tool_cb['values'])
+            if "DesktopDuplication" in current_tools:
+                current_tools.remove("DesktopDuplication")
+                self.capture_tool_cb['values'] = current_tools
+                
+                # If the current selection is now invalid, switch to a valid one
+                if self.capture_tool_cb.get() == "DesktopDuplication":
+                    if current_tools:
+                        self.capture_tool_cb.set(current_tools[0])
         
         # Update display mode options based on run mode
         self.update_display_mode_options()
         # Update stereo display visibility
         self.update_stereo_display_visibility()
+
+        if self.run_mode_key != "3D Monitor" and OS_NAME == "Windows":
+            current_tools = list(self.capture_tool_cb['values'])
+            if "DesktopDuplication" not in current_tools:
+                current_tools.append("DesktopDuplication")
+                self.capture_tool_cb['values'] = current_tools
     
     def hide_all_streamer_controls(self):
         """Hide all streamer-specific controls"""

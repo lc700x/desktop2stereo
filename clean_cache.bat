@@ -68,19 +68,9 @@ for /d %%i in ("!TORCH_TEMP!\torchinductor_*") do (
     rd /s /q "%%i" 2>nul
 )
 
-REM Cache subdirectories related to torch, triton, miopen, zluda
-set "USER_CACHE=%USERPROFILE%\.cache"
-if exist "!USER_CACHE!" (
-    echo Removing cache subdirectories related to torch, triton, miopen, zluda...
-    for /d %%i in ("!USER_CACHE!\*torch*" "!USER_CACHE!\*triton*" "!USER_CACHE!\*miopen*" "!USER_CACHE!\*zluda*") do (
-        if exist "%%i" (
-            echo   Removing: %%i
-            rd /s /q "%%i" 2>nul
-        )
-    )
-) else (
-    echo   User cache directory not found: !USER_CACHE!
-)
+echo.
+echo Removing Python __pycache__...
+powershell -Command "Get-ChildItem -Path . -Recurse -Include '__pycache__','*.pyc','*Zone.Identifier' | Remove-Item -Recurse -Force"
 
 echo.
 echo ============================================
