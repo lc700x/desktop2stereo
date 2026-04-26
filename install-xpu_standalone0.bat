@@ -20,7 +20,8 @@ echo.
 echo - Installing the requirements
 %PYTHON_EXE% -m pip install -r requirements-xpu0.txt --no-cache-dir --no-warn-script-location
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location
-%PYTHON_EXE% -m pip install onnx==1.20.1 onnxscript==0.6.0 --no-cache-dir --no-warn-script-location
+%PYTHON_EXE% -m pip install onnx==1.20.1 onnxscript==0.6.0 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+%PYTHON_EXE% -m pip install openvino==2026.0.0 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location
 %PYTHON_EXE% -m pip install windows-capture==2.0.0 --no-cache-dir --no-warn-script-location
 if %errorlevel% neq 0 (
