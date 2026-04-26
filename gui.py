@@ -1347,6 +1347,32 @@ class ConfigGUI(tk.Tk):
             self.specify_display_cb.grid_remove()
             self.label_stereo_monitor.grid_remove()
             self.stereo_monitor_menu.grid_remove()
+        
+        # Check if the current run mode supports stereo display
+        if self.run_mode_key not in ["RTMP Streamer", "Local Viewer", "3D Monitor"]:
+            return
+
+        # Get the current monitor count
+        monitor_count = 0
+        if mss:
+            try:
+                with mss.mss() as sct:
+                    monitor_count = len(sct.monitors) - 1
+            except Exception:
+                monitor_count = 0
+
+        # If there is only one monitor, do not show the options
+        if monitor_count <= 1:
+            # Ensure the checkbox is unchecked if it was previously checked
+            self.specify_display_var.set(False)
+            return
+
+        # If more than one monitor, show the options
+        self.label_specify_display.grid()
+        self.specify_display_cb.grid()
+        self.populate_monitors()
+        self.update_stereo_monitor_display()
+
     
     def update_stereo_monitor_display(self, *args):
         if self.specify_display_var.get():
