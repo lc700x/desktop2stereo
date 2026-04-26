@@ -150,9 +150,9 @@ if %errorlevel% neq 0 (
   exit /b 1
 )
 %PYTHON_EXE% -m pip install -r %REQUIREMENTS_FILE% --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install "triton-windows<3.7" --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
-%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install windows-capture==2.0.0 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 if %errorlevel% neq 0 (
     echo Failed to install requirements
@@ -160,33 +160,6 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-
-REM Check if the archive file exists
-if exist ".\%VIRTUAL_ENV%\Lib\site-packages\rocm_sdk_devel\_devel.tar" (
-    echo Found _devel.tar archive, extracting to python\Lib\site-packages\_rocm_sdk_devel...
-    
-    REM Extract the archive
-    echo Extracting _devel.tar, this may take a moment ...
-    cd ".\%VIRTUAL_ENV%\Lib\site-packages\rocm_sdk_devel"
-    tar -xf _devel.tar -C "..\."
-    
-    if %errorlevel% equ 0 (
-        echo ROCm SDK development files extracted successfully.
-        REM Remove the archive file after successful extraction
-        echo Removing the archive file _devel.tar...
-        @REM del _devel.tar
-    ) else (
-        echo Failed to extract ROCm SDK development files.
-    )
-) else (
-    echo Warning: _devel.tar archive not found in .\python\Lib\site-packages\rocm_sdk_devel\
-    echo Skipping ROCm SDK development files extraction.
-)
-
-cd "..\..\..\.."
-echo.
-
 echo Python environment deployed successfully.
 pause
 exit /b 0
-

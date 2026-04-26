@@ -316,7 +316,7 @@ DEFAULTS = {
     "Capture Mode": "Monitor",  # "Monitor" or "Window"
     "Monitor Index": 1,
     "Window Title": "",
-    "Output Resolution": 1440,
+    "Output Resolution": 2160,
     "FPS": 60,
     "Show FPS": False,
     "Model List": DEFAULT_MODEL_LIST,
@@ -349,10 +349,10 @@ DEFAULTS = {
     "CRF": 20,
     "Audio Delay": -0.15,
     "Lossless Scaling Support": False,
-    "Capture Tool": "WindowsCaptureCUDA" if "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM else "WindowsCapture",  # "WindowsCaptureCUDA" for NVIDIA GPU, "WindowsCapture", "DXCamera"
+    "Capture Tool": "WindowsCaptureCUDA" if "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM else "DXCamera",  # "WindowsCaptureCUDA" for NVIDIA GPU, "WindowsCapture", "DXCamera"
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False, # keep the viewer window aspect ratio not change
-    "Specify Display": False,
+    "Specify Display": True,
     "Stereo Monitor": None,
 }
 
@@ -599,7 +599,7 @@ class ConfigGUI(tk.Tk):
             List of available capture tool names.
         """
         if OS_NAME != "Windows":
-            return ["WindowsCapture", "DXCamera", "DesktopDuplication"]
+            return ["DXCamera","WindowsCapture", "DesktopDuplication"]
         
         # Check if the current device is NVIDIA CUDA (not ROCm)
         is_nvidia_cuda = "CUDA" in device_label.upper() and not IS_ROCM
@@ -607,7 +607,7 @@ class ConfigGUI(tk.Tk):
         if is_nvidia_cuda:
             return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera", "DesktopDuplication"]
         else:
-            return ["WindowsCapture", "DXCamera", "DesktopDuplication"]
+            return ["DXCamera","WindowsCapture", "DesktopDuplication"]
 
     def start_background_key_monitor(self):
         """Start background thread for system-wide ESC key monitoring"""
@@ -1347,6 +1347,32 @@ class ConfigGUI(tk.Tk):
             self.specify_display_cb.grid_remove()
             self.label_stereo_monitor.grid_remove()
             self.stereo_monitor_menu.grid_remove()
+        
+        # Check if the current run mode supports stereo display
+        if self.run_mode_key not in ["RTMP Streamer", "Local Viewer", "3D Monitor"]:
+            return
+
+        # Get the current monitor count
+        monitor_count = 0
+        if mss:
+            try:
+                with mss.mss() as sct:
+                    monitor_count = len(sct.monitors) - 1
+            except Exception:
+                monitor_count = 0
+
+        # If there is only one monitor, do not show the options
+        if monitor_count <= 1:
+            # Ensure the checkbox is unchecked if it was previously checked
+            self.specify_display_var.set(False)
+            return
+
+        # If more than one monitor, show the options
+        self.label_specify_display.grid()
+        self.specify_display_cb.grid()
+        self.populate_monitors()
+        self.update_stereo_monitor_display()
+
     
     def update_stereo_monitor_display(self, *args):
         if self.specify_display_var.get():
@@ -2356,7 +2382,10 @@ class ConfigGUI(tk.Tk):
         
         if current_device in self.device_label_to_index.values():
             self.device_var.set(current_device)
-    
+        
+        # Ensure stereo display controls are correctly shown/hidden for the current mode
+        self.update_stereo_display_visibility()
+
     def update_status(self, msg: str):
         """Update status bar text."""
         self.status_label.config(text=msg)
