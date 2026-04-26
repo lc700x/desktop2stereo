@@ -138,7 +138,7 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
 
     # Initialize capture object and capture loop for 24H2
     IS_24h2 = is_windows_11_24h2_or_newer()
-    IS_24h2 = False
+
     if IS_24h2:
         cap = (
             WindowsCapture(window_name=WINDOW_TITLE, minimum_update_interval=int(TIME_SLEEP * 1000))
@@ -146,7 +146,6 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
             else WindowsCapture(monitor_index=MONITOR_INDEX)
         )
     else:
-        print("[main] Frame Interval Control is not supported for this version of Windows (older than 24H2).")
         cap = (
             WindowsCapture(window_name=WINDOW_TITLE)
             if CAPTURE_MODE == "Window"
