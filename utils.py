@@ -1,3 +1,4 @@
+import sys
 import yaml, threading, time
 import os, platform, socket
 
@@ -153,6 +154,16 @@ if OS_NAME == "Windows":
     user32 = ctypes.windll.user32
     SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
     WDA_EXCLUDEFROMCAPTURE = 0x00000011   # Windows 10 2004+
+    
+    def is_windows_11_24h2_or_newer():
+        if sys.platform != "win32":
+            return False
+
+        ver = sys.getwindowsversion()
+        build = ver.build
+
+        # Windows 11 24H2 ≈ build 26100+
+        return build >= 26100
 
     def hide_window_from_capture(glfw_window):
         hwnd = glfw.get_win32_window(glfw_window)

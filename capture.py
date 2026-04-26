@@ -421,7 +421,7 @@ if OS_NAME == "Windows":
                     
                     if frame is not None:
                         # Use to_bgr() method for proper color format handling
-                        image_rgb = frame.to_numpy(copy=False)  # Returns BGR uint8 format
+                        image_rgb = frame.to_numpy(copy=True)  # Returns BGR uint8 format
                         
                         # Cache the frame
                         self.last_frame = image_rgb.copy()

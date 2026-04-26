@@ -10,10 +10,13 @@ import subprocess
 from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO
 from depth import process, predict_depth
 
-if "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO:
-    USE_CUDA = True
+if "CUDA" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO:
+    USE_CUDART = True
 else:
-    USE_CUDA = False
+    USE_CUDART = False
+
+# Fix for AMD GPUs
+USE_CUDART = False if CAPTURE_TOOL == "WindowsCapture" and "AMD" in DEVICE_INFO else USE_CUDART
 
 # Global process references
 global_processes = {
@@ -43,15 +46,16 @@ thread_latencies = {
 
 # Initialize capture
 if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Windows":
+    import ctypes
+    from ctypes import wintypes
+    import threading
+    from utils import is_windows_11_24h2_or_newer
+
     # Import capture library (regular or CUDA-accelerated)
     if CAPTURE_TOOL == "WindowsCapture":
         from windows_capture import WindowsCapture, Frame, InternalCaptureControl
     else:  # WindowsCaptureCUDA
         from wc_cuda import WindowsCapture, Frame, InternalCaptureControl
-    
-    import ctypes
-    from ctypes import wintypes
-    import threading
     
     # optional small delay (seconds) after capture event before performing actions
     CAPTURE_CURSOR_DELAY_S = 0.2
@@ -113,7 +117,7 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
             try:
                 # print("[keyboard] Simulating Win+Tab to show desktop and restore windows...")
                 simulate_alt_tab()
-                time.sleep(0.1)
+                time.sleep(0.2)
                 simulate_alt_tab()
 
                 if CAPTURE_CURSOR_DELAY_S:
@@ -133,30 +137,64 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
     alt_tab_thread.start()
 
     # Initialize capture object and capture loop for 24H2
-    cap = (
-        WindowsCapture(window_name=WINDOW_TITLE)
-        if CAPTURE_MODE == "Window"
-        else WindowsCapture(monitor_index=MONITOR_INDEX)
-    )
+    IS_24h2 = is_windows_11_24h2_or_newer()
+    IS_24h2 = False
+    if IS_24h2:
+        cap = (
+            WindowsCapture(window_name=WINDOW_TITLE, minimum_update_interval=int(TIME_SLEEP * 1000))
+            if CAPTURE_MODE == "Window"
+            else WindowsCapture(monitor_index=MONITOR_INDEX)
+        )
+    else:
+        print("[main] Frame Interval Control is not supported for this version of Windows (older than 24H2).")
+        cap = (
+            WindowsCapture(window_name=WINDOW_TITLE)
+            if CAPTURE_MODE == "Window"
+            else WindowsCapture(monitor_index=MONITOR_INDEX)
+        )
 
-    frame_lock = threading.Lock()
 
     def capture_loop():
         global capture_control
-        
-        @cap.event
-        def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
-            capture_start_time = time.perf_counter()
-            if shutdown_event.is_set():
-                return
-            capture_started_event.set()
-            
-            raw_q.put((frame.frame_buffer, OUTPUT_RESOLUTION, capture_start_time))
-            
-            # Calculate total processing time and wait if needed
-            process_time = time.perf_counter() - capture_start_time
-            wait_time = max(TIME_SLEEP - process_time, 0)
-            time.sleep(wait_time)
+
+        if IS_24h2:
+            @cap.event
+            def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
+
+                capture_start_time = time.perf_counter()
+                if shutdown_event.is_set():
+                    return
+                # check frame property
+                if hasattr(frame.frame_buffer, "copy"):
+                    raw = frame.frame_buffer.copy()
+                else:
+                    raw = frame.frame_buffer
+
+                raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
+
+        else:
+            next_frame_time = time.perf_counter()
+            @cap.event
+            def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
+                nonlocal next_frame_time
+
+                capture_start_time = time.perf_counter()
+                if shutdown_event.is_set():
+                    return
+                # Skip frames arriving too early (keeps FPS stable)
+                if capture_start_time < next_frame_time:
+                    return
+
+                # Prevent timing drift if system lags temporarily
+                next_frame_time += TIME_SLEEP
+                capture_started_event.set()
+                # check frame property
+                if hasattr(frame.frame_buffer, "copy"):
+                    raw = frame.frame_buffer.copy()
+                else:
+                    raw = frame.frame_buffer
+
+                raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
 
         @cap.event
         def on_closed():
@@ -1024,7 +1062,7 @@ def main(mode="Viewer"):
                 specify_display=STEREO_DISPLAY_SELECTION, 
                 stereo_display_index=STEREO_DISPLAY_INDEX, 
                 frame_size=(w,h),
-                use_cuda=USE_CUDA,
+                use_cuda=USE_CUDART,
                 cuda_device_id=DEVICE_ID)
 
             if STREAM_MODE == "RTMP":

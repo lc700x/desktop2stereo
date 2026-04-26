@@ -6,7 +6,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 from OpenGL.GL import *
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, get_font_type
+from utils import OS_NAME, crop_icon, get_font_type, DEVICE_INFO
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from utils import hide_window_from_capture, show_window_in_capture
@@ -14,91 +14,276 @@ elif OS_NAME == "Darwin":
     from utils import send_ctrl_cmd_f
 
 import ctypes, os, sys
-class CUDART_GL:
-    """CUDA-OpenGL interop helper (based on local_viewer.py)."""
-    def __init__(self, device_id=0):
-        # Locate cudart library
-        torch_dir = os.path.dirname(torch.__file__)
-        site_packages = os.path.dirname(torch_dir)
-        candidates = [
-            os.path.join(torch_dir, "lib"),
-            os.path.join(site_packages, "nvidia", "cuda_runtime", "lib"),
-            os.path.join(site_packages, "nvidia", "cuda_runtime", "bin"),
-        ]
-        cudart_path = None
-        for lib_dir in candidates:
-            if not os.path.exists(lib_dir):
-                continue
-            for f in os.listdir(lib_dir):
-                if sys.platform == "win32":
-                    if f.startswith("cudart64") and f.endswith(".dll"):
-                        cudart_path = os.path.join(lib_dir, f)
-                        break
-                else:
-                    if f.startswith("libcudart") and ".so" in f:
-                        cudart_path = os.path.join(lib_dir, f)
-                        break
-            if cudart_path:
-                break
-        if not cudart_path:
-            raise RuntimeError("Could not find cudart in torch/lib or nvidia/cuda_runtime/lib")
 
-        # Load library
-        if sys.platform == "win32":
-            self.lib = ctypes.WinDLL(cudart_path)
-        else:
-            self.lib = ctypes.CDLL(cudart_path)
+BACKEND = None
+# NVIDIA CUDA Version
+if "NVIDIA" in DEVICE_INFO:
+    BACKEND = "CUDA"
+    class CUDART_GL:
+        """CUDA-OpenGL interop helper (based on local_viewer.py)."""
+        def __init__(self, device_id=0):
+            # Locate cudart library
+            torch_dir = os.path.dirname(torch.__file__)
+            site_packages = os.path.dirname(torch_dir)
+            candidates = [
+                os.path.join(torch_dir, "lib"),
+                os.path.join(site_packages, "nvidia", "cuda_runtime", "lib"),
+                os.path.join(site_packages, "nvidia", "cuda_runtime", "bin"),
+            ]
+            cudart_path = None
+            for lib_dir in candidates:
+                if not os.path.exists(lib_dir):
+                    continue
+                for f in os.listdir(lib_dir):
+                    if sys.platform == "win32":
+                        if f.startswith("cudart64") and f.endswith(".dll"):
+                            cudart_path = os.path.join(lib_dir, f)
+                            break
+                    else:
+                        if f.startswith("libcudart") and ".so" in f:
+                            cudart_path = os.path.join(lib_dir, f)
+                            break
+                if cudart_path:
+                    break
+            if not cudart_path:
+                raise RuntimeError("Could not find cudart in torch/lib or nvidia/cuda_runtime/lib")
 
-        # Set argument types
-        self.lib.cudaSetDevice.argtypes = [ctypes.c_int]
-        self.lib.cudaGraphicsGLRegisterBuffer.argtypes = [
-            ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.c_uint
-        ]
-        self.lib.cudaGraphicsUnregisterResource.argtypes = [ctypes.c_void_p]
-        self.lib.cudaGraphicsMapResources.argtypes = [
-            ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
-        ]
-        self.lib.cudaGraphicsUnmapResources.argtypes = [
-            ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
-        ]
-        self.lib.cudaGraphicsResourceGetMappedPointer.argtypes = [
-            ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p
-        ]
-        self.lib.cudaMemcpy.argtypes = [
-            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int
-        ]
-        self.lib.cudaSetDevice(device_id)
+            # Load library
+            if sys.platform == "win32":
+                self.lib = ctypes.WinDLL(cudart_path)
+            else:
+                self.lib = ctypes.CDLL(cudart_path)
 
-    def register_buffer(self, pbo_id):
-        resource = ctypes.c_void_p()
-        res = self.lib.cudaGraphicsGLRegisterBuffer(ctypes.byref(resource), pbo_id, 1)  # 1 = cudaGraphicsRegisterFlagsNone
-        if res != 0:
-            raise RuntimeError(f"cudaGraphicsGLRegisterBuffer failed: {res}")
-        return resource
+            # Set argument types
+            self.lib.cudaSetDevice.argtypes = [ctypes.c_int]
+            self.lib.cudaGraphicsGLRegisterBuffer.argtypes = [
+                ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.c_uint
+            ]
+            self.lib.cudaGraphicsUnregisterResource.argtypes = [ctypes.c_void_p]
+            self.lib.cudaGraphicsMapResources.argtypes = [
+                ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
+            ]
+            self.lib.cudaGraphicsUnmapResources.argtypes = [
+                ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
+            ]
+            self.lib.cudaGraphicsResourceGetMappedPointer.argtypes = [
+                ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p
+            ]
+            self.lib.cudaMemcpy.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int
+            ]
+            self.lib.cudaSetDevice(device_id)
 
-    def unregister_resource(self, resource):
-        self.lib.cudaGraphicsUnregisterResource(resource)
+        def register_buffer(self, pbo_id):
+            resource = ctypes.c_void_p()
+            res = self.lib.cudaGraphicsGLRegisterBuffer(ctypes.byref(resource), pbo_id, 1)  # 1 = cudaGraphicsRegisterFlagsNone
+            if res != 0:
+                raise RuntimeError(f"cudaGraphicsGLRegisterBuffer failed: {res}")
+            return resource
 
-    def map_resource(self, resource):
-        res = self.lib.cudaGraphicsMapResources(1, ctypes.byref(resource), None)
-        if res != 0:
-            raise RuntimeError(f"cudaGraphicsMapResources failed: {res}")
-        ptr = ctypes.c_void_p()
-        size = ctypes.c_size_t()
-        res = self.lib.cudaGraphicsResourceGetMappedPointer(ctypes.byref(ptr), ctypes.byref(size), resource)
-        if res != 0:
+        def unregister_resource(self, resource):
+            self.lib.cudaGraphicsUnregisterResource(resource)
+
+        def map_resource(self, resource):
+            res = self.lib.cudaGraphicsMapResources(1, ctypes.byref(resource), None)
+            if res != 0:
+                raise RuntimeError(f"cudaGraphicsMapResources failed: {res}")
+            ptr = ctypes.c_void_p()
+            size = ctypes.c_size_t()
+            res = self.lib.cudaGraphicsResourceGetMappedPointer(ctypes.byref(ptr), ctypes.byref(size), resource)
+            if res != 0:
+                self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), None)
+                raise RuntimeError(f"cudaGraphicsResourceGetMappedPointer failed: {res}")
+            return ptr.value
+
+        def unmap_resource(self, resource):
             self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), None)
-            raise RuntimeError(f"cudaGraphicsResourceGetMappedPointer failed: {res}")
-        return ptr.value
 
-    def unmap_resource(self, resource):
-        self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), None)
+        def memcpy_d2d(self, dst_ptr, src_ptr, size):
+            # cudaMemcpyDeviceToDevice = 3
+            res = self.lib.cudaMemcpy(dst_ptr, src_ptr, size, 3)
+            if res != 0:
+                raise RuntimeError(f"cudaMemcpy failed: {res}")
 
-    def memcpy_d2d(self, dst_ptr, src_ptr, size):
-        # cudaMemcpyDeviceToDevice = 3
-        res = self.lib.cudaMemcpy(dst_ptr, src_ptr, size, 3)
-        if res != 0:
-            raise RuntimeError(f"cudaMemcpy failed: {res}")
+elif "AMD" in DEVICE_INFO:
+    BACKEND = "HIP"
+    class CUDART_GL:
+        """
+        HIP-OpenGL interop helper – performance‑tuned for AMD GPUs.
+        Equivalent to the CUDA version, but uses the HIP runtime.
+        """
+
+        HIP_SUCCESS = 0
+        # IMPORTANT: use the same flag as CUDA's cudaGraphicsRegisterFlagsWriteDiscard
+        HIP_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD = 1
+        HIP_MEMCPY_DEVICE_TO_DEVICE = 3          # hipMemcpyDeviceToDevice
+
+        def __init__(self, device_id=0):
+            # 1. Locate the HIP runtime library (libamdhip64.so / amdhip64.dll)
+            torch_dir = os.path.dirname(torch.__file__)
+            site_packages = os.path.dirname(torch_dir)
+
+            # Common install locations – extend as needed
+            candidates = [
+                os.path.join(torch_dir, "lib"),
+                os.path.join(site_packages, "_rocm_sdk_core", "bin"),
+                os.path.join(site_packages, "_rocm_sdk_core", "lib"),
+                os.path.join(site_packages, "_rocm_sdk_devel", "bin"),
+                os.path.join(site_packages, "_rocm_sdk_devel", "lib"),
+            ]
+
+            hip_path = None
+            for lib_dir in candidates:
+                if not os.path.exists(lib_dir):
+                    continue
+                for f in os.listdir(lib_dir):
+                    if sys.platform == "win32":
+                        if f.startswith("amdhip64") and f.endswith(".dll"):
+                            hip_path = os.path.join(lib_dir, f)
+                            break
+                    else:
+                        if f.startswith("libamdhip64") and ".so" in f:
+                            hip_path = os.path.join(lib_dir, f)
+                            break
+                if hip_path:
+                    break
+
+            if not hip_path:
+                raise RuntimeError(
+                    "Could not find libamdhip64.so (Linux) or amdhip64.dll (Windows) "
+                    "in torch/lib or elsewhere."
+                )
+
+            # 2. Load the library
+            if sys.platform == "win32":
+                self.lib = ctypes.WinDLL(hip_path)
+            else:
+                self.lib = ctypes.CDLL(hip_path)
+
+            # 3. Set argument types and return types
+            # hipSetDevice
+            self.lib.hipSetDevice.argtypes = [ctypes.c_int]
+            self.lib.hipSetDevice.restype = ctypes.c_int
+
+            # hipGraphicsGLRegisterBuffer
+            self.lib.hipGraphicsGLRegisterBuffer.argtypes = [
+                ctypes.POINTER(ctypes.c_void_p),   # resource (output)
+                ctypes.c_uint,                     # GLuint buffer
+                ctypes.c_uint,                     # flags
+            ]
+            self.lib.hipGraphicsGLRegisterBuffer.restype = ctypes.c_int
+
+            # hipGraphicsUnregisterResource
+            self.lib.hipGraphicsUnregisterResource.argtypes = [ctypes.c_void_p]
+            self.lib.hipGraphicsUnregisterResource.restype = ctypes.c_int
+
+            # hipGraphicsMapResources – stream now accepted (0 = default stream)
+            self.lib.hipGraphicsMapResources.argtypes = [
+                ctypes.c_int,                      # count
+                ctypes.POINTER(ctypes.c_void_p),   # *resources
+                ctypes.c_void_p,                   # hipStream_t (0 or stream pointer)
+            ]
+            self.lib.hipGraphicsMapResources.restype = ctypes.c_int
+
+            # hipGraphicsUnmapResources
+            self.lib.hipGraphicsUnmapResources.argtypes = [
+                ctypes.c_int,
+                ctypes.POINTER(ctypes.c_void_p),
+                ctypes.c_void_p,                   # hipStream_t
+            ]
+            self.lib.hipGraphicsUnmapResources.restype = ctypes.c_int
+
+            # hipGraphicsResourceGetMappedPointer
+            self.lib.hipGraphicsResourceGetMappedPointer.argtypes = [
+                ctypes.POINTER(ctypes.c_void_p),   # devPtr (output)
+                ctypes.POINTER(ctypes.c_size_t),   # size (output)
+                ctypes.c_void_p,                   # resource
+            ]
+            self.lib.hipGraphicsResourceGetMappedPointer.restype = ctypes.c_int
+
+            # hipMemcpy
+            self.lib.hipMemcpy.argtypes = [
+                ctypes.c_void_p,   # dst
+                ctypes.c_void_p,   # src
+                ctypes.c_size_t,   # sizeBytes
+                ctypes.c_int,      # kind (e.g. hipMemcpyDeviceToDevice)
+            ]
+            self.lib.hipMemcpy.restype = ctypes.c_int
+
+            # optional: hipStreamCreate / hipStreamDestroy for advanced pipelining
+            # (not used by default, kept for future use)
+            self.lib.hipStreamCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+            self.lib.hipStreamCreate.restype = ctypes.c_int
+            self.lib.hipStreamDestroy.argtypes = [ctypes.c_void_p]
+            self.lib.hipStreamDestroy.restype = ctypes.c_int
+
+            # 4. Set the active device
+            res = self.lib.hipSetDevice(device_id)
+            if res != self.HIP_SUCCESS:
+                raise RuntimeError(f"hipSetDevice({device_id}) failed with error {res}")
+
+        def register_buffer(self, pbo_id: int):
+            """
+            Register an OpenGL buffer for HIP access.
+            Uses the WRITE_DISCARD flag because we always overwrite the whole buffer.
+            """
+            resource = ctypes.c_void_p()
+            res = self.lib.hipGraphicsGLRegisterBuffer(
+                ctypes.byref(resource),
+                pbo_id,
+                self.HIP_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD,
+            )
+            if res != self.HIP_SUCCESS:
+                raise RuntimeError(f"hipGraphicsGLRegisterBuffer failed: {res}")
+            return resource
+
+        def unregister_resource(self, resource):
+            """Unregister a previously registered graphics resource."""
+            res = self.lib.hipGraphicsUnregisterResource(resource)
+            if res != self.HIP_SUCCESS:
+                raise RuntimeError(f"hipGraphicsUnregisterResource failed: {res}")
+
+        def map_resource(self, resource, stream=None):
+            """
+            Map a graphics resource and return the device pointer.
+            Optionally provide a HIP stream for asynchronous operation.
+            If stream is None, the default (null) stream is used.
+            """
+            stream_ptr = stream if stream is not None else ctypes.c_void_p(0)
+            res = self.lib.hipGraphicsMapResources(1, ctypes.byref(resource), stream_ptr)
+            if res != self.HIP_SUCCESS:
+                raise RuntimeError(f"hipGraphicsMapResources failed: {res}")
+
+            dev_ptr = ctypes.c_void_p()
+            size = ctypes.c_size_t()
+            res = self.lib.hipGraphicsResourceGetMappedPointer(
+                ctypes.byref(dev_ptr),
+                ctypes.byref(size),
+                resource,
+            )
+            if res != self.HIP_SUCCESS:
+                # Unmap to leave a clean state on failure
+                self.lib.hipGraphicsUnmapResources(1, ctypes.byref(resource), stream_ptr)
+                raise RuntimeError(f"hipGraphicsResourceGetMappedPointer failed: {res}")
+            return dev_ptr.value
+
+        def unmap_resource(self, resource, stream=None):
+            """Unmap a previously mapped graphics resource."""
+            stream_ptr = stream if stream is not None else ctypes.c_void_p(0)
+            res = self.lib.hipGraphicsUnmapResources(1, ctypes.byref(resource), stream_ptr)
+            if res != self.HIP_SUCCESS:
+                raise RuntimeError(f"hipGraphicsUnmapResources failed: {res}")
+
+        def memcpy_d2d(self, dst_ptr, src_ptr, size):
+            """Device-to-device memory copy (hipMemcpyDeviceToDevice)."""
+            res = self.lib.hipMemcpy(
+                dst_ptr,
+                src_ptr,
+                size,
+                self.HIP_MEMCPY_DEVICE_TO_DEVICE,
+            )
+            if res != self.HIP_SUCCESS:
+                raise RuntimeError(f"hipMemcpy failed: {res}")
 
 # Shaders as constants (unchanged)
 VERTEX_SHADER = """
@@ -133,9 +318,7 @@ FRAGMENT_SHADER = """
 
     vec2 pixel_size = 1.0 / u_resolution;
 
-    //-------------------------------------------------------------
     // FAST DISOCCLUSION DETECTION
-    //-------------------------------------------------------------
     bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
         // Bounds check
         if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
@@ -154,10 +337,7 @@ FRAGMENT_SHADER = """
         return false;
     }
 
-    //-------------------------------------------------------------
-    // OPTIMIZED PUSH-PULL INPAINTING (Horizontal Priority)
     // Uses directional search to find background pixels efficiently
-    //-------------------------------------------------------------
     vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
         vec4 best_color = vec4(0.0);
         float best_weight = 0.0;
@@ -237,9 +417,7 @@ FRAGMENT_SHADER = """
         return texture(tex_color, uv_coord);
     }
 
-    //-------------------------------------------------------------
     // ALTERNATIVE: FAST SEPARABLE BLUR (Uncomment to use instead)
-    //-------------------------------------------------------------
     /*
     vec4 separable_inpaint(vec2 uv_coord, float center_depth_inv) {
         vec4 accum = vec4(0.0);
@@ -266,9 +444,7 @@ FRAGMENT_SHADER = """
     }
     */
 
-    //-------------------------------------------------------------
     // MAIN
-    //-------------------------------------------------------------
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
 
@@ -557,10 +733,10 @@ class StereoWindow:
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
             self._cuda_resource_depth = self._cudart.register_buffer(self._pbo_depth)
 
-            print(f"[Main] Enabled CUDA-GL interop acceleration (CUDA: {self.cuda_device_id})")
+            print(f"[Main] Enabled {BACKEND}-GL interop acceleration ({BACKEND}: {self.cuda_device_id})")
         except Exception as e:
-            print(f"[Main] CUDA-GL interop initialization failed: {e}")
-            print("[Main] Falling back to CPU-GL interop.")
+            print(f"[Main] {BACKEND}-GL interop initialization failed: {e}")
+            print(f"[Main] Falling back to CPU-GL interop.")
             self.use_cuda = False
             self.cleanup_cuda()   # clean up any partial allocations
 
@@ -1114,7 +1290,15 @@ class StereoWindow:
             depth_np = depth
 
         if hasattr(rgb, 'detach'):
-            rgb_np = rgb.permute(1, 2, 0).detach().contiguous().clamp(0, 255).to(torch.uint8).cpu().numpy()
+            try:
+                rgb_np = rgb.permute(1, 2, 0).detach().contiguous().clamp(0, 255).to(torch.uint8).cpu().numpy()
+            except RuntimeError as e:
+                print(f"[update_frame] RuntimeError converting RGB tensor to numpy: {e}")
+                print("If this happens with WindowsCaptureCUDA: Make sure your Monitor is connected to a CUDA compatible NVIDIA GPU.")
+                rgb_np = None
+            except Exception as e:
+                print(f"[update_frame] Error converting RGB tensor to numpy: {e}")
+                rgb_np = None
         else:
             rgb_np = rgb
 
