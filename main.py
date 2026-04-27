@@ -1094,6 +1094,9 @@ def main(mode="Viewer"):
             
             # Main render loop
             next_render_time = time.perf_counter()
+            # Variables for latency update at 1Hz
+            last_latency_display = 0.0    # last latency value shown
+            last_fps_time = time.perf_counter()
             while (not glfw.window_should_close(window.window) and 
                    not shutdown_event.is_set()):
 
@@ -1101,62 +1104,40 @@ def main(mode="Viewer"):
                     # Get next frame (already processed + depth)
                     rgb, depth, capture_start_time = depth_q.get(timeout=0.001)
                     
-                    # Render
-                    render_start_time = time.perf_counter()
-                    window.update_frame(rgb, depth, current_fps, total_latency)
-                    
-                    if STREAM_MODE == "MJPEG":
-                        frame = window.capture_glfw_image()
-                        streamer.set_frame(frame)
-                    
-                    # Calculate FPS and latencies
-                    frame_count += 1
-                    total_frames += 1
+                    # Calculate total latency for this frame
                     current_time = time.perf_counter()
-                    render_latency = current_time - render_start_time
-                    thread_latencies['render'] = render_latency
-                    total_latency = (current_time - capture_start_time)
-                    thread_latencies['total'] = total_latency
-                    current_latency = total_latency
+                    total_latency = current_time - capture_start_time
                     
-                    # Store latency value for average calculation
+                    # Update latencies for statistics (still collected)
                     latency_history.append(total_latency)
                     if len(latency_history) > max_latency_history:
                         latency_history.pop(0)
                     
                     # Update FPS every second
-                    if current_time - last_time >= 1.0:
-                        # Calculate current FPS
-                        current_fps = frame_count / (current_time - last_time)
+                    frame_count += 1
+                    elapsed = current_time - last_time
+                    if elapsed >= 1.0:
+                        current_fps = frame_count / elapsed
+                        frame_count = 0
+                        last_time = current_time
                         
                         # Store FPS value for statistics
                         fps_values.append(current_fps)
-                        
-                        # Limit FPS history to last 5 seconds worth of data
                         if len(fps_values) > max_fps_history:
                             fps_values.pop(0)
                         
                         # Update FPS and latency statistics every 5 seconds
                         if current_time - last_fps_update_time >= fps_update_interval:
                             # Calculate average FPS
-                            avg_fps = sum(fps_values) / len(fps_values)
-                            if fps_values and len(fps_values) >= 20:  # Need at least 10 samples
-                                
-                                # Calculate average of FPS below 1% percentile
-                                # Sort FPS values in ascending order
+                            if fps_values:
+                                avg_fps = sum(fps_values) / len(fps_values)
+                            if fps_values and len(fps_values) >= 20:
+                                # Calculate 1% low average
                                 sorted_fps = sorted(fps_values)
-                                
-                                # Calculate 1% percentile index
                                 one_percent_index = int(len(sorted_fps) * 0.1)
-                                
-                                # Ensure we have at least 1 sample in the lowest 1%
                                 if one_percent_index == 0 and len(sorted_fps) > 0:
                                     one_percent_index = 1
-                                
-                                # Get FPS values below 1% percentile
                                 fps_below_1_percent = sorted_fps[:one_percent_index]
-                                
-                                # Calculate average of FPS below 1% percentile
                                 if fps_below_1_percent:
                                     low_fps_1_percent_avg = sum(fps_below_1_percent) / len(fps_below_1_percent)
                                 else:
@@ -1166,19 +1147,18 @@ def main(mode="Viewer"):
                             if latency_history:
                                 avg_total_latency = sum(latency_history) / len(latency_history)
                             
-                            # Reset for next calculation
                             last_fps_update_time = current_time
                         
-                        frame_count = 0
-                        last_time = current_time
+                        # Display current latency (update once per second)
+                        last_latency_display = total_latency
                         
-                        # Create window title with ALL detailed FPS and latency statistics
+                        # Create window title with detailed FPS and latency statistics
                         if SHOW_FPS:
                             title_text = (
                                 f"{current_fps:.1f}FPS | "
                                 f"Avg: {avg_fps:.1f} | "
                                 f"1% Low Avg: {low_fps_1_percent_avg:.1f} | "
-                                f"Latency: {total_latency*1000:.0f}ms | "
+                                f"Latency: {last_latency_display*1000:.0f}ms | "
                                 f"Avg Latency: {avg_total_latency*1000:.0f}ms "
                                 f"(Capture:{thread_latencies['capture']*1000:.0f}ms "
                                 f"Resize:{thread_latencies['resize']*1000:.0f}ms "
@@ -1186,26 +1166,38 @@ def main(mode="Viewer"):
                                 f"Render:{render_latency*1000:.0f}ms)"
                             )
                         else:
-                            title_text = (
-                                f"{current_fps:.0f}FPS "
-                                f"{total_latency*1000:.0f}ms"
-                            )
+                            title_text = f"{current_fps:.0f}FPS {last_latency_display*1000:.0f}ms"
                         
                         if STREAM_MODE == "MJPEG":
                             print(title_text)
                         
-                        # Set window title with detailed statistics
                         glfw.set_window_title(window.window, f"Stereo Viewer {title_text}")
+                        
+                        # Update the viewer OSD with new FPS and latency (once per second)
+                        window.update_frame(rgb, depth, current_fps, last_latency_display)
+                    else:
+                        # Update only frame, keep previous stats (no FPS/latency change)
+                        window.update_frame(rgb, depth)
+                    
+                    # Render latency and MJPEG frame capture
+                    render_start_time = time.perf_counter()
+                    if STREAM_MODE == "MJPEG":
+                        frame = window.capture_glfw_image()
+                        streamer.set_frame(frame)
+                    
+                    render_latency = time.perf_counter() - render_start_time
+                    thread_latencies['render'] = render_latency
+                    thread_latencies['total'] = total_latency
+                    
                 except queue.Empty:
                     pass
+                
                 now = time.perf_counter()
-
                 if not USE_3D_MONITOR and now < next_render_time:
                     time.sleep(next_render_time - now)
-
                 if not USE_3D_MONITOR:
                     next_render_time += TIME_SLEEP
-
+                
                 window.render()
                 glfw.swap_buffers(window.window)
                 glfw.poll_events()
