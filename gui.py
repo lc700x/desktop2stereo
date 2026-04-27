@@ -2063,8 +2063,14 @@ class ConfigGUI(tk.Tk):
 
         return self.device_label_to_index
 
-    def populate_monitors(self):
+    def populate_monitors(self, select_default=False):
+        """
+        Populate monitor dropdown.
+        If select_default=True, fallback to primary monitor.
+        Otherwise, preserve current selection if possible.
+        """
         self.monitor_label_to_index = {}
+
         monitors = []
         if mss:
             try:
@@ -2073,77 +2079,42 @@ class ConfigGUI(tk.Tk):
                         monitors.append(mon)
             except Exception:
                 monitors = []
+
+        # clear menu
+        menu = self.monitor_menu["menu"]
+        menu.delete(0, "end")
+
         if not monitors:
-            messagebox.showwarning("Warning", UI_TEXTS[self.language][
-                "Could not retrieve monitor list.\nFalling back to indexes 1 and 2."
-            ])
-            monitors = [{"width": 0, "height": 0, "left": 0, "top": 0} for _ in range(2)]
+            return self.monitor_label_to_index
 
-        self.monitor_menu["menu"].delete(0, "end")
-
-        # Detect primary monitor index
         primary_index = get_primary_monitor_index()
-        # Ensure detected index is within valid range
         if primary_index < 1 or primary_index > len(monitors):
             primary_index = 1
-        
+
+        current_selection = self.monitor_var.get()
+        found_current = False
+
         for idx, mon in enumerate(monitors, start=1):
-            # Build display label. Add "[Main]" suffix for primary monitor.
             is_primary = (idx == primary_index)
             label_suffix = PRIMARY_MONITOR_SUFFIX if is_primary else ""
             label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){label_suffix}"
 
             self.monitor_label_to_index[label] = idx
-            self.monitor_menu["menu"].add_command(
-                label=label,
-                command=lambda v=label: self.monitor_var.set(v)
-            )
 
-        # Use detected primary monitor index instead of hardcoded index 1
-        primary_label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == primary_index), None)
-        if primary_label:
-            self.monitor_var.set(primary_label)
-        elif self.monitor_label_to_index:
-            # Fallback: select first in list
-            self.monitor_var.set(next(iter(self.monitor_label_to_index)))
-        
-        # Also populate the stereo monitor menu
-        if self.stereo_monitor_menu:
-            # Use the update function to ensure stereo menu excludes selected input
-            self.update_stereo_monitor_menu()
-            
-            # Set default stereo monitor based on run mode
-            if self.run_mode_key == "3D Monitor" or self.capture_mode_key == "Window":
-                # In 3D Monitor mode, default to the same monitor as input
-                self.stereo_monitor_var.set(self.monitor_var.get())
-            else:
-                # For other modes, find a monitor that is NOT the input monitor
-                stereo_default_idx = DEFAULTS.get("Stereo Monitor", 1)
-                if stereo_default_idx == 1:
-                    stereo_default_idx = primary_index
-                    
-                # Find label for default stereo index that's not the input monitor
-                selected_input_label = self.monitor_var.get()
-                stereo_default_label = None
-                
-                # First, check if the default index is available and not the selected input
-                for lbl, i in self.monitor_label_to_index.items():
-                    if i == stereo_default_idx and lbl != selected_input_label:
-                        stereo_default_label = lbl
-                        break
-                
-                # If default was input monitor or not found, pick any available monitor that's not the input
-                if not stereo_default_label and self.monitor_label_to_index:
-                    for lbl, i in self.monitor_label_to_index.items():
-                        if lbl != selected_input_label:
-                            stereo_default_label = lbl
-                            break
-                
-                if stereo_default_label:
-                    self.stereo_monitor_var.set(stereo_default_label)
-                elif self.monitor_label_to_index:
-                    # Final fallback
-                    self.stereo_monitor_var.set(next(iter(self.monitor_label_to_index)))
+            menu.add_command(label=label, command=lambda v=label: self.monitor_var.set(v))
+
+            if label == current_selection:
+                found_current = True
+
+        # selection logic
+        if found_current:
+            self.monitor_var.set(current_selection)
+        elif select_default:
+            # fallback to primary only when explicitly requested
+            for lbl, i in self.monitor_label_to_index.items():
+                if i == primary_index:
+                    self.monitor_var.set(lbl)
+                    break
 
         return self.monitor_label_to_index
     
