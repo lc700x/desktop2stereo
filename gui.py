@@ -436,6 +436,7 @@ UI_TEXTS = {
         "Stereoscopy Output": "Stereoscopy Output:",
         "Specify Display": "Specify Display (Fullscreen)",
         "Stereo Monitor": "Stereoscopy on:",
+        "DesktopDuplication selected: Window capture mode disabled.": "DesktopDuplication selected: Window capture mode disabled."
     },
     "CN": {
         "Monitor": "输入屏幕",
@@ -516,6 +517,7 @@ UI_TEXTS = {
         "Stereoscopy Output": "立体输出:",
         "Specify Display": "指定显示器（全屏）",
         "Stereo Monitor": "输出立体到:",
+        "DesktopDuplication selected: Window capture mode disabled.": "已选择DesktopDuplication：窗口捕获模式已禁用。"
     }
 }
 
@@ -1061,7 +1063,7 @@ class ConfigGUI(tk.Tk):
             self.capture_mode_cb.config(state="disabled")
             
             # Optionally, show a status message
-            self.update_status("DesktopDuplication selected: Window capture mode disabled.")
+            self.update_status(UI_TEXTS[self.language]["DesktopDuplication selected: Window capture mode disabled."])
         else:
             # Re-enable the capture mode combobox for other tools
             self.capture_mode_cb.config(state="readonly")

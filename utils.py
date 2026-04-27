@@ -32,7 +32,8 @@ STEREO_MIX_NAMES = [
 DISABLE_TRT_KEYWORDS = [
     "video-depth-anything",
     "dpt-hybrid-midas-hf",
-    "depthpro"
+    "depthpro",
+    "da3-giant"
 ]
 
 # Models with Disabled CoreML 
