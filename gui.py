@@ -191,7 +191,6 @@ elif OS_NAME == "Darwin":
 
         return windows
 else:
-    import subprocess
     def get_primary_monitor_index():
         """
         find the primary monitor index by looking for the monitor that contains the origin (0,0).
@@ -305,7 +304,6 @@ try:
     import mss
 except Exception:
     mss = None
-"Foreground Scale"
 try:
     import yaml
     HAVE_YAML = True
@@ -1714,8 +1712,6 @@ class ConfigGUI(tk.Tk):
         """Allow user to get latest monitor/window list"""
         if self.capture_mode_key == "Window":
             self.refresh_window_list()
-        else:
-            self.populate_monitors()
         if self.run_mode_key == "RTMP Streamer":
             self.populate_audio_devices()
             self.auto_select_stereo_mix()
@@ -2063,11 +2059,9 @@ class ConfigGUI(tk.Tk):
 
         return self.device_label_to_index
 
-    def populate_monitors(self, select_default=False):
+    def populate_monitors(self):
         """
         Populate monitor dropdown.
-        If select_default=True, fallback to primary monitor.
-        Otherwise, preserve current selection if possible.
         """
         self.monitor_label_to_index = {}
 
@@ -2109,12 +2103,6 @@ class ConfigGUI(tk.Tk):
         # selection logic
         if found_current:
             self.monitor_var.set(current_selection)
-        elif select_default:
-            # fallback to primary only when explicitly requested
-            for lbl, i in self.monitor_label_to_index.items():
-                if i == primary_index:
-                    self.monitor_var.set(lbl)
-                    break
 
         return self.monitor_label_to_index
     
@@ -2188,9 +2176,6 @@ class ConfigGUI(tk.Tk):
         
         if selected_model not in self.depth_model_cb["values"]:
             selected_model = self.depth_model_cb["values"][0] if self.depth_model_cb["values"] else DEFAULTS["Depth Model"]
-        
-        self.depth_model_var.set(selected_model)
-        self.update_depth_resolution_options(selected_model)
         
         # Update TensorRT visibility based on selected model
         self.update_tensorrt_visibility_based_on_model(selected_model)
@@ -2569,14 +2554,12 @@ class ConfigGUI(tk.Tk):
         # Additional Windows-specific cleanup for FFmpeg
         if OS_NAME == "Windows" and self.run_mode_key == "RTMP Streamer":
             # taskkill if available
-            import subprocess
             subprocess.run(['taskkill', '/f', '/im', 'ffmpeg.exe'], 
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(['taskkill', '/f', '/im', 'mediamtx.exe'], 
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif self.run_mode_key == "RTMP Streamer":
             # taskkill if available
-            import subprocess
             subprocess.run(['pkill', '-f', 'ffmpeg'],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(['pkill', '-f', 'mediamtx'],
