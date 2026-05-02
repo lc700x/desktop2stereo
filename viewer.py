@@ -1294,7 +1294,6 @@ class StereoWindow:
                 rgb_np = rgb.permute(1, 2, 0).detach().contiguous().clamp(0, 255).to(torch.uint8).cpu().numpy()
             except RuntimeError as e:
                 print(f"[update_frame] RuntimeError converting RGB tensor to numpy: {e}")
-                print("If this happens with WindowsCaptureCUDA: Make sure your Monitor is connected to a CUDA compatible NVIDIA GPU.")
                 rgb_np = None
             except Exception as e:
                 print(f"[update_frame] Error converting RGB tensor to numpy: {e}")
@@ -1330,8 +1329,12 @@ class StereoWindow:
 
             # Reinit CUDA PBOs if needed (may disable CUDA on failure)
             if self.use_cuda:
-                self.cleanup_cuda()
-                self._init_cuda_pbos(w, h)
+                try:
+                    self.cleanup_cuda()
+                    self._init_cuda_pbos(w, h)
+                except Exception as e:
+                    print(f"[update_frame] Error initializing CUDA PBOs: {e}")
+                    self.use_cuda = False
 
         # Try CUDA zero‑copy path first
         cuda_success = False

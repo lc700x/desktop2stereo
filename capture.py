@@ -1,14 +1,16 @@
+import ctypes
+
 import numpy as np
 import mss
 from utils import OS_NAME, CAPTURE_TOOL
 
 if OS_NAME == "Windows":
-    from ctypes import windll
     # Enable DPI awareness to improve capture quality on high-resolution displays
     try:
-        windll.user32.SetProcessDPIAware()
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
-        pass  # Silently ignore failure to set DPI awareness
+        ctypes.windll.user32.SetProcessDPIAware()  # Silently ignore failure to set DPI awareness
+
     import win32gui
     
     if CAPTURE_TOOL == "DXCamera":
