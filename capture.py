@@ -1,16 +1,14 @@
-import ctypes
-
 import numpy as np
 import mss
 from utils import OS_NAME, CAPTURE_TOOL
 
 if OS_NAME == "Windows":
+    from ctypes import windll
     # Enable DPI awareness to improve capture quality on high-resolution displays
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        windll.user32.SetProcessDPIAware()
     except Exception:
-        ctypes.windll.user32.SetProcessDPIAware()  # Silently ignore failure to set DPI awareness
-
+        pass  # Silently ignore failure to set DPI awareness
     import win32gui
     
     if CAPTURE_TOOL == "DXCamera":
@@ -474,51 +472,117 @@ if OS_NAME == "Windows":
                         pass
 
 elif OS_NAME == "Darwin":
-    import mss.darwin
-    mss.darwin.IMAGE_OPTIONS = 0 # disable scaling
-    import io, cv2
+    import io
+    from collections import OrderedDict
+
+    import cv2
+    import numpy as np
     from PIL import Image
+
+    import Quartz as QZ
     import Quartz.CoreGraphics as CG
     from AppKit import NSCursor, NSBitmapImageRep, NSPNGFileType, NSScreen
     from Quartz import CGCursorIsVisible, NSEvent
-    from collections import OrderedDict
 
     # Keep the base cursor cache small and stable
     _cursor_cache = {
-        'bgra': None,
-        'hotspot': None,
-        'alpha_f32': None,
-        'premultiplied_bgr_f32': None,
-        'last_cursor': None
+        "bgra": None,
+        "hotspot": None,
+        "alpha_f32": None,
+        "premultiplied_bgr_f32": None,
+        "last_cursor": None,
     }
 
     # Small bounded cache for resized cursor variants
     _CURSOR_RESIZE_CACHE_MAX = 4
 
+    def _find_window(matcher):
+        windows = QZ.CGWindowListCopyWindowInfo(
+            QZ.kCGWindowListOptionAll, QZ.kCGNullWindowID
+        ) or []
+        return [w for w in windows if matcher(w)]
+
+    def get_window_info_mac(window_title):
+        """
+        Return a dict with window_id + bounds for a unique window match.
+        """
+        matches = _find_window(
+            lambda w: w.get("kCGWindowName") == window_title
+            or w.get("kCGWindowOwnerName") == window_title
+        )
+
+        if len(matches) == 0:
+            return None
+        if len(matches) > 1:
+            raise ValueError(f"Found multiple windows with name: {window_title}")
+
+        win = matches[0]
+        bounds = win.get("kCGWindowBounds", {}) or {}
+
+        return {
+            "window_id": int(win["kCGWindowNumber"]),
+            "left": int(bounds.get("X", 0)),
+            "top": int(bounds.get("Y", 0)),
+            "width": int(bounds.get("Width", 0)),
+            "height": int(bounds.get("Height", 0)),
+        }
+
     def get_window_client_bounds_mac(window_title):
-        """Return (x, y, w, h) for a window by title; None if not found."""
-        import Quartz
-        options = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
-        windows = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID)
-        for win in windows:
-            title = win.get("kCGWindowName", "")
-            owner = win.get("kCGWindowOwnerName", "")
-            if title == window_title or owner == window_title:
-                bounds = win.get("kCGWindowBounds", None)
-                if bounds:
-                    return int(bounds.get("X",0)), int(bounds.get("Y",0)), int(bounds.get("Width",0)), int(bounds.get("Height",0))
-        return None, None, None, None
-    
-    # Cursor cache to avoid redundant processing
-    _cursor_cache = {
-        'bgra': None,
-        'hotspot': None,
-        'alpha_f32': None,
-        'premultiplied_bgr_f32': None,
-        'last_cursor': None  # Store cursor object reference to detect changes
-    }
-    
-    # Cursor loader with caching & precomputation
+        """
+        Return (x, y, w, h) for a window by title; None if not found.
+        """
+        info = get_window_info_mac(window_title)
+        if info is None:
+            return None, None, None, None
+        return info["left"], info["top"], info["width"], info["height"]
+
+    def _cg_capture_region_as_bgra(
+        region: tuple[int, int, int, int] | None = None,
+        window_id: int | None = None,
+    ) -> np.ndarray:
+        """
+        Capture a region or window using CoreGraphics and return BGRA uint8.
+        """
+        if window_id is not None and region is not None:
+            raise ValueError("Only one of region or window_id must be specified")
+
+        if window_id is not None:
+            image = CG.CGWindowListCreateImage(
+                CG.CGRectNull,
+                CG.kCGWindowListOptionIncludingWindow,
+                window_id,
+                CG.kCGWindowImageBoundsIgnoreFraming | CG.kCGWindowImageNominalResolution,
+            )
+        else:
+            cg_region = CG.CGRectInfinite if region is None else CG.CGRectMake(*region)
+            image = CG.CGWindowListCreateImage(
+                cg_region,
+                CG.kCGWindowListOptionOnScreenOnly,
+                CG.kCGNullWindowID,
+                CG.kCGWindowImageDefault,
+            )
+
+        if image is None:
+            raise RuntimeError("Could not capture image with CoreGraphics")
+
+        width = CG.CGImageGetWidth(image)
+        height = CG.CGImageGetHeight(image)
+        bpr = CG.CGImageGetBytesPerRow(image)
+
+        provider = CG.CGImageGetDataProvider(image)
+        data = CG.CGDataProviderCopyData(provider)
+        raw = np.frombuffer(data, dtype=np.uint8)
+
+        # On macOS this is typically BGRA-compatible for OpenCV use.
+        frame = np.lib.stride_tricks.as_strided(
+            raw,
+            shape=(height, width, 4),
+            strides=(bpr, 4, 1),
+            writeable=True,
+        ).copy()
+
+        return frame
+
     def get_cursor_image_and_hotspot():
         """
         Return cursor image in BGRA, hotspot, alpha and premultiplied BGR.
@@ -529,15 +593,15 @@ elif OS_NAME == "Darwin":
             if cursor is None:
                 return None, None, None, None
 
-            if cursor == _cursor_cache['last_cursor'] and _cursor_cache['bgra'] is not None:
+            if cursor == _cursor_cache["last_cursor"] and _cursor_cache["bgra"] is not None:
                 return (
-                    _cursor_cache['bgra'],
-                    _cursor_cache['hotspot'],
-                    _cursor_cache['alpha_f32'],
-                    _cursor_cache['premultiplied_bgr_f32'],
+                    _cursor_cache["bgra"],
+                    _cursor_cache["hotspot"],
+                    _cursor_cache["alpha_f32"],
+                    _cursor_cache["premultiplied_bgr_f32"],
                 )
 
-            _cursor_cache['last_cursor'] = cursor
+            _cursor_cache["last_cursor"] = cursor
 
             ns_image = cursor.image()
             if ns_image is None:
@@ -558,61 +622,38 @@ elif OS_NAME == "Darwin":
             if png_data is None:
                 return None, None, None, None
 
-            # Small cursor image, so PIL conversion is fine here
             rgba = np.asarray(Image.open(io.BytesIO(png_data)).convert("RGBA"), dtype=np.uint8)
-
-            # Convert RGBA -> BGRA once for OpenCV-style blending
             bgra = rgba[:, :, [2, 1, 0, 3]].copy()
 
             alpha = bgra[:, :, 3].astype(np.float32) / 255.0
             premultiplied_bgr = bgra[:, :, :3].astype(np.float32) * alpha[:, :, None]
 
-            _cursor_cache['bgra'] = bgra
-            _cursor_cache['hotspot'] = hotspot
-            _cursor_cache['alpha_f32'] = alpha
-            _cursor_cache['premultiplied_bgr_f32'] = premultiplied_bgr
+            _cursor_cache["bgra"] = bgra
+            _cursor_cache["hotspot"] = hotspot
+            _cursor_cache["alpha_f32"] = alpha
+            _cursor_cache["premultiplied_bgr_f32"] = premultiplied_bgr
 
             return bgra, hotspot, alpha, premultiplied_bgr
 
         except Exception:
             return None, None, None, None
-        
+
     def get_cursor_position():
         """Return current cursor (x, y) in macOS display coordinates (origin bottom-left)."""
         ev = CG.CGEventCreate(None)
         loc = CG.CGEventGetLocation(ev)
         return loc.x, loc.y
-    
+
     def is_cursor_visible():
         """Check if cursor is visible (cached check for performance)."""
         return CGCursorIsVisible()
 
-    # Fast overlay using cached premultiplied data with optimized blending
     def overlay_cursor_on_frame(frame_bgr, cursor_bgra, hotspot, cursor_pos,
                                 alpha_f32=None, premultiplied_bgr_f32=None):
         """
-        Fast overlay of cursor_bgra onto frame_bgr (modified in-place).
-
-        Parameters
-        ----------
-        frame_bgr : (H,W,3) uint8
-            Destination frame (modified in place).
-        cursor_bgra : (h,w,4) uint8 or None
-            Cursor image in BGRA, or None to draw fallback dot.
-        hotspot : (hot_x, hot_y)
-            Cursor hotspot in pixels.
-        cursor_pos : (x, y)
-            Cursor center position in frame coordinates.
-        alpha_f32 : (h,w) float32, optional
-            Precomputed alpha in [0..1].
-        premultiplied_bgr_f32 : (h,w,3) float32, optional
-            Precomputed (BGR * alpha).
-
-        Returns
-        -------
-        frame_bgr : same object, with cursor blended in.
+        Overlay cursor onto a frame that is either BGR or BGRA.
+        Only the first 3 channels are blended; alpha is preserved if present.
         """
-        # Fast fallback if no cursor
         if cursor_bgra is None:
             x_cv, y_cv = cursor_pos
             cv2.circle(frame_bgr, (int(round(x_cv)), int(round(y_cv))), 8, (0, 0, 255), -1)
@@ -626,14 +667,12 @@ elif OS_NAME == "Darwin":
         top_left_x = int(round(x_cv - hot_x))
         top_left_y = int(round(y_cv - hot_y))
 
-        # clipped destination rectangle in frame coords
         x0 = max(top_left_x, 0)
         y0 = max(top_left_y, 0)
         x1 = min(top_left_x + cur_w, w_frame)
         y1 = min(top_left_y + cur_h, h_frame)
 
         if x0 >= x1 or y0 >= y1:
-            # fully outside
             return frame_bgr
 
         src_x0 = x0 - top_left_x
@@ -641,96 +680,7 @@ elif OS_NAME == "Darwin":
         src_x1 = src_x0 + (x1 - x0)
         src_y1 = src_y0 + (y1 - y0)
 
-        dst_region = frame_bgr[y0:y1, x0:x1]                         # uint8 view
-
-        # Use precomputed arrays if available (avoid recompute)
-        if premultiplied_bgr_f32 is not None and alpha_f32 is not None:
-            src_premult = premultiplied_bgr_f32[src_y0:src_y1, src_x0:src_x1]  # float32
-            alpha_roi = alpha_f32[src_y0:src_y1, src_x0:src_x1]               # float32
-            src_region = None
-        else:
-            src_region = cursor_bgra[src_y0:src_y1, src_x0:src_x1]   # uint8 BGRA
-            # compute alpha and premultiplied only for roi
-            alpha_roi = src_region[:, :, 3].astype(np.float32, copy=False) / 255.0
-            src_premult = src_region[:, :, :3].astype(np.float32, copy=False) * alpha_roi[..., None]
-
-        # quick checks for optimization paths
-        a_min = float(alpha_roi.min())
-        a_max = float(alpha_roi.max())
-
-        if a_max <= 1e-6:
-            # fully transparent ROI -> nothing to do
-            return frame_bgr
-
-        # Optimized blend using single numpy operation with broadcasting
-        # res = src_premult + dst * (1 - alpha)
-        alpha_3ch = alpha_roi[..., None]  # Expand to HxWx1 for broadcasting
-        
-        if a_min >= 0.999:
-            # fully opaque ROI -> direct copy (fastest path)
-            if src_region is not None:
-                dst_region[:, :, :] = src_region[:, :, :3]   # uint8 copy
-            else:
-                # premultiplied may be float; round to uint8
-                np.copyto(dst_region, np.clip(src_premult + 0.5, 0, 255).astype(np.uint8))
-            return frame_bgr
-
-        # General blending: single vectorized operation
-        dst_f32 = dst_region.astype(np.float32, copy=False)
-        blended = src_premult + dst_f32 * (1.0 - alpha_3ch)
-        
-        # clip + cast back to uint8
-        np.clip(blended, 0, 255, out=blended)
-        res_uint8 = blended.astype(np.uint8, copy=False)
-
-        # For pixels that are effectively opaque, ensure exact copy (avoid rounding differences)
-        if a_max >= 0.999 or np.any(alpha_roi >= 0.999):
-            # mask of opaque pixels
-            mask_opaque = (alpha_roi >= 0.999)
-            if mask_opaque.any():
-                if src_region is not None:
-                    res_uint8[mask_opaque] = src_region[:, :, :3][mask_opaque]
-                else:
-                    res_uint8[mask_opaque] = np.clip(src_premult + 0.5, 0, 255).astype(np.uint8)[mask_opaque]
-
-        # write back
-        np.copyto(dst_region, res_uint8)
-        return frame_bgr
-
-    # Convenience function that checks cursor visibility before overlaying
-    def overlay_cursor_on_frame(frame, cursor_bgra, hotspot, cursor_pos,
-                            alpha_f32=None, premultiplied_bgr_f32=None):
-        """
-        Overlay cursor onto a frame that is either BGR or BGRA.
-        Only the first 3 channels are blended; alpha is preserved if present.
-        """
-        if cursor_bgra is None:
-            x_cv, y_cv = cursor_pos
-            cv2.circle(frame, (int(round(x_cv)), int(round(y_cv))), 8, (0, 0, 255), -1)
-            return frame
-
-        h_frame, w_frame = frame.shape[:2]
-        x_cv, y_cv = cursor_pos
-        cur_h, cur_w = cursor_bgra.shape[:2]
-        hot_x, hot_y = hotspot
-
-        top_left_x = int(round(x_cv - hot_x))
-        top_left_y = int(round(y_cv - hot_y))
-
-        x0 = max(top_left_x, 0)
-        y0 = max(top_left_y, 0)
-        x1 = min(top_left_x + cur_w, w_frame)
-        y1 = min(top_left_y + cur_h, h_frame)
-
-        if x0 >= x1 or y0 >= y1:
-            return frame
-
-        src_x0 = x0 - top_left_x
-        src_y0 = y0 - top_left_y
-        src_x1 = src_x0 + (x1 - x0)
-        src_y1 = src_y0 + (y1 - y0)
-
-        dst_region = frame[y0:y1, x0:x1]
+        dst_region = frame_bgr[y0:y1, x0:x1]
         dst_rgb = dst_region[:, :, :3] if dst_region.ndim == 3 and dst_region.shape[2] == 4 else dst_region
 
         if premultiplied_bgr_f32 is not None and alpha_f32 is not None:
@@ -746,14 +696,14 @@ elif OS_NAME == "Darwin":
         a_max = float(alpha_roi.max())
 
         if a_max <= 1e-6:
-            return frame
+            return frame_bgr
 
         if a_min >= 0.999:
             if src_region is not None:
                 dst_rgb[:, :, :] = src_region[:, :, :3]
             else:
                 np.copyto(dst_rgb, np.clip(src_premult + 0.5, 0, 255).astype(np.uint8))
-            return frame
+            return frame_bgr
 
         alpha_3ch = alpha_roi[:, :, None]
         dst_f32 = dst_rgb.astype(np.float32, copy=False)
@@ -771,43 +721,58 @@ elif OS_NAME == "Darwin":
                     res_uint8[mask_opaque] = np.clip(src_premult + 0.5, 0, 255).astype(np.uint8)[mask_opaque]
 
         np.copyto(dst_rgb, res_uint8)
-        return frame
-    
+        return frame_bgr
+
     class DesktopGrabber:
         def __init__(self, output_resolution=1080, fps=60, window_title=None,
-                    capture_mode="Monitor", monitor_index=1, with_cursor=True):
+                     capture_mode="Monitor", monitor_index=1, with_cursor=True):
             self.scaled_height = output_resolution
             self.fps = fps
             self.with_cursor = with_cursor
             self.window_title = window_title
             self.capture_mode = capture_mode
-            self._mss = mss.mss()
             self.prev_rect = None
+            self.window_id = None
 
             # bounded per-instance resize cache
             self._cursor_cache = OrderedDict()
 
             if self.capture_mode == "Monitor":
-                mon_index = monitor_index
-                if mon_index >= len(self._mss.monitors):
-                    mon_index = 1
-                mon = self._mss.monitors[mon_index]
-                self.left, self.top, self.width, self.height = mon['left'], mon['top'], mon['width'], mon['height']
+                screens = list(NSScreen.screens())
+                if not screens:
+                    raise RuntimeError("No screens found")
+
+                mon_index = max(1, min(monitor_index, len(screens)))
+                screen = screens[mon_index - 1]
+                frame = screen.frame()
+
+                self.left = int(frame.origin.x)
+                self.top = int(frame.origin.y)
+                self.width = int(frame.size.width)
+                self.height = int(frame.size.height)
             else:
-                bounds = get_window_client_bounds_mac(self.window_title)
-                if bounds is None:
+                info = get_window_info_mac(self.window_title)
+                if info is None:
                     raise RuntimeError(f"Window '{self.window_title}' not found")
-                self.left, self.top, self.width, self.height = bounds
+
+                self.window_id = info["window_id"]
+                self.left = info["left"]
+                self.top = info["top"]
+                self.width = info["width"]
+                self.height = info["height"]
 
         def _ensure_rect(self):
             if self.capture_mode != "Monitor":
-                bounds = get_window_client_bounds_mac(self.window_title)
-                if bounds is None:
+                info = get_window_info_mac(self.window_title)
+                if info is None:
                     return
-                if bounds == self.prev_rect:
+                current = (info["left"], info["top"], info["width"], info["height"])
+                if current == self.prev_rect:
                     return
-                self.prev_rect = bounds
-                self.left, self.top, self.width, self.height = bounds
+
+                self.prev_rect = current
+                self.window_id = info["window_id"]
+                self.left, self.top, self.width, self.height = current
 
         def get_scale(self):
             mouse_location = NSEvent.mouseLocation()
@@ -816,7 +781,7 @@ elif OS_NAME == "Darwin":
             for screen in screens:
                 frame = screen.frame()
                 if frame.origin.x <= mouse_location.x <= frame.origin.x + frame.size.width and \
-                frame.origin.y <= mouse_location.y <= frame.origin.y + frame.size.height:
+                   frame.origin.y <= mouse_location.y <= frame.origin.y + frame.size.height:
                     return screen.backingScaleFactor()
 
             raise RuntimeError("No screen found under cursor")
@@ -861,11 +826,12 @@ elif OS_NAME == "Darwin":
             """
             self._ensure_rect()
 
-            monitor = {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
-            shot = self._mss.grab(monitor)
-
-            # mss on macOS gives BGRA; keep it as BGRA for as long as possible
-            frame = np.asarray(shot)
+            if self.capture_mode == "Monitor":
+                frame = _cg_capture_region_as_bgra(
+                    region=(self.left, self.top, self.width, self.height)
+                )
+            else:
+                frame = _cg_capture_region_as_bgra(window_id=self.window_id)
 
             if self.with_cursor and CGCursorIsVisible():
                 x, y = get_cursor_position()
@@ -887,7 +853,7 @@ elif OS_NAME == "Darwin":
                             hotspot,
                             (cursor_x, cursor_y),
                             alpha_f32=alpha_f32,
-                            premultiplied_bgr_f32=premultiplied
+                            premultiplied_bgr_f32=premultiplied,
                         )
 
             if output_format == "bgra":
@@ -898,13 +864,7 @@ elif OS_NAME == "Darwin":
                 raise ValueError("output_format must be 'bgr' or 'bgra'")
 
         def stop(self):
-            if hasattr(self, '_mss'):
-                try:
-                    self._mss.close()
-                except Exception:
-                    pass
-
-            if hasattr(self, '_cursor_cache'):
+            if hasattr(self, "_cursor_cache"):
                 self._cursor_cache.clear()
 
 
