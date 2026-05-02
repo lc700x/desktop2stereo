@@ -781,9 +781,9 @@ class StereoWindow:
                 self._cudart.unregister_resource(self._cuda_resource_color)
             if self._cuda_resource_depth:
                 self._cudart.unregister_resource(self._cuda_resource_depth)
-            if self._pbo_color:
+            if self._pbo_color and bool(glDeleteBuffers):
                 glDeleteBuffers(1, [self._pbo_color])
-            if self._pbo_depth:
+            if self._pbo_depth and bool(glDeleteBuffers):
                 glDeleteBuffers(1, [self._pbo_depth])
             self._cudart = None
     
