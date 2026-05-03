@@ -125,7 +125,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and ZOEDEPTH_FIX) or ("da3-" in MODEL_ID.lower() and USE_TENSORRT) or (("da3" in MODEL_ID.lower() or "video-depth-any" in MODEL_ID.lower()) and IS_XPU) or IS_CPU:
+if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and ZOEDEPTH_FIX) or ("da3" in MODEL_ID.lower() and USE_TENSORRT) or (("da3" in MODEL_ID.lower() or "video-depth-any" in MODEL_ID.lower()) and IS_XPU) or IS_CPU:
     FP16 = False 
 
 # Optimization for CUDA
