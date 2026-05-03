@@ -13,9 +13,9 @@ param (
 $filesToCopy = @(
     "capture.py","depth.py","gui.py","icon.ico","icon2.ico",
     "install-cuda.bash","install-cuda.bat","install-cuda0.bash","install-cuda0.bat",
-    "install-cuda_standalone.bat","install-cuda_standalone0.bat",
-    "install-xpu.bash","install-xpu0.bash","install-xpu.bat","install-xpu0.bat", "install-xpu_standalone.bat","install-xpu_standalone0.bat",
-    "install-dml.bat","install-dml0.bat","install-dml_standalone.bat","install-dml_standalone0.bat",
+    "install-cuda_standalone.bat","install-cuda_standalone0.bat","install-cuda_bundle.bat","install-cuda0_bundle.bat",
+    "install-xpu.bash","install-xpu0.bash","install-xpu.bat","install-xpu0.bat", "install-xpu_standalone.bat","install-xpu_standalone0.bat", "install-xpu_bundle.bat","install-xpu0_bundle.bat",
+    "install-dml.bat","install-dml0.bat","install-dml_standalone.bat","install-dml_standalone0.bat","install-dml_bundle.bat","install-dml0_bundle.bat",
     "install-mps","install-rocm.bash","install-rocm7.bash","install-rocm6_standalone.bat","install-rocm7.bat", "install-rocm7-nightly.bat", "install-rocm7_official_standalone.bat","install-rocm7_standalone.bat","install-rocm7_official_bundle.bat", "install-rocm7_bundle.bat","install-rocm7-nightly_bundle.bat","install-zluda_standalone.bat","install-zluda_standalone0.bat",
     "long_path.reg","main.py","readme.md","readmeCN.md",
     "requirements-cuda.txt","requirements-cuda0.txt", "requirements-xpu.txt", "requirements-xpu0.txt", "requirements-dml.txt","requirements-mps.txt", "requirements-rocm7-6000.txt", "requirements-rocm7-5000.txt",

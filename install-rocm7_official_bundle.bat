@@ -1,7 +1,6 @@
 @echo off
 echo --- Desktop2Stereo Installer (With ROCm for AMD 7000/9000/AI series GPU/APUs.) ---
 call "%~dp0activate.cmd"
-echo --- Desktop2Stereo Installer (With ROCm for AMD 6000/7000/9000/AI series GPU/APUs.) ---
 set "PYTHONPATH=.\python3\python.exe:$PYTHONPATH"
 Set "PYTHON_EXE=.\python3\python.exe"
 
