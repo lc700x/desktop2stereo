@@ -140,7 +140,7 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
 
     # Initialize capture object and capture loop for 24H2
     IS_24h2 = is_windows_11_24h2_or_newer()
-
+    
     if IS_24h2:
         cap = (
             WindowsCapture(window_name=WINDOW_TITLE, minimum_update_interval=int(TIME_SLEEP * 1000))
@@ -179,23 +179,23 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
             def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
                 nonlocal next_frame_time
 
-            capture_start_time = time.perf_counter()
-            if shutdown_event.is_set():
-                return
-            # Skip frames arriving too early (keeps FPS stable)
-            if capture_start_time < next_frame_time:
-                return
+                capture_start_time = time.perf_counter()
+                if shutdown_event.is_set():
+                    return
+                # Skip frames arriving too early (keeps FPS stable)
+                if capture_start_time < next_frame_time:
+                    return
 
-            # Prevent timing drift if system lags temporarily
-            next_frame_time += TIME_SLEEP
-            capture_started_event.set()
-            # check frame property
-            if hasattr(frame.frame_buffer, "copy"):
-                raw = frame.frame_buffer.copy()
-            else:
-                raw = frame.frame_buffer
+                # Prevent timing drift if system lags temporarily
+                next_frame_time += TIME_SLEEP
+                capture_started_event.set()
+                # check frame property
+                if hasattr(frame.frame_buffer, "copy"):
+                    raw = frame.frame_buffer.copy()
+                else:
+                    raw = frame.frame_buffer
 
-            raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
+                raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
 
         @cap.event
         def on_closed():
