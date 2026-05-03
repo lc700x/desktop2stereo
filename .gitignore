@@ -20,3 +20,5 @@ assets
 Python31*
 python3*
 *venv*
+*.whl
+*.egg-info

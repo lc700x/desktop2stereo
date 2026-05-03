@@ -10,7 +10,7 @@ import torch
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, CAPTURE_TOOL
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -195,10 +195,6 @@ if IS_AMD_ROCM:
         os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
         os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "TRUE" # Enable flash attention autotune for AMD ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Enable AOTriton for ROCm
-
-
-if USE_TORCH_COMPILE:
-    torch._dynamo.reset()
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -430,7 +426,11 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
         'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
         'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
     }
-    checkpoint_path = hf_hub_download(repo_id=model_id, filename=checkpoint_name, cache_dir=CACHE_PATH)
+    # Load depth model without network warning when local cache exists
+    try:
+        checkpoint_path = hf_hub_download(repo_id=model_id, filename=checkpoint_name, cache_dir=CACHE_PATH, local_files_only=True)
+    except:
+        checkpoint_path = hf_hub_download(repo_id=model_id, filename=checkpoint_name, cache_dir=CACHE_PATH)
 
     model = VideoDepthAnything(**model_configs[encoder])
     model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True), strict=True)
@@ -439,7 +439,11 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 # Load Depth-Anything-V3 Model
 def get_da3_model(model_id=MODEL_ID, dtype=DTYPE):
     from models.depth_anything_3.api_n import DepthAnything3
-    model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH, dtype=dtype)
+    # Load depth model without network warning when local cache exists
+    try:
+        model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH, dtype=dtype, local_files_only=True)
+    except:
+        model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH, dtype=dtype)
     return model.to(DEVICE)
 
 # TensorRT Optimization
@@ -923,19 +927,29 @@ class DepthModelWrapper:
         """Load the original PyTorch model."""
         global DTYPE
         DTYPE = self.dtype
+
         # Load model
         if 'video-depth-anything' in MODEL_ID.lower():
             model = get_video_depth_anything_model(MODEL_ID)
         elif 'da3'  in MODEL_ID.lower():
             model = get_da3_model(MODEL_ID, dtype=self.dtype)
         else:
-            # Load depth model
-            model = AutoModelForDepthEstimation.from_pretrained(
-                MODEL_ID,
-                dtype=self.dtype,
-                cache_dir=CACHE_PATH,
-                weights_only=True
-            ).to(DEVICE)
+            # Load depth model without network warning when local cache exists
+            try:
+                model = AutoModelForDepthEstimation.from_pretrained(
+                    MODEL_ID,
+                    dtype=self.dtype,
+                    cache_dir=CACHE_PATH,
+                    weights_only=True,
+                    local_files_only=True
+                ).to(DEVICE)
+            except Exception:
+                model = AutoModelForDepthEstimation.from_pretrained(
+                    MODEL_ID,
+                    dtype=self.dtype,
+                    cache_dir=CACHE_PATH,
+                    weights_only=True
+                ).to(DEVICE)
             
         if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() or enable_trt):
             model.half()

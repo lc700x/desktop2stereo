@@ -45,17 +45,19 @@ thread_latencies = {
 }
 
 # Initialize capture
-if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Windows":
+if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"] and OS_NAME == "Windows":
     import ctypes
     from ctypes import wintypes
     import threading
     from utils import is_windows_11_24h2_or_newer
 
     # Import capture library (regular or CUDA-accelerated)
-    if CAPTURE_TOOL == "WindowsCapture":
-        from windows_capture import WindowsCapture, Frame, InternalCaptureControl
-    else:  # WindowsCaptureCUDA
+    if CAPTURE_TOOL == "WindowsCaptureROCm":
+        from wc_rocm import WindowsCapture, Frame, InternalCaptureControl
+    elif CAPTURE_TOOL == "WindowsCaptureCUDA":
         from wc_cuda import WindowsCapture, Frame, InternalCaptureControl
+    else:
+        from windows_capture import WindowsCapture, Frame, InternalCaptureControl
     
     # optional small delay (seconds) after capture event before performing actions
     CAPTURE_CURSOR_DELAY_S = 0.2
@@ -177,23 +179,23 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureCUDA"] and OS_NAME == "Wind
             def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
                 nonlocal next_frame_time
 
-                capture_start_time = time.perf_counter()
-                if shutdown_event.is_set():
-                    return
-                # Skip frames arriving too early (keeps FPS stable)
-                if capture_start_time < next_frame_time:
-                    return
+            capture_start_time = time.perf_counter()
+            if shutdown_event.is_set():
+                return
+            # Skip frames arriving too early (keeps FPS stable)
+            if capture_start_time < next_frame_time:
+                return
 
-                # Prevent timing drift if system lags temporarily
-                next_frame_time += TIME_SLEEP
-                capture_started_event.set()
-                # check frame property
-                if hasattr(frame.frame_buffer, "copy"):
-                    raw = frame.frame_buffer.copy()
-                else:
-                    raw = frame.frame_buffer
+            # Prevent timing drift if system lags temporarily
+            next_frame_time += TIME_SLEEP
+            capture_started_event.set()
+            # check frame property
+            if hasattr(frame.frame_buffer, "copy"):
+                raw = frame.frame_buffer.copy()
+            else:
+                raw = frame.frame_buffer
 
-                raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
+            raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
 
         @cap.event
         def on_closed():
