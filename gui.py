@@ -297,6 +297,21 @@ def get_devices():
 
     return devices, is_rocm
 
+def get_default_windows_capture_tool():
+    """
+    Determine the default capture tool based on available devices and whether ROCm is detected.
+    Prioritize CUDA-accelerated capture if NVIDIA CUDA is available and not ROCm, otherwise fall back to CPU-based capture.
+    """
+    if "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM:
+        return "WindowsCaptureCUDA" # NVIDIA CUDA
+    
+    elif "CUDA" in DEVICES.get(0, {}).get("name", "") and IS_ROCM:
+        return "WindowsCaptureROCm" # AMD ROCm
+    
+    else:
+        return "DXCamera",  # Other GPU backends or CPU will use the DXcamera by default
+    
+
 DEVICES, IS_ROCM = get_devices()
 # print("ROCM: ", IS_ROCM)
 
@@ -347,7 +362,7 @@ DEFAULTS = {
     "CRF": 20,
     "Audio Delay": -0.15,
     "Lossless Scaling Support": False,
-    "Capture Tool": "WindowsCaptureCUDA" if "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM else "DXCamera",  # "WindowsCaptureCUDA" for NVIDIA GPU, "WindowsCapture", "DXCamera"
+    "Capture Tool": get_default_windows_capture_tool(),
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False, # keep the viewer window aspect ratio not change
     "Specify Display": True,
@@ -606,6 +621,8 @@ class ConfigGUI(tk.Tk):
         
         if is_nvidia_cuda:
             return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera", "DesktopDuplication"]
+        elif "CUDA" in device_label.upper() and IS_ROCM:
+            return ["WindowsCaptureROCm", "WindowsCapture", "DXCamera", "DesktopDuplication"]
         else:
             return ["DXCamera","WindowsCapture", "DesktopDuplication"]
 
