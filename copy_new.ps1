@@ -16,13 +16,13 @@ $filesToCopy = @(
     "install-cuda_standalone.bat","install-cuda_standalone0.bat",
     "install-xpu.bash","install-xpu0.bash","install-xpu.bat","install-xpu0.bat", "install-xpu_standalone.bat","install-xpu_standalone0.bat",
     "install-dml.bat","install-dml0.bat","install-dml_standalone.bat","install-dml_standalone0.bat",
-    "install-mps","install-rocm.bash","install-rocm7.bash","install-rocm6_standalone.bat","install-rocm7.bat","install-rocm7_official_standalone.bat","install-rocm7_standalone.bat","install-rocm7_official_bundle.bat", "install-rocm7_bundle.bat","install-zluda_standalone.bat","install-zluda_standalone0.bat",
+    "install-mps","install-rocm.bash","install-rocm7.bash","install-rocm6_standalone.bat","install-rocm7.bat", "install-rocm7-nightly.bat", "install-rocm7_official_standalone.bat","install-rocm7_standalone.bat","install-rocm7_official_bundle.bat", "install-rocm7_bundle.bat","install-rocm7-nightly_bundle.bat","install-zluda_standalone.bat","install-zluda_standalone0.bat",
     "long_path.reg","main.py","readme.md","readmeCN.md",
-    "requirements-cuda.txt","requirements-cuda0.txt", "requirements-xpu.txt", "requirements-xpu0.txt", "requirements-dml.txt","requirements-mps.txt", "requirements-rocm7-6000.txt", "requirements-rocm7-5000.txt"
+    "requirements-cuda.txt","requirements-cuda0.txt", "requirements-xpu.txt", "requirements-xpu0.txt", "requirements-dml.txt","requirements-mps.txt", "requirements-rocm7-6000.txt", "requirements-rocm7-5000.txt",
     "requirements-rocm.txt", "requirements-rocm6.txt", "requirements-rocm7.txt","requirements-rocm7-official.txt",
-    "requirements-rocm7-7000.txt", "requirements-rocm7-860M.txt", "requirements-rocm7-890M.txt",  "requirements-rocm7-8000S.txt", "requirements-rocm7-9000.txt", "requirements.txt",
+    "requirements-rocm7-7000.txt", "requirements-rocm7-nightly.txt", "requirements-rocm7-860M.txt", "requirements-rocm7-890M.txt",  "requirements-rocm7-8000S.txt", "requirements-rocm7-9000.txt", "requirements.txt",
     "run.bat","run_main.bat","run_linux.bash","main.bash","run_mac","main","run_windows.bat","main.bat","run_windows_bundle.bat","main_bundle.bat","main_zluda.bat", "run_windows_zluda.bat",
-    "settings.yaml","streamer.py","update.bat","update_mac_linux","update_windows.bat", "clean_cache.bat",
+    "settings.yaml","streamer.py","update.bat","update_mac_linux","update_windows.bat", "clean_cache.bat", "main.bash",
     "utils.py","viewer.py"
 )
 

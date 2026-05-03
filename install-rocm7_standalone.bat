@@ -1,7 +1,6 @@
 @echo off
 echo --- Desktop2Stereo Installer (With ROCm for AMD 6000/7000/9000/AI series GPU/APUs.) ---
 
-
 REM --- Get AMD GPUs sorted by AdapterRAM (largest first) ---
 for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Where-Object Name -like '*AMD*' | Sort-Object AdapterRAM -Descending | ForEach-Object { $_.Name }"`) do (
     set "FULL_GPU_NAME=%%i"
@@ -129,6 +128,7 @@ for %%a in (%MODEL_LIST%) do (
     exit /b 0
   )
 )
+
 exit /b 1
 
 
@@ -160,7 +160,21 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
-
 echo Python environment deployed successfully.
+echo .
+
+
+echo --- (Optional) Running Triton Installation test ---
+
+%PYTHON_EXE% -c "import torch, triton, triton.language as tl;"
+
+if %errorlevel% neq 0 (
+    echo.
+    echo Triton/ROCm may not be working correctly.  
+    pause
+    exit /b 1
+)
+
+echo Import PASSED: Triton is installed correctly.
+echo To enable torch.compile on AMD ROCm7 supported GPUs, you may have to install vs_buildtools https://aka.ms/vs/17/release/vs_buildtools.exe and select the "Desktop development with C++" to install (~6GB). OR you can just run with the torch.compile unchecked. 
 pause
-exit /b 0

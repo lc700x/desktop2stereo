@@ -1,0 +1,7 @@
+﻿# AMD ROCm7 Nightly Builds
+# RX 9070, RX 9070 XT, AI PRO R9700, R9600D, RX 9060, RX 9060 XT, 820M iGPU, Ryzen AI 7 350, Ryzen AI Max+ PRO 395, Ryzen AI 9 HX 375, Ryzen 7 7840U, Ryzen 9 270, RX 7600, RX 7800 XT, RX 7700 XT, PRO V710, W7700, RX 7900 XTX, RX 7900 XT, PRO W7900, W7800, RX 6900 XT, RX 6800 XT, PRO W6800, V620, RX 6750 XT, RX 6700 XT, RX 6600 XT, RX 6600, PRO W6600, Van Gogh iGPU, RX 6500 XT, 680M iGPU, Raphael iGPU, RX 5700, RX 5700 XT, Pro V520, Pro W5500
+--index-url https://rocm.nightlies.amd.com/whl-staging-multi-arch/
+rocm[libraries,devel,device-all]
+# torchaudio
+torch[device-all]
+torchvision[device-all]
