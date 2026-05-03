@@ -32,32 +32,21 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+echo Python environment deployed successfully.
+echo .
 
-REM Check if the archive file exists
-if exist ".\%VIRTUAL_ENV%\Lib\site-packages\rocm_sdk_devel\_devel.tar" (
-    echo Found _devel.tar archive, extracting to python\Lib\site-packages\_rocm_sdk_devel...
-    
-    REM Extract the archive
-    echo Extracting _devel.tar, this may take a moment ...
-    cd ".\%VIRTUAL_ENV%\Lib\site-packages\rocm_sdk_devel"
-    tar -xf _devel.tar -C "..\."
-    
-    if %errorlevel% equ 0 (
-        echo ROCm SDK development files extracted successfully.
-        REM Remove the archive file after successful extraction
-        echo Removing the archive file _devel.tar...
-        del _devel.tar
-    ) else (
-        echo Failed to extract ROCm SDK development files.
-    )
-) else (
-    echo Warning: _devel.tar archive not found in .\python\Lib\site-packages\rocm_sdk_devel\
-    echo Skipping ROCm SDK development files extraction.
+
+echo --- (Optional) Running Triton Installation test ---
+
+%PYTHON_EXE% -c "import torch, triton, triton.language as tl;"
+
+if %errorlevel% neq 0 (
+    echo.
+    echo Triton/ROCm may not be working correctly.  
+    pause
+    exit /b 1
 )
 
-cd "..\..\..\.."
-echo.
-
-echo Python environment deployed successfully.
+echo Import PASSED: Triton is installed correctly.
+echo To enable torch.compile on AMD ROCm7 supported GPUs, you may have to install vs_buildtools https://aka.ms/vs/17/release/vs_buildtools.exe and select the "Desktop development with C++" to install (~6GB). OR you can just run with the torch.compile unchecked. 
 pause
-exit /b 0
