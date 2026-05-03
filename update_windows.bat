@@ -26,6 +26,7 @@ rmdir /S /Q rtmp\mac
 rmdir /S /Q rtmp\linux
 del /F /Q update_mac_linux
 del /F /Q update.bat
+del /F /Q main
 del "%ZIP_FILE%"
 
 echo Latest Desktop2Stereo downloaded and extracted to current folder.
