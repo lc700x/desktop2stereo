@@ -26,6 +26,7 @@ rmdir /S /Q rtmp\mac
 rmdir /S /Q rtmp\linux
 del /F /Q update_mac_linux
 del /F /Q update_windows.bat
+del main
 del "%ZIP_FILE%"
 
 
