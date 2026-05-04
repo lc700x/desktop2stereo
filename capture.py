@@ -213,7 +213,7 @@ if OS_NAME == "Windows":
                 if self.capture_mode != "Monitor":
                     self._ensure_camera_matches_window()  # Ensure camera is up to date for window capture
                 img_array, _ = self.camera.get_bgr_frame()
-                return img_array, self.scaled_height
+                return img_array.copy(), self.scaled_height
 
             def stop(self):
                 """

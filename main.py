@@ -14,10 +14,6 @@ if "CUDA" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO:
     USE_CUDART = True
 else:
     USE_CUDART = False
-
-# Fix for AMD GPUs
-USE_CUDART = False if CAPTURE_TOOL == "WindowsCapture" and "AMD" in DEVICE_INFO else USE_CUDART
-
 # Global process references
 global_processes = {
     'ffmpeg': None,
@@ -154,48 +150,24 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
             else WindowsCapture(monitor_index=MONITOR_INDEX)
         )
 
-
     def capture_loop():
         global capture_control
 
-        if IS_24h2:
-            @cap.event
-            def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
+        next_frame_time = time.perf_counter()
 
-                capture_start_time = time.perf_counter()
-                if shutdown_event.is_set():
-                    return
-                # check frame property
-                if hasattr(frame.frame_buffer, "copy"):
-                    raw = frame.frame_buffer.copy()
-                else:
-                    raw = frame.frame_buffer
+        @cap.event
+        def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
 
-                raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
+            capture_start_time = time.perf_counter()
+            if shutdown_event.is_set():
+                return
+            # check frame property
+            if hasattr(frame.frame_buffer, "copy"):
+                raw = frame.frame_buffer.copy()
+            else:
+                raw = frame.frame_buffer.clone()
 
-        else:
-            next_frame_time = time.perf_counter()
-            @cap.event
-            def on_frame_arrived(frame: Frame, capture_control: InternalCaptureControl):
-                nonlocal next_frame_time
-
-                capture_start_time = time.perf_counter()
-                if shutdown_event.is_set():
-                    return
-                # Skip frames arriving too early (keeps FPS stable)
-                if capture_start_time < next_frame_time:
-                    return
-
-                # Prevent timing drift if system lags temporarily
-                next_frame_time += TIME_SLEEP
-                capture_started_event.set()
-                # check frame property
-                if hasattr(frame.frame_buffer, "copy"):
-                    raw = frame.frame_buffer.copy()
-                else:
-                    raw = frame.frame_buffer
-
-                raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
+            raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
 
         @cap.event
         def on_closed():
@@ -224,7 +196,6 @@ else:
                 continue
 
 # Combined processing + depth thread (replaces process_loop and depth_loop)
-
 def process_depth_loop():
     target_time = time.perf_counter()
     while not shutdown_event.is_set():
@@ -1180,7 +1151,7 @@ def main(mode="Viewer"):
                     else:
                         # Update only frame, keep previous stats (no FPS/latency change)
                         window.update_frame(rgb, depth)
-                    
+
                     # Render latency and MJPEG frame capture
                     render_start_time = time.perf_counter()
                     if STREAM_MODE == "MJPEG":

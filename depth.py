@@ -1174,7 +1174,7 @@ if USE_TORCH_COMPILE and IS_CUDA:
     depth_stabilizer.__call__ = torch.compile(depth_stabilizer.__call__, fullgraph=True)
 
 # Modified predict_depth function with improved TRT integration
-def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = False, dtype=DTYPE):
+def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = True, dtype=DTYPE):
     """
     Returns depth in [0,1] using fixed square input.
     """
