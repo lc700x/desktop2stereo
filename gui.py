@@ -2265,7 +2265,12 @@ class ConfigGUI(tk.Tk):
         self.update_stream_url()
         
         # Apply stereo display settings
-        self.specify_display_var.set(cfg.get("Specify Display", DEFAULTS["Specify Display"]))
+        # For RTMP Streamer mode, default to unchecked unless explicitly saved as True
+        if self.run_mode_key == "RTMP Streamer":
+            self.specify_display_var.set(cfg.get("Specify Display", False))
+        else:
+            self.specify_display_var.set(cfg.get("Specify Display", DEFAULTS["Specify Display"]))
+        
         stereo_monitor_idx = cfg.get("Stereo Monitor", DEFAULTS["Stereo Monitor"])
         label_for_stereo_idx = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == stereo_monitor_idx), None)
         if label_for_stereo_idx:
@@ -2282,7 +2287,7 @@ class ConfigGUI(tk.Tk):
         self.update_language_texts()
         self.on_run_mode_change()
         self.on_capture_mode_change()
-    
+
         # Check if saved optimizer is valid for current device
         self.use_torch_compile.set(cfg.get("torch.compile", False))
         self.use_tensorrt.set(cfg.get("TensorRT", False))
@@ -2330,6 +2335,7 @@ class ConfigGUI(tk.Tk):
         # Store current values that we might want to preserve
         current_language = self.language
         current_device = self.device_var.get()
+        current_run_mode = self.run_mode_key  # Save current run mode
         
         # Get current system's primary monitor index
         current_primary_index = get_primary_monitor_index()
@@ -2340,6 +2346,10 @@ class ConfigGUI(tk.Tk):
         
         # Load the dynamic defaults
         self.apply_config(dynamic_defaults, keep_optional=False)
+        
+        # For RTMP mode, ensure stereo display is unchecked by default
+        if current_run_mode == "RTMP Streamer":
+            self.specify_display_var.set(False)
         
         current_model = self.depth_model_var.get()
         # Update TensorRT visibility based on the default model
@@ -2360,7 +2370,7 @@ class ConfigGUI(tk.Tk):
         
         # Ensure stereo display controls are correctly shown/hidden for the current mode
         self.update_stereo_display_visibility()
-
+        
     def update_status(self, msg: str):
         """Update status bar text."""
         self.status_label.config(text=msg)
