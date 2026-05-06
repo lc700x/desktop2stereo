@@ -27,3 +27,4 @@ output/depth_vis/0000.jpg
 rocm6000/*.whl
 rocm6000/*.tar.gz
 rocm7000/*.7z
+controllers
