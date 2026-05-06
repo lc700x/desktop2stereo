@@ -5,7 +5,7 @@ import os, platform, socket
 # Debug Mode
 DEBUG = False
 # App Version
-VERSION = "2.4.1"
+VERSION = "2.4.2"
 # Get OS name
 OS_NAME = platform.system()
 # Define StereoMix devices
@@ -327,6 +327,8 @@ elif RUN_MODE == "RTMP Streamer":
     if OS_NAME == "Windows":
         # Frame Generation Settings for RTMP, Local Viewer not requried
         LOSSLESS_SCALING_SUPPORT = settings["Lossless Scaling Support"]
+elif RUN_MODE == "OpenXR Viewer":
+    RUN_MODE = "OpenXR"
 else:
     RUN_MODE = "Streamer"
 

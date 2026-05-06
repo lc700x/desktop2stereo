@@ -1176,7 +1176,71 @@ def main(mode="Viewer"):
                 glfw.poll_events()
             
             glfw.terminate()
-            
+
+        elif mode == "OpenXR":
+            try:
+                from openxr_viewer import OpenXRViewer, OPENXR_AVAILABLE
+                if not OPENXR_AVAILABLE:
+                    raise ImportError("pyopenxr not installed — run: pip install pyopenxr")
+                rgb, depth, capture_start_time = depth_q.get()
+                import torch
+                if isinstance(rgb, torch.Tensor):
+                    w, h = rgb.shape[2], rgb.shape[1]
+                else:
+                    w, h = rgb.shape[1], rgb.shape[0]
+                viewer = OpenXRViewer(
+                    ipd=IPD,
+                    depth_ratio=DEPTH_STRENGTH,
+                    convergence=CONVERGENCE,
+                    frame_size=(w, h),
+                    fps=FPS,
+                    depth_q=depth_q,
+                    show_fps=SHOW_FPS,
+                )
+                viewer.run(first_rgb=rgb, first_depth=depth)
+            except Exception as e:
+                print(f"[Main] OpenXR mode failed: {e}")
+                print("[Main] Falling back to Local Viewer mode.")
+                from viewer import StereoWindow
+                rgb, depth, capture_start_time = depth_q.get()
+                import torch
+                if isinstance(rgb, torch.Tensor):
+                    w, h = rgb.shape[2], rgb.shape[1]
+                else:
+                    w, h = rgb.shape[1], rgb.shape[0]
+                if DISPLAY_MODE == "Full-SBS":
+                    w = 2 * w
+                h_scaled = int(1280 / w * h)
+                w_scaled = 1280
+                window = StereoWindow(
+                    capture_mode=CAPTURE_MODE,
+                    monitor_index=MONITOR_INDEX,
+                    ipd=IPD, depth_ratio=DEPTH_STRENGTH,
+                    convergence=CONVERGENCE,
+                    display_mode=DISPLAY_MODE,
+                    fill_16_9=FILL_16_9,
+                    show_fps=SHOW_FPS,
+                    use_3d=USE_3D_MONITOR,
+                    fix_aspect=FIX_VIEWER_ASPECT,
+                    stream_mode=STREAM_MODE,
+                    lossless_scaling=LOSSLESS_SCALING_SUPPORT,
+                    specify_display=STEREO_DISPLAY_SELECTION,
+                    stereo_display_index=STEREO_DISPLAY_INDEX,
+                    frame_size=(w_scaled, h_scaled),
+                    use_cuda=USE_CUDART,
+                    cuda_device_id=DEVICE_ID)
+                window.update_frame(rgb, depth, 0.0, 0.0)
+                while not glfw.window_should_close(window.window) and not shutdown_event.is_set():
+                    try:
+                        rgb, depth, capture_start_time = depth_q.get(timeout=0.001)
+                        window.update_frame(rgb, depth)
+                    except queue.Empty:
+                        pass
+                    window.render()
+                    glfw.swap_buffers(window.window)
+                    glfw.poll_events()
+                glfw.terminate()
+
         else:
             from depth import make_sbs, DEVICE_INFO
             from streamer import MJPEGStreamer

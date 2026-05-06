@@ -424,6 +424,7 @@ UI_TEXTS = {
         "Audio Delay": "Audio Delay (s):",
         "Lossless Scaling Support": "Lossless Scaling Support",
         "3D Monitor": "3D Monitor",
+        "OpenXR Viewer": "OpenXR Viewer",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
         "Copy URL": "Copy URL",
@@ -505,6 +506,7 @@ UI_TEXTS = {
         "Audio Delay": "音频延迟 (秒):",
         "Lossless Scaling Support": "小黄鸭补帧支持",
         "3D Monitor": "3D显示器",
+        "OpenXR Viewer": "OpenXR查看器",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
         "Copy URL": "复制网址",
@@ -1334,6 +1336,16 @@ class ConfigGUI(tk.Tk):
             
     def update_display_mode_options(self):
         """Update display mode options based on current run mode"""
+        if self.run_mode_key == "OpenXR Viewer":
+            # OpenXR renders each eye directly — display mode is irrelevant
+            self.display_mode_cb.set("Full-SBS")
+            self.display_mode_cb.config(state="disabled")
+            self.label_display_mode.config(state="disabled")
+            return
+
+        self.display_mode_cb.config(state="readonly")
+        self.label_display_mode.config(state="normal")
+
         if self.run_mode_key in ["Legacy Streamer", "3D Monitor"]:
             # Remove "Depth Map" from display modes for Legacy Streamer
             display_modes = ["Half-SBS", "Full-SBS", "TAB"]
@@ -1829,6 +1841,7 @@ class ConfigGUI(tk.Tk):
         if OS_NAME == "Windows":
             localized_run_vals.append(texts.get("3D Monitor", "3D Monitor"))
             self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
+        localized_run_vals.append(texts.get("OpenXR Viewer", "OpenXR Viewer"))
         
         self.run_mode_cb["values"] = localized_run_vals
         # Add Inference Optimizer text update
@@ -1849,6 +1862,9 @@ class ConfigGUI(tk.Tk):
             if self.run_mode_key == "3D Monitor":
                 self.run_mode_var_label.set(localized_run_vals[4])
                 self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
+        if self.run_mode_key == "OpenXR Viewer":
+            self.run_mode_var_label.set(texts.get("OpenXR Viewer", "OpenXR Viewer"))
+            self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
         # elif OS_NAME == "Darwin":
             
         self.fill_16_9_cb.config(text=texts.get("Fill 16:9", "Fill 16:9"))
@@ -1944,6 +1960,9 @@ class ConfigGUI(tk.Tk):
             self.show_viewer_controls()
             # Set stereo monitor to match input monitor (default for 3D mode)
             self.stereo_monitor_var.set(self.monitor_var.get())
+        elif label == texts.get("OpenXR Viewer", "OpenXR Viewer"):
+            self.run_mode_key = "OpenXR Viewer"
+            self.show_viewer_controls()
         
         # Update display mode options based on run mode
         self.update_display_mode_options()
