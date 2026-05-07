@@ -10,7 +10,7 @@ import torch
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, ZOEDEPTH_FIX_KEYWORDS
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -72,7 +72,7 @@ else:
     
 # Correction for ZoeDepth models
 ZOEDEPTH_FIX = False
-if MODEL_ID in ("Intel/zoedepth-nyu", "Intel/zoedepth-kitti", "Intel/zoedepth-nyu-kitti"):
+if MODEL_ID in ZOEDEPTH_FIX_KEYWORDS:
     ZOEDEPTH_FIX = True
 
 if USE_COREML and IS_MPS:    
@@ -125,7 +125,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or (not USE_COREML and IS_MPS) or (USE_TENSORRT and ZOEDEPTH_FIX) or ("da3" in MODEL_ID.lower() and USE_TENSORRT) or (("da3" in MODEL_ID.lower() or "video-depth-any" in MODEL_ID.lower()) and IS_XPU) or IS_CPU:
+if IS_DIRECTML or ((USE_TENSORRT or USE_COREML or USE_OPENVINO) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and  MODEL_ID in COMPILE_FIX_KEYWORDS):
     FP16 = False 
 
 # Optimization for CUDA
@@ -228,6 +228,15 @@ font_dict = {
     ".": ["000","000","000","000","010"],  # for decimal point
     " ": ["000","000","000","000","000"],
 }
+
+
+# Model casting helper
+def maybe_autocast(device, enabled=True):
+    return (
+        torch.autocast(device_type=device.type, enabled=enabled)
+        if device.type != "privateuseone"  # privateuseone is DirectMLDirectML
+        else torch.nullcontext()
+    )
 
 # check if it is metric model
 def is_metric():
@@ -931,7 +940,7 @@ class DepthModelWrapper:
         # Load model
         if 'video-depth-anything' in MODEL_ID.lower():
             model = get_video_depth_anything_model(MODEL_ID)
-        elif 'da3'  in MODEL_ID.lower():
+        elif 'da3' in MODEL_ID.lower():
             model = get_da3_model(MODEL_ID, dtype=self.dtype)
         else:
             # Load depth model without network warning when local cache exists
@@ -951,7 +960,7 @@ class DepthModelWrapper:
                     weights_only=True
                 ).to(DEVICE)
             
-        if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() or enable_trt):
+        if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() and "video-depth-anything" not in MODEL_ID.lower()):
             model.half()
             
         # Special setup precision for DA3
@@ -1017,70 +1026,18 @@ class DepthModelWrapper:
         if getattr(self, "backend", None) == "OpenVINO":
             return self.model(tensor)
 
-        if self.is_cuda:
-            with torch.inference_mode():
-                with torch.amp.autocast('cuda'):
-                    if self.backend == "PyTorch":
-                        if "video-depth-anything" in MODEL_ID.lower():
-                            return self.model(pixel_values=tensor)
-                        elif "da3" in MODEL_ID.lower():
-                            return self.model.predict_depth(tensor)
-                        return self.model(pixel_values=tensor).predicted_depth
-                    elif self.backend == "TensorRT":
-                        return self.model(tensor)
-                    elif self.backend == "CoreML":
-                        # CoreML engine returns tensor on desired device
-                        return self.model(tensor)
-                    else:
-                        return self.model(tensor)
-        elif self.is_mps:
-            with torch.inference_mode():
-                with torch.amp.autocast('mps'):
-                    if self.backend == "PyTorch":
-                        if "video-depth-anything" in MODEL_ID.lower():
-                            return self.model(pixel_values=tensor)
-                        elif "da3" in MODEL_ID.lower():
-                            return self.model.predict_depth(tensor)
-                        return self.model(pixel_values=tensor).predicted_depth
-                    elif self.backend == "CoreML":
-                        # CoreML engine returns tensor on desired device
-                        return self.model(tensor)
-                    else:
-                        return self.model(tensor)
-        elif self.is_xpu:
-            with torch.inference_mode():
-                with torch.autocast(device_type='xpu', dtype=self.dtype):
-                    if self.backend == "PyTorch":
-                        if "video-depth-anything" in MODEL_ID.lower():
-                            return self.model(pixel_values=tensor)
-                        elif "da3" in MODEL_ID.lower():
-                            return self.model.predict_depth(tensor)
-                        return self.model(pixel_values=tensor).predicted_depth
-                    else:
-                        return self.model(tensor)
-        elif self.is_cpu:
-            with torch.inference_mode():
-                with torch.amp.autocast('cpu', dtype=self.dtype):
-                    if self.backend == "PyTorch":
-                        if "video-depth-anything" in MODEL_ID.lower():
-                            return self.model(pixel_values=tensor)
-                        elif "da3" in MODEL_ID.lower():
-                            return self.model.predict_depth(tensor)
-                        return self.model(pixel_values=tensor).predicted_depth
-                    else:
-                        return self.model(tensor)
-        else:
-            with torch.no_grad():
+        """Run inference using the active backend."""
+        with torch.no_grad():
+            with maybe_autocast(self.device, enabled=FP16):
                 if self.backend == "PyTorch":
                     if "video-depth-anything" in MODEL_ID.lower():
-                        return self.model(pixel_values=tensor)
+                        return self.model(pixel_values=tensor, fp32=not FP16)
                     elif "da3" in MODEL_ID.lower():
-                        return self.model.predict_depth(tensor)
-                    return self.model(pixel_values=tensor).predicted_depth
-                elif self.backend == "CoreML":
-                    # CoreML path for macOS (non-CUDA)
-                    return self.model(tensor)
+                        return self.model.predict_depth(tensor, fp32=not FP16)
+                    else:
+                        return self.model(pixel_values=tensor).predicted_depth
                 else:
+                    # TensorRT, CoreML
                     return self.model(tensor)
 
 # Initialize model wrapper
@@ -1115,34 +1072,11 @@ def warmup_model(model_wraper, steps: int = 3):
     """Warmup with fixed square input size."""
     target_size = DEPTH_RESOLUTION
     
-    if IS_CUDA:
-        with torch.inference_mode():
-            with torch.amp.autocast('cuda', dtype=DTYPE):
-                for i in range(steps):
-                    dummy = torch.randn(1, 3, target_size, target_size,
-                                        device=DEVICE, dtype=MODEL_DTYPE)
-                    model_wraper(dummy)
-    elif IS_MPS:
-        with torch.inference_mode():
-            with torch.amp.autocast('mps', dtype=DTYPE):
-                for i in range(steps):
-                    dummy = torch.randn(1, 3, target_size, target_size,
-                                        device=DEVICE, dtype=MODEL_DTYPE)
-                    model_wraper(dummy)
-                    
-    elif IS_XPU:
-        with torch.inference_mode():
-            with torch.amp.autocast('xpu', dtype=DTYPE):
-                for i in range(steps):
-                    dummy = torch.randn(1, 3, target_size, target_size,
-                                        device=DEVICE, dtype=MODEL_DTYPE)
-                    model_wraper(dummy)
-    else:
-        with torch.no_grad():
-            for i in range(steps):
-                dummy = torch.randn(1, 3, target_size, target_size,
-                                    device=DEVICE, dtype=MODEL_DTYPE)
-                model_wraper(dummy)
+    with maybe_autocast(DEVICE, enabled=FP16):
+        for i in range(steps):
+            dummy = torch.randn(1, 3, target_size, target_size,
+                               device=DEVICE)
+            model_wraper(dummy)
     return True
 
 # Warmup the model at startup
@@ -1184,12 +1118,12 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
 
     # Check image_rgb is a tensor or numpy array
     if isinstance(image_rgb, torch.Tensor):
-        rgb_tensor = image_rgb.to(device=DEVICE, dtype=dtype)
+        rgb_tensor = image_rgb.to(device=DEVICE)
         h, w = rgb_tensor.shape[1:]
     else:
         # Convert NumPy -> Torch tensor and move to device early
         h, w = image_rgb.shape[:2]
-        rgb_tensor = torch.from_numpy(image_rgb).to(device=DEVICE, dtype=dtype, non_blocking=True).permute(2, 0, 1).contiguous()
+        rgb_tensor = torch.from_numpy(image_rgb).to(device=DEVICE, non_blocking=True).permute(2, 0, 1).contiguous()
     
 
     tensor = rgb_tensor.unsqueeze(0)  # [1, C, H, W]
@@ -1201,36 +1135,23 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
             size=(target_size, target_size),
             mode='bilinear',
             align_corners=False
-        )  / 255.0
+        ) / 255.0
 
     # Normalize using ImageNet stats (or custom) — on GPU
     tensor = (tensor - MEAN) / STD
-    tensor = tensor.to(dtype=dtype).contiguous()
+    tensor = tensor.contiguous()
 
-    # MODEL INFERENCE
-    if IS_CUDA:
-        with torch.inference_mode():
-            with torch.amp.autocast('cuda', dtype=dtype):
-                depth = model_wraper(tensor)
-    elif IS_MPS:
-        with torch.inference_mode():
-            with torch.amp.autocast('mps', dtype=dtype):
-                depth = model_wraper(tensor)
-    elif IS_XPU:
-        with torch.inference_mode():
-            with torch.amp.autocast('xpu', dtype=dtype):
-                depth = model_wraper(tensor)
-    else:
-        with torch.no_grad():
-            depth = model_wraper(tensor)
+    # Model inference with appropriate autocast context
+    with maybe_autocast(DEVICE, enabled=FP16):
+        depth = model_wraper(tensor)
             
     # POST-PROCESSING
     with torch.no_grad():
         depth = post_process_depth(depth)
 
-    # Optional temporal stabilization (EMA)
-    if use_temporal_smooth:
-        depth = depth_stabilizer(depth)
+        # Optional temporal stabilization (EMA)
+        if use_temporal_smooth:
+            depth = depth_stabilizer(depth)
 
     # Resize depth back to original input resolution (on GPU)
     depth = F.interpolate(
@@ -1238,7 +1159,7 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
         size=(h, w),
         mode='bilinear',
         align_corners=False
-    ).squeeze(0).squeeze(0)  # [H, W]
+    ).squeeze(0).squeeze(0)
 
     # Return
     if return_tuple:
@@ -1360,8 +1281,6 @@ def make_sbs_core(rgb: torch.Tensor,
     Returns:
         SBS image [C,H,W] float tensor (0-255 range)
     """
-    # Cast to float32 for DirectML compatibility (avoids float64 ops)
-        
     C, H, W = rgb.shape
     img = rgb.unsqueeze(0).clamp(0, 255)  # [1,C,H,W]
     depth_strength = 0.05
@@ -1370,30 +1289,30 @@ def make_sbs_core(rgb: torch.Tensor,
     max_px = ipd_uv * W
     shifts = inv * max_px * depth_strength
     
-    # CUDA fast path: grid_sample
-    if not IS_DIRECTML:
-        xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=DTYPE).view(1, 1, W).expand(1, H, W)
-        ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=DTYPE).view(1, H, 1).expand(1, H, W)
-        shift_norm = shifts * (2.0 / (W - 1))
-        grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
-        grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
-        left = F.grid_sample(img, grid_left, mode="bilinear",
-                             padding_mode="reflection", align_corners=True)[0]
-        right = F.grid_sample(img, grid_right, mode="bilinear",
-                              padding_mode="reflection", align_corners=True)[0]
-    # Fallback path: vectorized gather (DirectML)
-    else:
-        base = torch.arange(W, device=device, dtype=torch.int64).view(1, -1).expand(H, -1)
-        # Ensure shifts is float32 for addition
-        shifts = shifts.to(dtype=torch.float32)
-        coords_left = (base.to(dtype=torch.float32) + shifts).clamp(0, W - 1).long()  # [H,W]
-        coords_right = (base.to(dtype=torch.float32) - shifts).clamp(0, W - 1).long()  # [H,W]
-        # Left eye
-        gather_idx_left = coords_left.unsqueeze(0).expand(C, H, W).unsqueeze(0)  # [1,C,H,W]
-        left = torch.gather(img.expand(1, C, H, W), 3, gather_idx_left)[0]  # [C,H,W]
-        # Right eye
-        gather_idx_right = coords_right.unsqueeze(0).expand(C, H, W).unsqueeze(0)
-        right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
+    with maybe_autocast(device, enabled=FP16):
+        # CUDA fast path: grid_sample
+        if not IS_DIRECTML:
+            xs = torch.linspace(-1.0, 1.0, W, device=device).view(1, 1, W).expand(1, H, W)
+            ys = torch.linspace(-1.0, 1.0, H, device=device).view(1, H, 1).expand(1, H, W)
+            shift_norm = shifts * (2.0 / (W - 1))
+            grid_left = torch.stack([xs + shift_norm, ys], dim=-1)
+            grid_right = torch.stack([xs - shift_norm, ys], dim=-1)
+            left = F.grid_sample(img, grid_left, mode="bilinear",
+                                 padding_mode="reflection", align_corners=True)[0]
+            right = F.grid_sample(img, grid_right, mode="bilinear",
+                                  padding_mode="reflection", align_corners=True)[0]
+        # Fallback path: vectorized gather (DirectML)
+        else:
+            base = torch.arange(W, device=device, dtype=torch.int64).view(1, -1).expand(H, -1)
+            shifts = shifts.to(dtype=torch.float32)
+            coords_left = (base.to(dtype=torch.float32) + shifts).clamp(0, W - 1).long()
+            coords_right = (base.to(dtype=torch.float32) - shifts).clamp(0, W - 1).long()
+            # Left eye
+            gather_idx_left = coords_left.unsqueeze(0).expand(C, H, W).unsqueeze(0)
+            left = torch.gather(img.expand(1, C, H, W), 3, gather_idx_left)[0]
+            # Right eye
+            gather_idx_right = coords_right.unsqueeze(0).expand(C, H, W).unsqueeze(0)
+            right = torch.gather(img.expand(1, C, H, W), 3, gather_idx_right)[0]
     
     # Aspect pad & arrange SBS/TAB
     if fill_16_9:

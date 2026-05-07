@@ -5,7 +5,7 @@ import os, platform, socket
 # Debug Mode
 DEBUG = False
 # App Version
-VERSION = "2.4.2"
+VERSION = "2.4.2 Beta"
 # Get OS name
 OS_NAME = platform.system()
 # Define StereoMix devices
@@ -30,10 +30,45 @@ STEREO_MIX_NAMES = [
 
 # Models with Disabled TRT 
 DISABLE_TRT_KEYWORDS = [
-    "video-depth-anything",
     "dpt-hybrid-midas-hf",
     "depthpro",
     "da3-giant"
+]
+
+ZOEDEPTH_FIX_KEYWORDS = [
+    "zoedepth-nyu-kitti",
+    "zoedepth-nyu",
+    "zoedepth-kitti"
+]   
+
+TRT_FIX_KEYWORDS = [
+    # DA3 models
+    "depth-anything/DA3-SMALL",
+    "depth-anything/DA3-BASE",
+    "depth-anything/DA3-LARGE-1.1",
+    "depth-anything/DA3-GIANT-1.1",
+    "depth-anything/DA3METRIC-LARGE",
+    "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
+    "depth-anything/DA3MONO-LARGE",
+    # Video-Depth-Anything
+    "depth-anything/Video-Depth-Anything-Small",
+    "depth-anything/Video-Depth-Anything-Base",
+    "depth-anything/Video-Depth-Anything-Large",
+    # Metric-Video-Depth-Anything
+    "depth-anything/Metric-Video-Depth-Anything-Small",
+    "depth-anything/Metric-Video-Depth-Anything-Base",
+    "depth-anything/Metric-Video-Depth-Anything-Large",
+]
+
+COMPILE_FIX_KEYWORDS = [
+    # Video-Depth-Anything
+    "depth-anything/Video-Depth-Anything-Small",
+    "depth-anything/Video-Depth-Anything-Base",
+    "depth-anything/Video-Depth-Anything-Large",
+    # Metric-Video-Depth-Anything
+    "depth-anything/Metric-Video-Depth-Anything-Small",
+    "depth-anything/Metric-Video-Depth-Anything-Base",
+    "depth-anything/Metric-Video-Depth-Anything-Large",
 ]
 
 # Models with Disabled CoreML 

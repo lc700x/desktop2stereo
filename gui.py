@@ -506,7 +506,7 @@ UI_TEXTS = {
         "Audio Delay": "音频延迟 (秒):",
         "Lossless Scaling Support": "小黄鸭补帧支持",
         "3D Monitor": "3D显示器",
-        "OpenXR Viewer": "OpenXR查看器",
+        "OpenXR Viewer": "OpenXR串流",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
         "Copy URL": "复制网址",
@@ -1837,11 +1837,10 @@ class ConfigGUI(tk.Tk):
         self.label_language.config(text=texts["Set Language:"])
         # Update run mode labels & combobox values
         self.label_run_mode.config(text=texts.get("Run Mode:", "Run Mode:"))
-        localized_run_vals = [texts.get("Local Viewer", "Local Viewer"), texts.get("RTMP Streamer", "RTMP Streamer"), texts.get("MJPEG Streamer", "MJPEG Streamer"), texts.get("Legacy Streamer", "Legacy Streamer")]
+        localized_run_vals = [texts.get("Local Viewer", "Local Viewer"), texts.get("OpenXR Viewer", "OpenXR Viewer"), texts.get("RTMP Streamer", "RTMP Streamer"), texts.get("MJPEG Streamer", "MJPEG Streamer"), texts.get("Legacy Streamer", "Legacy Streamer")]
         if OS_NAME == "Windows":
             localized_run_vals.append(texts.get("3D Monitor", "3D Monitor"))
             self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
-        localized_run_vals.append(texts.get("OpenXR Viewer", "OpenXR Viewer"))
         
         self.run_mode_cb["values"] = localized_run_vals
         # Add Inference Optimizer text update

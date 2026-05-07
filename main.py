@@ -1179,7 +1179,7 @@ def main(mode="Viewer"):
 
         elif mode == "OpenXR":
             try:
-                from openxr_viewer import OpenXRViewer, OPENXR_AVAILABLE
+                from xrviewer import OpenXRViewer, OPENXR_AVAILABLE
                 if not OPENXR_AVAILABLE:
                     raise ImportError("pyopenxr not installed — run: pip install pyopenxr")
                 rgb, depth, capture_start_time = depth_q.get()

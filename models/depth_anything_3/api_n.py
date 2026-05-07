@@ -97,27 +97,17 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         return depth
 
     # USER-FACING API (RUNTIME, AUTOSAFE)
-    def predict_depth(self, pixel_values: torch.Tensor) -> torch.Tensor:
+    def predict_depth(self, pixel_values: torch.Tensor, fp32: bool = False) -> torch.Tensor:
         """
         High-level inference API.
         Safe for DirectML / ROCm / CUDA / CPU with autocast on CUDA.
         """
         with torch.no_grad():
-            if pixel_values.device.type == "cuda":
-                # Autocast runtime only, does not affect export
-                with torch.autocast(device_type="cuda", dtype=pixel_values.dtype):
-                    return self.forward(pixel_values)
-            elif pixel_values.device.type == "mps":
-                with torch.autocast(device_type="mps", dtype=pixel_values.dtype):
-                    return self.forward(pixel_values)
-            elif pixel_values.device.type == "xpu":
-                with torch.autocast(device_type="xpu", dtype=pixel_values.dtype):
+            if pixel_values.device.type != "privateuseone":  # DirectML
+                with torch.autocast(device_type=pixel_values.device.type, enabled=not fp32):
                     return self.forward(pixel_values)
             else:
                 return self.forward(pixel_values)
-
-
-
     # def inference(
     #     self,
     #     image: list[np.ndarray | Image.Image | str],

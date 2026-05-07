@@ -41,8 +41,9 @@ try:
 except ImportError:
     CUDART_GL = None
 
-# GL_RGBA8 numeric value (used for swapchain format)
-_GL_RGBA8 = 0x8058
+# GL_SRGB8_ALPHA8: desktop captures are sRGB-encoded; signalling this to the
+# compositor prevents it from treating gamma values as linear (which causes pale/washed-out colours).
+_GL_SRGB8_ALPHA8 = 0x8C43
 
 # World-space vertex shader: applies MVP to place the quad in the scene
 _WORLD_VERT = """
@@ -68,6 +69,16 @@ void main() {
 }
 """
 
+# Solid-color vertex shader (no UV — avoids GLSL optimizer stripping in_uv)
+_SOLID_VERT = """
+#version 330
+in vec2 in_position;
+uniform mat4 u_mvp;
+void main() {
+    gl_Position = u_mvp * vec4(in_position, 0.0, 1.0);
+}
+"""
+
 # Solid-color fragment shader for the screen border quad
 _SOLID_FRAG = """
 #version 330
@@ -75,6 +86,145 @@ uniform vec4 u_color;
 out vec4 fragColor;
 void main() { fragColor = u_color; }
 """
+
+# Cinema glow fragment shader — Gaussian radial falloff for screen-projection ambience
+_GLOW_FRAG = """
+#version 330
+in vec2 uv;
+uniform vec4 u_glow_color;   // rgb = warm white, a = peak opacity
+out vec4 fragColor;
+void main() {
+    vec2 d   = uv * 2.0 - 1.0;          // map [0,1] → [-1,+1]
+    float r  = length(d);
+    float g  = exp(-r * r * 0.9);       // gaussian falloff; 0.9 fills wall further
+    fragColor = vec4(u_glow_color.rgb, g * u_glow_color.a);
+}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Windows input helpers (no-op on non-Windows)
+# ---------------------------------------------------------------------------
+
+if sys.platform == "win32":
+    _U32 = ctypes.windll.user32
+
+    class _MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                    ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+                    ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+    class _INPUT(ctypes.Structure):
+        class _I(ctypes.Union):
+            _fields_ = [("mi", _MOUSEINPUT)]
+        _anonymous_ = ("_i",)
+        _fields_ = [("type", ctypes.c_ulong), ("_i", _I)]
+
+    _MOUSEEVENTF_MOVE     = 0x0001
+    _MOUSEEVENTF_LEFTDOWN = 0x0002
+    _MOUSEEVENTF_LEFTUP   = 0x0004
+    _MOUSEEVENTF_RIGHTDOWN= 0x0008
+    _MOUSEEVENTF_RIGHTUP  = 0x0010
+    _MOUSEEVENTF_ABSOLUTE = 0x8000
+    _KEYEVENTF_KEYUP      = 0x0002
+
+    def _set_cursor_pos(x, y):
+        _U32.SetCursorPos(int(x), int(y))
+
+    def _send_mouse_flags(flags):
+        inp = _INPUT(type=0)
+        inp.mi.dwFlags = flags
+        ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+
+    def _send_key(vk, shift=False, ctrl=False, alt=False, win=False):
+        kbd = ctypes.windll.user32.keybd_event
+        # Press modifiers (chord support: Ctrl+C, Alt+Tab, Win+R, etc.)
+        if ctrl:  kbd(0x11, 0, 0, 0)             # VK_CONTROL down
+        if shift: kbd(0x10, 0, 0, 0)             # VK_SHIFT down
+        if alt:   kbd(0x12, 0, 0, 0)             # VK_MENU (Alt) down
+        if win:   kbd(0x5B, 0, 0, 0)             # VK_LWIN down
+        kbd(vk, 0, 0, 0)                          # key down
+        kbd(vk, 0, _KEYEVENTF_KEYUP, 0)           # key up
+        # Release modifiers in reverse
+        if win:   kbd(0x5B, 0, _KEYEVENTF_KEYUP, 0)
+        if alt:   kbd(0x12, 0, _KEYEVENTF_KEYUP, 0)
+        if shift: kbd(0x10, 0, _KEYEVENTF_KEYUP, 0)
+        if ctrl:  kbd(0x11, 0, _KEYEVENTF_KEYUP, 0)
+
+    def _get_desktop_size():
+        return _U32.GetSystemMetrics(0), _U32.GetSystemMetrics(1)
+else:
+    def _set_cursor_pos(x, y): pass
+    def _send_mouse_flags(flags): pass
+    def _send_key(vk, shift=False, ctrl=False, alt=False, win=False): pass
+    def _get_desktop_size(): return (1920, 1080)
+    _MOUSEEVENTF_LEFTDOWN  = 0x0002
+    _MOUSEEVENTF_LEFTUP    = 0x0004
+    _MOUSEEVENTF_RIGHTDOWN = 0x0008
+    _MOUSEEVENTF_RIGHTUP   = 0x0010
+
+
+# ---------------------------------------------------------------------------
+# Virtual keyboard layout
+# ---------------------------------------------------------------------------
+
+# (label, normal_vk, _, shifted_vk, width_units)
+# VK codes: https://docs.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
+# vk == -1 marks a layout gap: the slot consumes width but renders nothing and
+# generates no keystroke (used to align the navigation/arrow clusters).
+_KB_UNITS_WIDE = 18   # total horizontal units per row
+_KB_ROWS = [
+    # Row F: Esc + F1–F12 + PrtSc/ScrLk/Pause   (1.5 + 12 + 4.5 = 18)
+    [('Esc',0x1B,None,0x1B,1.5),
+     ('F1',0x70,None,0x70,1),('F2',0x71,None,0x71,1),
+     ('F3',0x72,None,0x72,1),('F4',0x73,None,0x73,1),
+     ('F5',0x74,None,0x74,1),('F6',0x75,None,0x75,1),
+     ('F7',0x76,None,0x76,1),('F8',0x77,None,0x77,1),
+     ('F9',0x78,None,0x78,1),('F10',0x79,None,0x79,1),
+     ('F11',0x7A,None,0x7A,1),('F12',0x7B,None,0x7B,1),
+     ('PrtSc',0x2C,None,0x2C,1.5),('ScrLk',0x91,None,0x91,1.5),('Pause',0x13,None,0x13,1.5)],
+    # Row 0: number row + Ins/Hom/PgUp        (13 + 2 + 3 = 18)
+    [('`',0xC0,'~',0xC0,1),('1',0x31,'!',0x31,1),('2',0x32,'@',0x32,1),
+     ('3',0x33,'#',0x33,1),('4',0x34,'$',0x34,1),('5',0x35,'%',0x35,1),
+     ('6',0x36,'^',0x36,1),('7',0x37,'&',0x37,1),('8',0x38,'*',0x38,1),
+     ('9',0x39,'(',0x39,1),('0',0x30,')',0x30,1),('-',0xBD,'_',0xBD,1),
+     ('=',0xBB,'+',0xBB,1),('Bksp',0x08,None,0x08,2),
+     ('Ins',0x2D,None,0x2D,1),('Hom',0x24,None,0x24,1),('PgU',0x21,None,0x21,1)],
+    # Row 1: QWERTY + Del/End/PgDn            (1.5 + 12 + 1.5 + 3 = 18)
+    [('Tab',0x09,None,0x09,1.5),('Q',0x51,None,0x51,1),('W',0x57,None,0x57,1),
+     ('E',0x45,None,0x45,1),('R',0x52,None,0x52,1),('T',0x54,None,0x54,1),
+     ('Y',0x59,None,0x59,1),('U',0x55,None,0x55,1),('I',0x49,None,0x49,1),
+     ('O',0x4F,None,0x4F,1),('P',0x50,None,0x50,1),('[',0xDB,'{',0xDB,1),
+     (']',0xDD,'}',0xDD,1),('\\',0xDC,'|',0xDC,1.5),
+     ('Del',0x2E,None,0x2E,1),('End',0x23,None,0x23,1),('PgD',0x22,None,0x22,1)],
+    # Row 2: ASDF + 3-unit gap                (1.75 + 11 + 2.25 + 3 = 18)
+    [('Caps',0x14,None,0x14,1.75),('A',0x41,None,0x41,1),('S',0x53,None,0x53,1),
+     ('D',0x44,None,0x44,1),('F',0x46,None,0x46,1),('G',0x47,None,0x47,1),
+     ('H',0x48,None,0x48,1),('J',0x4A,None,0x4A,1),('K',0x4B,None,0x4B,1),
+     ('L',0x4C,None,0x4C,1),(';',0xBA,':',0xBA,1),("'",0xDE,'"',0xDE,1),
+     ('Enter',0x0D,None,0x0D,2.25),
+     ('',-1,None,-1,3)],
+    # Row 3: ZXCV + Up arrow centred over Down
+    # 2.25 + 11 + 1.75 = 15.0   then  gap(1) | ↑(1) | gap(1)  →  ↑ occupies col 16-17
+    [('Shift',0x10,None,0x10,2.25),('Z',0x5A,None,0x5A,1),('X',0x58,None,0x58,1),
+     ('C',0x43,None,0x43,1),('V',0x56,None,0x56,1),('B',0x42,None,0x42,1),
+     ('N',0x4E,None,0x4E,1),('M',0x4D,None,0x4D,1),(',',0xBC,'<',0xBC,1),
+     ('.',0xBE,'>',0xBE,1),('/',0xBF,'?',0xBF,1),('Shift',0x10,None,0x10,1.75),
+     ('',-1,None,-1,1),('↑',0x26,None,0x26,1),('',-1,None,-1,1)],
+    # Row 4: bottom + arrow cluster — Down sits directly under Up at col 16-17.
+    # 1.5+1+1.25+7.5+1.25+1+1.5 = 15.0   then  ←(1) | ↓(1) | →(1)
+    [('Ctrl',0x11,None,0x11,1.5),('Win',0x5B,None,0x5B,1),
+     ('Alt',0x12,None,0x12,1.25),
+     ('Space',0x20,None,0x20,7.5),
+     ('Alt',0x12,None,0x12,1.25),('Apps',0x5D,None,0x5D,1),
+     ('Ctrl',0x11,None,0x11,1.5),
+     ('←',0x25,None,0x25,1),('↓',0x28,None,0x28,1),('→',0x27,None,0x27,1)],
+]
+
+import collections as _collections
+_KeyEntry = _collections.namedtuple('_KeyEntry', 'label vk shifted_vk rect_uv rect_local')
+
+_KB_TEX_W, _KB_TEX_H = 1280, 384   # keyboard texture: 6 rows × 18 units
 
 
 # ---------------------------------------------------------------------------
@@ -208,14 +358,19 @@ class OpenXRViewer:
         self._session_running = False
 
         # Controller action handles (set by _init_controller_actions)
-        self._action_set       = None
-        self._act_left_stick   = None
-        self._act_right_stick  = None
-        self._act_menu_btn     = None
-        self._act_left_grip    = None   # grab/move mode
-        self._act_right_grip   = None   # resize mode
-        self._act_a_btn        = None   # right A — double press = hide all
-        self._act_b_btn        = None   # right B — reset position
+        self._action_set          = None
+        self._act_left_stick      = None
+        self._act_right_stick     = None
+        self._act_menu_btn        = None
+        self._act_left_grip       = None   # grab/move mode
+        self._act_right_grip      = None   # resize mode
+        self._act_a_btn           = None   # right A — double press = hide all
+        self._act_b_btn           = None   # right B — right mouse click
+        self._act_y_btn           = None   # left  Y — reset screen position/size/rotation
+        self._act_left_trigger       = None   # left trigger (float) — left mouse click
+        self._act_right_trigger      = None   # right trigger (float) — right mouse click / hold
+        self._act_left_stick_click   = None   # left thumbstick click — toggle keyboard
+        self._act_right_stick_click  = None   # right thumbstick click — toggle cinema glow
 
         # Menu button debounce + FPS overlay toggle
         self._menu_pressed_last   = False
@@ -229,15 +384,51 @@ class OpenXRViewer:
         self._a_last         = False  # A-button previous frame state
         self._a_last_t       = 0.0   # timestamp of last A press (double-press detection)
         self._b_last         = False  # B-button previous frame state
+        self._y_last         = False  # Y-button previous frame state (reset screen)
         # Grab tracking — anchor = laser hit point on the screen plane at grab start.
         # The anchor sits at fixed distance along the laser; screen-local offset of
         # anchor from centre is stored so the screen translates 1:1 with the laser.
-        self._grab_ray_dist  = 1.5    # distance along aim ray to anchor (m)
-        self._grab_offset_x  = 0.0    # screen-local X offset of anchor from centre (m)
-        self._grab_offset_y  = 0.0    # screen-local Y offset of anchor from centre (m)
+        self._grab_ray_dist      = 1.5    # distance along aim ray to anchor (m) — push/pull only
+        self._grab_offset_x      = 0.0    # screen-local X offset of anchor from centre (m)
+        self._grab_offset_y      = 0.0    # screen-local Y offset of anchor from centre (m)
+        self._grab_ctrl_pos_prev = None   # controller world pos last grab frame (delta tracking)
+        self._grab_anchor_world  = None   # anchor point in world space at grab start
+        self._screen_eye_init = False  # screen_pan_y aligned to headset height on first frame
+        self._initial_head_y  = 0.0   # headset eye height at session start, used for B-reset
         # Border fade: shown during interaction, fades out when idle
         self._border_alpha   = 0.0    # 0.0 = invisible, 1.0 = fully opaque
         self._border_idle_t  = 0.0    # wall time when interaction last ended
+
+        # Mouse cursor control
+        self._cursor_uv_l         = None  # (u,v) where left laser hits screen, or None
+        self._cursor_uv_r         = None  # (u,v) where right laser hits screen, or None
+        self._cursor_ctrl         = None  # 'left' | 'right' | None — active cursor controller
+        self._left_trig_prev      = 0.0
+        self._right_trig_prev     = 0.0
+        self._left_trig_hold_t    = None  # perf_counter() when left trigger passed threshold
+        self._right_trig_hold_t   = None  # perf_counter() when right trigger passed threshold
+        self._left_btn_down       = False # whether right mouse button held via left trigger
+        self._right_btn_down      = False # whether right mouse button is currently held
+
+        # Virtual keyboard
+        self._keyboard_visible     = False
+        self._keyboard_tex         = None  # moderngl Texture (RGBA, _KB_TEX_W × _KB_TEX_H)
+        self._keyboard_vao         = None  # quad VAO using _overlay_prog
+        self._keyboard_keys        = []    # list of _KeyEntry
+        self._keyboard_width       = 1.5   # metres
+        self._keyboard_height      = 0.5   # metres (6 rows)
+        self._keyboard_distance    = 1.5   # metres in front of user origin
+        self._keyboard_pan_y       = -0.2  # metres below eye level
+        self._shift_active         = False
+        self._caps_lock            = False
+        self._ctrl_active          = False   # one-shot Ctrl modifier (Ctrl+C etc.)
+        self._alt_active           = False   # one-shot Alt modifier  (Alt+Tab etc.)
+        self._win_active           = False   # one-shot Win modifier  (Win+R etc.)
+        self._left_stick_click_prev= False
+        self._kb_trig_prev_l       = 0.0   # keyboard trigger debounce — left controller
+        self._kb_trig_prev_r       = 0.0   # keyboard trigger debounce — right controller
+        self._kb_hover_l           = None  # index of key under left laser, or None
+        self._kb_hover_r           = None  # index of key under right laser, or None
 
         # GPU interop (CUDA / HIP) — initialised lazily on first frame
         self._cuda_gl         = None   # CUDART_GL instance, False = permanently failed
@@ -275,6 +466,12 @@ class OpenXRViewer:
         # Screen border (slightly larger quad, solid color)
         self._border_prog = None
         self._border_vao  = None
+
+        # Cinema glow (large Gaussian quad behind the screen, additive blend)
+        self._glow_prog              = None
+        self._glow_vao               = None
+        self._glow_visible           = False
+        self._right_stick_click_prev = False
 
         # Controller aim poses + laser pointer rendering
         self._act_aim_left  = None   # XrAction POSE_INPUT for left aim
@@ -373,12 +570,12 @@ class OpenXRViewer:
 
         # Screen border (solid-color quad rendered before the main screen)
         self._border_prog = self.ctx.program(
-            vertex_shader=_WORLD_VERT,
+            vertex_shader=_SOLID_VERT,
             fragment_shader=_SOLID_FRAG,
         )
         vbo_border = self.ctx.buffer(vertices.tobytes())
         self._border_vao = self.ctx.vertex_array(
-            self._border_prog, [(vbo_border, '2f 2f', 'in_position', 'in_uv')]
+            self._border_prog, [(vbo_border, '2f 8x', 'in_position')]
         )
 
         # Laser beam: a very thin elongated quad (width=0.003 m, length=5 m)
@@ -391,12 +588,12 @@ class OpenXRViewer:
         ], dtype='f4')
         self._laser_vao = self.ctx.vertex_array(
             self._border_prog,
-            [(self.ctx.buffer(laser_verts.tobytes()), '2f 2f', 'in_position', 'in_uv')],
+            [(self.ctx.buffer(laser_verts.tobytes()), '2f 8x', 'in_position')],
         )
         # Controller dot: tiny square (5×5 cm)
         self._dot_vao = self.ctx.vertex_array(
             self._border_prog,
-            [(self.ctx.buffer(laser_verts.tobytes()), '2f 2f', 'in_position', 'in_uv')],
+            [(self.ctx.buffer(laser_verts.tobytes()), '2f 8x', 'in_position')],
         )
 
         # In-VR FPS overlay program (world-space quad, plain RGBA blit)
@@ -411,6 +608,17 @@ class OpenXRViewer:
         vbo2 = self.ctx.buffer(vertices.tobytes())
         self._overlay_vao = self.ctx.vertex_array(
             self._overlay_prog, [(vbo2, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        # Cinema glow program (WORLD_VERT passes UV; GLOW_FRAG computes Gaussian)
+        self._glow_prog = self.ctx.program(
+            vertex_shader=_WORLD_VERT,
+            fragment_shader=_GLOW_FRAG,
+        )
+        self._glow_prog['u_glow_color'].value = (1.0, 0.92, 0.75, 0.70)  # warm cinema amber
+        vbo_glow = self.ctx.buffer(vertices.tobytes())
+        self._glow_vao = self.ctx.vertex_array(
+            self._glow_prog, [(vbo_glow, '2f 2f', 'in_position', 'in_uv')]
         )
 
     def _init_openxr(self):
@@ -436,7 +644,12 @@ class OpenXRViewer:
         )
 
         # 3. Verify GL requirements (mandatory before session creation)
-        xr.get_opengl_graphics_requirements_khr(self._xr_instance, self._xr_system_id)
+        _pfn = ctypes.cast(
+            xr.get_instance_proc_addr(self._xr_instance, "xrGetOpenGLGraphicsRequirementsKHR"),
+            xr.PFN_xrGetOpenGLGraphicsRequirementsKHR,
+        )
+        _reqs = xr.GraphicsRequirementsOpenGLKHR()
+        xr.check_result(xr.Result(_pfn(self._xr_instance, self._xr_system_id, ctypes.byref(_reqs))))
 
         # 4. Graphics binding — platform-specific
         if sys.platform == "win32":
@@ -492,7 +705,7 @@ class OpenXRViewer:
                     xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT |
                     xr.SwapchainUsageFlags.SAMPLED_BIT
                 ),
-                format=_GL_RGBA8,
+                format=_GL_SRGB8_ALPHA8,
                 sample_count=1,
                 width=sc_w,
                 height=sc_h,
@@ -559,6 +772,24 @@ class OpenXRViewer:
         self._act_right_grip= make_bool("right_grip", "Right Grip")
         self._act_a_btn     = make_bool("a_btn",      "A Button")
         self._act_b_btn     = make_bool("b_btn",      "B Button")
+        self._act_y_btn     = make_bool("y_btn",      "Y Button")
+        self._act_left_stick_click  = make_bool("left_stick_click",  "Left Stick Click")
+        self._act_right_stick_click = make_bool("right_stick_click", "Right Stick Click")
+
+        def make_float(name, label):
+            return xr.create_action(
+                self._action_set,
+                xr.ActionCreateInfo(
+                    action_type=xr.ActionType.FLOAT_INPUT,
+                    action_name=name,
+                    localized_action_name=label,
+                    count_subaction_paths=len(subpaths),
+                    subaction_paths=subpaths,
+                ),
+            )
+
+        self._act_left_trigger  = make_float("left_trigger",  "Left Trigger")
+        self._act_right_trigger = make_float("right_trigger", "Right Trigger")
 
         self._act_aim_left = xr.create_action(
             self._action_set,
@@ -587,26 +818,35 @@ class OpenXRViewer:
         # squeeze/click (which requires a discrete click event on some runtimes).
         _b = {
             "/interaction_profiles/oculus/touch_controller": [
-                ("/user/hand/left/input/thumbstick",    self._act_left_stick),
-                ("/user/hand/right/input/thumbstick",   self._act_right_stick),
-                ("/user/hand/left/input/menu/click",    self._act_menu_btn),
-                ("/user/hand/left/input/squeeze/value", self._act_left_grip),
-                ("/user/hand/right/input/squeeze/value",self._act_right_grip),
-                ("/user/hand/right/input/a/click",      self._act_a_btn),
-                ("/user/hand/right/input/b/click",      self._act_b_btn),
-                ("/user/hand/left/input/aim/pose",      self._act_aim_left),
-                ("/user/hand/right/input/aim/pose",     self._act_aim_right),
+                ("/user/hand/left/input/thumbstick",         self._act_left_stick),
+                ("/user/hand/right/input/thumbstick",        self._act_right_stick),
+                ("/user/hand/left/input/thumbstick/click",   self._act_left_stick_click),
+                ("/user/hand/right/input/thumbstick/click",  self._act_right_stick_click),
+                ("/user/hand/left/input/menu/click",         self._act_menu_btn),
+                ("/user/hand/left/input/squeeze/value",      self._act_left_grip),
+                ("/user/hand/right/input/squeeze/value",     self._act_right_grip),
+                ("/user/hand/right/input/a/click",           self._act_a_btn),
+                ("/user/hand/right/input/b/click",           self._act_b_btn),
+                ("/user/hand/left/input/y/click",            self._act_y_btn),
+                ("/user/hand/left/input/trigger/value",      self._act_left_trigger),
+                ("/user/hand/right/input/trigger/value",     self._act_right_trigger),
+                ("/user/hand/left/input/aim/pose",           self._act_aim_left),
+                ("/user/hand/right/input/aim/pose",          self._act_aim_right),
             ],
             "/interaction_profiles/valve/index_controller": [
-                ("/user/hand/left/input/thumbstick",    self._act_left_stick),
-                ("/user/hand/right/input/thumbstick",   self._act_right_stick),
-                ("/user/hand/left/input/trackpad/click",self._act_menu_btn),
-                ("/user/hand/left/input/squeeze/value", self._act_left_grip),
-                ("/user/hand/right/input/squeeze/value",self._act_right_grip),
-                ("/user/hand/right/input/a/click",      self._act_a_btn),
-                ("/user/hand/right/input/b/click",      self._act_b_btn),
-                ("/user/hand/left/input/aim/pose",      self._act_aim_left),
-                ("/user/hand/right/input/aim/pose",     self._act_aim_right),
+                ("/user/hand/left/input/thumbstick",         self._act_left_stick),
+                ("/user/hand/right/input/thumbstick",        self._act_right_stick),
+                ("/user/hand/left/input/thumbstick/click",   self._act_left_stick_click),
+                ("/user/hand/right/input/thumbstick/click",  self._act_right_stick_click),
+                ("/user/hand/left/input/trackpad/click",     self._act_menu_btn),
+                ("/user/hand/left/input/squeeze/value",      self._act_left_grip),
+                ("/user/hand/right/input/squeeze/value",     self._act_right_grip),
+                ("/user/hand/right/input/a/click",           self._act_a_btn),
+                ("/user/hand/right/input/b/click",           self._act_b_btn),
+                ("/user/hand/left/input/trigger/value",      self._act_left_trigger),
+                ("/user/hand/right/input/trigger/value",     self._act_right_trigger),
+                ("/user/hand/left/input/aim/pose",           self._act_aim_left),
+                ("/user/hand/right/input/aim/pose",         self._act_aim_right),
             ],
             # KHR simple only has select/click (boolean) and menu — no sticks or grip
             "/interaction_profiles/khr/simple_controller": [
@@ -664,6 +904,156 @@ class OpenXRViewer:
         self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
         self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
         self._texture_size = (w, h)
+
+    def _init_keyboard(self):
+        """Build keyboard key geometry and render the keyboard texture via PIL."""
+        TW, TH   = _KB_TEX_W, _KB_TEX_H
+        ROW_H    = TH / len(_KB_ROWS)                  # pixel height per row
+        UNIT_W   = TW / float(_KB_UNITS_WIDE)          # pixel width of one key unit
+        UNIT_M   = self._keyboard_width / float(_KB_UNITS_WIDE)
+        PAD      = 3                                   # pixel inset for key face
+
+        img  = Image.new('RGBA', (TW, TH), (30, 30, 35, 230))
+        draw = ImageDraw.Draw(img)
+        # Try a font that contains arrow / shift / enter symbols. Segoe UI Symbol
+        # ships on every modern Windows install and covers the Unicode keyboard
+        # glyphs; fall back to the app font, then PIL's bitmap default.
+        fnt = None
+        for candidate in (r"C:\Windows\Fonts\seguisym.ttf",
+                          r"C:\Windows\Fonts\segoeui.ttf",
+                          self.font_type):
+            if not candidate:
+                continue
+            try:
+                fnt = ImageFont.truetype(candidate, 16)
+                break
+            except Exception:
+                continue
+
+        self._keyboard_keys = []
+        kw_half  = self._keyboard_width  / 2.0
+        kh_half  = self._keyboard_height / 2.0
+        row_h_m  = self._keyboard_height / len(_KB_ROWS)  # metres per row
+
+        for row_i, row in enumerate(_KB_ROWS):
+            py0 = int(row_i * ROW_H)
+            py1 = int((row_i + 1) * ROW_H)
+            # Local Y of this row: top of keyboard = +kh_half, rows go downward
+            ly1 = kh_half - row_i * row_h_m
+            ly0 = ly1 - row_h_m
+            px  = 0.0
+            lx  = -kw_half
+            for (label, vk_normal, _, vk_shifted, width_units) in row:
+                px_end  = px + width_units * UNIT_W
+                lx_end  = lx + width_units * UNIT_M
+
+                # vk == -1 marks a layout gap: advance position but do not draw
+                # the key face and do not register a hit target.
+                if vk_normal == -1:
+                    px = px_end
+                    lx = lx_end
+                    continue
+
+                # Draw key background and outline
+                draw.rectangle([px + PAD, py0 + PAD, px_end - PAD, py1 - PAD],
+                               fill=(60, 62, 70, 255), outline=(130, 132, 140, 255))
+
+                # Draw label centred in key face
+                if fnt:
+                    tx = (px + px_end) / 2
+                    ty = (py0 + py1) / 2
+                    draw.text((tx, ty), label, font=fnt, fill=(220, 220, 225, 255), anchor='mm')
+                else:
+                    draw.text((int(px + PAD + 2), int(py0 + PAD + 2)), label,
+                               fill=(220, 220, 225, 255))
+
+                # UV rect in [0,1]
+                uv_rect = (px / TW, py0 / TH, px_end / TW, py1 / TH)
+                # Local rect in metres (x grows right, y grows up)
+                loc_rect = (lx, ly0, lx_end, ly1)
+
+                self._keyboard_keys.append(_KeyEntry(
+                    label=label,
+                    vk=vk_normal,
+                    shifted_vk=vk_shifted if vk_shifted is not None else vk_normal,
+                    rect_uv=uv_rect,
+                    rect_local=loc_rect,
+                ))
+
+                px  = px_end
+                lx  = lx_end
+
+        # Upload texture
+        tex_data = np.flipud(np.array(img, dtype=np.uint8))
+        if self._keyboard_tex is not None:
+            self._keyboard_tex.release()
+        self._keyboard_tex = self.ctx.texture((TW, TH), 4, dtype='f1')
+        self._keyboard_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._keyboard_tex.write(tex_data.tobytes())
+
+        # VAO — reuse _overlay_prog (already compiled, same WORLD_VERT + OVERLAY_FRAG)
+        verts = np.array([-1,-1,0,0, 1,-1,1,0, -1,1,0,1, 1,1,1,1], dtype='f4')
+        if self._keyboard_vao is not None:
+            self._keyboard_vao.release()
+        self._keyboard_vao = self.ctx.vertex_array(
+            self._overlay_prog, [(self.ctx.buffer(verts.tobytes()), '2f 2f', 'in_position', 'in_uv')]
+        )
+
+    def _render_keyboard(self, mgl_fbo, view_mat, proj_mat):
+        """Render the virtual keyboard quad and highlight hovered keys."""
+        if self._keyboard_tex is None or self._keyboard_vao is None:
+            return
+
+        kw2 = self._keyboard_width  / 2.0
+        kh2 = self._keyboard_height / 2.0
+        kb_model = np.array([
+            [kw2, 0,   0, 0.0                  ],
+            [0,   kh2, 0, self._keyboard_pan_y  ],
+            [0,   0,   1, -self._keyboard_distance],
+            [0,   0,   0, 1                     ],
+        ], dtype=np.float32)
+        mvp = proj_mat @ view_mat @ kb_model
+
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self._keyboard_tex.use(location=2)
+        self._overlay_prog['u_mvp'].write(mvp.T.astype('f4').tobytes())
+        self._keyboard_vao.render(moderngl.TRIANGLE_STRIP)
+
+        def _hl_quad(rect_local, color):
+            x0, y0, x1, y1 = rect_local
+            cx = (x0 + x1) / 2.0; cy_ = (y0 + y1) / 2.0
+            hw = (x1 - x0) / 2.0; hh  = (y1 - y0) / 2.0
+            hl_model = np.array([
+                [hw,  0,   0, cx                                  ],
+                [0,   hh,  0, self._keyboard_pan_y + cy_           ],
+                [0,   0,   1, -self._keyboard_distance + 0.001     ],
+                [0,   0,   0, 1                                   ],
+            ], dtype=np.float32)
+            hl_mvp = proj_mat @ view_mat @ hl_model
+            self._border_prog['u_mvp'].write(hl_mvp.T.astype('f4').tobytes())
+            self._border_prog['u_color'].value = color
+            self._border_vao.render(moderngl.TRIANGLE_STRIP)
+
+        # Amber highlight on every key whose VK matches an armed modifier
+        VK_SHIFT = 0x10; VK_CAPS = 0x14; VK_CTRL = 0x11; VK_ALT = 0x12; VK_WIN = 0x5B
+        active_vks = set()
+        if self._shift_active: active_vks.add(VK_SHIFT)
+        if self._caps_lock:    active_vks.add(VK_CAPS)
+        if self._ctrl_active:  active_vks.add(VK_CTRL)
+        if self._alt_active:   active_vks.add(VK_ALT)
+        if self._win_active:   active_vks.add(VK_WIN)
+        if active_vks:
+            for key in self._keyboard_keys:
+                if key.vk in active_vks:
+                    _hl_quad(key.rect_local, (1.0, 0.7, 0.15, 0.45))
+
+        # Cyan highlight on keys hovered by either laser
+        for hover_idx in set(x for x in [self._kb_hover_l, self._kb_hover_r] if x is not None):
+            _hl_quad(self._keyboard_keys[hover_idx].rect_local, (0.2, 0.7, 1.0, 0.35))
+
+        self.ctx.disable(moderngl.BLEND)
 
     def _init_cuda_pbos(self, w, h):
         """Create or recreate PBOs and register them with CUDA/HIP."""
@@ -934,8 +1324,11 @@ class OpenXRViewer:
         is parallel to it — so the laser only clips when it actually hits the screen.
         """
         BEAM_MAX = 30.0   # long enough to look infinite in any room-scale space
-        if self.screen_height is None:
-            return BEAM_MAX
+        # Compute height inline during resize (when screen_height is temporarily None)
+        sh = self.screen_height
+        if sh is None:
+            fw, fh = self.frame_size
+            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
         cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
         cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
         screen_n   = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
@@ -949,11 +1342,11 @@ class OpenXRViewer:
         # Check hit is within the actual screen rectangle (not the infinite plane)
         hit   = ctrl_pos + fwd_w * t
         diff  = hit - screen_pos
-        r_ax  = np.array([cy, 0.0, -sy_], dtype='f8')       # screen right
-        u_ax  = np.array([sp*sy_, cp, sp*cy], dtype='f8')   # screen up
+        r_ax  = np.array([cy, 0.0, -sy_], dtype='f8')
+        u_ax  = np.array([sp*sy_, cp, sp*cy], dtype='f8')
         loc_x = float(np.dot(diff, r_ax))
         loc_y = float(np.dot(diff, u_ax))
-        if abs(loc_x) <= self.screen_width / 2.0 and abs(loc_y) <= self.screen_height / 2.0:
+        if abs(loc_x) <= self.screen_width / 2.0 and abs(loc_y) <= sh / 2.0:
             return max(0.01, t - 0.005)   # hit within screen — stop 5 mm before
         return BEAM_MAX   # outside screen rectangle — let laser go to max
 
@@ -997,6 +1390,52 @@ class OpenXRViewer:
             self._border_prog['u_mvp'].write(beam_mvp.T.astype('f4').tobytes())
             self._border_prog['u_color'].value = beam_color
             self._laser_vao.render(moderngl.TRIANGLE_STRIP)
+
+    def _render_glow(self, mgl_fbo, view_mat, proj_mat):
+        """Render a large Gaussian glow quad behind the screen (cinema ambient effect).
+
+        The quad is GLOW_SCALE times the screen size, pushed 2 cm behind the screen
+        surface, and composited with ADDITIVE blending so it brightens the dark VR
+        background without changing the screen itself.
+        """
+        if self._glow_prog is None or self._glow_vao is None:
+            return
+        if self.screen_height is None:
+            return
+
+        GLOW_SCALE  = 5.0   # glow extends 5× beyond each screen edge (cinema wall fill)
+        GLOW_OFFSET = 0.02  # push 2 cm behind the screen to avoid z-fighting
+
+        cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+        cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+        # Screen normal — used to push the glow quad slightly behind the screen
+        screen_n = np.array([cp * sy_, -sp, cp * cy], dtype=np.float32)
+
+        rot_y = np.array([[ cy, 0, sy_, 0], [0, 1,  0, 0], [-sy_, 0, cy, 0], [0, 0, 0, 1]], dtype=np.float32)
+        rot_x = np.array([[1, 0,  0, 0], [0, cp, -sp, 0], [0, sp, cp, 0], [0, 0, 0, 1]], dtype=np.float32)
+
+        gx = self.screen_width  * GLOW_SCALE / 2.0
+        gy = self.screen_height * GLOW_SCALE / 2.0
+        # Centre of glow quad = screen centre pushed back along its normal
+        gc = np.array([self.screen_pan_x, self.screen_pan_y, -self.screen_distance],
+                      dtype=np.float32) - screen_n * GLOW_OFFSET
+        glow_model = np.array([
+            [gx, 0,  0, gc[0]],
+            [0,  gy, 0, gc[1]],
+            [0,  0,  1, gc[2]],
+            [0,  0,  0, 1    ],
+        ], dtype=np.float32)
+        mvp = proj_mat @ view_mat @ rot_y @ rot_x @ glow_model
+
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        # Additive blend: glow adds light rather than replacing background colour
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
+        self._glow_prog['u_mvp'].write(mvp.T.astype('f4').tobytes())
+        self._glow_vao.render(moderngl.TRIANGLE_STRIP)
+        # Restore standard alpha blend for subsequent draws
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self.ctx.disable(moderngl.BLEND)
 
     def _render_border(self, mgl_fbo, view_mat, proj_mat):
         """Render a thin solid-color quad slightly larger than the screen.
@@ -1060,6 +1499,11 @@ class OpenXRViewer:
             self.ctx.screen.use()
             return
 
+        # 0. Cinema glow (large Gaussian behind everything, additive blend)
+        if self._glow_visible:
+            self._render_glow(mgl_fbo, view_mat, proj_mat)
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+
         # 1. Border (behind the screen, slightly larger)
         self._render_border(mgl_fbo, view_mat, proj_mat)
         self.ctx.viewport = (0, 0, sc_w, sc_h)
@@ -1077,10 +1521,13 @@ class OpenXRViewer:
         self.prog['u_eye_offset'].value     = eye_sign * self.ipd_uv / 2.0
         self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
 
-        # Match the desktop viewer's default (unset) uniform value of (0.0, 0.0).
-        # This makes pixel_size = 1/0 = infinity, disabling the depth‑gradient
-        # disocclusion test and producing identical inpainting behaviour.
-        self.prog['u_resolution'].value = (0.0, 0.0)
+        # Pass texture resolution so the disocclusion test uses correct pixel-space
+        # gradients — matches viewer.py's effective behaviour with proper edge fill.
+        if self._texture_size:
+            self.prog['u_resolution'].value = (float(self._texture_size[0]),
+                                               float(self._texture_size[1]))
+        else:
+            self.prog['u_resolution'].value = (0.0, 0.0)
 
         self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
@@ -1095,6 +1542,11 @@ class OpenXRViewer:
         if self._fps_overlay_visible and self._overlay_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_fps_overlay(eye_index, mgl_fbo, view_mat, proj_mat)
+
+        # 5. Virtual keyboard
+        if self._keyboard_visible and self._keyboard_tex is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_keyboard(mgl_fbo, view_mat, proj_mat)
 
         self.ctx.screen.use()
 
@@ -1158,13 +1610,221 @@ class OpenXRViewer:
         except Exception:
             return False
 
+    def _read_float_action(self, action, hand_path_str="/user/hand/left"):
+        """Return the float value [0,1] of a trigger/squeeze action."""
+        if action is None:
+            return 0.0
+        try:
+            path  = xr.string_to_path(self._xr_instance, hand_path_str)
+            state = xr.get_action_state_float(
+                self._xr_session,
+                xr.ActionStateGetInfo(action=action, subaction_path=path),
+            )
+            return float(state.current_state) if state.is_active else 0.0
+        except Exception:
+            return 0.0
+
+    def _laser_screen_hit_uv(self, ctrl_pos, fwd_w):
+        """Return (u, v, t) where the aim ray hits the screen surface, or None.
+
+        u, v are in [0, 1] (u=0 left, v=0 bottom). t is the along-ray distance.
+        Returns None if the ray misses the screen rect or is parallel to it.
+        """
+        sh = self.screen_height
+        if sh is None:
+            fw, fh = self.frame_size
+            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
+        cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+        cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+        screen_n   = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
+        screen_pos = np.array([self.screen_pan_x, self.screen_pan_y, -self.screen_distance], dtype='f8')
+        denom = float(np.dot(screen_n, fwd_w))
+        if abs(denom) < 1e-6:
+            return None
+        t = float(np.dot(screen_n, screen_pos - ctrl_pos)) / denom
+        if t < 0.01:
+            return None
+        hit  = ctrl_pos + fwd_w * t
+        diff = hit - screen_pos
+        r_ax = np.array([cy, 0.0, -sy_],         dtype='f8')
+        u_ax = np.array([sp * sy_, cp, sp * cy],  dtype='f8')
+        loc_x = float(np.dot(diff, r_ax))
+        loc_y = float(np.dot(diff, u_ax))
+        if abs(loc_x) <= self.screen_width / 2.0 and abs(loc_y) <= sh / 2.0:
+            u = 0.5 + loc_x / self.screen_width
+            v = 0.5 + loc_y / sh
+            return u, v, t
+        return None
+
+    def _keyboard_laser_hit(self, ctrl_pos, fwd_w):
+        """Return (key_index, t) if the aim ray hits a key on the virtual keyboard, else (None, None)."""
+        if not self._keyboard_keys:
+            return None, None
+        # Keyboard plane: normal = (0, 0, 1), position = (0, _keyboard_pan_y, -_keyboard_distance)
+        kb_pos = np.array([0.0, self._keyboard_pan_y, -self._keyboard_distance], dtype='f8')
+        kb_n   = np.array([0.0, 0.0, 1.0], dtype='f8')
+        denom  = float(np.dot(kb_n, fwd_w))
+        if abs(denom) < 1e-6:
+            return None, None
+        t = float(np.dot(kb_n, kb_pos - ctrl_pos)) / denom
+        if t < 0.05:
+            return None, None
+        hit  = ctrl_pos + fwd_w * t
+        # Local keyboard coords (keyboard is axis-aligned, centred at kb_pos)
+        lx = float(hit[0]) - 0.0
+        ly = float(hit[1]) - self._keyboard_pan_y
+        for i, key in enumerate(self._keyboard_keys):
+            x0, y0, x1, y1 = key.rect_local
+            if x0 <= lx <= x1 and y0 <= ly <= y1:
+                return i, t
+        return None, None
+
+    def _handle_cursor(self):
+        """Move the Windows mouse cursor when a controller laser is pointing at the screen.
+
+        The controller whose laser hits the screen controls the cursor.  When both hit,
+        the one that was already active keeps priority to avoid jitter.
+        """
+        dw, dh = _get_desktop_size()
+        hit_l = hit_r = None
+        if self._aim_mat_l is not None:
+            cp = self._aim_mat_l[:3, 3].astype('f8')
+            fw = -self._aim_mat_l[:3, 2].astype('f8')
+            hit_l = self._laser_screen_hit_uv(cp, fw)
+        if self._aim_mat_r is not None:
+            cp = self._aim_mat_r[:3, 3].astype('f8')
+            fw = -self._aim_mat_r[:3, 2].astype('f8')
+            hit_r = self._laser_screen_hit_uv(cp, fw)
+
+        self._cursor_uv_l = (hit_l[0], hit_l[1]) if hit_l else None
+        self._cursor_uv_r = (hit_r[0], hit_r[1]) if hit_r else None
+
+        # Pick active controller — prefer current one if still on screen
+        if hit_l and self._cursor_ctrl == 'left':
+            u, v = hit_l[0], hit_l[1]
+        elif hit_r and self._cursor_ctrl == 'right':
+            u, v = hit_r[0], hit_r[1]
+        elif hit_l:
+            self._cursor_ctrl = 'left'
+            u, v = hit_l[0], hit_l[1]
+        elif hit_r:
+            self._cursor_ctrl = 'right'
+            u, v = hit_r[0], hit_r[1]
+        else:
+            self._cursor_ctrl = None
+            return
+
+        _set_cursor_pos(int(u * dw), int((1.0 - v) * dh))
+
+    def _handle_triggers(self):
+        """Map controller triggers to the Windows left mouse button.
+
+        Trigger pulled past CLICK_THRESH → LEFTDOWN (held for as long as the trigger is held).
+        Trigger released below CLICK_THRESH → LEFTUP.
+        This makes single-clicks AND click-and-drag both work naturally — release the
+        trigger to drop. Right-click is on the B button (see _poll_controller_input).
+        If the controller's laser is over the virtual keyboard, the trigger drives the
+        keyboard instead and the left button is released cleanly.
+        """
+        CLICK_THRESH = 0.7
+
+        lt = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
+        rt = self._read_float_action(self._act_right_trigger, "/user/hand/right")
+
+        left_on_kb  = self._kb_hover_l is not None
+        right_on_kb = self._kb_hover_r is not None
+
+        for trig_now, trig_prev_attr, on_kb, btn_down_attr in [
+            (lt, '_left_trig_prev',  left_on_kb,  '_left_btn_down'),
+            (rt, '_right_trig_prev', right_on_kb, '_right_btn_down'),
+        ]:
+            trig_prev = getattr(self, trig_prev_attr)
+            btn_down  = getattr(self, btn_down_attr)
+
+            if on_kb:
+                # Laser on keyboard — release any held left button cleanly
+                if btn_down:
+                    _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
+                    setattr(self, btn_down_attr, False)
+            else:
+                if trig_now >= CLICK_THRESH and trig_prev < CLICK_THRESH and not btn_down:
+                    # Rising edge — press the left mouse button (and hold while trigger held)
+                    _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
+                    setattr(self, btn_down_attr, True)
+                elif trig_now < CLICK_THRESH and trig_prev >= CLICK_THRESH and btn_down:
+                    # Falling edge — release the left mouse button (completes click or drag)
+                    _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
+                    setattr(self, btn_down_attr, False)
+
+            setattr(self, trig_prev_attr, trig_now)
+
+    def _handle_keyboard_input(self):
+        """Send Windows keystrokes when a controller trigger fires on a keyboard key."""
+        CLICK_THRESH = 0.7
+        VK_SHIFT     = 0x10
+        VK_CAPS      = 0x14
+
+        lt = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
+        rt = self._read_float_action(self._act_right_trigger, "/user/hand/right")
+
+        for trig_now, trig_prev_attr, hover_attr, aim_mat in [
+            (lt, '_kb_trig_prev_l', '_kb_hover_l', self._aim_mat_l),
+            (rt, '_kb_trig_prev_r', '_kb_hover_r', self._aim_mat_r),
+        ]:
+            trig_prev = getattr(self, trig_prev_attr)
+            if aim_mat is not None:
+                cp  = aim_mat[:3, 3].astype('f8')
+                fw  = -aim_mat[:3, 2].astype('f8')
+                idx, _ = self._keyboard_laser_hit(cp, fw)
+            else:
+                idx = None
+            setattr(self, hover_attr, idx)
+
+            # Rising edge on a key
+            if trig_now >= CLICK_THRESH and trig_prev < CLICK_THRESH and idx is not None:
+                key = self._keyboard_keys[idx]
+                VK_CTRL = 0x11
+                VK_ALT  = 0x12
+                VK_WIN  = 0x5B
+                if key.vk == VK_SHIFT:
+                    self._shift_active = not self._shift_active
+                elif key.vk == VK_CAPS:
+                    self._caps_lock = not self._caps_lock
+                elif key.vk == VK_CTRL:
+                    self._ctrl_active = not self._ctrl_active
+                elif key.vk == VK_ALT:
+                    self._alt_active  = not self._alt_active
+                elif key.vk == VK_WIN:
+                    self._win_active  = not self._win_active
+                else:
+                    use_shift = self._shift_active ^ self._caps_lock
+                    vk_to_use = key.shifted_vk if use_shift else key.vk
+                    # Send the key with all currently-armed modifiers wrapping it
+                    _send_key(vk_to_use,
+                              shift=use_shift and vk_to_use == key.vk,
+                              ctrl=self._ctrl_active,
+                              alt=self._alt_active,
+                              win=self._win_active)
+                    # Auto-release one-shot modifiers after a non-modifier key
+                    self._shift_active = False
+                    self._ctrl_active  = False
+                    self._alt_active   = False
+                    self._win_active   = False
+
+            setattr(self, trig_prev_attr, trig_now)
+
     def _poll_controller_input(self, dt):
         """Quest-like controls:
-          Left grip held  → move mode : left stick = pan X/Y, right stick Y = distance
-          Right grip held → resize mode: left stick Y = scale, right stick = rotate
-          No grip         → orient mode: right stick = yaw/pitch, left stick Y = slow distance
-          A (double press) → hide/show all    B → reset position
-          Menu (left)      → toggle FPS overlay
+          Grip held       → grab screen: 1:1 controller delta tracking, perp to laser
+          Right stick Y   → resize screen while grabbing
+          Left stick Y    → push/pull screen distance while grabbing
+          No grip         → right stick = yaw/pitch, left stick = pan
+          A button        → left mouse click    B button → right mouse click
+          Left trigger    → left click (on laser-screen hit)
+          Right trigger   → hold = right button down; release = right button up
+          Left stick click → toggle virtual keyboard
+          Right stick click → toggle cinema glow
+          Menu (left)     → toggle FPS overlay
         """
         if self._action_set is None:
             return
@@ -1208,39 +1868,37 @@ class OpenXRViewer:
             ctrl_pos = aim_mat[:3, 3].astype('f8')
             fwd_w    = -aim_mat[:3, 2].astype('f8')   # controller forward in world space
 
-            # Screen basis (constant during grab — orientation isn't changed by grip)
+            # Screen basis from current orientation
             cp = math.cos(self.screen_pitch); sp = math.sin(self.screen_pitch)
             cy = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
-            screen_n = np.array([cp * sy_, -sp, cp * cy], dtype='f8')   # normal
-            screen_r = np.array([cy, 0.0, -sy_],         dtype='f8')   # right
-            screen_u = np.array([sp * sy_, cp, sp * cy], dtype='f8')   # up
+            screen_n   = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
+            screen_r   = np.array([cy, 0.0, -sy_],          dtype='f8')
+            screen_u   = np.array([sp * sy_, cp, sp * cy],  dtype='f8')
+            screen_ctr = np.array([self.screen_pan_x, self.screen_pan_y,
+                                   -self.screen_distance], dtype='f8')
 
             if not prev_grabbed:
-                # Anchor = where the laser currently hits the screen plane
-                screen_ctr0 = np.array(
-                    [self.screen_pan_x, self.screen_pan_y, -self.screen_distance], dtype='f8'
-                )
+                # Grab start: record grab_ray_dist and screen-local offsets only.
+                # No world-space anchor stored — we recompute every frame from ctrl_pos+fwd_w*dist.
                 denom = float(np.dot(screen_n, fwd_w))
                 if abs(denom) > 1e-6:
-                    t = float(np.dot(screen_n, screen_ctr0 - ctrl_pos)) / denom
-                    if t > 0.1:
-                        self._grab_ray_dist = t
+                    t = float(np.dot(screen_n, screen_ctr - ctrl_pos)) / denom
+                    if t > 0.05:
                         hit  = ctrl_pos + fwd_w * t
-                        diff = hit - screen_ctr0
+                        diff = hit - screen_ctr
                         self._grab_offset_x = float(np.dot(diff, screen_r))
                         self._grab_offset_y = float(np.dot(diff, screen_u))
+                        self._grab_ray_dist = t
                     else:
-                        # Laser pointing away from screen — anchor at screen centre
-                        self._grab_ray_dist = max(0.5, float(np.linalg.norm(screen_ctr0 - ctrl_pos)))
                         self._grab_offset_x = 0.0
                         self._grab_offset_y = 0.0
+                        self._grab_ray_dist = max(0.5, float(np.linalg.norm(screen_ctr - ctrl_pos)))
                 else:
-                    # Laser parallel to screen — fall back
-                    self._grab_ray_dist = max(0.5, float(np.linalg.norm(screen_ctr0 - ctrl_pos)))
                     self._grab_offset_x = 0.0
                     self._grab_offset_y = 0.0
+                    self._grab_ray_dist = max(0.5, float(np.linalg.norm(screen_ctr - ctrl_pos)))
 
-            # Right thumbstick Y: resize (scale screen + anchor offset to match)
+            # Right thumbstick Y: resize — scale screen and offsets together
             if abs(ry) > DEAD:
                 scale = 1.0 + ry * 1.5 * dt
                 self._grab_offset_x *= scale
@@ -1248,17 +1906,28 @@ class OpenXRViewer:
                 self.screen_width = max(0.3, self.screen_width * scale)
                 self.screen_height = None
 
-            # Left thumbstick Y: push/pull (move anchor along the laser)
+            # Left thumbstick Y: push/pull along aim ray
             if abs(ly) > DEAD:
-                self._grab_ray_dist = max(0.3, self._grab_ray_dist + ly * self._dist_speed * dt)
+                self._grab_ray_dist = max(0.05, self._grab_ray_dist + ly * self._dist_speed * dt)
 
-            # Anchor follows the laser; screen centre = anchor − screen-local offset.
-            # As the controller rotates, fwd_w changes → anchor sweeps → screen tracks.
+            # Anchor = exact laser point at grab_ray_dist — zero drift, works for both
+            # translation and rotation of the controller.
             anchor = ctrl_pos + fwd_w * self._grab_ray_dist
-            new_ctr = anchor - screen_r * self._grab_offset_x - screen_u * self._grab_offset_y
-            self.screen_pan_x    = float(new_ctr[0])
-            self.screen_pan_y    = float(new_ctr[1])
-            self.screen_distance = float(-new_ctr[2])
+
+            # Rotate screen perpendicular to laser
+            _fy = float(np.clip(fwd_w[1], -1.0, 1.0))
+            self.screen_pitch = math.asin(_fy)
+            self.screen_yaw   = math.atan2(-fwd_w[0], -fwd_w[2])
+            _cp = math.cos(self.screen_pitch); _sp = math.sin(self.screen_pitch)
+            _cy = math.cos(self.screen_yaw);   _sy = math.sin(self.screen_yaw)
+            _sr = np.array([_cy, 0.0, -_sy],            dtype='f8')
+            _su = np.array([_sp * _sy, _cp, _sp * _cy], dtype='f8')
+
+            # Position screen so anchor lands at screen-local (grab_offset_x, grab_offset_y)
+            _new_ctr = anchor - _sr * self._grab_offset_x - _su * self._grab_offset_y
+            self.screen_pan_x    = float(_new_ctr[0])
+            self.screen_pan_y    = float(_new_ctr[1])
+            self.screen_distance = max(0.3, float(-_new_ctr[2]))
 
         elif not any_grip:
             # Free mode: right stick = yaw/pitch; left stick = pan
@@ -1273,33 +1942,52 @@ class OpenXRViewer:
             self._fps_overlay_visible = not self._fps_overlay_visible
         self._menu_pressed_last = menu_now
 
-        # A (right): single-press = toggle FPS overlay; double-press = hide/show screen
+        # A (right): left mouse click at current cursor position
         a_now = self._read_bool_action(self._act_a_btn, "/user/hand/right")
         if a_now and not self._a_last:
-            t = time.perf_counter()
-            if t - self._a_last_t < 0.4:
-                # double-press: hide/show screen
-                self._screen_visible = not self._screen_visible
-                self._a_last_t = 0.0
-            else:
-                # single-press: toggle FPS overlay (resolved on next press or timeout)
-                self._a_last_t = t
-                self._fps_overlay_visible = not self._fps_overlay_visible
+            _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
+            _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
         self._a_last = a_now
 
-        # B (right): single press = reset position/orientation/size
+        # B (right): right mouse click / context menu at current cursor position
         b_now = self._read_bool_action(self._act_b_btn, "/user/hand/right")
         if b_now and not self._b_last:
-            self.screen_distance = 2.0; self.screen_pan_x   = 0.0
-            self.screen_pan_y    = 0.0; self.screen_yaw     = 0.0
-            self.screen_pitch    = 0.0; self.screen_width   = 2.0
-            self.screen_height   = None
+            _send_mouse_flags(_MOUSEEVENTF_RIGHTDOWN)
+            _send_mouse_flags(_MOUSEEVENTF_RIGHTUP)
         self._b_last = b_now
+
+        # Y (left): reset screen to default position / size / orientation
+        y_now = self._read_bool_action(self._act_y_btn, "/user/hand/left")
+        if y_now and not self._y_last:
+            self.screen_distance = 2.0
+            self.screen_width    = 2.0
+            self.screen_height   = None       # rederived from frame aspect next render
+            self.screen_pan_x    = 0.0
+            self.screen_pan_y    = float(self._initial_head_y)  # eye height at session start
+            self.screen_yaw      = 0.0
+            self.screen_pitch    = 0.0
+            self._border_alpha   = 1.0        # flash the border to confirm the reset
+            self._border_idle_t  = time.perf_counter()
+        self._y_last = y_now
+
+        # Left thumbstick click: toggle virtual keyboard
+        lsc_now = self._read_bool_action(self._act_left_stick_click, "/user/hand/left")
+        if lsc_now and not self._left_stick_click_prev:
+            self._keyboard_visible = not self._keyboard_visible
+            if self._keyboard_visible and self._keyboard_tex is None:
+                self._init_keyboard()
+        self._left_stick_click_prev = lsc_now
+
+        # Right thumbstick click: toggle cinema glow effect
+        rsc_now = self._read_bool_action(self._act_right_stick_click, "/user/hand/right")
+        if rsc_now and not self._right_stick_click_prev:
+            self._glow_visible = not self._glow_visible
+        self._right_stick_click_prev = rsc_now
 
         self._any_grip_last = any_grip  # persist for next frame's prev_grabbed check
 
-        # Border fade: snap to 1 during interaction; decay to 0 when idle
-        interacting = grip_l or grip_r or b_now or a_now
+        # Border fade: snap to 1 during grip; decay to 0 when idle
+        interacting = grip_l or grip_r
         if interacting:
             self._border_alpha  = 1.0
             self._border_idle_t = time.perf_counter()
@@ -1309,6 +1997,11 @@ class OpenXRViewer:
             FADE_DUR   = 0.8   # fade-out duration in seconds
             if idle > FADE_DELAY:
                 self._border_alpha = max(0.0, 1.0 - (idle - FADE_DELAY) / FADE_DUR)
+
+        # Cursor + trigger input (runs every frame regardless of grip state)
+        self._handle_keyboard_input()   # updates _kb_hover_l/r, consumes keyboard triggers
+        self._handle_cursor()           # moves Windows cursor when laser hits screen
+        self._handle_triggers()         # fires mouse clicks (skips keys claimed by keyboard)
 
     # ------------------------------------------------------------------
     # Main blocking loop
@@ -1427,6 +2120,16 @@ class OpenXRViewer:
                     )
                 except Exception:
                     views = [None, None]
+
+                # Align screen_pan_y to headset eye height on the first valid frame.
+                if not self._screen_eye_init and views and views[0] is not None:
+                    try:
+                        ey = (views[0].pose.position.y + views[1].pose.position.y) / 2.0
+                        self.screen_pan_y    = float(ey)
+                        self._initial_head_y = float(ey)
+                    except Exception:
+                        pass
+                    self._screen_eye_init = True
 
                 eye_layer_views = []
 
@@ -1564,3 +2267,56 @@ class OpenXRViewer:
             self.window = None
 
         print("[OpenXRViewer] Cleanup complete")
+
+if __name__ == "__main__":
+    # Add this test function at the end of openxr_viewer.py
+
+    def test_openxr_basic():
+        """Minimal test to verify OpenXR initializes without errors."""
+        if not OPENXR_AVAILABLE:
+            print("[TEST] OpenXR not available - skipping test")
+            return False
+        
+        print("[TEST] Starting basic OpenXR test...")
+        
+        try:
+            # Create viewer with minimal config
+            viewer = OpenXRViewer(
+                frame_size=(640, 480),
+                fps=30,
+                show_fps=False
+            )
+            
+            # Test GLFW/ModernGL init
+            print("[TEST] Initializing GLFW/ModernGL...")
+            viewer._init_glfw()
+            viewer._init_moderngl()
+            print("[TEST] ✓ GLFW/ModernGL OK")
+            
+            # Test OpenXR init (without starting session)
+            print("[TEST] Initializing OpenXR...")
+            viewer._init_openxr()
+            print("[TEST] ✓ OpenXR initialized")
+            
+            # Test texture creation
+            print("[TEST] Creating test textures...")
+            viewer._init_textures(640, 480)
+            print("[TEST] ✓ Textures created")
+            
+            # Cleanup
+            print("[TEST] Cleaning up...")
+            if viewer.window:
+                glfw.destroy_window(viewer.window)
+                glfw.terminate()
+            
+            print("[TEST] ✅ All basic tests passed!")
+            return True
+            
+        except Exception as e:
+            print(f"[TEST] ❌ Test failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    # Run test when script is executed directly
+    success = test_openxr_basic()
+    sys.exit(0 if success else 1)
