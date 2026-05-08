@@ -1851,19 +1851,19 @@ class ConfigGUI(tk.Tk):
         if self.run_mode_key == "Local Viewer":
             self.run_mode_var_label.set(localized_run_vals[0])
             self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
+        elif self.run_mode_key == "OpenXR Viewer":
+            self.run_mode_var_label.set(localized_run_vals[1])
+            self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
         elif self.run_mode_key == "RTMP Streamer":
-                self.run_mode_var_label.set(localized_run_vals[1])
+                self.run_mode_var_label.set(localized_run_vals[2])
         elif self.run_mode_key == "MJPEG Streamer":
-            self.run_mode_var_label.set(localized_run_vals[2])
-        elif self.run_mode_key == "Legacy Streamer":
             self.run_mode_var_label.set(localized_run_vals[3])
+        elif self.run_mode_key == "Legacy Streamer":
+            self.run_mode_var_label.set(localized_run_vals[4])
         if OS_NAME == "Windows":
             if self.run_mode_key == "3D Monitor":
-                self.run_mode_var_label.set(localized_run_vals[4])
+                self.run_mode_var_label.set(localized_run_vals[5])
                 self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
-        if self.run_mode_key == "OpenXR Viewer":
-            self.run_mode_var_label.set(texts.get("OpenXR Viewer", "OpenXR Viewer"))
-            self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
         # elif OS_NAME == "Darwin":
             
         self.fill_16_9_cb.config(text=texts.get("Fill 16:9", "Fill 16:9"))

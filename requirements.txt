@@ -17,6 +17,7 @@ sounddevice==0.5.3
 PyOpenGL==3.1.10
 PyOpenGL-accelerate==3.1.10
 pyopenxr==1.0.3401
+setuptools==81.0.0
 
 # for da3
 omegaconf==2.3.0
