@@ -27,6 +27,7 @@ from OpenGL.GL import (
     GL_PIXEL_UNPACK_BUFFER, GL_DYNAMIC_DRAW,
     GL_RGB, GL_RED, GL_UNSIGNED_BYTE, GL_FLOAT,
     glDisable, GL_FRAMEBUFFER_SRGB,
+    glTexParameterf, GL_TEXTURE_LOD_BIAS,
 )
 
 try:
@@ -155,7 +156,16 @@ if sys.platform == "win32":
     _KEYEVENTF_KEYUP      = 0x0002
 
     def _set_cursor_pos(x, y):
-        _U32.SetCursorPos(int(x), int(y))
+        # Use SendInput with MOVE+ABSOLUTE so apps receive WM_MOUSEMOVE/WM_INPUT
+        # events while a button is held — SetCursorPos alone is invisible to apps
+        # that rely on raw input for drag tracking.
+        sw = _U32.GetSystemMetrics(0)
+        sh = _U32.GetSystemMetrics(1)
+        inp = _INPUT(type=0)
+        inp.mi.dwFlags = _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE
+        inp.mi.dx = ctypes.c_long(max(0, min(65535, int(x) * 65535 // max(sw - 1, 1))))
+        inp.mi.dy = ctypes.c_long(max(0, min(65535, int(y) * 65535 // max(sh - 1, 1))))
+        ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
 
     def _send_mouse_flags(flags):
         inp = _INPUT(type=0)
@@ -348,7 +358,7 @@ class OpenXRViewer:
         **kwargs,
     ):
         self.ipd_uv = ipd
-        self.depth_strength = 0.1  # multiplied by depth_ratio; effective = depth_strength * depth_ratio
+        self.depth_strength = 0.03  # multiplied by depth_ratio; effective = depth_strength * depth_ratio
         self.depth_ratio = depth_ratio
         self.convergence = convergence
         self.frame_size = frame_size
@@ -423,10 +433,10 @@ class OpenXRViewer:
         self._a_last         = False  # A-button previous frame state
         self._a_last_t       = 0.0   # timestamp of last A press (double-press detection)
         self._b_last              = False  # B-button previous frame state
-        self._ltrig_drag          = False  # left trigger is actively holding left mouse button
-        self._rtrig_drag          = False  # right trigger is actively holding left mouse button
-        self._ltrig_press_t       = None   # perf_counter when left trigger crossed PRESS_THRESH (None = idle)
-        self._rtrig_press_t       = None   # perf_counter when right trigger crossed PRESS_THRESH (None = idle)
+        self._ltrig_state   = 'idle'  # 'idle' | 'pressed' | 'dragging'
+        self._rtrig_state   = 'idle'
+        self._ltrig_press_t = 0.0    # perf_counter of last rising edge — left
+        self._rtrig_press_t = 0.0    # perf_counter of last rising edge — right
         self._y_last         = False  # Y-button previous frame state (reset screen)
         self._x_last         = False  # X-button previous frame state (toggle keyboard)
         # Head pose (world) cached each frame from xr.locate_views — used as the orbit
@@ -438,6 +448,7 @@ class OpenXRViewer:
         # Border fade: shown during interaction, fades out when idle
         self._border_alpha   = 0.0    # 0.0 = invisible, 1.0 = fully opaque
         self._border_idle_t  = 0.0    # wall time when interaction last ended
+        self._saved_dclick_time = None  # system double-click time saved before session
 
         # Mouse cursor control
         self._cursor_uv_l         = None  # (u,v,t) where left laser hits screen, or None
@@ -549,6 +560,7 @@ class OpenXRViewer:
         self._laser_prev_mat_r   = None
         self._LASER_HIDE_AFTER   = 3.0   # seconds of idle before hiding
         self._LASER_MOVE_THRESH  = 0.001 # metres or radians — minimum motion to count
+
 
         # ModernGL / GL handles
         self.window = None
@@ -788,10 +800,10 @@ class OpenXRViewer:
         for eye_index, vcv in enumerate(view_configs):
             rec_w = vcv.recommended_image_rect_width
             rec_h = vcv.recommended_image_rect_height
-            # Target 2× recommended (diminishing returns beyond that as the panel
-            # pixel density becomes the bottleneck), clamped to the hardware max.
-            sc_w = max(2, min(vcv.max_image_rect_width,  rec_w * 2) & ~1)
-            sc_h = max(2, min(vcv.max_image_rect_height, rec_h * 2) & ~1)
+            # Use exactly the recommended resolution — this matches the HMD panel
+            # pixel density and is what the runtime expects for correct reprojection.
+            sc_w = rec_w & ~1
+            sc_h = rec_h & ~1
             print(f"[OpenXRViewer] Eye {eye_index} recommended: {rec_w}x{rec_h}  swapchain: {sc_w}x{sc_h}")
 
             sc_info = xr.SwapchainCreateInfo(
@@ -1003,6 +1015,16 @@ class OpenXRViewer:
         self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
         self.color_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
         self.color_tex.build_mipmaps()
+        try:
+            self.color_tex.anisotropy = 16.0
+        except Exception:
+            pass
+        # Negative LOD bias: bias the sampler toward sharper (higher-res) mip levels.
+        # -0.5 = use a mip level 0.5 finer than the GPU would naturally pick,
+        # preserving anti-aliasing while recovering perceived sharpness.
+        glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, -0.5)
+        glBindTexture(GL_TEXTURE_2D, 0)
         self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
         self.depth_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
         self.depth_tex.build_mipmaps()
@@ -1299,9 +1321,8 @@ class OpenXRViewer:
             glGenerateMipmap(GL_TEXTURE_2D)
             glBindTexture(GL_TEXTURE_2D, 0)
 
-            # Depth: float tensor on GPU → DMA into PBO
             ptr = self._cuda_gl.map_resource(self._cuda_res_depth)
-            self._cuda_gl.memcpy_d2d(ptr, depth_gpu.data_ptr(), depth_gpu.nbytes)
+            self._cuda_gl.memcpy_d2d(ptr, depth_gpu.contiguous().data_ptr(), depth_gpu.nbytes)
             self._cuda_gl.unmap_resource(self._cuda_res_depth)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_depth)
             glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
@@ -1630,11 +1651,12 @@ class OpenXRViewer:
         other orientation.
         """
         lx, ly, lz = self.screen_pan_x, self.screen_pan_y, -self.screen_distance
-        # Apply rot_y (yaw around Y): x' = lx*cy + lz*sy_,  z' = -lx*sy_ + lz*cy
-        rx =  lx * cy + lz * sy_
-        rz = -lx * sy_ + lz * cy
-        # Apply rot_x (pitch around X): y' = ly*cp - rz*sp,  z' = ly*sp + rz*cp
-        return np.array([rx, ly * cp - rz * sp, ly * sp + rz * cp], dtype='f8')
+        # Apply rot_x (pitch) first — matches _build_model_mat4's rot_y @ rot_x order
+        ix = lx
+        iy = ly * cp - lz * sp
+        iz = ly * sp + lz * cp
+        # Then apply rot_y (yaw)
+        return np.array([ix * cy + iz * sy_, iy, -ix * sy_ + iz * cy], dtype='f8')
 
     def _laser_screen_hit_dist(self, ctrl_pos, fwd_w):
         """Return the distance along fwd_w where the aim ray hits the visible screen rect.
@@ -2152,17 +2174,26 @@ class OpenXRViewer:
     def _handle_triggers(self):
         """Map controller triggers to mouse clicks and drag.
 
-        Both triggers use tap-vs-hold detection:
-          - Quick tap (released within HOLD_TIME) → atomic LEFTDOWN + LEFTUP (single click).
-          - Long press (held >= HOLD_TIME) → LEFTDOWN held until trigger released (drag).
-          - Keyboard hover on the same hand cancels any pending press or active drag.
+        Three-state machine per trigger: idle → pressed → dragging.
 
-        Two triggers are independent but share one physical mouse button for drag:
-        the button stays held as long as EITHER trigger's drag is active.
+        • Rising edge (idle → pressed):
+            Send LEFTDOWN + LEFTUP immediately — a complete click pulse.
+            The OS sees two clean press+release pairs within GetDoubleClickTime
+            for double-click, just like a real mouse double-click.
+
+        • Held past HOLD_TIME (pressed → dragging):
+            Send LEFTDOWN (hold) — the OS sees button-down + subsequent
+            MOUSEMOVE events = drag.
+
+        • Released from dragging:
+            Send LEFTUP to end the drag.
+
+        This gives all three: single-click, double-click, and drag —
+        without requiring the user to do two complete trigger cycles quickly.
         """
         PRESS_THRESH   = 0.55   # rising edge
         RELEASE_THRESH = 0.30   # falling edge (hysteresis)
-        HOLD_TIME      = 0.25   # seconds — hold longer than this to enter drag mode
+        HOLD_TIME      = 0.22   # seconds trigger must stay held to enter drag mode
 
         now = time.perf_counter()
         lt  = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
@@ -2171,54 +2202,50 @@ class OpenXRViewer:
         left_on_kb  = self._kb_hover_l is not None
         right_on_kb = self._kb_hover_r is not None
 
-        # A laser is "usable" if it's hitting the screen OR is the active cursor
-        # controller (prevents clicks being swallowed by a single pixel of edge miss).
-        left_laser_usable  = (self._cursor_uv_l is not None or
-                              self._cursor_ctrl == 'left')
-        right_laser_usable = (self._cursor_uv_r is not None or
-                              self._cursor_ctrl == 'right')
+        left_laser_usable  = (not left_on_kb and
+                              (self._cursor_uv_l is not None or
+                               self._cursor_ctrl == 'left'))
+        right_laser_usable = (not right_on_kb and
+                              (self._cursor_uv_r is not None or
+                               self._cursor_ctrl == 'right'))
 
-        # ── Per-trigger tap-vs-hold state machine ────────────────────────────────
-        for trig, on_kb, laser_usable, press_t_attr, drag_attr in (
-            (lt, left_on_kb,  left_laser_usable,  '_ltrig_press_t', '_ltrig_drag'),
-            (rt, right_on_kb, right_laser_usable, '_rtrig_press_t', '_rtrig_drag'),
+        any_drag = False
+
+        for trig, usable, state_attr, press_t_attr in (
+            (lt, left_laser_usable,  '_ltrig_state', '_ltrig_press_t'),
+            (rt, right_laser_usable, '_rtrig_state', '_rtrig_press_t'),
         ):
-            press_t = getattr(self, press_t_attr)
-            drag    = getattr(self, drag_attr)
+            state = getattr(self, state_attr)
 
-            if on_kb:
-                # Keyboard reclaims this trigger — cancel pending press or drag cleanly.
-                setattr(self, press_t_attr, None)
-                setattr(self, drag_attr,    False)
-
-            elif drag:
-                # Drag is active — wait for release.
-                if trig <= RELEASE_THRESH:
-                    setattr(self, drag_attr, False)
-
-            elif press_t is not None:
-                # Trigger pressed, not yet classified as click or drag.
-                if trig <= RELEASE_THRESH:
-                    # Released before hold threshold → single click.
+            if state == 'idle':
+                if trig >= PRESS_THRESH and usable:
+                    # Rising edge: fire an immediate click pulse so the OS can
+                    # accumulate it toward double-click detection, then start timer.
                     _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
                     _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
-                    setattr(self, press_t_attr, None)
-                elif (now - press_t) >= HOLD_TIME:
-                    # Held long enough → enter drag mode (LEFTDOWN sent below).
-                    setattr(self, drag_attr,    True)
-                    setattr(self, press_t_attr, None)
-
-            else:
-                # Idle — watch for rising edge.
-                if laser_usable and trig >= PRESS_THRESH:
+                    setattr(self, state_attr,   'pressed')
                     setattr(self, press_t_attr, now)
 
-        # ── Combined mouse button: held when either trigger drag is active ───────
-        want_down = self._ltrig_drag or self._rtrig_drag
-        if want_down and not self._left_btn_down:
-            _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
-            self._left_btn_down = True
-        elif not want_down and self._left_btn_down:
+            elif state == 'pressed':
+                if not usable or trig <= RELEASE_THRESH:
+                    # Released quickly — click already delivered, return to idle.
+                    setattr(self, state_attr, 'idle')
+                elif (now - getattr(self, press_t_attr)) >= HOLD_TIME:
+                    # Held long enough → begin drag (send LEFTDOWN if not already down).
+                    if not self._left_btn_down:
+                        _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
+                        self._left_btn_down = True
+                    setattr(self, state_attr, 'dragging')
+                    any_drag = True
+
+            elif state == 'dragging':
+                if not usable or trig <= RELEASE_THRESH:
+                    setattr(self, state_attr, 'idle')
+                else:
+                    any_drag = True
+
+        # Send LEFTUP once both triggers leave drag state.
+        if not any_drag and self._left_btn_down:
             _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
             self._left_btn_down = False
 
@@ -2303,8 +2330,8 @@ class OpenXRViewer:
                                    Screen reorients to face the head as it orbits.
           Left  grip + L stick  → pan screen in world X / Y.
           Right stick (no grip) → mouse scroll (X = horizontal, Y = vertical).
-          Right grip + R stick X → push/pull screen distance (closer/further).
-          Right grip + R stick Y → resize screen (up = larger, down = smaller).
+          Right grip + R stick X → resize screen (left = smaller, right = larger).
+          Right grip + R stick Y → screen distance (up = closer, down = further).
           Left  trigger    → hold = left mouse button held (drag).
           Right trigger    → hold = left mouse button held (drag, same as left).
           A (right)        → discrete left mouse click   B (right) → right mouse click
@@ -2391,7 +2418,8 @@ class OpenXRViewer:
                     self.screen_pitch = -math.asin(max(-0.999, min(0.999, vy / v_len)))
                     self.screen_yaw   = math.atan2(vx, vz)
 
-        # ── Right grip + right stick: distance (X) and size (Y) ──────────────────
+        # ── Right grip + right stick X: resize screen (left=smaller, right=larger) ──
+        # ── Right grip + right stick Y: distance (up=closer, down=further) ─────────
         # ── Left grip + right stick Y: depth strength (parallax intensity) ────────
         #    Push stick up to increase 3-D depth effect; down to flatten/remove it.
         #    Right stick click while left grip held = toggle depth off/on instantly.
@@ -2399,16 +2427,19 @@ class OpenXRViewer:
         DIST_SPEED   = 0.7    # m/s
         RESIZE_SPEED = 1.2    # m/s of width change at full deflection
         DEPTH_SPEED  = 0.08   # depth_strength units/s at full deflection
-        SCROLL_SPEED = 600    # wheel units per second at full deflection
+        SCROLL_SPEED = 900    # wheel units per second at full deflection
         if grip_r and not grip_l:
-            if abs(rx) > DEAD:
-                self.screen_distance = max(0.3,
-                                           self.screen_distance + rx * DIST_SPEED * dt)
-            if abs(ry) > DEAD:
+            if abs(rx) > abs(ry) and abs(rx) > DEAD:
+                # X dominant → resize only (prevents Y bleed-through from changing distance)
                 self.screen_width = max(0.3,
-                                        self.screen_width + ry * RESIZE_SPEED * dt)
+                                        self.screen_width + rx * RESIZE_SPEED * dt)
                 self.screen_height = None
                 self._resizing = True
+            elif abs(ry) > abs(rx) and abs(ry) > DEAD:
+                # Y dominant → distance only
+                # Up (ry > 0) → further (distance increases); down → closer
+                self.screen_distance = max(0.3,
+                                           self.screen_distance + ry * DIST_SPEED * dt)
         elif grip_l and not grip_r:
             # Left grip + right stick Y → adjust depth strength
             if abs(ry) > DEAD:
@@ -2534,6 +2565,13 @@ class OpenXRViewer:
             print(f"[OpenXRViewer] OpenXR init failed: {e}")
             self.cleanup()
             raise
+
+        # Widen the system double-click window so VR trigger taps have more time.
+        # Default Windows value is 500 ms — too tight for controller triggers.
+        # We restore the original value in cleanup() so no permanent side-effects.
+        if sys.platform == "win32" and self._saved_dclick_time is None:
+            self._saved_dclick_time = _U32.GetDoubleClickTime()
+            _U32.SystemParametersInfoW(0x0020, 1200, None, 0)  # SPI_SETDOUBLECLICKTIME
 
         # Upload the first frame supplied by main.py
         if first_rgb is not None and first_depth is not None:
@@ -2731,6 +2769,10 @@ class OpenXRViewer:
 
     def cleanup(self):
         """Release all OpenXR and OpenGL resources."""
+        if sys.platform == "win32" and self._saved_dclick_time is not None:
+            _U32.SystemParametersInfoW(0x0020, self._saved_dclick_time, None, 0)
+            self._saved_dclick_time = None
+
         raw_ids = [raw_id for raw_id, _ in self._fbo_cache.values()]
         if raw_ids:
             try:
