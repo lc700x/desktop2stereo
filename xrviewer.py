@@ -24,10 +24,12 @@ from OpenGL.GL import (
     GL_FRAMEBUFFER_COMPLETE,
     glGenBuffers, glDeleteBuffers, glBindBuffer, glBufferData,
     glBindTexture, glTexSubImage2D, glGenerateMipmap,
-    GL_PIXEL_UNPACK_BUFFER, GL_DYNAMIC_DRAW,
-    GL_RGB, GL_RED, GL_UNSIGNED_BYTE, GL_FLOAT,
+    GL_PIXEL_UNPACK_BUFFER, GL_PIXEL_PACK_BUFFER, GL_DYNAMIC_DRAW, GL_STREAM_READ,
+    GL_RGB, GL_RED, GL_RGBA, GL_UNSIGNED_BYTE, GL_FLOAT,
     glDisable, GL_FRAMEBUFFER_SRGB,
     glTexParameterf, GL_TEXTURE_LOD_BIAS,
+    glMapBuffer, glUnmapBuffer, GL_READ_ONLY, GL_MAP_UNSYNCHRONIZED_BIT,
+    glReadPixels, glFlush,
 )
 
 try:
@@ -36,6 +38,180 @@ try:
 except ImportError:
     OPENXR_AVAILABLE = False
     print("[OpenXRViewer] pyopenxr not installed. Run: pip install pyopenxr")
+
+# ---------------------------------------------------------------------------
+# D3D11 ctypes helpers (Windows only)
+# ---------------------------------------------------------------------------
+# DXGI / D3D11 format constants used for swapchain negotiation
+_DXGI_FORMAT_R8G8B8A8_UNORM_SRGB = 29
+_DXGI_FORMAT_R8G8B8A8_UNORM      = 28
+_DXGI_FORMAT_B8G8R8A8_UNORM_SRGB = 91
+_DXGI_FORMAT_B8G8R8A8_UNORM      = 87
+
+_D3D11_PREFERRED_FORMATS = [
+    _DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+    _DXGI_FORMAT_R8G8B8A8_UNORM,
+    _DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+    _DXGI_FORMAT_B8G8R8A8_UNORM,
+]
+
+if sys.platform == "win32":
+    import ctypes.wintypes as _wintypes
+
+    _d3d11 = None
+    _dxgi  = None
+
+    def _load_d3d11():
+        global _d3d11, _dxgi
+        if _d3d11 is None:
+            _d3d11 = ctypes.windll.LoadLibrary("d3d11.dll")
+            _dxgi  = ctypes.windll.LoadLibrary("dxgi.dll")
+
+    # D3D_DRIVER_TYPE / D3D_FEATURE_LEVEL constants
+    _D3D_DRIVER_TYPE_HARDWARE  = 1
+    _D3D_DRIVER_TYPE_WARP      = 5
+    _D3D11_SDK_VERSION         = 7
+    _D3D_FEATURE_LEVEL_11_0    = 0xb000
+    _D3D_FEATURE_LEVEL_10_1    = 0xa100
+    _D3D_FEATURE_LEVEL_10_0    = 0xa000
+
+    def _create_d3d11_device(adapter_luid=None):
+        """Create an ID3D11Device + ID3D11DeviceContext via ctypes.
+        Returns (device_ptr, context_ptr, feature_level) as c_void_p values.
+        adapter_luid: optional _LUID from GraphicsRequirementsD3D11KHR to pick the correct adapter.
+        """
+        _load_d3d11()
+
+        feature_levels = (ctypes.c_int * 3)(
+            _D3D_FEATURE_LEVEL_11_0,
+            _D3D_FEATURE_LEVEL_10_1,
+            _D3D_FEATURE_LEVEL_10_0,
+        )
+        device      = ctypes.c_void_p(0)
+        context     = ctypes.c_void_p(0)
+        feat_out    = ctypes.c_int(0)
+
+        # If adapter_luid provided, try to find the matching IDXGIAdapter
+        adapter = ctypes.c_void_p(0)
+        if adapter_luid is not None:
+            try:
+                adapter = _find_dxgi_adapter(adapter_luid)
+            except Exception as e:
+                print(f"[OpenXRViewer] LUID adapter lookup failed ({e}), using default")
+                adapter = ctypes.c_void_p(0)
+
+        hr = _d3d11.D3D11CreateDevice(
+            adapter,                              # pAdapter (NULL = default)
+            _D3D_DRIVER_TYPE_HARDWARE if not adapter else 0,  # DriverType (0=unknown when adapter set)
+            None,                                 # Software
+            0,                                    # Flags
+            feature_levels,
+            3,                                    # FeatureLevels count
+            _D3D11_SDK_VERSION,
+            ctypes.byref(device),
+            ctypes.byref(feat_out),
+            ctypes.byref(context),
+        )
+        if hr != 0:
+            raise RuntimeError(f"D3D11CreateDevice failed: hr=0x{hr & 0xFFFFFFFF:08x}")
+        return device, context, feat_out.value
+
+    # IID_IDXGIFactory1  {770aae78-f26f-4dba-a829-253c83d1b387}
+    _IID_IDXGIFactory1 = (ctypes.c_byte * 16)(
+        0x78, 0xae, 0x0a, 0x77, 0x6f, 0xf2, 0xba, 0x4d,
+        0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87,
+    )
+
+    def _find_dxgi_adapter(luid):
+        """Return an IDXGIAdapter* (c_void_p) matching the given _LUID, or raise."""
+        _load_d3d11()
+        factory = ctypes.c_void_p(0)
+        hr = _dxgi.CreateDXGIFactory1(ctypes.byref((ctypes.c_byte * 16)(*_IID_IDXGIFactory1)),
+                                      ctypes.byref(factory))
+        if hr != 0:
+            raise RuntimeError(f"CreateDXGIFactory1 failed: 0x{hr & 0xFFFFFFFF:08x}")
+
+        # IDXGIFactory1 vtable: [0]=QI [1]=AddRef [2]=Release ... [7]=EnumAdapters1
+        # We use EnumAdapters (index 6) which is on IDXGIFactory (parent interface)
+        # Layout: IUnknown(0-2) + IDXGIObject(3-6) + IDXGIFactory(7=EnumAdapters, 8=MakeWindowAssoc, 9=GetWindowAssoc, 10=CreateSwapChain, 11=CreateSoftwareAdapter) + IDXGIFactory1(12=EnumAdapters1, 13=IsCurrent)
+        vtbl = ctypes.cast(factory, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        enum_adapters = ctypes.CFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p))(
+            ctypes.cast(vtbl + 7 * ctypes.sizeof(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)).contents.value
+        )
+        release_fn = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
+            ctypes.cast(vtbl + 2 * ctypes.sizeof(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)).contents.value
+        )
+
+        idx = 0
+        result_adapter = ctypes.c_void_p(0)
+        while True:
+            adapter = ctypes.c_void_p(0)
+            hr = enum_adapters(factory, idx, ctypes.byref(adapter))
+            if hr != 0:
+                break
+            # IDXGIAdapter vtable: QI(0) AddRef(1) Release(2) SetPrivateData(3) SetPrivateDataInterface(4) GetPrivateData(5) GetParent(6) EnumOutputs(7) GetDesc(8)
+            # DXGI_ADAPTER_DESC is: Description[128 wchar], VendorId, DeviceId, SubSysId, Revision, DedicatedVideoMemory, DedicatedSystemMemory, SharedSystemMemory, AdapterLuid
+            adapter_vtbl = ctypes.cast(adapter, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            # GetDesc is vtbl[8]
+            get_desc = ctypes.CFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p)(
+                ctypes.cast(adapter_vtbl + 8 * ctypes.sizeof(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)).contents.value
+            )
+            # DXGI_ADAPTER_DESC: 128*2 bytes description + 4*4 IDs + 3*8 memory + 8 luid = 128*2+16+24+8 = 304 bytes
+            desc_buf = (ctypes.c_byte * 304)()
+            get_desc(adapter, desc_buf)
+            # LUID is at offset 128*2 + 4*4 + 3*8 = 256+16+24 = 296 bytes
+            luid_low  = ctypes.c_ulong.from_buffer_copy(desc_buf, 296).value
+            luid_high = ctypes.c_long.from_buffer_copy(desc_buf, 300).value
+            adapter_rel = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
+                ctypes.cast(adapter_vtbl + 2 * ctypes.sizeof(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)).contents.value
+            )
+            if luid_low == luid.low_part and luid_high == luid.high_part:
+                result_adapter = adapter
+                break
+            adapter_rel(adapter)
+            idx += 1
+
+        release_fn(factory)
+        if not result_adapter:
+            raise RuntimeError("Matching DXGI adapter not found for LUID")
+        return result_adapter
+
+    def _d3d11_update_subresource(context, dst, src_ptr, row_pitch):
+        """Write CPU data into a D3D11 texture via UpdateSubresource (vtbl index 48).
+        Works with any format including SRGB — no staging texture needed.
+        src_ptr: integer address of the source data (already row-reversed).
+        """
+        _UPDATE_SR_VTBL_IDX = 48
+        vtbl = ctypes.cast(context, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        fn_ptr = ctypes.cast(
+            vtbl + _UPDATE_SR_VTBL_IDX * ctypes.sizeof(ctypes.c_void_p),
+            ctypes.POINTER(ctypes.c_void_p),
+        ).contents.value
+        UpdateFn = ctypes.CFUNCTYPE(
+            None,
+            ctypes.c_void_p,  # this
+            ctypes.c_void_p,  # pDstResource
+            ctypes.c_uint,    # DstSubresource
+            ctypes.c_void_p,  # pDstBox (NULL = whole texture)
+            ctypes.c_void_p,  # pSrcData
+            ctypes.c_uint,    # SrcRowPitch
+            ctypes.c_uint,    # SrcDepthPitch
+        )(fn_ptr)
+        UpdateFn(
+            context.value,
+            ctypes.cast(dst, ctypes.c_void_p).value,
+            0,        # subresource 0
+            None,     # full texture
+            src_ptr,
+            row_pitch,
+            0,
+        )
+
+
+
+else:
+    def _create_d3d11_device(adapter_luid=None):
+        raise RuntimeError("D3D11 only available on Windows")
 
 from viewer import FRAGMENT_SHADER, BACKEND
 try:
@@ -201,6 +377,9 @@ else:
     _MOUSEEVENTF_RIGHTDOWN = 0x0008
     _MOUSEEVENTF_RIGHTUP   = 0x0010
 
+# Controller thumbstick dead-zone
+DEAD = 0.15
+
 
 # ---------------------------------------------------------------------------
 # Virtual keyboard layout
@@ -304,11 +483,22 @@ def _pose_to_view_mat4(pose):
 def _fov_to_proj_mat4(fov, near=0.05, far=100.0):
     """XrFovf → standard 4×4 OpenGL asymmetric-frustum projection matrix
     (numpy, math row/col convention). Caller must transpose before writing to OpenGL.
+
+    Includes a small epsilon offset to prevent division by zero when the
+    headset runtime reports a degenerate FOV (e.g., left == right).
     """
     l = math.tan(fov.angle_left)  * near
     r = math.tan(fov.angle_right) * near
     t = math.tan(fov.angle_up)    * near
     b = math.tan(fov.angle_down)  * near
+
+    # Prevent ZeroDivisionError when headset reports identical left/right or up/down angles.
+    EPS = 1e-6
+    if abs(r - l) < EPS:
+        r += EPS
+    if abs(t - b) < EPS:
+        t += EPS
+
     p = np.zeros((4, 4), dtype=np.float32)
     p[0, 0] =  2 * near / (r - l)
     p[0, 2] =  (r + l)  / (r - l)      # col 2 of row 0
@@ -607,6 +797,17 @@ class OpenXRViewer:
         self._anim_target_yaw      = None   # target screen_yaw
         self._anim_target_pitch    = None   # target screen_pitch
 
+        # D3D11 backend state (populated by _init_d3d11_device when D3D11 path is active)
+        self._use_d3d11             = False   # True = D3D11 OpenXR session + readback path
+        self._d3d11_device          = None    # c_void_p ID3D11Device*
+        self._d3d11_context         = None    # c_void_p ID3D11DeviceContext*
+        self._d3d11_swapchain_fmt   = _DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+        # Offscreen GL FBOs used when rendering for D3D11 swapchain images.
+        # Key: (eye_index, img_index) → (mgl_fbo, mgl_tex, raw_fbo_id, w, h)
+        self._offscreen_fbo_cache   = {}
+        # PBOs for async pixel readback in the D3D11 path.
+        # Key: (eye_index, img_index) → (pbo_id, w, h)
+        self._d3d11_pbo_cache       = {}
         # ModernGL / GL handles
         self.window = None
         self.ctx = None
@@ -791,6 +992,198 @@ class OpenXRViewer:
         )
 
     def _init_openxr(self):
+        """Try OpenGL first; fall back to D3D11 on Windows if OpenGL fails."""
+        try:
+            self._init_openxr_opengl()
+            return
+        except Exception as e:
+            if sys.platform != "win32":
+                raise
+            print(f"[OpenXRViewer] OpenGL init failed ({e}), falling back to D3D11")
+            self._cleanup_partial_openxr()
+
+        self._init_openxr_d3d11()
+        self._use_d3d11 = True
+
+    def _cleanup_partial_openxr(self):
+        """Tear down any partially-initialised OpenXR + D3D11 state so a retry is clean."""
+        for swapchain in self._xr_swapchains.values():
+            try:
+                xr.destroy_swapchain(swapchain)
+            except Exception:
+                pass
+        self._xr_swapchains.clear()
+        self._swapchain_images.clear()
+        self._swapchain_sizes.clear()
+
+        for attr in ("_xr_space", "_aim_space_l", "_aim_space_r"):
+            sp = getattr(self, attr, None)
+            if sp:
+                try:
+                    xr.destroy_space(sp)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+        if self._xr_session:
+            try:
+                xr.destroy_session(self._xr_session)
+            except Exception:
+                pass
+            self._xr_session = None
+
+        if self._xr_instance:
+            try:
+                xr.destroy_instance(self._xr_instance)
+            except Exception:
+                pass
+            self._xr_instance = None
+
+        self._xr_system_id = None
+
+        # Release D3D11 COM objects if they were created
+        for d3d_obj in (self._d3d11_context, self._d3d11_device):
+            if d3d_obj is not None:
+                try:
+                    vtbl = ctypes.cast(d3d_obj, ctypes.POINTER(ctypes.c_void_p)).contents.value
+                    release_fn = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
+                        ctypes.cast(vtbl + 2 * ctypes.sizeof(ctypes.c_void_p),
+                                    ctypes.POINTER(ctypes.c_void_p)).contents.value
+                    )
+                    release_fn(d3d_obj.value)
+                except Exception:
+                    pass
+        self._d3d11_device  = None
+        self._d3d11_context = None
+
+    def _init_openxr_d3d11(self):
+        """Create an OpenXR instance + session backed by a D3D11 device.
+
+        Rendering still happens in ModernGL; each frame the completed eye texture
+        is read back via glReadPixels and uploaded into the D3D11 swapchain image
+        via UpdateSubresource.  This is a CPU-round-trip but avoids the need for
+        NV_DX_interop or a full D3D11 rendering port.
+        """
+        # 1. Instance (D3D11 extension)
+        app_info = xr.ApplicationInfo(
+            application_name="Desktop2Stereo",
+            application_version=1,
+            engine_name="D2S",
+            engine_version=1,
+            api_version=xr.XR_CURRENT_API_VERSION,
+        )
+        create_info = xr.InstanceCreateInfo(
+            application_info=app_info,
+            enabled_extension_names=[xr.KHR_D3D11_ENABLE_EXTENSION_NAME],
+        )
+        self._xr_instance = xr.create_instance(create_info)
+        print("[OpenXRViewer] XrInstance created (D3D11)")
+
+        # 2. System
+        self._xr_system_id = xr.get_system(
+            self._xr_instance,
+            xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
+        )
+
+        # 3. Query D3D11 requirements (runtime mandates this call before session creation)
+        _pfn = ctypes.cast(
+            xr.get_instance_proc_addr(self._xr_instance, "xrGetD3D11GraphicsRequirementsKHR"),
+            xr.PFN_xrGetD3D11GraphicsRequirementsKHR,
+        )
+        # Python 3.12 ctypes rejects int where a Structure field is expected.
+        # pyopenxr's GraphicsRequirementsD3D11KHR.__init__ defaults adapter_luid=0
+        # which triggers TypeError. Pass an explicit zeroed _LUID() instance instead.
+        from xr.platform.windows import _LUID as _XrLUID
+        _reqs = xr.GraphicsRequirementsD3D11KHR(adapter_luid=_XrLUID())
+        xr.check_result(xr.Result(_pfn(self._xr_instance, self._xr_system_id, ctypes.byref(_reqs))))
+        print(f"[OpenXRViewer] D3D11 min feature level: 0x{_reqs.min_feature_level:04x}")
+
+        # 4. Create D3D11 device on the adapter the runtime requires
+        device, context, feat = _create_d3d11_device(adapter_luid=_reqs.adapter_luid)
+        self._d3d11_device  = device
+        self._d3d11_context = context
+        print(f"[OpenXRViewer] D3D11 device created (feature level 0x{feat:04x})")
+
+        # 5. Graphics binding
+        binding = xr.GraphicsBindingD3D11KHR(
+            device=ctypes.cast(device, ctypes.POINTER(ctypes.c_int)),
+        )
+
+        # 6. Session
+        session_info = xr.SessionCreateInfo(
+            system_id=self._xr_system_id,
+            next=ctypes.cast(ctypes.pointer(binding), ctypes.c_void_p),
+        )
+        self._xr_session = xr.create_session(self._xr_instance, session_info)
+        print("[OpenXRViewer] XrSession created (D3D11)")
+
+        # 7. Reference space
+        available_spaces = xr.enumerate_reference_spaces(self._xr_session)
+        ref_type = (
+            xr.ReferenceSpaceType.STAGE
+            if xr.ReferenceSpaceType.STAGE in available_spaces
+            else xr.ReferenceSpaceType.LOCAL
+        )
+        self._xr_space = xr.create_reference_space(
+            self._xr_session,
+            xr.ReferenceSpaceCreateInfo(
+                reference_space_type=ref_type,
+                pose_in_reference_space=xr.Posef(),
+            ),
+        )
+
+        # 8. Swapchains with DXGI format
+        view_configs = xr.enumerate_view_configuration_views(
+            self._xr_instance,
+            self._xr_system_id,
+            xr.ViewConfigurationType.PRIMARY_STEREO,
+        )
+        # Pick the best supported DXGI format
+        runtime_fmts = xr.enumerate_swapchain_formats(self._xr_session)
+        chosen_fmt = None
+        for preferred in _D3D11_PREFERRED_FORMATS:
+            if preferred in runtime_fmts:
+                chosen_fmt = preferred
+                break
+        if chosen_fmt is None:
+            raise RuntimeError(f"No supported D3D11 swapchain format. Runtime offers: {runtime_fmts}")
+        self._d3d11_swapchain_fmt = chosen_fmt
+        print(f"[OpenXRViewer] D3D11 swapchain format: {chosen_fmt}")
+
+        for eye_index, vcv in enumerate(view_configs):
+            rec_w = vcv.recommended_image_rect_width
+            rec_h = vcv.recommended_image_rect_height
+            sc_w  = rec_w & ~1
+            sc_h  = rec_h & ~1
+            print(f"[OpenXRViewer] Eye {eye_index} swapchain: {sc_w}x{sc_h} (D3D11)")
+
+            sc_info = xr.SwapchainCreateInfo(
+                usage_flags=(
+                    xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT |
+                    xr.SwapchainUsageFlags.SAMPLED_BIT
+                ),
+                format=chosen_fmt,
+                sample_count=1,
+                width=sc_w,
+                height=sc_h,
+                face_count=1,
+                array_size=1,
+                mip_count=1,
+            )
+            swapchain = xr.create_swapchain(self._xr_session, sc_info)
+            images    = xr.enumerate_swapchain_images(swapchain, xr.SwapchainImageD3D11KHR)
+            self._xr_swapchains[eye_index]    = swapchain
+            self._swapchain_images[eye_index] = images
+            self._swapchain_sizes[eye_index]  = (sc_w, sc_h)
+
+        # 9. Controller actions (best-effort)
+        try:
+            self._init_controller_actions()
+        except Exception as e:
+            print(f"[OpenXRViewer] Controller actions unavailable: {e}")
+
+    def _init_openxr_opengl(self):
+        """Original OpenGL-backed OpenXR session."""
         # 1. Instance
         app_info = xr.ApplicationInfo(
             application_name="Desktop2Stereo",
@@ -804,7 +1197,7 @@ class OpenXRViewer:
             enabled_extension_names=[xr.KHR_OPENGL_ENABLE_EXTENSION_NAME],
         )
         self._xr_instance = xr.create_instance(create_info)
-        print("[OpenXRViewer] XrInstance created")
+        print("[OpenXRViewer] XrInstance created (OpenGL)")
 
         # 2. System
         self._xr_system_id = xr.get_system(
@@ -841,7 +1234,7 @@ class OpenXRViewer:
             next=ctypes.cast(ctypes.pointer(binding), ctypes.c_void_p),
         )
         self._xr_session = xr.create_session(self._xr_instance, session_info)
-        print("[OpenXRViewer] XrSession created")
+        print("[OpenXRViewer] XrSession created (OpenGL)")
 
         # 6. Reference space — prefer STAGE (floor origin), fall back to LOCAL
         available_spaces = xr.enumerate_reference_spaces(self._xr_session)
@@ -871,7 +1264,7 @@ class OpenXRViewer:
             # pixel density and is what the runtime expects for correct reprojection.
             sc_w = rec_w & ~1
             sc_h = rec_h & ~1
-            print(f"[OpenXRViewer] Eye {eye_index} recommended: {rec_w}x{rec_h}  swapchain: {sc_w}x{sc_h}")
+            print(f"[OpenXRViewer] Eye {eye_index} swapchain: {sc_w}x{sc_h}")
 
             sc_info = xr.SwapchainCreateInfo(
                 usage_flags=(
@@ -1548,6 +1941,89 @@ class OpenXRViewer:
         self._fbo_cache[key] = (raw_id, mgl_fbo)
         return raw_id, mgl_fbo
 
+    def _get_or_create_offscreen_fbo(self, eye_index, image_index, w, h):
+        """Return a ModernGL FBO backed by an RGBA texture of size (w, h).
+
+        Used in the D3D11 path: ModernGL renders into this offscreen FBO, then
+        _blit_gl_to_d3d11() reads it back and uploads it to the D3D11 swapchain image.
+        """
+        key = (eye_index, image_index)
+        cached = self._offscreen_fbo_cache.get(key)
+        if cached and cached[3] == w and cached[4] == h:
+            return cached[0], cached[1]   # mgl_fbo, raw_id
+
+        # Discard old entry if dimensions changed
+        if cached:
+            try:
+                cached[2].release()    # mgl Texture
+                glDeleteFramebuffers(1, [cached[1]])
+            except Exception:
+                pass
+
+        raw_id = glGenFramebuffers(1)
+        mgl_tex = self.ctx.texture((w, h), 4, dtype='f1')
+        glBindFramebuffer(GL_FRAMEBUFFER, raw_id)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, mgl_tex.glo, 0)
+        status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        if status != GL_FRAMEBUFFER_COMPLETE:
+            raise RuntimeError(
+                f"[OpenXRViewer] Offscreen FBO incomplete for eye {eye_index}: {status:#x}"
+            )
+        mgl_fbo = self.ctx.detect_framebuffer(raw_id)
+        self._offscreen_fbo_cache[key] = (mgl_fbo, raw_id, mgl_tex, w, h)
+        return mgl_fbo, raw_id
+
+    def _get_or_create_d3d11_pbo(self, eye_index, img_index, w, h):
+        """Return a GL PBO id sized for (w, h) RGBA readback, creating/resizing as needed."""
+        key = (eye_index, img_index)
+        cached = self._d3d11_pbo_cache.get(key)
+        if cached and cached[1] == w and cached[2] == h:
+            return cached[0]
+        if cached:
+            glDeleteBuffers(1, [cached[0]])
+        pbo_id = int(glGenBuffers(1))
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
+        glBufferData(GL_PIXEL_PACK_BUFFER, w * h * 4, None, GL_STREAM_READ)
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+        self._d3d11_pbo_cache[key] = (pbo_id, w, h)
+        return pbo_id
+
+    def _submit_pbo_readback(self, raw_fbo_id, pbo_id, w, h):
+        """Submit an async glReadPixels into pbo_id and flush to kick off DMA immediately."""
+        glBindFramebuffer(GL_FRAMEBUFFER, raw_fbo_id)
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
+        glFlush()  # push the DMA command to the GPU so it starts while we render eye 1
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+    def _upload_pbo_to_d3d11(self, pbo_id, d3d11_texture_ptr, w, h):
+        """Map the readback PBO and upload straight into the D3D11 swapchain texture.
+
+        GL renders Y-flipped (see _render_eye flip_y) so glReadPixels already
+        produces top-down rows — no CPU row-reversal needed.  The mapped PBO
+        pointer is passed directly to D3D11 UpdateSubresource, eliminating the
+        intermediate flip-buffer and its per-frame memcpy.
+        """
+        row_bytes = w * 4
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
+        # UNSYNCHRONIZED: the Phase-1/Phase-2 pipelining gives the DMA enough time
+        # to finish; if it hasn't, we accept a one-frame visual glitch rather than
+        # stalling the pipeline.
+        src_ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY | GL_MAP_UNSYNCHRONIZED_BIT)
+        if src_ptr:
+            try:
+                _d3d11_update_subresource(
+                    self._d3d11_context, d3d11_texture_ptr,
+                    int(src_ptr), row_bytes,
+                )
+            except Exception as exc:
+                print(f"[OpenXRViewer] d3d11 upload failed: {exc}")
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER)
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+
     def _render_fps_overlay(self, eye_index, mgl_fbo, vp_mat):
         """Render the FPS/latency text quad just below the virtual screen (in VR)."""
         if self.screen_height is None:
@@ -1915,12 +2391,12 @@ class OpenXRViewer:
                 setattr(self, mat_attr, None)
 
     def _reset_screen_to_gaze(self, show_border=False):
-        """Smoothly glide the screen to 2 m in front of the current head gaze.
+        """Instantly snap the screen to 2 m in front of the current head gaze.
 
-        Writes animation targets; _tick_screen_anim() interpolates toward them each
-        frame.  Size and shape are preserved — only position/orientation are updated.
+        Size and shape are preserved — only position/orientation are updated.
         """
         RESET_DIST = 2.0
+        self._anim_target_pan_x = None  # cancel any stale animation
         if self._head_pos_w is not None and self._head_fwd_w is not None:
             hx, hy, hz = self._head_pos_w
             fx, fy, fz = self._head_fwd_w
@@ -1929,31 +2405,35 @@ class OpenXRViewer:
                 fx /= flen; fy /= flen; fz /= flen
             else:
                 fx, fy, fz = 0.0, 0.0, -1.0
+            # World-space target point
             tx = hx + fx * RESET_DIST
             ty = hy + fy * RESET_DIST
             tz = hz + fz * RESET_DIST
             horiz = math.sqrt(fx*fx + fz*fz)
             yaw   = math.atan2(-fx, -fz) if horiz > 1e-4 else self.screen_yaw
             pitch = math.asin(max(-0.999, min(0.999, fy)))
-            cy_ = math.cos(yaw);   sy_ = math.sin(yaw)
-            cp_ = math.cos(pitch); sp_ = math.sin(pitch)
-            x1 =  cy_ * tx - sy_ * tz
+            # Invert model matrix (rot_y @ rot_x then translate) to get local coords
+            cy, sy_ = math.cos(yaw),   math.sin(yaw)
+            cp, sp  = math.cos(pitch), math.sin(pitch)
+            # Inverse rot_y
+            x1 =  cy * tx - sy_ * tz
             y1 =  ty
-            z1 =  sy_ * tx + cy_ * tz
+            z1 =  sy_ * tx + cy * tz
+            # Inverse rot_x
             x2 =  x1
-            y2 =  cp_ * y1 + sp_ * z1
-            z2 = -sp_ * y1 + cp_ * z1
-            self._anim_target_pan_x    = x2
-            self._anim_target_pan_y    = y2
-            self._anim_target_distance = -z2
-            self._anim_target_yaw      = yaw
-            self._anim_target_pitch    = pitch
+            y2 =  cp * y1 + sp * z1
+            z2 = -sp * y1 + cp * z1
+            self.screen_pan_x    = x2
+            self.screen_pan_y    = y2
+            self.screen_distance = -z2
+            self.screen_yaw      = yaw
+            self.screen_pitch    = pitch
         else:
-            self._anim_target_pan_x    = 0.0
-            self._anim_target_pan_y    = float(self._initial_head_y)
-            self._anim_target_distance = RESET_DIST
-            self._anim_target_yaw      = 0.0
-            self._anim_target_pitch    = 0.0
+            self.screen_distance = RESET_DIST
+            self.screen_pan_x    = 0.0
+            self.screen_pan_y    = float(self._initial_head_y)
+            self.screen_pitch    = 0.0
+            self.screen_yaw      = 0.0
         if show_border:
             self._border_alpha  = 1.0
             self._border_idle_t = time.perf_counter()
@@ -2086,6 +2566,10 @@ class OpenXRViewer:
         if sh is None:
             fw, fh = self.frame_size
             sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
+        # Protect against degenerate screen dimensions
+        safe_w = max(self.screen_width, 1e-6)
+        safe_h = max(sh, 1e-6)
+
         cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
         cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
         screen_n   = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
@@ -2103,7 +2587,7 @@ class OpenXRViewer:
         u_ax  = np.array([sp*sy_, cp, sp*cy], dtype='f8')
         loc_x = float(np.dot(diff, r_ax))
         loc_y = float(np.dot(diff, u_ax))
-        if abs(loc_x) <= self.screen_width / 2.0 and abs(loc_y) <= sh / 2.0:
+        if abs(loc_x) <= safe_w / 2.0 and abs(loc_y) <= safe_h / 2.0:
             return max(0.01, t - 0.005)   # hit within screen — stop 5 mm before
         return BEAM_MAX   # outside screen rectangle — let laser go to max
 
@@ -2295,12 +2779,18 @@ class OpenXRViewer:
 
         self.ctx.disable(moderngl.BLEND)
 
-    def _render_eye(self, eye_index, mgl_fbo, view_mat, proj_mat):
+    def _render_eye(self, eye_index, mgl_fbo, view_mat, proj_mat, flip_y=False):
         """Render one eye's parallax view into the swapchain FBO using world-space MVP.
 
         Left eye:  u_eye_offset = -ipd/2
         Right eye: u_eye_offset = +ipd/2
+
+        If flip_y is True the projection is Y-flipped so glReadPixels produces
+        top-down rows for D3D11, eliminating the CPU row-reversal copy.
         """
+        if flip_y:
+            proj_mat = proj_mat.copy()
+            proj_mat[1, :] = -proj_mat[1, :]  # flip clip-space Y → GL renders upside-down
         sc_w, sc_h = self._swapchain_sizes[eye_index]
 
         # The swapchain is GL_SRGB8_ALPHA8, but the desktop capture texture is already
@@ -2346,11 +2836,6 @@ class OpenXRViewer:
             prog['u_mvp'].write(vp_mat.T.tobytes())
             prog['u_eye_offset'].value     = eye_sign * self.ipd_uv / 2.0
             prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
-            if self._texture_size:
-                prog['u_resolution'].value = (float(self._texture_size[0]),
-                                              float(self._texture_size[1]))
-            else:
-                prog['u_resolution'].value = (0.0, 0.0)
             prog['u_convergence'].value = float(self.convergence)
             n_verts = (48 + 1) * 2
             self._curved_vao.render(moderngl.TRIANGLE_STRIP, vertices=n_verts)
@@ -2361,13 +2846,6 @@ class OpenXRViewer:
             self.prog['u_mvp'].write(mvp.T.tobytes())
             self.prog['u_eye_offset'].value     = eye_sign * self.ipd_uv / 2.0
             self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
-            # Pass texture resolution so the disocclusion test uses correct pixel-space
-            # gradients — matches viewer.py's effective behaviour with proper edge fill.
-            if self._texture_size:
-                self.prog['u_resolution'].value = (float(self._texture_size[0]),
-                                                   float(self._texture_size[1]))
-            else:
-                self.prog['u_resolution'].value = (0.0, 0.0)
             # Keep convergence in sync — user-driven divergence input updates self.convergence
             # at runtime; pushing it here ensures any external change is reflected per-frame.
             self.prog['u_convergence'].value = float(self.convergence)
@@ -2476,6 +2954,47 @@ class OpenXRViewer:
         except Exception:
             return False
 
+    def _read_bool_edge(self, action, hand_path_str, prev_state):
+        """Return True on the rising edge of a boolean action.
+
+        Tries to use the OpenXR runtime's `changed` flag via the raw ctypes struct
+        (pyopenxr may not expose it as a Python attribute).  Falls back to manual
+        frame-to-frame comparison if the ctypes path fails.
+        """
+        if action is None:
+            return False
+        try:
+            path = (self._path_left
+                    if hand_path_str == "/user/hand/left" else self._path_right)
+            if path is None:
+                path = xr.string_to_path(self._xr_instance, hand_path_str)
+            state = xr.get_action_state_boolean(
+                self._xr_session,
+                xr.ActionStateGetInfo(action=action, subaction_path=path),
+            )
+            pressed = bool(state.is_active and state.current_state)
+
+            # pyopenxr wraps XrActionStateBoolean. Try the Python attribute first,
+            # then fall back to reading the underlying ctypes struct.
+            changed = False
+            if hasattr(state, 'changed'):
+                changed = bool(state.changed)
+            else:
+                # The struct is [isActive:i4, currentState:i4, changed:i4, ...]
+                # changed is at byte offset 8 (after two 4-byte fields).
+                try:
+                    ptr = ctypes.cast(ctypes.byref(state), ctypes.POINTER(ctypes.c_int32))
+                    changed = bool(ptr[2])  # offset 2 × 4 bytes
+                except Exception:
+                    pass
+
+            if changed:
+                return pressed   # runtime-confirmed edge
+            # Fallback: manual rising-edge detection
+            return pressed and not prev_state
+        except Exception:
+            return False
+
     def _read_float_action(self, action, hand_path_str="/user/hand/left"):
         """Return the float value [0,1] of a trigger/squeeze action."""
         if action is None:
@@ -2503,6 +3022,9 @@ class OpenXRViewer:
         if sh is None:
             fw, fh = self.frame_size
             sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
+        safe_w = max(self.screen_width, 1e-6)
+        safe_h = max(sh, 1e-6)
+
         cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
         cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
         screen_n   = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
@@ -2519,9 +3041,9 @@ class OpenXRViewer:
         u_ax = np.array([sp * sy_, cp, sp * cy],  dtype='f8')
         loc_x = float(np.dot(diff, r_ax))
         loc_y = float(np.dot(diff, u_ax))
-        if abs(loc_x) <= self.screen_width / 2.0 and abs(loc_y) <= sh / 2.0:
-            u = 0.5 + loc_x / self.screen_width
-            v = 0.5 + loc_y / sh
+        if abs(loc_x) <= safe_w / 2.0 and abs(loc_y) <= safe_h / 2.0:
+            u = 0.5 + loc_x / safe_w
+            v = 0.5 + loc_y / safe_h
             return u, v, t
         return None
 
@@ -2793,6 +3315,39 @@ class OpenXRViewer:
 
             setattr(self, trig_prev_attr, trig_now)
 
+    def _accum_scroll(self, x_axis, y_axis, dt):
+        """Accumulate thumbstick deflection into accelerated mouse wheel events.
+
+        Uses a cubic acceleration curve so small deflections are precise while
+        full push is dramatically faster — eliminates the \"stuck\" feeling.
+
+        Fires WHEEL_DELTA-granular (120) scroll so every event is a full
+        hardware notch that applications process reliably.
+        """
+        WHEEL_DELTA        = 100     # Windows: one wheel notch
+        SCROLL_BASE_NOTCH  = 2.0     # notches/s just above dead zone
+        SCROLL_MAX_NOTCH   = 35.0    # notches/s at full deflection
+        ACCEL_EXPONENT     = 2.8     # >1 = soft centre, aggressive at edges
+
+        for axis_val, accum_attr, send_fn in [
+            (x_axis, '_scroll_accum_x', _send_hscroll),
+            (y_axis, '_scroll_accum_y', _send_vscroll),
+        ]:
+            mag = abs(axis_val)
+            if mag <= DEAD:
+                continue
+            # Normalise [DEAD .. 1.0] → [0 .. 1]
+            t = (mag - DEAD) / (1.0 - DEAD)
+            # Cubic acceleration + base offset ensures fine control near centre
+            speed = SCROLL_BASE_NOTCH + (SCROLL_MAX_NOTCH - SCROLL_BASE_NOTCH) * (t ** ACCEL_EXPONENT)
+            accum = getattr(self, accum_attr) + float(axis_val) * speed * dt
+            # Fire whole notches; keep leftover for next frame
+            whole = int(accum)
+            if whole:
+                send_fn(whole * WHEEL_DELTA)
+                accum -= whole
+            setattr(self, accum_attr, accum)
+
     def _poll_controller_input(self, dt):
         """Hand-split controls:
           Left  stick (no grip) → mouse scroll (X = horizontal, Y = vertical).
@@ -2814,7 +3369,6 @@ class OpenXRViewer:
           L grip + R stick click → toggle depth off/on (flat mode ↔ last strength)
           Keyboard Z/C     → depth strength −/+ 0.01   X → depth = 0 (flat)
         """
-        self._tick_screen_anim(dt)
         if self._action_set is None:
             return
 
@@ -2832,7 +3386,6 @@ class OpenXRViewer:
                 pass
             return 0.0, 0.0
 
-        DEAD = 0.15
         lx, ly = vec2(self._act_left_stick,  "/user/hand/left")
         rx, ry = vec2(self._act_right_stick, "/user/hand/right")
 
@@ -2845,7 +3398,6 @@ class OpenXRViewer:
 
         # ── Left grip + left stick: rotate screen yaw (X) / pitch (Y) at half speed ──
         # ── Left stick (no grip): mouse scroll (same axes as right stick) ─────────
-        SCROLL_SPEED = 900    # wheel units per second at full deflection
         ROT_SPEED    = 0.35   # rad/s — intentionally slow (0.5 × 0.7) for precision
         if grip_l:
             if abs(lx) > DEAD:
@@ -2854,10 +3406,7 @@ class OpenXRViewer:
                 self.screen_pitch += ly * ROT_SPEED * dt   # up → tilt up
         else:
             # No left grip → left stick accumulates scroll (flushed below with right stick)
-            if abs(lx) > DEAD:
-                self._scroll_accum_x += lx * SCROLL_SPEED * dt
-            if abs(ly) > DEAD:
-                self._scroll_accum_y += ly * SCROLL_SPEED * dt
+            self._accum_scroll(lx, ly, dt)
 
         # ── Right grip + right stick X: resize screen (left=smaller, right=larger) ──
         # ── Right grip + right stick Y: distance (up=closer, down=further) ─────────
@@ -2889,20 +3438,8 @@ class OpenXRViewer:
                                           self.depth_strength + ry * DEPTH_SPEED * dt))
         self._grip_r_prev = grip_r
         if not grip_r:
-            # Accumulate fractional scroll and fire whole units so apps receive
-            # clean WHEEL_DELTA multiples without jitter at low frame rates.
-            if abs(rx) > DEAD:
-                self._scroll_accum_x += rx * SCROLL_SPEED * dt
-            if abs(ry) > DEAD:
-                self._scroll_accum_y += ry * SCROLL_SPEED * dt
-            sx = int(self._scroll_accum_x)
-            sy = int(self._scroll_accum_y)
-            if abs(sx) >= 1:
-                _send_hscroll(sx)
-                self._scroll_accum_x -= sx
-            if abs(sy) >= 1:
-                _send_vscroll(sy)
-                self._scroll_accum_y -= sy
+            # Accelerated scroll: higher stick deflection → disproportionately faster scroll
+            self._accum_scroll(rx, ry, dt)
 
         # Menu (left): toggle FPS overlay
         menu_now = self._read_bool_action(self._act_menu_btn, "/user/hand/left")
@@ -2929,10 +3466,15 @@ class OpenXRViewer:
             if b_now:
                 self.depth_ratio = max(DEPTH_RATIO_MIN, self.depth_ratio - DEPTH_RATIO_SPEED * dt)
         else:
-            if a_now and not self._a_last:
+            # Use XR runtime's `changed` flag when available — more reliable than
+            # manual frame-to-frame tracking when a button sits under a resting thumb.
+            # Fall back to manual edge detection if pyopenxr doesn't expose it.
+            a_edge = self._read_bool_edge(self._act_a_btn, "/user/hand/right", self._a_last)
+            b_edge = self._read_bool_edge(self._act_b_btn, "/user/hand/right", self._b_last)
+            if a_edge:
                 _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
                 _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
-            if b_now and not self._b_last:
+            if b_edge:
                 _send_mouse_flags(_MOUSEEVENTF_RIGHTDOWN)
                 _send_mouse_flags(_MOUSEEVENTF_RIGHTUP)
 
@@ -3168,40 +3710,88 @@ class OpenXRViewer:
 
                 eye_layer_views = []
 
-                for eye_index in range(2):
-                    swapchain = self._xr_swapchains[eye_index]
+                if self._use_d3d11:
+                    # D3D11 two-phase loop: overlap GPU DMA with rendering.
+                    #
+                    # Phase 1 — render both eyes and immediately submit async
+                    # glReadPixels into PBOs.  glReadPixels with a bound PBO
+                    # returns instantly; the actual DMA from GPU VRAM to the
+                    # PBO runs asynchronously while we render the next eye.
+                    #
+                    # Phase 2 — glMapBuffer (which stalls until the DMA is
+                    # done) and UpdateSubresource.  By this point eye 0's DMA
+                    # has been running while eye 1 was rendering, so the stall
+                    # is typically zero or near-zero for eye 0, and minimal
+                    # for eye 1.
+                    d3d11_pending = []   # (eye_index, pbo_id, d3d11_tex, sc_w, sc_h, swapchain, view)
 
-                    img_index = xr.acquire_swapchain_image(
-                        swapchain, xr.SwapchainImageAcquireInfo()
-                    )
-                    xr.wait_swapchain_image(
-                        swapchain,
-                        xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
-                    )
+                    for eye_index in range(2):
+                        swapchain = self._xr_swapchains[eye_index]
+                        img_index = xr.acquire_swapchain_image(swapchain, xr.SwapchainImageAcquireInfo())
+                        xr.wait_swapchain_image(swapchain, xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION))
+                        sc_image = self._swapchain_images[eye_index][img_index]
+                        sc_w, sc_h = self._swapchain_sizes[eye_index]
+                        view = views[eye_index] if views and views[eye_index] else None
+                        view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
+                        proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
 
-                    sc_image = self._swapchain_images[eye_index][img_index]
-                    _, mgl_fbo = self._get_or_create_fbo(eye_index, img_index, sc_image.image)
+                        mgl_fbo, raw_fbo_id = self._get_or_create_offscreen_fbo(eye_index, img_index, sc_w, sc_h)
+                        self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
 
-                    view = views[eye_index] if views and views[eye_index] else None
-                    view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
-                    proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
+                        pbo_id = self._get_or_create_d3d11_pbo(eye_index, img_index, sc_w, sc_h)
+                        self._submit_pbo_readback(raw_fbo_id, pbo_id, sc_w, sc_h)
+                        d3d11_pending.append((eye_index, pbo_id, sc_image.texture, sc_w, sc_h, swapchain, view))
 
-                    self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat)
-
-                    xr.release_swapchain_image(swapchain, xr.SwapchainImageReleaseInfo())
-
-                    sc_w, sc_h = self._swapchain_sizes[eye_index]
-                    eye_layer_views.append(xr.CompositionLayerProjectionView(
-                        pose=view.pose if view else xr.Posef(),
-                        fov=view.fov  if view else _default_fov,
-                        sub_image=xr.SwapchainSubImage(
-                            swapchain=swapchain,
-                            image_rect=xr.Rect2Di(
-                                offset=xr.Offset2Di(x=0, y=0),
-                                extent=xr.Extent2Di(width=sc_w, height=sc_h),
+                    # Phase 2: map PBOs (DMA should be done), upload, release.
+                    for eye_index, pbo_id, d3d11_tex, sc_w, sc_h, swapchain, view in d3d11_pending:
+                        self._upload_pbo_to_d3d11(pbo_id, d3d11_tex, sc_w, sc_h)
+                        xr.release_swapchain_image(swapchain, xr.SwapchainImageReleaseInfo())
+                        eye_layer_views.append(xr.CompositionLayerProjectionView(
+                            pose=view.pose if view else xr.Posef(),
+                            fov=view.fov   if view else _default_fov,
+                            sub_image=xr.SwapchainSubImage(
+                                swapchain=swapchain,
+                                image_rect=xr.Rect2Di(
+                                    offset=xr.Offset2Di(x=0, y=0),
+                                    extent=xr.Extent2Di(width=sc_w, height=sc_h),
+                                ),
                             ),
-                        ),
-                    ))
+                        ))
+                else:
+                    for eye_index in range(2):
+                        swapchain = self._xr_swapchains[eye_index]
+
+                        img_index = xr.acquire_swapchain_image(
+                            swapchain, xr.SwapchainImageAcquireInfo()
+                        )
+                        xr.wait_swapchain_image(
+                            swapchain,
+                            xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
+                        )
+
+                        sc_image = self._swapchain_images[eye_index][img_index]
+                        sc_w, sc_h = self._swapchain_sizes[eye_index]
+
+                        view = views[eye_index] if views and views[eye_index] else None
+                        view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
+                        proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
+
+                        _, mgl_fbo = self._get_or_create_fbo(eye_index, img_index, sc_image.image)
+                        self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat)
+
+                        xr.release_swapchain_image(swapchain, xr.SwapchainImageReleaseInfo())
+
+                        eye_layer_views.append(xr.CompositionLayerProjectionView(
+                            pose=view.pose if view else xr.Posef(),
+                            fov=view.fov  if view else _default_fov,
+                            sub_image=xr.SwapchainSubImage(
+                                swapchain=swapchain,
+                                image_rect=xr.Rect2Di(
+                                    offset=xr.Offset2Di(x=0, y=0),
+                                    extent=xr.Extent2Di(width=sc_w, height=sc_h),
+                                ),
+                            ),
+                        ))
 
                 proj_layer = xr.CompositionLayerProjection(
                     space=self._xr_space,
@@ -3249,6 +3839,43 @@ class OpenXRViewer:
             except Exception:
                 pass
         self._fbo_cache.clear()
+
+        # Release D3D11-path PBOs used for async pixel readback
+        if self._d3d11_pbo_cache:
+            try:
+                glDeleteBuffers(len(self._d3d11_pbo_cache), [v[0] for v in self._d3d11_pbo_cache.values()])
+            except Exception:
+                pass
+            self._d3d11_pbo_cache.clear()
+
+        # Release D3D11-path offscreen FBOs and their backing textures
+        offscreen_raw_ids = [entry[1] for entry in self._offscreen_fbo_cache.values()]
+        if offscreen_raw_ids:
+            try:
+                glDeleteFramebuffers(len(offscreen_raw_ids), offscreen_raw_ids)
+            except Exception:
+                pass
+        for entry in self._offscreen_fbo_cache.values():
+            try:
+                entry[2].release()   # mgl Texture
+            except Exception:
+                pass
+        self._offscreen_fbo_cache.clear()
+
+        # Release D3D11 device/context (COM objects — call Release via vtable)
+        for d3d_obj in (self._d3d11_context, self._d3d11_device):
+            if d3d_obj is not None:
+                try:
+                    vtbl = ctypes.cast(d3d_obj, ctypes.POINTER(ctypes.c_void_p)).contents.value
+                    release_fn = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
+                        ctypes.cast(vtbl + 2 * ctypes.sizeof(ctypes.c_void_p),
+                                    ctypes.POINTER(ctypes.c_void_p)).contents.value
+                    )
+                    release_fn(d3d_obj.value)
+                except Exception:
+                    pass
+        self._d3d11_device = None
+        self._d3d11_context = None
 
         # Release GPU interop PBOs
         if self._pbo_color is not None and self._cuda_gl:
