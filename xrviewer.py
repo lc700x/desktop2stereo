@@ -21,15 +21,16 @@ from OpenGL.GL import (
     glGenFramebuffers, glBindFramebuffer, glFramebufferTexture2D,
     glDeleteFramebuffers, glCheckFramebufferStatus,
     GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-    GL_FRAMEBUFFER_COMPLETE,
+    GL_FRAMEBUFFER_COMPLETE, GL_RGBA8,
     glGenBuffers, glDeleteBuffers, glBindBuffer, glBufferData,
     glBindTexture, glTexSubImage2D, glGenerateMipmap,
     GL_PIXEL_UNPACK_BUFFER, GL_PIXEL_PACK_BUFFER, GL_DYNAMIC_DRAW, GL_STREAM_READ,
-    GL_RGB, GL_RED, GL_RGBA, GL_UNSIGNED_BYTE, GL_FLOAT,
+    GL_RGB, GL_RED, GL_RGBA, GL_BGRA, GL_UNSIGNED_BYTE, GL_FLOAT,
     glDisable, GL_FRAMEBUFFER_SRGB,
     glTexParameterf, GL_TEXTURE_LOD_BIAS,
     glMapBuffer, glUnmapBuffer, GL_READ_ONLY, GL_MAP_UNSYNCHRONIZED_BIT,
-    glReadPixels, glFlush,
+    glReadPixels, glFlush, glGenTextures, glDeleteTextures,
+    glFinish, glGetString, GL_RENDERER,
 )
 
 try:
@@ -208,6 +209,242 @@ if sys.platform == "win32":
         )
 
 
+
+    # ── NV_DX_interop2 helpers (NVIDIA only, zero-copy GL↔D3D11) ──────────
+    _nv_dx_interop_available = False
+    _wglDXOpenDeviceNV        = None
+    _wglDXCloseDeviceNV       = None
+    _wglDXRegisterObjectNV    = None
+    _wglDXLockObjectsNV       = None
+    _wglDXUnlockObjectsNV     = None
+    _wglDXUnregisterObjectNV  = None
+
+    def _load_nv_dx_interop():
+        """Try to load WGL_NV_DX_interop2 extension functions."""
+        global _nv_dx_interop_available, _wglDXOpenDeviceNV, _wglDXCloseDeviceNV
+        global _wglDXRegisterObjectNV, _wglDXLockObjectsNV, _wglDXUnlockObjectsNV
+        global _wglDXUnregisterObjectNV
+        if _nv_dx_interop_available:
+            return True
+        try:
+            from OpenGL.WGL.NV.DX_interop2 import (
+                wglDXOpenDeviceNV, wglDXCloseDeviceNV,
+                wglDXRegisterObjectNV, wglDXLockObjectsNV,
+                wglDXUnlockObjectsNV, wglDXUnregisterObjectNV,
+            )
+            _wglDXOpenDeviceNV       = wglDXOpenDeviceNV
+            _wglDXCloseDeviceNV      = wglDXCloseDeviceNV
+            _wglDXRegisterObjectNV   = wglDXRegisterObjectNV
+            _wglDXLockObjectsNV      = wglDXLockObjectsNV
+            _wglDXUnlockObjectsNV    = wglDXUnlockObjectsNV
+            _wglDXUnregisterObjectNV = wglDXUnregisterObjectNV
+            _nv_dx_interop_available = True
+            return True
+        except ImportError:
+            try:
+                # Fallback: load via wglGetProcAddress
+                from OpenGL.GL.WGL.NV.DX_interop import (
+                    wglDXOpenDeviceNV, wglDXCloseDeviceNV,
+                    wglDXRegisterObjectNV, wglDXLockObjectsNV,
+                    wglDXUnlockObjectsNV, wglDXUnregisterObjectNV,
+                )
+                _wglDXOpenDeviceNV       = wglDXOpenDeviceNV
+                _wglDXCloseDeviceNV      = wglDXCloseDeviceNV
+                _wglDXRegisterObjectNV   = wglDXRegisterObjectNV
+                _wglDXLockObjectsNV      = wglDXLockObjectsNV
+                _wglDXUnlockObjectsNV    = wglDXUnlockObjectsNV
+                _wglDXUnregisterObjectNV = wglDXUnregisterObjectNV
+                _nv_dx_interop_available = True
+                return True
+            except (ImportError, AttributeError):
+                return False
+        except (ImportError, AttributeError):
+            return False
+
+    # ── EXT_memory_object_win32 helpers (cross-vendor, GL 4.5+) ──────────
+    _ext_mem_available       = False
+    _glImportMemoryWin32HandleEXT  = None
+    _glTextureStorageMem2DEXT      = None
+    _glCreateMemoryObjectsEXT      = None
+    _glDeleteMemoryObjectsEXT      = None
+
+    # Handle types for glImportMemoryWin32HandleEXT
+    _GL_HANDLE_TYPE_OPAQUE_WIN32_EXT        = 0x9587
+    _GL_HANDLE_TYPE_D3D11_TEXTURE_KTX_Z     = None  # not used
+
+    def _load_ext_memory_object():
+        """Try to load GL_EXT_memory_object_win32 + GL_EXT_memory_object."""
+        global _ext_mem_available, _glImportMemoryWin32HandleEXT
+        global _glTextureStorageMem2DEXT, _glCreateMemoryObjectsEXT
+        global _glDeleteMemoryObjectsEXT
+        if _ext_mem_available:
+            return True
+        try:
+            from OpenGL.GL.EXT.memory_object_win32 import glImportMemoryWin32HandleEXT
+            from OpenGL.GL.EXT.memory_object import (
+                glCreateMemoryObjectsEXT, glDeleteMemoryObjectsEXT,
+            )
+            from OpenGL.GL.EXT.memory_object_fd import glTextureStorageMem2DEXT
+            _glImportMemoryWin32HandleEXT = glImportMemoryWin32HandleEXT
+            _glCreateMemoryObjectsEXT     = glCreateMemoryObjectsEXT
+            _glDeleteMemoryObjectsEXT     = glDeleteMemoryObjectsEXT
+            _glTextureStorageMem2DEXT     = glTextureStorageMem2DEXT
+            _ext_mem_available = True
+            return True
+        except (ImportError, AttributeError):
+            # Fallback: load via raw ctypes from wglGetProcAddress
+            try:
+                from OpenGL.GL import wglGetProcAddress
+                _names = {
+                    'glImportMemoryWin32HandleEXT': ctypes.c_void_p,
+                    'glTextureStorageMem2DEXT':     ctypes.c_void_p,
+                    'glCreateMemoryObjectsEXT':     ctypes.c_void_p,
+                    'glDeleteMemoryObjectsEXT':     ctypes.c_void_p,
+                }
+                _ptrs = {}
+                for name in _names:
+                    addr = wglGetProcAddress(name.encode() if hasattr(name, 'encode') else name)
+                    if not addr:
+                        raise RuntimeError(f"{name} not found")
+                    _ptrs[name] = addr
+                # Build ctypes function wrappers
+                _glImportMemoryWin32HandleEXT = ctypes.CFUNCTYPE(
+                    None, ctypes.c_uint, ctypes.c_uint64, ctypes.c_uint, ctypes.c_void_p,
+                )(ctypes.cast(_ptrs['glImportMemoryWin32HandleEXT'], ctypes.c_void_p).value)
+                _glTextureStorageMem2DEXT = ctypes.CFUNCTYPE(
+                    None, ctypes.c_uint, ctypes.c_int, ctypes.c_uint, ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint64,
+                )(ctypes.cast(_ptrs['glTextureStorageMem2DEXT'], ctypes.c_void_p).value)
+                _glCreateMemoryObjectsEXT = ctypes.CFUNCTYPE(
+                    None, ctypes.c_int, ctypes.POINTER(ctypes.c_uint),
+                )(ctypes.cast(_ptrs['glCreateMemoryObjectsEXT'], ctypes.c_void_p).value)
+                _glDeleteMemoryObjectsEXT = ctypes.CFUNCTYPE(
+                    None, ctypes.c_int, ctypes.POINTER(ctypes.c_uint),
+                )(ctypes.cast(_ptrs['glDeleteMemoryObjectsEXT'], ctypes.c_void_p).value)
+                _ext_mem_available = True
+                return True
+            except Exception:
+                return False
+
+    def _create_d3d11_shared_texture(device, w, h, fmt=_DXGI_FORMAT_R8G8B8A8_UNORM):
+        """Create a D3D11 texture with D3D11_RESOURCE_MISC_SHARED_NTHANDLE.
+
+        Returns (texture_ptr, shared_handle) as c_void_p values.
+        The shared_handle is an NT kernel handle suitable for
+        glImportMemoryWin32HandleEXT.
+        """
+        desc = (
+            ctypes.c_uint(w),           # Width
+            ctypes.c_uint(h),           # Height
+            ctypes.c_uint(1),           # MipLevels
+            ctypes.c_uint(1),           # ArraySize
+            ctypes.c_uint(fmt),         # Format
+            # DXGI_SAMPLE_DESC
+            ctypes.c_uint(1),           # Count
+            ctypes.c_uint(0),           # Quality
+            ctypes.c_uint(0),           # Usage (D3D11_USAGE_DEFAULT)
+            ctypes.c_uint(0x40),        # BindFlags (D3D11_BIND_SHADER_RESOURCE = 0x80 | D3D11_BIND_RENDER_TARGET = 0x20)
+            ctypes.c_uint(0),           # CPUAccessFlags
+            ctypes.c_uint(0x2),         # MiscFlags (D3D11_RESOURCE_MISC_SHARED_NTHANDLE = 0x800, but we also need SHARED = 0x2)
+        )
+        # Actually D3D11_RESOURCE_MISC_SHARED_NTHANDLE is the right flag for NT handles.
+        # Let me redo the struct properly.
+        # D3D11_TEXTURE2D_DESC layout (order matters):
+        # Width:UINT, Height:UINT, MipLevels:UINT, ArraySize:UINT,
+        # Format:DXGI_FORMAT, SampleDesc:DXGI_SAMPLE_DESC,
+        # Usage:D3D11_USAGE, BindFlags:UINT, CPUAccessFlags:UINT, MiscFlags:UINT
+
+        _D3D11_BIND_SHADER_RESOURCE = 0x8
+        _D3D11_BIND_RENDER_TARGET   = 0x20
+        _D3D11_RESOURCE_MISC_SHARED_NTHANDLE = 0x800
+
+        _TEX2D_DESC_FMT = (
+            'I I I I I I I I I I I'
+        )  # 11 UINTs
+        # We need to pack SampleDesc.Count and SampleDesc.Quality as two UINTs
+
+        tex_desc = (
+            ctypes.c_uint * 11
+        )(
+            w, h, 1, 1, fmt,
+            1, 0,              # SampleDesc
+            0,                  # D3D11_USAGE_DEFAULT
+            _D3D11_BIND_SHADER_RESOURCE | _D3D11_BIND_RENDER_TARGET,
+            0,                  # CPUAccessFlags
+            _D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
+        )
+
+        tex_ptr = ctypes.c_void_p(0)
+        vtbl = ctypes.cast(device, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        # ID3D11Device::CreateTexture2D at vtable index 5
+        create_tex2d = ctypes.CFUNCTYPE(
+            ctypes.c_long,
+            ctypes.c_void_p,                          # this
+            ctypes.POINTER(ctypes.c_uint * 11),       # pDesc
+            ctypes.c_void_p,                          # pInitialData
+            ctypes.POINTER(ctypes.c_void_p),          # ppTexture2D
+        )(ctypes.cast(vtbl + 5 * ctypes.sizeof(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)).contents.value)
+
+        hr = create_tex2d(device, ctypes.byref(tex_desc), None, ctypes.byref(tex_ptr))
+        if hr != 0:
+            raise RuntimeError(f"CreateTexture2D(shared) failed: hr=0x{hr & 0xFFFFFFFF:08x}")
+
+        # Get shared handle via IDXGIResource1::CreateSharedHandle
+        # First get IDXGIResource from ID3D11Texture2D via QueryInterface
+        # IID_IDXGIResource1 = {7632e1f5-ee65-4ca2-87fd-4c20ee8d71a9}
+        _IID_IDXGIResource1 = (ctypes.c_byte * 16)(
+            0xf5, 0xe1, 0x32, 0x76, 0x65, 0xee, 0xa2, 0x4c,
+            0x87, 0xfd, 0x4c, 0x20, 0xee, 0x8d, 0x71, 0xa9,
+        )
+        dxgi_res = ctypes.c_void_p(0)
+        tex_vtbl = ctypes.cast(tex_ptr, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        qi_fn = ctypes.CFUNCTYPE(
+            ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(ctypes.c_byte * 16), ctypes.POINTER(ctypes.c_void_p),
+        )(ctypes.cast(tex_vtbl, ctypes.POINTER(ctypes.c_void_p)).contents.value)
+        hr = qi_fn(tex_ptr, ctypes.byref(_IID_IDXGIResource1), ctypes.byref(dxgi_res))
+        if hr != 0 or not dxgi_res:
+            tex_vtbl2 = ctypes.cast(tex_ptr, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            release_fn2 = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
+                ctypes.cast(tex_vtbl2 + 2 * ctypes.sizeof(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)).contents.value
+            )
+            release_fn2(tex_ptr)
+            raise RuntimeError(f"QueryInterface(IDXGIResource1) failed: hr=0x{hr & 0xFFFFFFFF:08x}")
+
+        # IDXGIResource1::CreateSharedHandle
+        # Params: dwAccess, lpAttributes, dwAccessFlags, lpName, pHandle
+        _DXGI_SHARED_RESOURCE_READ = 0x80000000
+        _DXGI_SHARED_RESOURCE_WRITE = 1
+        dxgi_vtbl = ctypes.cast(dxgi_res, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        create_sh = ctypes.CFUNCTYPE(
+            ctypes.c_long,
+            ctypes.c_void_p,      # this
+            ctypes.c_uint,        # dwAccess
+            ctypes.c_void_p,      # lpAttributes (NULL)
+            ctypes.c_uint,        # dwAccessFlags
+            ctypes.c_void_p,     # lpName (NULL)
+            ctypes.POINTER(ctypes.c_void_p),  # pHandle (out)
+        )(ctypes.cast(dxgi_vtbl + 12 * ctypes.sizeof(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)).contents.value)
+
+        shared_handle = ctypes.c_void_p(0)
+        hr = create_sh(
+            dxgi_res,
+            _DXGI_SHARED_RESOURCE_READ | _DXGI_SHARED_RESOURCE_WRITE,
+            None, 0, None,
+            ctypes.byref(shared_handle),
+        )
+        # Release DXGI resource (we only needed it for CreateSharedHandle)
+        dxgi_rel = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
+            ctypes.cast(dxgi_vtbl + 2 * ctypes.sizeof(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)).contents.value
+        )
+        dxgi_rel(dxgi_res)
+
+        if hr != 0 or not shared_handle:
+            tex_rel = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
+                ctypes.cast(tex_vtbl + 2 * ctypes.sizeof(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)).contents.value
+            )
+            tex_rel(tex_ptr)
+            raise RuntimeError(f"CreateSharedHandle failed: hr=0x{hr & 0xFFFFFFFF:08x}")
+
+        return tex_ptr, shared_handle
 
 else:
     def _create_d3d11_device(adapter_luid=None):
@@ -439,7 +676,7 @@ _KB_ROWS = [
 ]
 
 import collections as _collections
-_KeyEntry = _collections.namedtuple('_KeyEntry', 'label vk shifted_vk rect_uv rect_local')
+_KeyEntry = _collections.namedtuple('_KeyEntry', 'label shifted_label vk shifted_vk rect_uv rect_local')
 
 _KB_TEX_W, _KB_TEX_H = 1280, 384   # keyboard texture: 6 rows × 18 units
 
@@ -637,6 +874,9 @@ class OpenXRViewer:
         # Border fade: shown during interaction, fades out when idle
         self._border_alpha   = 0.0    # 0.0 = invisible, 1.0 = fully opaque
         self._border_idle_t  = 0.0    # wall time when interaction last ended
+        # Keyboard border fade
+        self._kb_border_alpha  = 0.0
+        self._kb_border_idle_t = 0.0
         self._saved_dclick_time = None  # system double-click time saved before session
 
         # Mouse cursor control
@@ -654,8 +894,10 @@ class OpenXRViewer:
         self._keyboard_tex         = None  # moderngl Texture (RGBA, _KB_TEX_W × _KB_TEX_H)
         self._keyboard_vao         = None  # quad VAO using _overlay_prog
         self._keyboard_keys        = []    # list of _KeyEntry
-        self._keyboard_width       = 1.0   # metres
+        self._keyboard_width       = 1.6   # metres
         self._keyboard_height      = 0.33  # metres (6 rows)
+        self._kb_show_shifted      = False # True → render shifted labels on keys
+        self._kb_last_build_width  = 0.0   # track width changes for texture rebuild
         # World-space anchor of the keyboard centre. Re-snapped to the user's current
         # head pose every time the keyboard is toggled on so it materialises within
         # easy reach below the user's gaze direction (not at world origin).
@@ -680,6 +922,10 @@ class OpenXRViewer:
         self._kb_trig_prev_r       = 0.0   # keyboard trigger debounce — right controller
         self._kb_hover_l           = None  # index of key under left laser, or None
         self._kb_hover_r           = None  # index of key under right laser, or None
+        self._kb_held_key_l        = None  # index of key held by left trigger, or None
+        self._kb_held_key_r        = None  # index of key held by right trigger, or None
+        self._kb_held_mods_l       = None  # (shift, ctrl, alt, win, vk) snapshot for left held key
+        self._kb_held_mods_r       = None  # (shift, ctrl, alt, win, vk) snapshot for right held key
 
         # GPU interop (CUDA / HIP) — initialised lazily on first frame
         self._cuda_gl         = None   # CUDART_GL instance, False = permanently failed
@@ -802,12 +1048,20 @@ class OpenXRViewer:
         self._d3d11_device          = None    # c_void_p ID3D11Device*
         self._d3d11_context         = None    # c_void_p ID3D11DeviceContext*
         self._d3d11_swapchain_fmt   = _DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+        self._swapchain_is_bgra     = False  # True when WMR runtime only offers BGRA
         # Offscreen GL FBOs used when rendering for D3D11 swapchain images.
         # Key: (eye_index, img_index) → (mgl_fbo, mgl_tex, raw_fbo_id, w, h)
         self._offscreen_fbo_cache   = {}
         # PBOs for async pixel readback in the D3D11 path.
         # Key: (eye_index, img_index) → (pbo_id, w, h)
         self._d3d11_pbo_cache       = {}
+
+        # GPU interop state (NV_DX_interop2 or EXT_memory_object) for zero-copy
+        self._interop_mode      = None   # 'nv_dx' | 'ext_mem' | None (PBO fallback)
+        self._nv_dx_device      = None   # HANDLE from wglDXOpenDeviceNV
+        self._nv_dx_objects     = {}     # {img_index: GL_tex_id} for registered swapchain textures
+        self._ext_shared_tex    = {}     # {(eye): (d3d11_tex, gl_mem_obj, gl_tex, mgl_fbo)}
+
         # ModernGL / GL handles
         self.window = None
         self.ctx = None
@@ -1148,7 +1402,11 @@ class OpenXRViewer:
         if chosen_fmt is None:
             raise RuntimeError(f"No supported D3D11 swapchain format. Runtime offers: {runtime_fmts}")
         self._d3d11_swapchain_fmt = chosen_fmt
-        print(f"[OpenXRViewer] D3D11 swapchain format: {chosen_fmt}")
+        self._swapchain_is_bgra = chosen_fmt in (
+            _DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, _DXGI_FORMAT_B8G8R8A8_UNORM,
+        )
+        print(f"[OpenXRViewer] D3D11 swapchain format: {chosen_fmt}"
+              f"{' (BGRA)' if self._swapchain_is_bgra else ''}")
 
         for eye_index, vcv in enumerate(view_configs):
             rec_w = vcv.recommended_image_rect_width
@@ -1176,11 +1434,227 @@ class OpenXRViewer:
             self._swapchain_images[eye_index] = images
             self._swapchain_sizes[eye_index]  = (sc_w, sc_h)
 
-        # 9. Controller actions (best-effort)
+        # 9. Try GPU interop to avoid the PBO readback path
+        self._setup_gpu_interop_d3d11()
+
+        # 10. Controller actions (best-effort)
         try:
             self._init_controller_actions()
         except Exception as e:
             print(f"[OpenXRViewer] Controller actions unavailable: {e}")
+
+    # ── GPU interop helpers ────────────────────────────────────────────
+
+    @staticmethod
+    def _is_nvidia_gpu():
+        """Detect NVIDIA GPU via OpenGL renderer string."""
+        try:
+            from OpenGL.GL import glGetString, GL_RENDERER
+            r = glGetString(GL_RENDERER)
+            if r:
+                return b'NVIDIA' in r.upper() if isinstance(r, bytes) else 'NVIDIA' in r.upper()
+        except Exception:
+            pass
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return 'NVIDIA' in torch.cuda.get_device_name(0)
+        except Exception:
+            pass
+        return False
+
+    def _setup_gpu_interop_d3d11(self):
+        """Attempt GPU interop to eliminate the PBO readback path.
+
+        Order: NV_DX_interop2 for NVIDIA GPUs, EXT_memory_object for all others.
+        Falls back to the PBO path (already configured) if neither is available.
+
+        Interop is skipped for BGRA swapchains (common on WMR) because GL
+        renders RGBA natively and the R↔B mismatch would swap colours.
+        The PBO path handles BGRA via GL_BGRA readback format.
+        """
+        if not sys.platform == "win32":
+            return
+
+        if self._swapchain_is_bgra:
+            print("[OpenXRViewer] BGRA swapchain — GPU interop disabled (using PBO with GL_BGRA readback)")
+            return
+
+        is_nv = self._is_nvidia_gpu()
+
+        if is_nv and _load_nv_dx_interop():
+            try:
+                self._init_interop_nv()
+                self._interop_mode = 'nv_dx'
+                print("[OpenXRViewer] GPU interop active: NV_DX_interop2 (zero-copy)")
+                return
+            except Exception as e:
+                print(f"[OpenXRViewer] NV_DX_interop2 setup failed: {e}")
+
+        if _load_ext_memory_object():
+            try:
+                self._init_interop_ext_mem()
+                self._interop_mode = 'ext_mem'
+                print("[OpenXRViewer] GPU interop active: EXT_memory_object (GPU-side blit)")
+                return
+            except Exception as e:
+                print(f"[OpenXRViewer] EXT_memory_object setup failed: {e}")
+
+        self._interop_mode = None
+        print("[OpenXRViewer] GPU interop unavailable — using PBO fallback")
+
+    def _init_interop_nv(self):
+        """Set up WGL_NV_DX_interop2: register the D3D11 device with GL.
+
+        Individual swapchain textures are registered per-frame the first time
+        each image index is seen (see _get_or_create_nv_interop_fbo).
+        """
+        self._nv_dx_device = _wglDXOpenDeviceNV(self._d3d11_device)
+        if not self._nv_dx_device:
+            raise RuntimeError("wglDXOpenDeviceNV returned NULL")
+
+    def _get_or_create_nv_interop_fbo(self, eye_index, img_index, d3d11_tex, w, h):
+        """Register a swapchain D3D11 texture with GL via NV_DX_interop2.
+
+        Each unique (eye, img_index) pair is registered once and cached.
+        Returns (mgl_fbo, raw_fbo_id) for direct rendering into the D3D11 texture.
+        """
+        key = (eye_index, img_index)
+        if key in self._nv_dx_objects:
+            gl_tex, raw_fbo = self._nv_dx_objects[key]
+            return self.ctx.detect_framebuffer(raw_fbo), raw_fbo
+
+        gl_tex = glGenTextures(1)
+        # Register the D3D11 texture as a GL texture
+        dx_obj = _wglDXRegisterObjectNV(
+            self._nv_dx_device,
+            d3d11_tex,
+            gl_tex,
+            GL_TEXTURE_2D,
+            0x0002,  # WGL_ACCESS_WRITE_DISCARD_NV → the driver knows we overwrite
+        )
+        if not dx_obj:
+            glDeleteTextures(1, [gl_tex])
+            raise RuntimeError(f"wglDXRegisterObjectNV failed for eye {eye_index} img {img_index}")
+
+        # Set up FBO attached to the registered texture
+        raw_fbo = glGenFramebuffers(1)
+        glBindFramebuffer(GL_FRAMEBUFFER, raw_fbo)
+        # Lock, attach, unlock
+        _wglDXLockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_tex, 0)
+        _wglDXUnlockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+        self._nv_dx_objects[key] = (gl_tex, raw_fbo, dx_obj)
+        return self.ctx.detect_framebuffer(raw_fbo), raw_fbo
+
+    def _init_interop_ext_mem(self):
+        """Set up EXT_memory_object_win32: create shared D3D11 textures and
+        import them into GL once.  Render to the GL side, then CopyResource
+        to the swapchain image each frame (GPU-side blit, no CPU round-trip).
+        """
+        for eye_index in range(2):
+            sc_w, sc_h = self._swapchain_sizes[eye_index]
+            fmt = self._d3d11_swapchain_fmt
+            d3d11_tex, nt_handle = _create_d3d11_shared_texture(
+                self._d3d11_device, sc_w, sc_h, fmt,
+            )
+
+            # Import into GL
+            mem_obj = ctypes.c_uint(0)
+            _glCreateMemoryObjectsEXT(1, ctypes.byref(mem_obj))
+            _glImportMemoryWin32HandleEXT(
+                mem_obj, sc_w * sc_h * 4,
+                _GL_HANDLE_TYPE_OPAQUE_WIN32_EXT,
+                nt_handle,
+            )
+
+            # Create GL texture backed by the imported memory
+            gl_tex = glGenTextures(1)
+            glBindTexture(GL_TEXTURE_2D, gl_tex)
+            _glTextureStorageMem2DEXT(gl_tex, 1, GL_RGBA8, sc_w, sc_h, mem_obj, 0)
+            glBindTexture(GL_TEXTURE_2D, 0)
+
+            # FBO
+            raw_fbo = int(glGenFramebuffers(1))
+            glBindFramebuffer(GL_FRAMEBUFFER, raw_fbo)
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_tex, 0)
+            st = glCheckFramebufferStatus(GL_FRAMEBUFFER)
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
+            if st != GL_FRAMEBUFFER_COMPLETE:
+                raise RuntimeError(f"EXT_mem FBO incomplete for eye {eye_index}: {st:#x}")
+
+            mgl_fbo = self.ctx.detect_framebuffer(raw_fbo)
+            self._ext_shared_tex[eye_index] = (d3d11_tex, mem_obj, gl_tex, mgl_fbo, raw_fbo)
+
+    def _blit_ext_to_swapchain(self, eye_index, d3d11_swapchain_tex):
+        """GPU-side CopyResource from our shared texture to the swapchain image."""
+        d3d11_shared_tex = self._ext_shared_tex[eye_index][0]
+        # ID3D11DeviceContext::CopyResource at vtable index 47
+        ctx = self._d3d11_context
+        vtbl = ctypes.cast(ctx, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        copy_fn = ctypes.CFUNCTYPE(
+            None,
+            ctypes.c_void_p,  # this
+            ctypes.c_void_p,  # pDstResource
+            ctypes.c_void_p,  # pSrcResource
+        )(ctypes.cast(vtbl + 47 * ctypes.sizeof(ctypes.c_void_p),
+                      ctypes.POINTER(ctypes.c_void_p)).contents.value)
+        # Sync: ensure GL is done before D3D11 reads the shared texture
+        glFinish()
+        copy_fn(ctx, d3d11_swapchain_tex, d3d11_shared_tex)
+
+    def _cleanup_interop(self):
+        """Release all GPU interop resources."""
+        if self._interop_mode == 'nv_dx' and self._nv_dx_device:
+            for (gl_tex, raw_fbo, dx_obj) in self._nv_dx_objects.values():
+                try:
+                    _wglDXUnregisterObjectNV(self._nv_dx_device, dx_obj)
+                except Exception:
+                    pass
+                try:
+                    glDeleteFramebuffers(1, [raw_fbo])
+                except Exception:
+                    pass
+                try:
+                    glDeleteTextures(1, [gl_tex])
+                except Exception:
+                    pass
+            self._nv_dx_objects.clear()
+            try:
+                _wglDXCloseDeviceNV(self._nv_dx_device)
+            except Exception:
+                pass
+            self._nv_dx_device = None
+
+        if self._interop_mode == 'ext_mem':
+            for d3d11_tex, mem_obj, gl_tex, mgl_fbo, raw_fbo in self._ext_shared_tex.values():
+                try:
+                    glDeleteFramebuffers(1, [raw_fbo])
+                except Exception:
+                    pass
+                try:
+                    glDeleteTextures(1, [gl_tex])
+                except Exception:
+                    pass
+                try:
+                    _glDeleteMemoryObjectsEXT(1, ctypes.byref(ctypes.c_uint(mem_obj)))
+                except Exception:
+                    pass
+                # Release D3D11 texture
+                try:
+                    tex_vtbl = ctypes.cast(d3d11_tex, ctypes.POINTER(ctypes.c_void_p)).contents.value
+                    tex_rel = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
+                        ctypes.cast(tex_vtbl + 2 * ctypes.sizeof(ctypes.c_void_p),
+                                    ctypes.POINTER(ctypes.c_void_p)).contents.value
+                    )
+                    tex_rel(d3d11_tex)
+                except Exception:
+                    pass
+            self._ext_shared_tex.clear()
+
+        self._interop_mode = None
 
     def _init_openxr_opengl(self):
         """Original OpenGL-backed OpenXR session."""
@@ -1490,19 +1964,23 @@ class OpenXRViewer:
         self.depth_tex.build_mipmaps()
         self._texture_size = (w, h)
 
-    def _init_keyboard(self):
-        """Build keyboard key geometry and render the keyboard texture via PIL."""
+    def _build_keyboard_texture(self):
+        """(Re)build the virtual keyboard texture with the current shift state.
+
+        When Shift or Caps Lock is active the number/symbol keys show their
+        shifted glyph (e.g. '!' instead of '1').  Modifier key backgrounds
+        are highlighted as before.
+        """
         TW, TH   = _KB_TEX_W, _KB_TEX_H
-        ROW_H    = TH / len(_KB_ROWS)                  # pixel height per row
-        UNIT_W   = TW / float(_KB_UNITS_WIDE)          # pixel width of one key unit
+        ROW_H    = TH / len(_KB_ROWS)
+        UNIT_W   = TW / float(_KB_UNITS_WIDE)
         UNIT_M   = self._keyboard_width / float(_KB_UNITS_WIDE)
-        PAD      = 3                                   # pixel inset for key face
+        PAD      = 3
+        show_s   = self._kb_show_shifted   # whether to render shifted labels
 
         img  = Image.new('RGBA', (TW, TH), (30, 30, 35, 230))
         draw = ImageDraw.Draw(img)
-        # Try a font that contains arrow / shift / enter symbols. Segoe UI Symbol
-        # ships on every modern Windows install and covers the Unicode keyboard
-        # glyphs; fall back to the app font, then PIL's bitmap default.
+
         fnt = None
         for candidate in (r"C:\Windows\Fonts\seguisym.ttf",
                           r"C:\Windows\Fonts\segoeui.ttf",
@@ -1518,47 +1996,48 @@ class OpenXRViewer:
         self._keyboard_keys = []
         kw_half  = self._keyboard_width  / 2.0
         kh_half  = self._keyboard_height / 2.0
-        row_h_m  = self._keyboard_height / len(_KB_ROWS)  # metres per row
+        row_h_m  = self._keyboard_height / len(_KB_ROWS)
 
         for row_i, row in enumerate(_KB_ROWS):
             py0 = int(row_i * ROW_H)
             py1 = int((row_i + 1) * ROW_H)
-            # Local Y of this row: top of keyboard = +kh_half, rows go downward
             ly1 = kh_half - row_i * row_h_m
             ly0 = ly1 - row_h_m
             px  = 0.0
             lx  = -kw_half
-            for (label, vk_normal, _, vk_shifted, width_units) in row:
+            for (label, vk_normal, shifted_label, vk_shifted, width_units) in row:
                 px_end  = px + width_units * UNIT_W
                 lx_end  = lx + width_units * UNIT_M
 
-                # vk == -1 marks a layout gap: advance position but do not draw
-                # the key face and do not register a hit target.
                 if vk_normal == -1:
                     px = px_end
                     lx = lx_end
                     continue
 
-                # Draw key background and outline
+                # Key background
                 draw.rectangle([px + PAD, py0 + PAD, px_end - PAD, py1 - PAD],
                                fill=(60, 62, 70, 255), outline=(130, 132, 140, 255))
 
-                # Draw label centred in key face
+                # Pick label: shifted version if available and shift is active
+                display_label = label
+                if show_s and shifted_label is not None:
+                    display_label = shifted_label
+
                 if fnt:
                     tx = (px + px_end) / 2
                     ty = (py0 + py1) / 2
-                    draw.text((tx, ty), label, font=fnt, fill=(220, 220, 225, 255), anchor='mm')
+                    draw.text((tx, ty), display_label, font=fnt,
+                              fill=(220, 220, 225, 255), anchor='mm')
                 else:
-                    draw.text((int(px + PAD + 2), int(py0 + PAD + 2)), label,
-                               fill=(220, 220, 225, 255))
+                    draw.text((int(px + PAD + 2), int(py0 + PAD + 2)),
+                              display_label, fill=(220, 220, 225, 255))
 
-                # UV rect in [0,1]
-                uv_rect = (px / TW, py0 / TH, px_end / TW, py1 / TH)
-                # Local rect in metres (x grows right, y grows up)
-                loc_rect = (lx, ly0, lx_end, ly1)
+                uv_rect   = (px / TW, py0 / TH, px_end / TW, py1 / TH)
+                loc_rect  = (lx, ly0, lx_end, ly1)
 
                 self._keyboard_keys.append(_KeyEntry(
                     label=label,
+                    shifted_label=shifted_label,
                     vk=vk_normal,
                     shifted_vk=vk_shifted if vk_shifted is not None else vk_normal,
                     rect_uv=uv_rect,
@@ -1568,7 +2047,7 @@ class OpenXRViewer:
                 px  = px_end
                 lx  = lx_end
 
-        # Upload texture
+        # Upload
         tex_data = np.flipud(np.array(img, dtype=np.uint8))
         if self._keyboard_tex is not None:
             self._keyboard_tex.release()
@@ -1576,13 +2055,18 @@ class OpenXRViewer:
         self._keyboard_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._keyboard_tex.write(tex_data.tobytes())
 
-        # VAO — reuse _overlay_prog (already compiled, same WORLD_VERT + OVERLAY_FRAG)
-        verts = np.array([-1,-1,0,0, 1,-1,1,0, -1,1,0,1, 1,1,1,1], dtype='f4')
-        if self._keyboard_vao is not None:
-            self._keyboard_vao.release()
-        self._keyboard_vao = self.ctx.vertex_array(
-            self._overlay_prog, [(self.ctx.buffer(verts.tobytes()), '2f 2f', 'in_position', 'in_uv')]
-        )
+        # VAO (first build only — geometry never changes)
+        if self._keyboard_vao is None:
+            verts = np.array([-1,-1,0,0, 1,-1,1,0, -1,1,0,1, 1,1,1,1], dtype='f4')
+            self._keyboard_vao = self.ctx.vertex_array(
+                self._overlay_prog,
+                [(self.ctx.buffer(verts.tobytes()), '2f 2f', 'in_position', 'in_uv')],
+            )
+
+    def _init_keyboard(self):
+        """Initial keyboard build (called once when the user toggles it on)."""
+        self._kb_show_shifted = False
+        self._build_keyboard_texture()
 
     def _kb_world_mat(self):
         """Build the keyboard's world transform: rot_y(yaw) ∘ rot_x(pitch) then translate.
@@ -1609,34 +2093,27 @@ class OpenXRViewer:
         trans[2, 3] = -self._keyboard_distance
         return trans @ rot_y @ rot_x
 
-    def _anchor_keyboard_to_head(self):
-        """Re-snap the keyboard so it sits in front of and just below the user's head.
+    def _anchor_keyboard_below_screen(self):
+        """Snap the keyboard below the screen's bottom edge, facing the same direction.
 
-        Called when the keyboard is toggled on so it materialises within reach instead
-        of at the world origin. Uses cached head pose; if unavailable, falls back to a
-        sensible default at the user's initial eye height.
+        The keyboard sits below the FPS overlay panel so it doesn't overlap.
         """
-        FORWARD_DIST = 0.55   # metres in front of the head
-        BELOW_EYE    = 0.30   # metres below the eye line (so the user looks down at it)
-        if self._head_pos_w is not None and self._head_fwd_w is not None:
-            hx, hy, hz   = self._head_pos_w
-            fx, _fy, fz  = self._head_fwd_w
-            # Project forward onto the horizontal plane so the keyboard sits level even
-            # if the user happened to be looking up/down when toggling.
-            horiz = math.sqrt(fx * fx + fz * fz)
-            if horiz < 1e-4:
-                fx, fz = 0.0, -1.0
-            else:
-                fx /= horiz; fz /= horiz
-            self._keyboard_pan_x    = hx + fx * FORWARD_DIST
-            self._keyboard_pan_y    = hy - BELOW_EYE
-            self._keyboard_distance = -(hz + fz * FORWARD_DIST)
-            self._keyboard_yaw      = math.atan2(fx, -fz)   # face the user
+        FPS_GAP = 0.05   # gap between screen bottom and FPS overlay
+        FPS_H   = 0.12   # FPS overlay panel height
+        KB_GAP  = 0.05   # gap between FPS overlay bottom and keyboard top (same as FPS_GAP)
+        if self.screen_height is None:
+            fw, fh = self.frame_size
+            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
         else:
-            self._keyboard_pan_x    = 0.0
-            self._keyboard_pan_y    = self._initial_head_y - BELOW_EYE
-            self._keyboard_distance = FORWARD_DIST
-            self._keyboard_yaw      = 0.0
+            sh = self.screen_height
+        # Place keyboard below the FPS overlay panel, same distance + yaw
+        self._keyboard_pan_x    = self.screen_pan_x
+        self._keyboard_pan_y    = (self.screen_pan_y - sh / 2.0
+                                   - FPS_GAP - FPS_H - KB_GAP
+                                   - self._keyboard_height / 2.0)
+        self._keyboard_distance = self.screen_distance
+        self._keyboard_yaw      = self.screen_yaw
+        self._keyboard_pitch    = math.radians(-30.0)  # tilt up toward user
 
     def _render_keyboard(self, mgl_fbo, vp_mat):
         """Render the virtual keyboard quad and highlight hovered keys."""
@@ -1658,6 +2135,21 @@ class OpenXRViewer:
         mgl_fbo.use()
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+
+        # Keyboard border: solid quad slightly larger than the keyboard
+        if self._kb_border_alpha > 0.0 and self._border_prog is not None:
+            BORDER = 0.008
+            bx = kw2 + BORDER
+            by = kh2 + BORDER
+            border_scale = np.array([[bx, 0, 0, 0],
+                                     [0, by, 0, 0],
+                                     [0, 0,  1, -0.001],
+                                     [0, 0,  0, 1]], dtype=np.float32)
+            border_mvp = vp_kb @ border_scale
+            self._border_prog['u_mvp'].write(border_mvp.T.tobytes())
+            self._border_prog['u_color'].value = (0.3, 0.7, 1.0, self._kb_border_alpha)
+            self._border_vao.render(moderngl.TRIANGLE_STRIP)
+
         self._keyboard_tex.use(location=2)
         self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
         self._keyboard_vao.render(moderngl.TRIANGLE_STRIP)
@@ -1991,10 +2483,14 @@ class OpenXRViewer:
         return pbo_id
 
     def _submit_pbo_readback(self, raw_fbo_id, pbo_id, w, h):
-        """Submit an async glReadPixels into pbo_id and flush to kick off DMA immediately."""
+        """Submit an async glReadPixels into pbo_id and flush to kick off DMA immediately.
+
+        Uses GL_BGRA for BGRA swapchains (WMR) so the byte order matches D3D11 directly.
+        """
+        pixel_fmt = GL_BGRA if self._swapchain_is_bgra else GL_RGBA
         glBindFramebuffer(GL_FRAMEBUFFER, raw_fbo_id)
         glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
+        glReadPixels(0, 0, w, h, pixel_fmt, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
         glFlush()  # push the DMA command to the GPU so it starts while we render eye 1
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
@@ -2091,7 +2587,7 @@ class OpenXRViewer:
                              f"   Latency {lat_str}")
                 _draw_row(ROW0, "[Performance]", C_LABEL, fps_str, C_GREEN)
                 scr_str   = (f"{self._cached_screen_width:.2f}"
-                             f"x{self._cached_screen_height:.2f} m"
+                             f" x {self._cached_screen_height:.2f} m"
                              f"  @  {self._cached_screen_dist:.2f} m"
                              f"   Depth {self._cached_depth_ratio:.2f}")
                 _draw_row(ROW1, "[3D Display]", C_LABEL, scr_str, C_CYAN)
@@ -2437,6 +2933,8 @@ class OpenXRViewer:
         if show_border:
             self._border_alpha  = 1.0
             self._border_idle_t = time.perf_counter()
+        if self._keyboard_visible:
+            self._anchor_keyboard_below_screen()
 
     def _tick_screen_anim(self, dt):
         """Exponential-decay glide toward the animation target set by _reset_screen_to_gaze.
@@ -2522,6 +3020,8 @@ class OpenXRViewer:
         if show_border:
             self._border_alpha  = 1.0
             self._border_idle_t = time.perf_counter()
+        if self._keyboard_visible:
+            self._anchor_keyboard_below_screen()
 
     def _screen_uv_to_world(self, u, v):
         """Convert a screen UV in [0,1]² to its world-space 3-D position on the screen plane."""
@@ -3120,11 +3620,14 @@ class OpenXRViewer:
         if self._aim_mat_l is not None:
             cp = self._aim_mat_l[:3, 3].astype('f8')
             fw = -self._aim_mat_l[:3, 2].astype('f8')
-            hit_l = self._laser_screen_hit_uv(cp, fw)
+            # Keyboard blocks the laser — don't let it reach the screen
+            if not (self._keyboard_visible and self._keyboard_laser_hit(cp, fw)[0] is not None):
+                hit_l = self._laser_screen_hit_uv(cp, fw)
         if self._aim_mat_r is not None:
             cp = self._aim_mat_r[:3, 3].astype('f8')
             fw = -self._aim_mat_r[:3, 2].astype('f8')
-            hit_r = self._laser_screen_hit_uv(cp, fw)
+            if not (self._keyboard_visible and self._keyboard_laser_hit(cp, fw)[0] is not None):
+                hit_r = self._laser_screen_hit_uv(cp, fw)
 
         self._cursor_uv_l = hit_l if hit_l else None   # (u, v, t) or None
         self._cursor_uv_r = hit_r if hit_r else None   # (u, v, t) or None
@@ -3240,24 +3743,58 @@ class OpenXRViewer:
             _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
             self._left_btn_down = False
 
+    def _press_key(self, key, key_idx, held_key_attr, held_mods_attr):
+        """Press and hold a regular key on the virtual keyboard (key-down only)."""
+        kbd = ctypes.windll.user32.keybd_event
+        VK_SHIFT = 0x10; VK_CTRL = 0x11; VK_ALT = 0x12; VK_WIN = 0x5B
+        sh = self._mod_state['shift']
+        ct = self._mod_state['ctrl']
+        al = self._mod_state['alt']
+        wn = self._mod_state['win']
+        shift_on = sh[0] or sh[1]
+        ctrl_on  = ct[0] or ct[1]
+        alt_on   = al[0] or al[1]
+        win_on   = wn[0] or wn[1]
+        use_shift = shift_on ^ self._caps_lock
+        vk_to_use = key.shifted_vk if use_shift else key.vk
+        need_shift = use_shift and vk_to_use == key.vk
+        if ctrl_on:     kbd(VK_CTRL,  0, 0, 0)
+        if need_shift:  kbd(VK_SHIFT, 0, 0, 0)
+        if alt_on:      kbd(VK_ALT,   0, 0, 0)
+        if win_on:      kbd(VK_WIN,   0, 0, 0)
+        kbd(vk_to_use, 0, 0, 0)
+        setattr(self, held_key_attr, key_idx)
+        setattr(self, held_mods_attr, (need_shift, ctrl_on, alt_on, win_on, vk_to_use))
+
     def _handle_keyboard_input(self):
-        """Send Windows keystrokes when a controller trigger fires on a keyboard key."""
+        """Send Windows keystrokes when a controller trigger fires on a keyboard key.
+
+        Regular keys use press-and-hold: key-down on trigger pull, key-up on release.
+        Modifier keys (Shift/Ctrl/Alt/Win) use tap/lock toggles.  Caps toggles caps-lock.
+        """
         if not self._keyboard_visible:
             self._kb_hover_l = None
             self._kb_hover_r = None
             return
-        CLICK_THRESH = 0.7
-        VK_SHIFT     = 0x10
-        VK_CAPS      = 0x14
+        CLICK_THRESH  = 0.7
+        RELEASE_THRESH = 0.3
+        VK_SHIFT      = 0x10
+        VK_CAPS       = 0x14
+        VK_CTRL       = 0x11
+        VK_ALT        = 0x12
+        VK_WIN        = 0x5B
+        kbd           = ctypes.windll.user32.keybd_event
 
         lt = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
         rt = self._read_float_action(self._act_right_trigger, "/user/hand/right")
 
-        for trig_now, trig_prev_attr, hover_attr, aim_mat in [
-            (lt, '_kb_trig_prev_l', '_kb_hover_l', self._aim_mat_l),
-            (rt, '_kb_trig_prev_r', '_kb_hover_r', self._aim_mat_r),
+        for trig_now, trig_prev_attr, hover_attr, held_key_attr, held_mods_attr, aim_mat in [
+            (lt, '_kb_trig_prev_l', '_kb_hover_l', '_kb_held_key_l', '_kb_held_mods_l', self._aim_mat_l),
+            (rt, '_kb_trig_prev_r', '_kb_hover_r', '_kb_held_key_r', '_kb_held_mods_r', self._aim_mat_r),
         ]:
             trig_prev = getattr(self, trig_prev_attr)
+            held_key  = getattr(self, held_key_attr)
+            held_mods = getattr(self, held_mods_attr)
             if aim_mat is not None:
                 cp  = aim_mat[:3, 3].astype('f8')
                 fw  = -aim_mat[:3, 2].astype('f8')
@@ -3266,54 +3803,70 @@ class OpenXRViewer:
                 idx = None
             setattr(self, hover_attr, idx)
 
-            # Rising edge on a key
+            # —— Release held regular key when trigger drops or laser leaves the key ——
+            if held_key is not None:
+                release = False
+                if trig_now < RELEASE_THRESH:
+                    release = True
+                elif idx != held_key:
+                    release = True
+                if release:
+                    shift_dn, ctrl_dn, alt_dn, win_dn, vk_held = held_mods
+                    kbd(vk_held, 0, _KEYEVENTF_KEYUP, 0)
+                    if win_dn:   kbd(VK_WIN,   0, _KEYEVENTF_KEYUP, 0)
+                    if alt_dn:   kbd(VK_ALT,   0, _KEYEVENTF_KEYUP, 0)
+                    if shift_dn: kbd(VK_SHIFT, 0, _KEYEVENTF_KEYUP, 0)
+                    if ctrl_dn:  kbd(VK_CTRL,  0, _KEYEVENTF_KEYUP, 0)
+                    # Auto-release one-shot modifiers that were armed when the key went down
+                    for name in ('shift', 'ctrl', 'alt', 'win'):
+                        self._mod_state[name][0] = False
+                    setattr(self, held_key_attr, None)
+                    setattr(self, held_mods_attr, None)
+                    held_key  = None
+                    held_mods = None
+
+            # —— Rising edge: modifier / caps toggles, or start holding a regular key ——
             if trig_now >= CLICK_THRESH and trig_prev < CLICK_THRESH and idx is not None:
                 key = self._keyboard_keys[idx]
-                VK_CTRL = 0x11
-                VK_ALT  = 0x12
-                VK_WIN  = 0x5B
                 mod_name = {VK_SHIFT: 'shift', VK_CTRL: 'ctrl',
                             VK_ALT: 'alt', VK_WIN: 'win'}.get(key.vk)
                 if mod_name is not None:
                     DOUBLE_TAP_WINDOW = 0.4
                     now_t = time.monotonic()
-                    state = self._mod_state[mod_name]   # [active, lock, last_tap_t]
+                    state = self._mod_state[mod_name]
                     if state[1]:
-                        # Already locked — any tap releases it.
                         state[0] = False
                         state[1] = False
+                    elif state[0]:
+                        state[0] = False
+                        _send_key(key.vk)
                     elif (now_t - state[2]) < DOUBLE_TAP_WINDOW:
-                        # Second tap within window → engage persistent lock.
                         state[0] = False
                         state[1] = True
                     else:
-                        # Single tap → toggle one-shot for the next key.
-                        state[0] = not state[0]
+                        state[0] = True
                     state[2] = now_t
                 elif key.vk == VK_CAPS:
                     self._caps_lock = not self._caps_lock
                 else:
-                    sh = self._mod_state['shift']
-                    ct = self._mod_state['ctrl']
-                    al = self._mod_state['alt']
-                    wn = self._mod_state['win']
-                    shift_on = sh[0] or sh[1]
-                    ctrl_on  = ct[0] or ct[1]
-                    alt_on   = al[0] or al[1]
-                    win_on   = wn[0] or wn[1]
-                    use_shift = shift_on ^ self._caps_lock
-                    vk_to_use = key.shifted_vk if use_shift else key.vk
-                    # Send the key with all currently-armed modifiers wrapping it
-                    _send_key(vk_to_use,
-                              shift=use_shift and vk_to_use == key.vk,
-                              ctrl=ctrl_on,
-                              alt=alt_on,
-                              win=win_on)
-                    # Auto-release one-shot modifiers (locked ones persist).
-                    for st in (sh, ct, al, wn):
-                        st[0] = False
+                    self._press_key(key, idx, held_key_attr, held_mods_attr)
+
+            # —— Slide to new key: trigger already held, laser moved to another regular key ——
+            if (held_key is None and trig_now >= CLICK_THRESH
+                    and idx is not None and trig_prev >= CLICK_THRESH):
+                key = self._keyboard_keys[idx]
+                if key.vk not in (VK_SHIFT, VK_CTRL, VK_ALT, VK_WIN, VK_CAPS):
+                    self._press_key(key, idx, held_key_attr, held_mods_attr)
 
             setattr(self, trig_prev_attr, trig_now)
+
+        # After processing triggers, check if shift/caps state changed and
+        # rebuild the keyboard texture so labels update visually.
+        sh = self._mod_state['shift']
+        cur_shifted = bool(sh[0] or sh[1] or self._caps_lock)
+        if cur_shifted != self._kb_show_shifted:
+            self._kb_show_shifted = cur_shifted
+            self._build_keyboard_texture()
 
     def _accum_scroll(self, x_axis, y_axis, dt):
         """Accumulate thumbstick deflection into accelerated mouse wheel events.
@@ -3392,18 +3945,29 @@ class OpenXRViewer:
         grip_l = self._read_bool_action(self._act_left_grip,  "/user/hand/left")
         grip_r = self._read_bool_action(self._act_right_grip, "/user/hand/right")
 
-        active = grip_l or grip_r
+        laser_on_screen = (self._cursor_uv_l is not None) or (self._cursor_uv_r is not None)
+        active = (grip_l or grip_r) and laser_on_screen
         self._grabbed  = active
         self._resizing = False
 
-        # ── Left grip + left stick: rotate screen yaw (X) / pitch (Y) at half speed ──
-        # ── Left stick (no grip): mouse scroll (same axes as right stick) ─────────
-        ROT_SPEED    = 0.35   # rad/s — intentionally slow (0.5 × 0.7) for precision
+        # ── Left grip + left stick ─────────────────────────────────────────
+        # Keyboard visible → translate keyboard (X=horizontal, Y=vertical, Z=depth).
+        # Keyboard hidden  → rotate screen yaw (X) / pitch (Y).
+        # No grip → mouse scroll (same axes as right stick).
+        KB_MOVE_SPEED = 0.4    # m/s at full deflection
+        ROT_SPEED     = 0.35   # rad/s
         if grip_l:
-            if abs(lx) > DEAD:
-                self.screen_yaw   -= lx * ROT_SPEED * dt   # right → yaw right
-            if abs(ly) > DEAD:
-                self.screen_pitch += ly * ROT_SPEED * dt   # up → tilt up
+            if self._keyboard_visible and self._kb_hover_l is not None:
+                # Left grip + left stick → keyboard x,y translation (only when laser is on keyboard)
+                if abs(lx) > DEAD:
+                    self._keyboard_pan_x += lx * KB_MOVE_SPEED * dt
+                if abs(ly) > DEAD:
+                    self._keyboard_pan_y += ly * KB_MOVE_SPEED * dt  # up → raise keyboard
+            else:
+                if laser_on_screen and abs(lx) > DEAD:
+                    self.screen_yaw   -= lx * ROT_SPEED * dt
+                if laser_on_screen and abs(ly) > DEAD:
+                    self.screen_pitch += ly * ROT_SPEED * dt
         else:
             # No left grip → left stick accumulates scroll (flushed below with right stick)
             self._accum_scroll(lx, ly, dt)
@@ -3418,28 +3982,49 @@ class OpenXRViewer:
         RESIZE_SPEED = 1.2    # m/s of width change at full deflection
         DEPTH_SPEED  = 0.08   # depth_strength units/s at full deflection
         if grip_r and not grip_l:
-            if abs(rx) > abs(ry) and abs(rx) > DEAD:
-                # X dominant → resize only (prevents Y bleed-through from changing distance)
-                self.screen_width = max(0.3,
-                                        self.screen_width + rx * RESIZE_SPEED * dt)
-                self.screen_height = None
-                self._resizing = True
-                self._screen_osd_show_t = time.perf_counter()
-            elif abs(ry) > abs(rx) and abs(ry) > DEAD:
-                # Y dominant → distance only
-                # Up (ry > 0) → further (distance increases); down → closer
-                self.screen_distance = max(0.3,
-                                           self.screen_distance + ry * DIST_SPEED * dt)
-                self._screen_osd_show_t = time.perf_counter()
+            # When pointing at the keyboard, right stick acts on keyboard instead of screen
+            if self._keyboard_visible and self._kb_hover_r is not None:
+                if abs(rx) > abs(ry) and abs(rx) > DEAD:
+                    self._keyboard_width = max(0.3,
+                        self._keyboard_width + rx * RESIZE_SPEED * dt)
+                    self._keyboard_height = None  # recalc from aspect
+                elif abs(ry) > abs(rx) and abs(ry) > DEAD:
+                    self._keyboard_distance = max(0.2,
+                        self._keyboard_distance - ry * DIST_SPEED * dt)
+            else:
+                if laser_on_screen and abs(rx) > abs(ry) and abs(rx) > DEAD:
+                    self.screen_width = max(0.3,
+                                            self.screen_width + rx * RESIZE_SPEED * dt)
+                    self.screen_height = None
+                    self._resizing = True
+                    self._screen_osd_show_t = time.perf_counter()
+                elif laser_on_screen and abs(ry) > abs(rx) and abs(ry) > DEAD:
+                    self.screen_distance = max(0.3,
+                                               self.screen_distance - ry * DIST_SPEED * dt)
+                    self._screen_osd_show_t = time.perf_counter()
         elif grip_l and not grip_r:
-            # Left grip + right stick Y → adjust depth strength
-            if abs(ry) > DEAD:
-                self.depth_strength = max(0.0, min(0.5,
-                                          self.depth_strength + ry * DEPTH_SPEED * dt))
+            if self._keyboard_visible and self._kb_hover_r is not None:
+                # Right stick Y = keyboard depth (only when laser is on keyboard)
+                if abs(ry) > DEAD:
+                    self._keyboard_distance = max(0.2,
+                        self._keyboard_distance - ry * KB_MOVE_SPEED * dt)
+            else:
+                # Left grip + right stick Y → adjust depth strength
+                if laser_on_screen and abs(ry) > DEAD:
+                    self.depth_strength = max(0.0, min(0.5,
+                                              self.depth_strength + ry * DEPTH_SPEED * dt))
         self._grip_r_prev = grip_r
         if not grip_r:
             # Accelerated scroll: higher stick deflection → disproportionately faster scroll
             self._accum_scroll(rx, ry, dt)
+
+        # Rebuild keyboard geometry if width changed
+        if (self._keyboard_visible and self._keyboard_tex is not None
+                and abs(self._keyboard_width - self._kb_last_build_width) > 0.001):
+            self._keyboard_height = (self._keyboard_width
+                                     * _KB_TEX_H / float(_KB_TEX_W))
+            self._build_keyboard_texture()
+            self._kb_last_build_width = self._keyboard_width
 
         # Menu (left): toggle FPS overlay
         menu_now = self._read_bool_action(self._act_menu_btn, "/user/hand/left")
@@ -3506,7 +4091,7 @@ class OpenXRViewer:
             if self._keyboard_visible:
                 if self._keyboard_tex is None:
                     self._init_keyboard()
-                self._anchor_keyboard_to_head()
+                self._anchor_keyboard_below_screen()
         self._x_last = x_now
 
         # Left thumbstick click: cycle background color through _BG_COLORS presets.
@@ -3535,15 +4120,25 @@ class OpenXRViewer:
 
         # Border fade: snap to 1 while the user is actively re-positioning, fade out
         # when idle. `active` is computed at the top of this method.
+        FADE_DELAY = 1.5   # seconds before starting to fade
+        FADE_DUR   = 0.8   # fade-out duration in seconds
         if active:
             self._border_alpha  = 1.0
             self._border_idle_t = time.perf_counter()
         else:
             idle = time.perf_counter() - self._border_idle_t
-            FADE_DELAY = 1.5   # seconds before starting to fade
-            FADE_DUR   = 0.8   # fade-out duration in seconds
             if idle > FADE_DELAY:
                 self._border_alpha = max(0.0, 1.0 - (idle - FADE_DELAY) / FADE_DUR)
+
+        # Keyboard border fade: show while gripping keyboard (but not when adjusting screen)
+        kb_active = self._keyboard_visible and (grip_l or grip_r) and not laser_on_screen
+        if kb_active:
+            self._kb_border_alpha  = 1.0
+            self._kb_border_idle_t = time.perf_counter()
+        else:
+            idle = time.perf_counter() - self._kb_border_idle_t
+            if idle > FADE_DELAY:
+                self._kb_border_alpha = max(0.0, 1.0 - (idle - FADE_DELAY) / FADE_DUR)
 
         # Cursor + trigger input (runs every frame regardless of grip state)
         self._handle_keyboard_input()   # updates _kb_hover_l/r, consumes keyboard triggers
@@ -3711,52 +4306,114 @@ class OpenXRViewer:
                 eye_layer_views = []
 
                 if self._use_d3d11:
-                    # D3D11 two-phase loop: overlap GPU DMA with rendering.
+                    # ── D3D11 rendering ──────────────────────────────────
                     #
-                    # Phase 1 — render both eyes and immediately submit async
-                    # glReadPixels into PBOs.  glReadPixels with a bound PBO
-                    # returns instantly; the actual DMA from GPU VRAM to the
-                    # PBO runs asynchronously while we render the next eye.
-                    #
-                    # Phase 2 — glMapBuffer (which stalls until the DMA is
-                    # done) and UpdateSubresource.  By this point eye 0's DMA
-                    # has been running while eye 1 was rendering, so the stall
-                    # is typically zero or near-zero for eye 0, and minimal
-                    # for eye 1.
-                    d3d11_pending = []   # (eye_index, pbo_id, d3d11_tex, sc_w, sc_h, swapchain, view)
+                    # Prefer GPU interop (NV_DX_interop2 or EXT_memory_object)
+                    # which avoids the CPU round-trip entirely.
+                    # Fall back to the optimized PBO readback path otherwise.
 
-                    for eye_index in range(2):
-                        swapchain = self._xr_swapchains[eye_index]
-                        img_index = xr.acquire_swapchain_image(swapchain, xr.SwapchainImageAcquireInfo())
-                        xr.wait_swapchain_image(swapchain, xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION))
-                        sc_image = self._swapchain_images[eye_index][img_index]
-                        sc_w, sc_h = self._swapchain_sizes[eye_index]
-                        view = views[eye_index] if views and views[eye_index] else None
-                        view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
-                        proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
+                    if self._interop_mode == 'nv_dx':
+                        # NV_DX_interop2: render directly into swapchain textures
+                        for eye_index in range(2):
+                            swapchain = self._xr_swapchains[eye_index]
+                            img_index = xr.acquire_swapchain_image(swapchain, xr.SwapchainImageAcquireInfo())
+                            xr.wait_swapchain_image(swapchain, xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION))
+                            sc_image = self._swapchain_images[eye_index][img_index]
+                            sc_w, sc_h = self._swapchain_sizes[eye_index]
+                            view = views[eye_index] if views and views[eye_index] else None
+                            view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
+                            proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
 
-                        mgl_fbo, raw_fbo_id = self._get_or_create_offscreen_fbo(eye_index, img_index, sc_w, sc_h)
-                        self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
+                            mgl_fbo, raw_fbo = self._get_or_create_nv_interop_fbo(
+                                eye_index, img_index, sc_image.texture, sc_w, sc_h,
+                            )
+                            # Lock the registered D3D11 texture for GL access
+                            _, _, dx_obj = self._nv_dx_objects[(eye_index, img_index)]
+                            _wglDXLockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
+                            try:
+                                self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
+                            finally:
+                                _wglDXUnlockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
 
-                        pbo_id = self._get_or_create_d3d11_pbo(eye_index, img_index, sc_w, sc_h)
-                        self._submit_pbo_readback(raw_fbo_id, pbo_id, sc_w, sc_h)
-                        d3d11_pending.append((eye_index, pbo_id, sc_image.texture, sc_w, sc_h, swapchain, view))
-
-                    # Phase 2: map PBOs (DMA should be done), upload, release.
-                    for eye_index, pbo_id, d3d11_tex, sc_w, sc_h, swapchain, view in d3d11_pending:
-                        self._upload_pbo_to_d3d11(pbo_id, d3d11_tex, sc_w, sc_h)
-                        xr.release_swapchain_image(swapchain, xr.SwapchainImageReleaseInfo())
-                        eye_layer_views.append(xr.CompositionLayerProjectionView(
-                            pose=view.pose if view else xr.Posef(),
-                            fov=view.fov   if view else _default_fov,
-                            sub_image=xr.SwapchainSubImage(
-                                swapchain=swapchain,
-                                image_rect=xr.Rect2Di(
-                                    offset=xr.Offset2Di(x=0, y=0),
-                                    extent=xr.Extent2Di(width=sc_w, height=sc_h),
+                            xr.release_swapchain_image(swapchain, xr.SwapchainImageReleaseInfo())
+                            eye_layer_views.append(xr.CompositionLayerProjectionView(
+                                pose=view.pose if view else xr.Posef(),
+                                fov=view.fov   if view else _default_fov,
+                                sub_image=xr.SwapchainSubImage(
+                                    swapchain=swapchain,
+                                    image_rect=xr.Rect2Di(
+                                        offset=xr.Offset2Di(x=0, y=0),
+                                        extent=xr.Extent2Di(width=sc_w, height=sc_h),
+                                    ),
                                 ),
-                            ),
-                        ))
+                            ))
+
+                    elif self._interop_mode == 'ext_mem':
+                        # EXT_memory_object: render to shared GL FBO, GPU-side blit to swapchain
+                        for eye_index in range(2):
+                            swapchain = self._xr_swapchains[eye_index]
+                            img_index = xr.acquire_swapchain_image(swapchain, xr.SwapchainImageAcquireInfo())
+                            xr.wait_swapchain_image(swapchain, xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION))
+                            sc_image = self._swapchain_images[eye_index][img_index]
+                            sc_w, sc_h = self._swapchain_sizes[eye_index]
+                            view = views[eye_index] if views and views[eye_index] else None
+                            view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
+                            proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
+
+                            mgl_fbo = self._ext_shared_tex[eye_index][3]
+                            self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
+                            self._blit_ext_to_swapchain(eye_index, sc_image.texture)
+
+                            xr.release_swapchain_image(swapchain, xr.SwapchainImageReleaseInfo())
+                            eye_layer_views.append(xr.CompositionLayerProjectionView(
+                                pose=view.pose if view else xr.Posef(),
+                                fov=view.fov   if view else _default_fov,
+                                sub_image=xr.SwapchainSubImage(
+                                    swapchain=swapchain,
+                                    image_rect=xr.Rect2Di(
+                                        offset=xr.Offset2Di(x=0, y=0),
+                                        extent=xr.Extent2Di(width=sc_w, height=sc_h),
+                                    ),
+                                ),
+                            ))
+
+                    else:
+                        # PBO fallback: two-phase loop to overlap GPU DMA with rendering.
+                        d3d11_pending = []   # (eye_index, pbo_id, d3d11_tex, sc_w, sc_h, swapchain, view)
+
+                        for eye_index in range(2):
+                            swapchain = self._xr_swapchains[eye_index]
+                            img_index = xr.acquire_swapchain_image(swapchain, xr.SwapchainImageAcquireInfo())
+                            xr.wait_swapchain_image(swapchain, xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION))
+                            sc_image = self._swapchain_images[eye_index][img_index]
+                            sc_w, sc_h = self._swapchain_sizes[eye_index]
+                            view = views[eye_index] if views and views[eye_index] else None
+                            view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
+                            proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
+
+                            mgl_fbo, raw_fbo_id = self._get_or_create_offscreen_fbo(eye_index, img_index, sc_w, sc_h)
+                            self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
+
+                            pbo_id = self._get_or_create_d3d11_pbo(eye_index, img_index, sc_w, sc_h)
+                            self._submit_pbo_readback(raw_fbo_id, pbo_id, sc_w, sc_h)
+                            d3d11_pending.append((eye_index, pbo_id, sc_image.texture, sc_w, sc_h, swapchain, view))
+
+                        # Phase 2: map PBOs (DMA should be done), upload, release.
+                        for eye_index, pbo_id, d3d11_tex, sc_w, sc_h, swapchain, view in d3d11_pending:
+                            self._upload_pbo_to_d3d11(pbo_id, d3d11_tex, sc_w, sc_h)
+                            xr.release_swapchain_image(swapchain, xr.SwapchainImageReleaseInfo())
+                            eye_layer_views.append(xr.CompositionLayerProjectionView(
+                                pose=view.pose if view else xr.Posef(),
+                                fov=view.fov   if view else _default_fov,
+                                sub_image=xr.SwapchainSubImage(
+                                    swapchain=swapchain,
+                                    image_rect=xr.Rect2Di(
+                                        offset=xr.Offset2Di(x=0, y=0),
+                                        extent=xr.Extent2Di(width=sc_w, height=sc_h),
+                                    ),
+                                ),
+                            ))
+
                 else:
                     for eye_index in range(2):
                         swapchain = self._xr_swapchains[eye_index]
@@ -3831,6 +4488,8 @@ class OpenXRViewer:
         if sys.platform == "win32" and self._saved_dclick_time is not None:
             _U32.SystemParametersInfoW(0x0020, self._saved_dclick_time, None, 0)
             self._saved_dclick_time = None
+
+        self._cleanup_interop()
 
         raw_ids = [raw_id for raw_id, _ in self._fbo_cache.values()]
         if raw_ids:
