@@ -1187,16 +1187,19 @@ def main(mode="Viewer"):
                 w, h = rgb.shape[2], rgb.shape[1]
             else:
                 w, h = rgb.shape[1], rgb.shape[0]
-            viewer = OpenXRViewer(
-                ipd=IPD,
-                depth_ratio=DEPTH_STRENGTH,
-                convergence=CONVERGENCE,
-                frame_size=(w, h),
-                fps=FPS,
-                depth_q=depth_q,
-                show_fps=SHOW_FPS,
-            )
-            viewer.run(first_rgb=rgb, first_depth=depth)
+            try:
+                viewer = OpenXRViewer(
+                    ipd=IPD,
+                    depth_ratio=DEPTH_STRENGTH,
+                    convergence=CONVERGENCE,
+                    frame_size=(w, h),
+                    fps=FPS,
+                    depth_q=depth_q,
+                    show_fps=SHOW_FPS,
+                )
+                viewer.run(first_rgb=rgb, first_depth=depth)
+            except Exception as e:
+                print(f"[Main] OpenXR Viewer error: {e}")
 
         else:
             from depth import make_sbs, DEVICE_INFO

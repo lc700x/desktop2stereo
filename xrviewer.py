@@ -41,6 +41,237 @@ except ImportError:
     print("[OpenXRViewer] pyopenxr not installed. Run: pip install pyopenxr")
 
 # ---------------------------------------------------------------------------
+# glb loader (for VR controller models)
+# ---------------------------------------------------------------------------
+import struct
+import json
+import io as _io
+from PIL import Image
+
+
+def _read_glb_chunks(data):
+    """Read GLB chunks and return JSON and binary data."""
+    magic = struct.unpack_from('<I', data, 0)[0]
+    if magic != 0x46546C67:
+        raise ValueError(f"Not a GLB file (magic=0x{magic:08X})")
+    total_len = struct.unpack_from('<I', data, 8)[0]
+    offset = 12
+    json_data, bin_data = None, None
+    while offset < total_len:
+        chunk_len = struct.unpack_from('<I', data, offset)[0]
+        chunk_type = struct.unpack_from('<I', data, offset + 4)[0]
+        raw = data[offset + 8:offset + 8 + chunk_len]
+        if chunk_type == 0x4E4F534A:  # JSON chunk
+            json_data = json.loads(raw.decode('utf-8'))
+        elif chunk_type == 0x004E4942:  # BIN chunk
+            bin_data = raw
+        offset += 8 + chunk_len
+    return json_data, bin_data
+
+
+_DTYPE_MAP = {5120: np.int8, 5121: np.uint8, 5122: np.int16,
+              5123: np.uint16, 5125: np.uint32, 5126: np.float32}
+_TYPE_NC = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4,
+            'MAT2': 4, 'MAT3': 9, 'MAT4': 16}
+
+
+def _get_accessor(gltf, bin_data, acc_idx):
+    """Extract numpy array from a glTF accessor."""
+    acc = gltf['accessors'][acc_idx]
+    bv = gltf['bufferViews'][acc['bufferView']]
+    off = bv.get('byteOffset', 0) + acc.get('byteOffset', 0)
+    nc = _TYPE_NC[acc['type']]
+    dt = np.dtype(_DTYPE_MAP[acc['componentType']]).newbyteorder('<')
+    arr = np.frombuffer(bin_data[off:off + acc['count'] * nc * dt.itemsize], dtype=dt)
+    if nc > 1:
+        arr = arr.reshape(acc['count'], nc)
+    # Normalize data types for consistency
+    if acc['componentType'] in (5121, 5123, 5125):
+        arr = arr.astype(np.uint32)
+    elif acc['componentType'] == 5126:
+        arr = arr.astype(np.float32)
+    return arr
+
+
+def _quat_to_mat4(q):
+    """Convert quaternion [x, y, z, w] to 4x4 rotation matrix."""
+    x, y, z, w = float(q[0]), float(q[1]), float(q[2]), float(q[3])
+    xx, yy, zz = x*x, y*y, z*z
+    xy, xz, yz = x*y, x*z, y*z
+    wx, wy, wz = w*x, w*y, w*z
+    return np.array([
+        [1-2*(yy+zz), 2*(xy-wz),   2*(xz+wy),   0],
+        [2*(xy+wz),   1-2*(xx+zz), 2*(yz-wx),   0],
+        [2*(xz-wy),   2*(yz+wx),   1-2*(xx+yy), 0],
+        [0,           0,           0,           1],
+    ], dtype=np.float64)
+
+
+def _build_node_matrices(gltf):
+    """Compute world matrix for each node (top-down). Returns list of 4x4 float64 matrices.
+    Parent world matrix = parent_matrix @ local_matrix.
+    Local matrix = translation * rotation * scale.
+    Root nodes assume identity parent matrix.
+    """
+    nodes = gltf.get('nodes', [])
+    n = len(nodes)
+    if n == 0:
+        return []
+
+    # Build local matrices
+    local_mats = []
+    for node in nodes:
+        t = node.get('translation', [0, 0, 0])
+        r = node.get('rotation', [0, 0, 0, 1])  # [x, y, z, w]
+        s = node.get('scale', [1, 1, 1])
+
+        T = np.eye(4, dtype=np.float64)
+        T[:3, 3] = t
+        R = _quat_to_mat4(r)
+        S_mat = np.diag([s[0], s[1], s[2], 1.0]).astype(np.float64)
+        local_mats.append(T @ R @ S_mat)
+
+    # Build child -> parent mapping
+    parent = [-1] * n
+    for pi, node in enumerate(nodes):
+        for ci in node.get('children', []):
+            parent[ci] = pi
+
+    # Topological order (BFS from roots) to compute world matrices
+    world_mats = [None] * n
+    queue = [i for i in range(n) if parent[i] == -1]
+    for i in queue:
+        world_mats[i] = local_mats[i].copy()
+
+    head = 0
+    while head < len(queue):
+        pi = queue[head]
+        head += 1
+        for ci in nodes[pi].get('children', []):
+            if world_mats[ci] is None:
+                world_mats[ci] = world_mats[pi] @ local_mats[ci]
+                queue.append(ci)
+
+    # Isolated nodes (no parent) just use local matrix
+    for i in range(n):
+        if world_mats[i] is None:
+            world_mats[i] = local_mats[i].copy()
+
+    return world_mats
+
+
+def _apply_transform(vertices_xyz, matrix_4x4):
+    """Apply 4x4 transformation matrix to vertex positions."""
+    n = vertices_xyz.shape[0]
+    ones = np.ones((n, 1), dtype=np.float64)
+    v4 = np.hstack([vertices_xyz.astype(np.float64), ones])
+    t = (matrix_4x4 @ v4.T).T
+    return t[:, :3].astype(np.float32)
+
+
+def load_glb_model(path):
+    """Load a GLB model, apply node transformations.
+    Returns:
+        primitives: list of dict with keys:
+            vertices (N, 8 float32: pos xyz, normal xyz, uv)
+            indices (M, uint32)
+            tex_id (int, index into textures)
+        textures: list of numpy RGBA uint8 arrays
+    """
+    with open(path, 'rb') as f:
+        data = f.read()
+    gltf, bin_data = _read_glb_chunks(data)
+
+    # World matrices for all nodes
+    world_mats = _build_node_matrices(gltf)
+    nodes = gltf.get('nodes', [])
+
+    # Map mesh index to world matrix (first node referencing the mesh)
+    mesh_world_mat = {}
+    for ni, node in enumerate(nodes):
+        mi = node.get('mesh')
+        if mi is not None and mi not in mesh_world_mat:
+            mesh_world_mat[mi] = world_mats[ni]
+
+    # Extract textures
+    all_textures = []
+    if 'images' in gltf:
+        for img in gltf['images']:
+            tex_data = None
+            if 'bufferView' in img:
+                bv = gltf['bufferViews'][img['bufferView']]
+                off = bv.get('byteOffset', 0)
+                tex_data = bin_data[off:off + bv['byteLength']]
+            elif 'uri' in img and img['uri'].startswith('data:'):
+                import base64
+                tex_data = base64.b64decode(img['uri'].split(',', 1)[1])
+            if tex_data:
+                pil_img = Image.open(_io.BytesIO(tex_data))
+                pil_img = pil_img.convert('RGBA')
+                all_textures.append(np.array(pil_img, dtype=np.uint8))
+            else:
+                all_textures.append(None)
+
+    # Map texture index to image index
+    tex_img_map = {}
+    if 'textures' in gltf:
+        for ti, tex in enumerate(gltf['textures']):
+            si = tex.get('source', 0)
+            tex_img_map[ti] = si if si < len(all_textures) else -1
+
+    primitives = []
+    for mi, mesh in enumerate(gltf.get('meshes', [])):
+        world_mat = mesh_world_mat.get(mi, np.eye(4, dtype=np.float64))
+        for prim in mesh.get('primitives', []):
+            attrs = prim['attributes']
+            pos = _get_accessor(gltf, bin_data, attrs['POSITION'])
+
+            # Extract normals if present, else zeros
+            if 'NORMAL' in attrs:
+                norm = _get_accessor(gltf, bin_data, attrs['NORMAL'])
+            else:
+                norm = np.zeros((pos.shape[0], 3), dtype=np.float32)
+
+            # Apply node world matrix: position with full 4x4, normals with rotation part only
+            if not np.allclose(world_mat, np.eye(4)):
+                pos = _apply_transform(pos, world_mat)
+                rot3 = world_mat[:3, :3].astype(np.float32)
+                norm = (rot3 @ norm.T).T.astype(np.float32)
+
+            # Extract UV coordinates
+            if 'TEXCOORD_0' in attrs:
+                uv = _get_accessor(gltf, bin_data, attrs['TEXCOORD_0'])
+                if uv.shape[1] > 2:
+                    uv = uv[:, :2]
+            else:
+                uv = np.zeros((pos.shape[0], 2), dtype=np.float32)
+
+            # Combine: position (3), normal (3), uv (2) -> total 8 floats
+            vertices = np.hstack([pos, norm, uv]).astype(np.float32)
+
+            # Indices
+            if 'indices' in prim:
+                indices = _get_accessor(gltf, bin_data, prim['indices'])
+            else:
+                indices = np.arange(pos.shape[0], dtype=np.uint32)
+
+            # Texture ID from material
+            tex_id = -1
+            mat_idx = prim.get('material')
+            if mat_idx is not None and 'materials' in gltf:
+                mat = gltf['materials'][mat_idx]
+                bt = mat.get('pbrMetallicRoughness', {}).get('baseColorTexture')
+                if bt and 'index' in bt:
+                    tid = tex_img_map.get(bt['index'], -1)
+                    if tid >= 0 and all_textures[tid] is not None:
+                        tex_id = tid
+
+            primitives.append({'vertices': vertices, 'indices': indices,
+                               'tex_id': tex_id})
+
+    return primitives, all_textures
+
+# ---------------------------------------------------------------------------
 # D3D11 ctypes helpers (Windows only)
 # ---------------------------------------------------------------------------
 # DXGI / D3D11 format constants used for swapchain negotiation
@@ -1337,7 +1568,6 @@ class OpenXRViewer:
         )
         self._controller_prog['u_tex'].value = 3
 
-        from glb_loader import load_glb_model
         import os as _os
         _base = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
                               'controllers')
@@ -1478,7 +1708,7 @@ class OpenXRViewer:
                 xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
             )
         except Exception as e:
-            raise RuntimeError(f"XR HMD Device is not connected: {e}")
+            raise RuntimeError(f"XR Device is not connected: {e}")
         # 3. Query D3D11 requirements (runtime mandates this call before session creation)
         _pfn = ctypes.cast(
             xr.get_instance_proc_addr(self._xr_instance, "xrGetD3D11GraphicsRequirementsKHR"),
