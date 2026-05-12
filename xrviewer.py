@@ -1022,7 +1022,8 @@ class OpenXRViewer:
         self._aim_space_l   = None   # XrSpace for left aim
         self._aim_space_r   = None   # XrSpace for right aim
         self._laser_vao     = None   # thin quad for laser beam
-        self._dot_vao       = None   # small square for controller dot
+        self._dot_vao       = None   # small square for controller origin dot
+        self._circle_vao    = None   # tessellated circle for hit-point indicator
         # Cached aim poses updated each frame (numpy 4x4 view-space matrices)
         self._aim_mat_l     = None
         self._aim_mat_r     = None
@@ -1174,7 +1175,17 @@ class OpenXRViewer:
             self._border_prog,
             [(self.ctx.buffer(laser_verts.tobytes()), '2f 8x', 'in_position')],
         )
-        # Controller dot: tiny square (5×5 cm)
+        # Hit-point indicator: tessellated circle (TRIANGLE_FAN), blue stroke + white fill
+        N_SEG = 32
+        circle_data = [0.0, 0.0, 0.0, 0.0]  # centre vertex
+        for i in range(N_SEG + 1):
+            a = 2.0 * math.pi * i / N_SEG
+            circle_data.extend([math.cos(a), math.sin(a), 0.0, 0.0])
+        self._circle_vao = self.ctx.vertex_array(
+            self._border_prog,
+            [(self.ctx.buffer(np.array(circle_data, dtype='f4').tobytes()), '2f 8x', 'in_position')],
+        )
+        # Controller origin dot: tiny square at the controller position
         self._dot_vao = self.ctx.vertex_array(
             self._border_prog,
             [(self.ctx.buffer(laser_verts.tobytes()), '2f 8x', 'in_position')],
@@ -2115,6 +2126,73 @@ class OpenXRViewer:
         self._keyboard_yaw      = self.screen_yaw
         self._keyboard_pitch    = math.radians(-30.0)  # tilt up toward user
 
+    def _render_keyboard_hit_circles(self, mgl_fbo, vp_mat):
+        """Render hit-point indicator circles on the keyboard where lasers intersect keys."""
+        if not self._keyboard_visible or not self._keyboard_keys:
+            return
+        
+        STROKE_R = 0.0096  # blue stroke circle radius
+        FILL_R   = 0.0056  # white fill circle radius
+        HIT_OFFSET = 0.002  # pull circles slightly toward viewer to avoid z-fighting
+        
+        now = time.perf_counter()
+        mgl_fbo.use()
+        
+        # Process both controllers
+        for aim_mat, is_grab, last_move_attr, ctrl_name, hover_idx in [
+            (self._aim_mat_l, self._grabbed, "_laser_last_move_l", 'left', self._kb_hover_l),
+            (self._aim_mat_r, self._grabbed, "_laser_last_move_r", 'right', self._kb_hover_r),
+        ]:
+            if aim_mat is None or hover_idx is None:
+                continue
+            
+            # Only show if the laser has moved recently (consistent with screen lasers)
+            if not is_grab and (now - getattr(self, last_move_attr)) > self._LASER_HIDE_AFTER:
+                continue
+            
+            fwd_w = -aim_mat[:3, 2].astype('f8')
+            ctrl_pos = aim_mat[:3, 3].astype('f8')
+            
+            # Get hit position on keyboard
+            cp = math.cos(self._keyboard_pitch); sp = math.sin(self._keyboard_pitch)
+            cy = math.cos(self._keyboard_yaw);   sy = math.sin(self._keyboard_yaw)
+            
+            # Local axes in world
+            kb_n = np.array([sy * cp, -sp, cy * cp], dtype='f8')
+            kb_pos = np.array([self._keyboard_pan_x,
+                            self._keyboard_pan_y,
+                            -self._keyboard_distance], dtype='f8')
+            
+            denom = float(np.dot(kb_n, fwd_w))
+            if abs(denom) < 1e-6:
+                continue
+            
+            t = float(np.dot(kb_n, kb_pos - ctrl_pos)) / denom
+            if t < 0.05:
+                continue
+            
+            hit_pos = ctrl_pos + fwd_w * (t - HIT_OFFSET)
+            
+            def _draw_circle(radius, color):
+                model = np.eye(4, dtype='f4')
+                model[0, 0] = radius
+                model[1, 1] = radius
+                model[0, 3] = float(hit_pos[0])
+                model[1, 3] = float(hit_pos[1])
+                model[2, 3] = float(hit_pos[2])
+                circle_mvp = vp_mat @ model
+                self._border_prog['u_mvp'].write(circle_mvp.T.tobytes())
+                self._border_prog['u_color'].value = color
+                self._circle_vao.render(moderngl.TRIANGLE_FAN)
+            
+            # Use different colors based on which hand is grabbing
+            if is_grab:
+                _draw_circle(STROKE_R, (0.3, 0.7, 1.0, 0.85))   # cyan when grabbing
+                _draw_circle(FILL_R,   (1.0, 1.0, 1.0, 0.85))   # white fill
+            else:
+                _draw_circle(STROKE_R, (0.2, 0.6, 1.0, 0.65))   # blue stroke
+                _draw_circle(FILL_R,   (1.0, 1.0, 1.0, 0.65))   # white fill
+
     def _render_keyboard(self, mgl_fbo, vp_mat):
         """Render the virtual keyboard quad and highlight hovered keys."""
         if self._keyboard_tex is None or self._keyboard_vao is None:
@@ -2127,9 +2205,9 @@ class OpenXRViewer:
 
         # Keyboard quad: vertices are in [-1, +1] in X and Y, so scale by half-extents.
         scale_kb = np.array([[kw2, 0,   0, 0],
-                             [0,   kh2, 0, 0],
-                             [0,   0,   1, 0],
-                             [0,   0,   0, 1]], dtype=np.float32)
+                            [0,   kh2, 0, 0],
+                            [0,   0,   1, 0],
+                            [0,   0,   0, 1]], dtype=np.float32)
         mvp = vp_kb @ scale_kb
 
         mgl_fbo.use()
@@ -2142,9 +2220,9 @@ class OpenXRViewer:
             bx = kw2 + BORDER
             by = kh2 + BORDER
             border_scale = np.array([[bx, 0, 0, 0],
-                                     [0, by, 0, 0],
-                                     [0, 0,  1, -0.001],
-                                     [0, 0,  0, 1]], dtype=np.float32)
+                                    [0, by, 0, 0],
+                                    [0, 0,  1, -0.001],
+                                    [0, 0,  0, 1]], dtype=np.float32)
             border_mvp = vp_kb @ border_scale
             self._border_prog['u_mvp'].write(border_mvp.T.tobytes())
             self._border_prog['u_color'].value = (0.3, 0.7, 1.0, self._kb_border_alpha)
@@ -2153,6 +2231,9 @@ class OpenXRViewer:
         self._keyboard_tex.use(location=2)
         self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
         self._keyboard_vao.render(moderngl.TRIANGLE_STRIP)
+
+        # NEW: Render hit circles on the keyboard (add this call)
+        self._render_keyboard_hit_circles(mgl_fbo, vp_mat)
 
         def _hl_quad(rect_local, color):
             # rect_local is already in metres, expressed in the keyboard's local frame
@@ -3172,9 +3253,16 @@ class OpenXRViewer:
         return BEAM_MAX
 
     def _render_lasers(self, mgl_fbo, vp_mat):
-        """Render a thin laser beam from each tracked controller aim pose."""
-        BEAM_W   = 0.003   # half-width in metres
-        DOT_SIZE = 0.025   # half-size of the controller origin dot
+        """Render a thin laser beam from each tracked controller aim pose.
+
+        The beam clips to the nearest hit (screen, keyboard, or overlay panel).
+        Two small circles (blue stroke + white fill) mark the intersection point.
+        """
+        BEAM_W      = 0.003   # half-width in metres
+        STROKE_R    = 0.0096  # blue stroke circle radius (0.8×)
+        FILL_R      = 0.0056  # white fill circle radius (0.8×)
+        HIT_OFFSET  = 0.003   # pull circles slightly toward viewer to avoid z-fighting
+        BLANK_LEN   = 1.5     # gap between beam tip and surface (8×)
 
         now = time.perf_counter()
         mgl_fbo.use()
@@ -3188,21 +3276,18 @@ class OpenXRViewer:
                 continue
 
             fwd_w = -aim_mat[:3, 2].astype('f8')
+            ctrl_pos = aim_mat[:3, 3].astype('f8')
             color = (0.3, 0.7, 1.0, 1.0) if is_grab else (1.0, 1.0, 1.0, 0.9)
 
-            # Controller origin dot
+            # Controller origin dot (small square at the controller)
+            DOT_SIZE = 0.03
             scale_dot = np.diag([DOT_SIZE, DOT_SIZE, DOT_SIZE, 1.0]).astype('f4')
             dot_mvp = vp_mat @ (aim_mat @ scale_dot)
             self._border_prog['u_mvp'].write(dot_mvp.T.tobytes())
             self._border_prog['u_color'].value = color
             self._dot_vao.render(moderngl.TRIANGLE_STRIP)
 
-            # Laser beam: col0=right×width, col1=fwd×half_len, col3=midpoint
-            ctrl_pos = aim_mat[:3, 3].astype('f8')
-
-            # Clip the beam to the raw screen-hit distance so the tip sits exactly
-            # on the screen surface.  The cursor (mouse position) uses a smoothed UV
-            # to tame jitter, but beam length uses the raw distance — no offset.
+            # Compute beam length — clip to nearest surface hit
             if (self._cursor_ctrl == ctrl_name
                     and cursor_uv is not None):
                 beam_len = max(0.01, float(cursor_uv[2]))
@@ -3212,15 +3297,39 @@ class OpenXRViewer:
                     self._keyboard_laser_hit_dist(ctrl_pos, fwd_w),
                     self._overlay_panel_hit_dist(ctrl_pos, fwd_w),
                 )
+            has_hit = beam_len < 5.0   # BEAM_MAX is 30 — under 5 means a real surface hit
+
+            # Laser beam quad — stop short of the surface so only the circles touch it
+            draw_len = max(0.05, beam_len - BLANK_LEN) if has_hit else beam_len
             beam_mat = np.zeros((4, 4), dtype='f4')
             beam_mat[:3, 0] = aim_mat[:3, 0] * BEAM_W
-            beam_mat[:3, 1] = fwd_w * (beam_len / 2.0)
-            beam_mat[:3, 3] = aim_mat[:3, 3] + fwd_w * (beam_len / 2.0)
+            beam_mat[:3, 1] = fwd_w * (draw_len / 2.0)
+            beam_mat[:3, 3] = ctrl_pos + fwd_w * (draw_len / 2.0)
             beam_mat[3, 3]  = 1.0
             beam_mvp = vp_mat @ beam_mat
             self._border_prog['u_mvp'].write(beam_mvp.T.tobytes())
-            self._border_prog['u_color'].value = (*color[:3], 0.55)
+            self._border_prog['u_color'].value = (1.0, 1.0, 1.0, 0.55)
             self._laser_vao.render(moderngl.TRIANGLE_STRIP)
+
+            # Hit-point indicator circles (blue stroke + white fill)
+            if not has_hit:
+                continue
+            hit_pos = ctrl_pos + fwd_w * (beam_len - HIT_OFFSET)
+
+            def _draw_circle(radius, color):
+                model = np.eye(4, dtype='f4')
+                model[0, 0] = radius
+                model[1, 1] = radius
+                model[0, 3] = float(hit_pos[0])
+                model[1, 3] = float(hit_pos[1])
+                model[2, 3] = float(hit_pos[2])
+                circle_mvp = vp_mat @ model
+                self._border_prog['u_mvp'].write(circle_mvp.T.tobytes())
+                self._border_prog['u_color'].value = color
+                self._circle_vao.render(moderngl.TRIANGLE_FAN)
+
+            _draw_circle(STROKE_R, (0.2, 0.6, 1.0, 0.75))   # blue stroke
+            _draw_circle(FILL_R,   (1.0, 1.0, 1.0, 0.75))   # white fill
 
     def _render_border(self, mgl_fbo, vp_mat):
         """Render a thin solid-color border slightly larger than the screen.
@@ -4000,7 +4109,7 @@ class OpenXRViewer:
                     self._screen_osd_show_t = time.perf_counter()
                 elif laser_on_screen and abs(ry) > abs(rx) and abs(ry) > DEAD:
                     self.screen_distance = max(0.3,
-                                               self.screen_distance - ry * DIST_SPEED * dt)
+                                            self.screen_distance + ry * DIST_SPEED * dt)  # Changed: -ry → +ry
                     self._screen_osd_show_t = time.perf_counter()
         elif grip_l and not grip_r:
             if self._keyboard_visible and self._kb_hover_r is not None:
