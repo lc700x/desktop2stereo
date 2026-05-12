@@ -24,7 +24,3 @@ test*.png
 output/scene.glb
 output/depth_vis/0000.jpg
 *.zip
-rocm6000/*.whl
-rocm6000/*.tar.gz
-rocm7000/*.7z
-controllers
