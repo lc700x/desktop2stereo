@@ -27,10 +27,11 @@ from OpenGL.GL import (
     GL_PIXEL_UNPACK_BUFFER, GL_PIXEL_PACK_BUFFER, GL_DYNAMIC_DRAW, GL_STREAM_READ,
     GL_RGB, GL_RED, GL_RGBA, GL_BGRA, GL_UNSIGNED_BYTE, GL_FLOAT,
     glDisable, GL_FRAMEBUFFER_SRGB,
+    glFrontFace, GL_CW, GL_CCW,
     glTexParameterf, GL_TEXTURE_LOD_BIAS,
     glMapBuffer, glUnmapBuffer, GL_READ_ONLY, GL_MAP_UNSYNCHRONIZED_BIT,
     glReadPixels, glFlush, glGenTextures, glDeleteTextures,
-    glFinish, glGetString, GL_RENDERER,
+    glFinish
 )
 
 try:
@@ -48,9 +49,7 @@ import json
 import io as _io
 from PIL import Image
 
-
 def _read_glb_chunks(data):
-    """Read GLB chunks and return JSON and binary data."""
     magic = struct.unpack_from('<I', data, 0)[0]
     if magic != 0x46546C67:
         raise ValueError(f"Not a GLB file (magic=0x{magic:08X})")
@@ -61,9 +60,9 @@ def _read_glb_chunks(data):
         chunk_len = struct.unpack_from('<I', data, offset)[0]
         chunk_type = struct.unpack_from('<I', data, offset + 4)[0]
         raw = data[offset + 8:offset + 8 + chunk_len]
-        if chunk_type == 0x4E4F534A:  # JSON chunk
+        if chunk_type == 0x4E4F534A:
             json_data = json.loads(raw.decode('utf-8'))
-        elif chunk_type == 0x004E4942:  # BIN chunk
+        elif chunk_type == 0x004E4942:
             bin_data = raw
         offset += 8 + chunk_len
     return json_data, bin_data
@@ -246,7 +245,7 @@ def load_glb_model(path):
             else:
                 uv = np.zeros((pos.shape[0], 2), dtype=np.float32)
 
-            # Combine: position (3), normal (3), uv (2) -> total 8 floats
+            # Combine: position (3), normal (3), uv (2) -> [px,py,pz, nx,ny,nz, u,v] = 8 floats
             vertices = np.hstack([pos, norm, uv]).astype(np.float32)
 
             # Indices
@@ -441,7 +440,7 @@ if sys.platform == "win32":
 
 
 
-    # ── NV_DX_interop2 helpers (NVIDIA only, zero-copy GL↔D3D11) ──────────
+    # NV_DX_interop2 helpers (NVIDIA only, zero-copy GL↔D3D11)
     _nv_dx_interop_available = False
     _wglDXOpenDeviceNV        = None
     _wglDXCloseDeviceNV       = None
@@ -764,30 +763,7 @@ void main() {
     else if (t < 0.667) col = mix(vec3(1.0,1.0,0.0), vec3(1.0,0.5,0.0), (t-0.5)/0.167);
     else if (t < 0.833) col = mix(vec3(1.0,0.5,0.0), vec3(1.0,0.0,0.0), (t-0.667)/0.166);
     else                col = mix(vec3(1.0,0.0,0.0), vec3(0.0,0.4,1.0), (t-0.833)/0.167);
-    fragColor = vec4(col, 0.7);
-}
-"""
-
-# VR controller model shaders (textured diffuse)
-_CTRL_VERT = """
-#version 330
-in vec3 in_position;
-in vec2 in_uv;
-out vec2 v_uv;
-uniform mat4 u_mvp;
-void main() {
-    v_uv = in_uv;
-    gl_Position = u_mvp * vec4(in_position, 1.0);
-}
-"""
-
-_CTRL_FRAG = """
-#version 330
-in vec2 v_uv;
-out vec4 fragColor;
-uniform sampler2D u_tex;
-void main() {
-    fragColor = texture(u_tex, v_uv);
+    fragColor = vec4(col, 1.0);
 }
 """
 
@@ -813,6 +789,69 @@ void main() {
     gl_Position = u_mvp * vec4(in_position, 1.0);
 }
 """
+
+# VR controller model shader (improved: supports Blinn-Phong lighting and texture toggle)
+_CTRL_VERT = """
+#version 330
+in vec3 in_position;
+in vec3 in_normal;   // Corresponds to 12 skipped bytes in the data
+in vec2 in_uv;
+out vec2 v_uv;
+out vec3 v_normal;
+out vec3 v_position;
+uniform mat4 u_mvp;
+uniform mat4 u_model; // Used for normal transformation
+void main() {
+    v_uv = in_uv;
+    v_normal = mat3(transpose(inverse(u_model))) * in_normal; // Normal transformation
+    vec4 world_pos = u_model * vec4(in_position, 1.0);
+    v_position = world_pos.xyz;
+    gl_Position = u_mvp * world_pos;
+}
+"""
+
+_CTRL_FRAG = """
+#version 330
+in vec2 v_uv;
+in vec3 v_normal;
+in vec3 v_position;
+out vec4 fragColor;
+
+uniform sampler2D u_tex;
+uniform vec3 u_light_color;    // Light source color
+uniform vec3 u_ambient_color;  // Ambient light color
+uniform vec3 u_base_color_factor; // Base color factor
+uniform int u_use_texture;     // 0: use solid color, 1: sample texture
+uniform vec3 u_camera_pos;     // Camera world coordinates (= headset position)
+
+void main() {
+    // Discard back faces (inner walls), keep only front faces (outer shell)
+    if (!gl_FrontFacing) discard;
+
+    vec3 N = normalize(v_normal);
+    vec3 light_pos = u_camera_pos + vec3(0.0, 0.05, 0.0);
+    vec3 L = normalize(light_pos - v_position);
+    vec3 V = normalize(u_camera_pos - v_position);
+    vec3 H = normalize(L + V);
+
+    vec3 baseColor;
+    if (u_use_texture == 1) {
+        baseColor = texture(u_tex, v_uv).rgb * u_base_color_factor;
+    } else {
+        baseColor = u_base_color_factor;
+    }
+
+    float diff = abs(dot(N, L));
+    vec3 diffuse = u_light_color * diff;
+    vec3 ambient = u_ambient_color;
+    float spec = pow(max(dot(N, H), 0.0), 32.0);
+    vec3 specular = u_light_color * spec;
+
+    fragColor = vec4((ambient + diffuse + specular) * baseColor, 1.0);
+}
+"""
+
+
 
 # ---------------------------------------------------------------------------
 # Windows input helpers (no-op on non-Windows)
@@ -1091,6 +1130,18 @@ class OpenXRViewer:
         self.screen_distance = 2.0
         self.screen_width    = 2.4
         self.screen_height   = None   # derived from frame aspect ratio on first frame
+
+        # screen presets: (name, width_m, distance_m) — height is derived from width and frame aspect ratio
+        self._screen_presets = [
+            ("10-inch Tablet",        0.30, 0.4),
+            ("27-inch Monitor",       0.60, 0.6),
+            ("65-inch TV",            1.44, 2.0),
+            ("100-inch Projector 1",  2.40, 2.0),
+            ("100-inch Projector 2",  2.21, 2.5),
+            ("1000-inch IMAX",       22.0,  20),
+        ]
+        self._preset_index = 3  # default 4: 100-inch projector with 2.0 m distance
+        self._preset_name_overlay = None   # preset name overlay (permanently visible)
         self.screen_pan_x    = 0.0
         self.screen_pan_y    = 0.0
         self.screen_yaw      = 0.0    # rotation around Y axis
@@ -1253,7 +1304,7 @@ class OpenXRViewer:
         self._overlay_prog     = None
         self._overlay_vao      = None
         self._overlay_tex      = None
-        self._overlay_tex_size = (768, 154)  # 3-row info panel
+        self._overlay_tex_size = (768, 150)  # 3-row info panel
 
         # Depth-ratio OSD: floating panel that appears when depth_ratio changes
         self._depth_osd_tex       = None   # moderngl Texture (RGBA, 256×64)
@@ -1277,6 +1328,11 @@ class OpenXRViewer:
         # Right thumbstick click state
         self._right_stick_click_prev = False
 
+        # VR controller model offsets
+        self._y_offset = -0.02       # Y offset (down 2cm)
+        self._z_offset = -0.03       # Z offset
+        self._x_offset = 0.0         # X offset (left/right)
+
         # Right grip + A/B → depth_ratio control (hold A = increase, hold B = decrease)
         # Reset to default: right grip + right thumbstick click
 
@@ -1293,6 +1349,8 @@ class OpenXRViewer:
         self._curved_border_prog = None  # solid-color arc border program
         self._curved_border_vbo  = None  # dynamic VBO for border arc vertices
         self._curved_border_vao  = None
+        self._curved_verts_params = None        # curved screen VBO cache dirty flag
+        self._curved_border_verts_params = None # border VBO cache dirty flag
 
         # Background color cycling (left thumbstick click)
         self._bg_color_idx    = 0       # index into _BG_COLORS
@@ -1305,23 +1363,27 @@ class OpenXRViewer:
         # Controller aim poses + laser pointer rendering
         self._act_aim_left  = None   # XrAction POSE_INPUT for left aim
         self._act_aim_right = None   # XrAction POSE_INPUT for right aim
-        self._act_grip_left  = None   # XrAction POSE_INPUT for left grip
-        self._act_grip_right = None   # XrAction POSE_INPUT for right grip
         self._aim_space_l   = None   # XrSpace for left aim
         self._aim_space_r   = None   # XrSpace for right aim
-        self._grip_space_l  = None   # XrSpace for left grip
-        self._grip_space_r  = None   # XrSpace for right grip
-        self._beam_prog     = None   # tapered rainbow beam shader
-        self._beam_vao      = None   # tapered quad for laser beam
-        self._laser_vao     = None   # thin quad for laser beam (legacy, kept for compat)
+        self._laser_vao     = None   # thin quad for laser beam
         self._dot_vao       = None   # small square for controller origin dot
         self._circle_vao    = None   # tessellated circle for hit-point indicator
-        # Cached aim poses updated each frame (numpy 4x4 world-space matrices)
+        # Cached aim poses updated each frame (numpy 4x4 view-space matrices)
         self._aim_mat_l     = None
         self._aim_mat_r     = None
-        # Cached grip poses for 3D controller model placement
-        self._grip_mat_l    = None
-        self._grip_mat_r    = None
+
+        # Controller grip poses + 3D model rendering
+        self._act_grip_left  = None   # XrAction POSE_INPUT for left grip
+        self._act_grip_right = None   # XrAction POSE_INPUT for right grip
+        self._grip_space_l   = None   # XrSpace for left grip
+        self._grip_space_r   = None   # XrSpace for right grip
+        self._grip_mat_l     = None   # 4x4 world-space matrix
+        self._grip_mat_r     = None   # 4x4 world-space matrix
+        self._controller_prog   = None   # textured shader for controller
+        self._ctrl_prims_l      = []     # list of {vao, vbo, ibo, tex_id} for left
+        self._ctrl_prims_r      = []     # list of {vao, vbo, ibo, tex_id} for right
+        self._ctrl_tex_cache    = {}     # tex_id -> moderngl Texture
+
         # Laser auto-hide: track last movement time and previous pose per controller
         _now = time.perf_counter()
         self._laser_last_move_l  = _now
@@ -1329,7 +1391,7 @@ class OpenXRViewer:
         self._laser_prev_mat_l   = None
         self._laser_prev_mat_r   = None
         self._LASER_HIDE_AFTER   = 5.0   # seconds of idle before hiding
-        self._LASER_MOVE_THRESH  = 0.001 # metres or radians — minimum motion to count
+        self._LASER_MOVE_THRESH  = 0.015 # metres or radians — minimum motion to count
 
         # Screen position animation — used by home-button gaze-reset to glide
         # smoothly instead of snapping.  None = no animation in progress.
@@ -1458,11 +1520,24 @@ class OpenXRViewer:
             self._border_prog, [(vbo_border, '2f 8x', 'in_position')]
         )
 
-        # Tapered rainbow beam: wide at root (v=0), narrow at tip (v=1)
+        # Laser beam: a very thin elongated quad (width=0.003 m, length=5 m)
+        # in local space X=[-0.5,0.5], Y=[-1,1]; we scale X to beam_w, Y to half-length
+        laser_verts = np.array([
+            -1, -1, 0, 0,
+             1, -1, 1, 0,
+            -1,  1, 0, 1,
+             1,  1, 1, 1,
+        ], dtype='f4')
+        self._laser_vao = self.ctx.vertex_array(
+            self._border_prog,
+            [(self.ctx.buffer(laser_verts.tobytes()), '2f 8x', 'in_position')],
+        )
+        # Flat beam (quadrilateral) + rainbow flow animation
         self._beam_prog = self.ctx.program(
             vertex_shader=_BEAM_VERT,
             fragment_shader=_BEAM_FRAG,
         )
+        # Single quadrilateral: Y=0(base, thick) → Y=1(tip, thin)
         beam_verts = np.array([
             -1.0, 0.0, 0.0, 0.0,   # bottom-left, v=0
              1.0, 0.0, 0.0, 0.0,   # bottom-right, v=0
@@ -1485,15 +1560,9 @@ class OpenXRViewer:
             [(self.ctx.buffer(np.array(circle_data, dtype='f4').tobytes()), '2f 8x', 'in_position')],
         )
         # Controller origin dot: tiny square at the controller position
-        dot_verts = np.array([
-            -1, -1, 0, 0,
-             1, -1, 1, 0,
-            -1,  1, 0, 1,
-             1,  1, 1, 1,
-        ], dtype='f4')
         self._dot_vao = self.ctx.vertex_array(
             self._border_prog,
-            [(self.ctx.buffer(dot_verts.tobytes()), '2f 8x', 'in_position')],
+            [(self.ctx.buffer(laser_verts.tobytes()), '2f 8x', 'in_position')],
         )
 
         # In-VR FPS overlay program (world-space quad, plain RGBA blit)
@@ -1567,10 +1636,14 @@ class OpenXRViewer:
             fragment_shader=_CTRL_FRAG,
         )
         self._controller_prog['u_tex'].value = 3
+        self._controller_prog['u_use_texture'].value = 1
+        self._controller_prog['u_base_color_factor'].value = (1.0, 1.0, 1.0)
+        self._controller_prog['u_light_color'].value = (0.37, 0.37, 0.40)
+        self._controller_prog['u_ambient_color'].value = (0.22, 0.22, 0.24)
 
         import os as _os
         _base = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                              'controllers')
+                            'controllers', 'pico-4u')
 
         self._ctrl_tex_cache = {}
         self._ctrl_prims_l = []
@@ -1590,7 +1663,7 @@ class OpenXRViewer:
                 ibo = self.ctx.buffer(pd['indices'].tobytes())
                 vao = self.ctx.vertex_array(
                     self._controller_prog,
-                    [(vbo, '3f 12x 2f', 'in_position', 'in_uv')],
+                    [(vbo, '3f 3f 2f', 'in_position', 'in_normal', 'in_uv')],
                     ibo,
                 )
                 target_list.append({
@@ -1602,14 +1675,8 @@ class OpenXRViewer:
         try:
             _create_prims(_os.path.join(_base, 'right.glb'), self._ctrl_prims_r)
             _create_prims(_os.path.join(_base, 'left.glb'),  self._ctrl_prims_l)
-            print(f"[OpenXRViewer] Loaded PICO 4U controllers: "
-                  f"R={len(self._ctrl_prims_r)} prims, "
-                  f"L={len(self._ctrl_prims_l)} prims, "
-                  f"{len(self._ctrl_tex_cache)} textures")
         except Exception as e:
             print(f"[OpenXRViewer] Controller model load failed: {e}")
-            import traceback
-            traceback.print_exc()
             self._ctrl_prims_l = []
             self._ctrl_prims_r = []
 
@@ -1702,13 +1769,11 @@ class OpenXRViewer:
         print("[OpenXRViewer] XrInstance created (D3D11)")
 
         # 2. System
-        try:
-            self._xr_system_id = xr.get_system(
-                self._xr_instance,
-                xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
-            )
-        except Exception as e:
-            raise RuntimeError(f"XR Device is not connected: {e}")
+        self._xr_system_id = xr.get_system(
+            self._xr_instance,
+            xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
+        )
+
         # 3. Query D3D11 requirements (runtime mandates this call before session creation)
         _pfn = ctypes.cast(
             xr.get_instance_proc_addr(self._xr_instance, "xrGetD3D11GraphicsRequirementsKHR"),
@@ -2225,6 +2290,8 @@ class OpenXRViewer:
                 subaction_paths=[subpaths[1]],
             ),
         )
+
+        # Grip pose actions ── used for placing controller 3D models
         self._act_grip_left = xr.create_action(
             self._action_set,
             xr.ActionCreateInfo(
@@ -2550,76 +2617,6 @@ class OpenXRViewer:
         self._keyboard_yaw      = self.screen_yaw
         self._keyboard_pitch    = math.radians(-30.0)  # tilt up toward user
 
-    def _render_keyboard_hit_circles(self, mgl_fbo, vp_mat):
-        """Render hit-point indicator circles on the keyboard where lasers intersect keys."""
-        if not self._keyboard_visible:
-            return
-
-        STROKE_R = 0.0096  # blue stroke circle radius
-        FILL_R   = 0.0072  # white fill circle radius
-        HIT_OFFSET = 0.01   # pull circles toward viewer to avoid z-fighting
-
-        now = time.perf_counter()
-        mgl_fbo.use()
-
-        # Process both controllers
-        for aim_mat, grip_mat, is_grab, last_move_attr, ctrl_name, hover_idx in [
-            (self._aim_mat_l, self._grip_mat_l, self._grabbed, "_laser_last_move_l", 'left', self._kb_hover_l),
-            (self._aim_mat_r, self._grip_mat_r, self._grabbed, "_laser_last_move_r", 'right', self._kb_hover_r),
-        ]:
-            if aim_mat is None or hover_idx is None:
-                continue
-
-            # Only show if the laser has moved recently (consistent with screen lasers)
-            if not is_grab and (now - getattr(self, last_move_attr)) > self._LASER_HIDE_AFTER:
-                continue
-
-            ctrl_pos, fwd_w = self._beam_origin_dir(aim_mat, grip_mat)
-
-            # Get hit position on keyboard
-            cp = math.cos(self._keyboard_pitch); sp = math.sin(self._keyboard_pitch)
-            cy = math.cos(self._keyboard_yaw);   sy = math.sin(self._keyboard_yaw)
-
-            # Local axes in world
-            kb_n = np.array([sy * cp, -sp, cy * cp], dtype='f8')
-            kb_pos = np.array([self._keyboard_pan_x,
-                            self._keyboard_pan_y,
-                            -self._keyboard_distance], dtype='f8')
-
-            denom = float(np.dot(kb_n, fwd_w))
-            if abs(denom) < 1e-6:
-                continue
-
-            t = float(np.dot(kb_n, kb_pos - ctrl_pos)) / denom
-            if t < 0.05:
-                continue
-
-            hit_pos = ctrl_pos + fwd_w * (t - HIT_OFFSET)
-
-            # Orient circle to face beam direction (billboard toward controller)
-            fwd_n = fwd_w / (np.linalg.norm(fwd_w) + 1e-10)
-            world_up = np.array([0.0, 1.0, 0.0], dtype='f8')
-            kb_right = np.cross(world_up, fwd_n)
-            kb_right = kb_right / (np.linalg.norm(kb_right) + 1e-10)
-            kb_up = np.cross(fwd_n, kb_right)
-            Rc = np.eye(4, dtype='f4')
-            Rc[:3, 0] = kb_right.astype('f4')
-            Rc[:3, 1] = kb_up.astype('f4')
-            Rc[:3, 2] = -fwd_n.astype('f4')
-
-            def _draw_circle(radius, color):
-                model = np.eye(4, dtype='f4')
-                model[:3, :3] = Rc[:3, :3] * radius
-                model[:3, 3] = hit_pos.astype('f4')
-                circle_mvp = vp_mat @ model
-                self._border_prog['u_mvp'].write(circle_mvp.T.tobytes())
-                self._border_prog['u_color'].value = color
-                self._circle_vao.render(moderngl.TRIANGLE_FAN)
-
-            # Use same colors as screen hit circles for consistency
-            _draw_circle(STROKE_R, (0.2, 0.6, 1.0, 0.75))   # blue stroke
-            _draw_circle(FILL_R,   (1.0, 1.0, 1.0, 0.75))   # white fill
-
     def _render_keyboard(self, mgl_fbo, vp_mat):
         """Render the virtual keyboard quad and highlight hovered keys."""
         if self._keyboard_tex is None or self._keyboard_vao is None:
@@ -2632,9 +2629,9 @@ class OpenXRViewer:
 
         # Keyboard quad: vertices are in [-1, +1] in X and Y, so scale by half-extents.
         scale_kb = np.array([[kw2, 0,   0, 0],
-                            [0,   kh2, 0, 0],
-                            [0,   0,   1, 0],
-                            [0,   0,   0, 1]], dtype=np.float32)
+                             [0,   kh2, 0, 0],
+                             [0,   0,   1, 0],
+                             [0,   0,   0, 1]], dtype=np.float32)
         mvp = vp_kb @ scale_kb
 
         mgl_fbo.use()
@@ -2647,9 +2644,9 @@ class OpenXRViewer:
             bx = kw2 + BORDER
             by = kh2 + BORDER
             border_scale = np.array([[bx, 0, 0, 0],
-                                    [0, by, 0, 0],
-                                    [0, 0,  1, -0.001],
-                                    [0, 0,  0, 1]], dtype=np.float32)
+                                     [0, by, 0, 0],
+                                     [0, 0,  1, -0.001],
+                                     [0, 0,  0, 1]], dtype=np.float32)
             border_mvp = vp_kb @ border_scale
             self._border_prog['u_mvp'].write(border_mvp.T.tobytes())
             self._border_prog['u_color'].value = (0.3, 0.7, 1.0, self._kb_border_alpha)
@@ -2658,9 +2655,6 @@ class OpenXRViewer:
         self._keyboard_tex.use(location=2)
         self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
         self._keyboard_vao.render(moderngl.TRIANGLE_STRIP)
-
-        # NEW: Render hit circles on the keyboard (add this call)
-        self._render_keyboard_hit_circles(mgl_fbo, vp_mat)
 
         def _hl_quad(rect_local, color):
             # rect_local is already in metres, expressed in the keyboard's local frame
@@ -2802,9 +2796,13 @@ class OpenXRViewer:
             if depth_np is None:
                 depth_np = depth_gpu.cpu().numpy()
             self.color_tex.write(rgb_np.astype('uint8', copy=False).tobytes())
-            self.color_tex.build_mipmaps()
+            glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
+            glGenerateMipmap(GL_TEXTURE_2D)
+            glBindTexture(GL_TEXTURE_2D, 0)
             self.depth_tex.write(depth_np.tobytes())
-            self.depth_tex.build_mipmaps()
+            glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
+            glGenerateMipmap(GL_TEXTURE_2D)
+            glBindTexture(GL_TEXTURE_2D, 0)
 
     def _build_model_mat4(self):
         """Construct the screen quad's world-space model matrix (math row/col convention).
@@ -3029,7 +3027,7 @@ class OpenXRViewer:
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
 
     def _render_fps_overlay(self, eye_index, mgl_fbo, vp_mat):
-        """Render the FPS/latency text quad just below the virtual screen (in VR)."""
+        """Render the FPS/latency text quad (head-relative or left-controller-attached)."""
         if self.screen_height is None:
             return
 
@@ -3070,9 +3068,9 @@ class OpenXRViewer:
                 bfont   = self.bold_font or self.font   # bold for labels
 
                 PAD    = 14
-                ROW0   = 22   # y baseline: 3 rows centred in 154px
-                ROW1   = 60
-                ROW2   = 99
+                ROW0   = 22   # y baseline: 3 rows centred in 150px
+                ROW1   = 56
+                ROW2   = 90
 
                 # Compute VAL_X from the widest label so all values align
                 labels = ["[Performance]", "[3D Display]", "[Resolution]"]
@@ -3108,35 +3106,79 @@ class OpenXRViewer:
                 data = np.flipud(np.array(img, dtype=np.uint8))
                 self._overlay_tex.write(data.tobytes())
 
-        GAP       = 0.05
-        OVERLAY_H = 0.12
+        OVERLAY_H = 0.075  # world-space height (3 rows, shrunk from 0.10)
         ow, oh    = self._overlay_tex_size
-        OVERLAY_W = OVERLAY_H * (ow / oh)   # preserve texture pixel aspect (768/128 = 6.0)
+        OVERLAY_W = OVERLAY_H * (ow / oh)
 
-        cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
-        cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
-        rot_y = np.array([
-            [ cy,  0, sy_, 0],
-            [  0,  1,   0, 0],
-            [-sy_, 0,  cy, 0],
-            [  0,  0,   0, 1],
-        ], dtype=np.float32)
-        rot_x = np.array([
-            [1,  0,   0, 0],
-            [0,  cp, -sp, 0],
-            [0,  sp,  cp, 0],
-            [0,  0,   0,  1],
-        ], dtype=np.float32)
+        panel_pos = None
+        panel_fwd = None
+        panel_up  = None
 
-        y_off = self.screen_pan_y - self.screen_height / 2.0 - GAP - OVERLAY_H / 2.0
-        overlay_model = np.array([
-            [OVERLAY_W / 2, 0,             0, self.screen_pan_x   ],
-            [0,             OVERLAY_H / 2, 0, y_off               ],
-            [0,             0,             1, -self.screen_distance],
-            [0,             0,             0, 1                    ],
-        ], dtype=np.float32)
+        # Try left-controller attachment first; fall back to head-relative
+        if self._grip_mat_l is not None and self._aim_mat_l is not None:
+            # Grip axes in world space (columns of grip_mat)
+            grip_right = self._grip_mat_l[:3, 0].astype('f8')
+            grip_up    = self._grip_mat_l[:3, 1].astype('f8')
+            grip_fwd   = self._grip_mat_l[:3, 2].astype('f8')
+            grip_right /= np.linalg.norm(grip_right) + 1e-10
+            grip_up    /= np.linalg.norm(grip_up) + 1e-10
+            grip_fwd   /= np.linalg.norm(grip_fwd) + 1e-10
 
-        mvp = vp_mat @ rot_y @ rot_x @ overlay_model
+            # Laser forward direction (same as _laser_beam_setup)
+            fwd_w = -self._aim_mat_l[:3, 2].astype('f8')
+            right_w = self._aim_mat_l[:3, 0].astype('f8')
+            _ang = math.radians(12); _ca, _sa = math.cos(_ang), math.sin(_ang)
+            _k = right_w / (np.linalg.norm(right_w) + 1e-10)
+            laser_fwd = fwd_w * _ca + np.cross(_k, fwd_w) * _sa + _k * np.dot(_k, fwd_w) * (1 - _ca)
+            laser_fwd /= np.linalg.norm(laser_fwd) + 1e-10
+
+            # Laser start point (same origin as _laser_beam_setup)
+            grip_pos = self._grip_mat_l[:3, 3].astype('f8')
+            laser_origin = grip_pos + grip_up * 0.020 + laser_fwd * 0.11
+
+            # Panel faces user: blend grip_up (button-surface normal) with
+            # toward_user (-laser_fwd). Both are controller-relative → tracks.
+            toward_user = (-laser_fwd).astype('f8')
+            panel_fwd = grip_up + toward_user
+            panel_fwd /= np.linalg.norm(panel_fwd) + 1e-10
+            panel_up  = grip_up.copy()
+
+            # Pre-compute orthonormal basis
+            _pr = np.cross(panel_up, panel_fwd)
+            _pr /= np.linalg.norm(_pr) + 1e-10
+            _pu2 = np.cross(panel_fwd, _pr)
+            _pu2 /= np.linalg.norm(_pu2) + 1e-10
+
+            # Bottom edge midpoint at laser_origin + offset along panel normal.
+            # Top edge fixed at old 0.10 height so shrinking leaves gap below.
+            PANEL_OFFSET = 0.05
+            _top_ref = 0.10  # original OVERLAY_H, top edge anchor
+            panel_pos = laser_origin + panel_fwd * PANEL_OFFSET + _pu2 * (_top_ref - OVERLAY_H / 2.0)
+
+        if panel_pos is None and self._head_pos_w is not None and self._head_fwd_w is not None:
+            # Fallback: 1m in front of head, 0.15m below. Panel faces toward user.
+            hx, hy, hz = self._head_pos_w
+            fx, fy, fz = self._head_fwd_w
+            panel_pos = np.array([hx + fx * 1.0, hy + fy * 1.0 - 0.15, hz + fz * 1.0], dtype='f8')
+            panel_fwd = np.array([-fx, -fy, -fz], dtype='f8')
+            panel_up  = np.array([0.0, 1.0, 0.0], dtype='f8')
+
+        if panel_pos is not None:
+            # Build T @ R @ S: scale -> rotate -> translate
+            S = np.diag([OVERLAY_W/2.0, OVERLAY_H/2.0, 1.0, 1.0]).astype(np.float32)
+            panel_right = np.cross(panel_up, panel_fwd)
+            panel_right /= np.linalg.norm(panel_right) + 1e-10
+            panel_up2 = np.cross(panel_fwd, panel_right)
+            panel_up2 /= np.linalg.norm(panel_up2) + 1e-10
+            R = np.eye(4, dtype=np.float32)
+            R[:3, 0] = panel_right.astype(np.float32)
+            R[:3, 1] = panel_up2.astype(np.float32)
+            R[:3, 2] = panel_fwd.astype(np.float32)
+            T = np.eye(4, dtype=np.float32)
+            T[0, 3] = panel_pos[0]; T[1, 3] = panel_pos[1]; T[2, 3] = panel_pos[2]
+            mvp = vp_mat @ T @ R @ S
+        else:
+            mvp = vp_mat  # fallback
 
         mgl_fbo.use()
         self.ctx.enable(moderngl.BLEND)
@@ -3396,7 +3438,8 @@ class OpenXRViewer:
 
     def _update_grip_poses(self, display_time):
         """Locate controller grip spaces and cache 4x4 world-space matrices.
-        Controller 3D model is placed at grip pose (center of handle)."""
+        Controller 3D models are placed at the grip center (aim pose is at the tracking ring).
+        Also update movement timestamps for 5-second idle auto-hide."""
         now = time.perf_counter()
         for space, mat_attr, move_attr in [
             (self._grip_space_l, "_grip_mat_l", "_laser_last_move_l"),
@@ -3410,6 +3453,7 @@ class OpenXRViewer:
                 if loc.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
                     R = _xr_quat_to_mat4(loc.pose.orientation)
                     R[:3, 3] = [loc.pose.position.x, loc.pose.position.y, loc.pose.position.z]
+                    # Detect movement
                     prev = getattr(self, mat_attr)
                     if prev is not None:
                         delta = float(np.linalg.norm(R[:3, 3] - prev[:3, 3]))
@@ -3513,6 +3557,20 @@ class OpenXRViewer:
             self.screen_yaw      = self._anim_target_yaw
             self.screen_pitch    = self._anim_target_pitch
             self._anim_target_pan_x = None   # clear — animation complete
+
+    def _apply_preset(self, index):
+        """Apply screen preset combination."""
+        name, width, dist = self._screen_presets[index]
+        self.screen_width    = width
+        self.screen_distance = dist
+        self.screen_height   = None
+        self.screen_pitch    = 0.0   # perpendicular to floor
+        self._screen_curved  = False
+        self._preset_index            = index
+        self._preset_name_overlay     = f"{name}  {width:.2f}m / {dist:.2f}m"
+        self._last_overlay_update     = 0.0  # force overlay refresh
+        self._border_alpha  = 1.0
+        self._border_idle_t = time.perf_counter()
 
     def _reset_screen_to_default(self, show_border=False):
         """Reset screen to upright default: 2 m ahead horizontally, perpendicular to floor.
@@ -3635,7 +3693,7 @@ class OpenXRViewer:
         or the hit point falls outside the keyboard rectangle.
         """
         BEAM_MAX = 30.0
-        if not self._keyboard_visible:
+        if not self._keyboard_visible or not self._keyboard_keys:
             return BEAM_MAX
         cp = math.cos(self._keyboard_pitch); sp = math.sin(self._keyboard_pitch)
         cy = math.cos(self._keyboard_yaw);   sy = math.sin(self._keyboard_yaw)
@@ -3708,21 +3766,6 @@ class OpenXRViewer:
             return max(0.01, t - 0.005)
         return BEAM_MAX
 
-    @staticmethod
-    def _beam_origin_dir(aim_mat, grip_mat):
-        """Compute adjusted beam origin and direction, matching _laser_beam_setup."""
-        fw = -aim_mat[:3, 2].astype('f8')
-        right = aim_mat[:3, 0].astype('f8')
-        _ang = math.radians(12); _ca, _sa = math.cos(_ang), math.sin(_ang)
-        _k = right / (np.linalg.norm(right) + 1e-10)
-        fw = fw * _ca + np.cross(_k, fw) * _sa + _k * np.dot(_k, fw) * (1 - _ca)
-        if grip_mat is not None:
-            cp = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.03).astype('f8')
-        else:
-            cp = aim_mat[:3, 3].astype('f8')
-        cp = cp + fw * 0.08
-        return cp, fw
-
     def _laser_beam_setup(self):
         """Return shared beam calculations (position, direction) for each ray."""
         now = time.perf_counter()
@@ -3741,10 +3784,10 @@ class OpenXRViewer:
             _k = right_w / (np.linalg.norm(right_w) + 1e-10)
             fwd_w = fwd_w * _ca + np.cross(_k, fwd_w) * _sa + _k * np.dot(_k, fwd_w) * (1 - _ca)
             if grip_mat is not None:
-                ctrl_pos = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.03).astype('f8')
+                ctrl_pos = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
             else:
                 ctrl_pos = aim_mat[:3, 3].astype('f8')
-            ctrl_pos = ctrl_pos + fwd_w * 0.08
+            ctrl_pos = ctrl_pos + fwd_w * 0.11
             right = aim_mat[:3, 0].astype('f4')
             fwd = fwd_w.astype('f4')
             up = np.cross(right, fwd); up = up / (np.linalg.norm(up) + 1e-10)
@@ -3754,15 +3797,16 @@ class OpenXRViewer:
 
     def _render_lasers(self, mgl_fbo, vp_mat, blend=False):
         """blend=False: opaque rainbow beam; blend=True: semi-transparent hit circles."""
-        if blend:
-            self._render_laser_hit_circles(mgl_fbo, vp_mat)
-            return
         beams = self._laser_beam_setup()
         if not beams:
             return
+        if blend:
+            self._render_laser_hit_circles(mgl_fbo, vp_mat, beams)
+            return
         mgl_fbo.use()
         for now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up in beams:
-            draw_len = 0.4; BEAM_R = 0.003
+            draw_len = 0.4
+            BEAM_R = 0.004
             S = np.diag([BEAM_R, draw_len, BEAM_R, 1.0]).astype('f4')
             R = np.eye(4, dtype='f4'); R[:3, 0] = right2; R[:3, 1] = fwd; R[:3, 2] = up
             T = np.eye(4, dtype='f4'); T[:3, 3] = ctrl_pos.astype('f4')
@@ -3770,34 +3814,26 @@ class OpenXRViewer:
             self._beam_prog['u_mvp'].write(beam_mvp.T.tobytes())
             self._beam_prog['u_time'].value = float(now)
             self._beam_vao.render(moderngl.TRIANGLE_STRIP)
-
-    def _render_laser_hit_circles(self, mgl_fbo, vp_mat):
-        beams = self._laser_beam_setup()
-        if not beams:
-            return
+    def _render_laser_hit_circles(self, mgl_fbo, vp_mat, beams):
         mgl_fbo.use()
         for now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up in beams:
             cursor_uv = self._cursor_uv_l if ctrl_name == 'left' else self._cursor_uv_r
             if (self._cursor_ctrl == ctrl_name and cursor_uv is not None):
                 beam_len = max(0.01, float(cursor_uv[2]))
             else:
-                # Only screen/overlay — keyboard has its own hit circles
                 beam_len = min(
                     self._laser_screen_hit_dist(ctrl_pos, fwd_w),
+                    self._keyboard_laser_hit_dist(ctrl_pos, fwd_w),
                     self._overlay_panel_hit_dist(ctrl_pos, fwd_w),
                 )
             if beam_len >= 5.0:
                 continue
-            HIT_OFFSET = 0.01
+            HIT_OFFSET = 0.003
             hit_pos = ctrl_pos + fwd_w * (beam_len - HIT_OFFSET)
-            STROKE_R = 0.0096
-            FILL_R = 0.0072
-            # Orient circle to face beam direction (billboard toward controller)
-            Rc = np.eye(4, dtype='f4')
-            Rc[:3, 0] = right2; Rc[:3, 1] = up; Rc[:3, 2] = -fwd
+            STROKE_R = 0.0096; FILL_R = 0.0056
             for radius, color in [(STROKE_R, (0.2, 0.6, 1.0, 0.75)), (FILL_R, (1.0, 1.0, 1.0, 0.75))]:
                 model = np.eye(4, dtype='f4')
-                model[:3, :3] = Rc[:3, :3] * radius
+                model[0, 0] = radius; model[1, 1] = radius
                 model[:3, 3] = hit_pos.astype('f4')
                 circle_mvp = vp_mat @ model
                 self._border_prog['u_mvp'].write(circle_mvp.T.tobytes())
@@ -3805,8 +3841,7 @@ class OpenXRViewer:
                 self._circle_vao.render(moderngl.TRIANGLE_FAN)
 
     def _render_controllers(self, mgl_fbo, vp_mat, view_mat):
-        """Render PICO 4 Ultra 3D controller models at each grip pose.
-        Auto-hides after 5 seconds of idle, re-shows on movement."""
+        """Render PICO 4 Ultra 3D controller models with Blinn-Phong lighting."""
         now = time.perf_counter()
         controllers = []
         for grip_mat, prims, last_move_attr in [
@@ -3829,28 +3864,55 @@ class OpenXRViewer:
         controllers.sort(key=lambda x: x[0], reverse=True)
         mgl_fbo.use()
 
-        for _dist, grip_mat, prims in controllers:
-            import math as _m
-            _ang = _m.radians(-25)
-            _ca, _sa = _m.cos(_ang), _m.sin(_ang)
-            _corr = np.eye(4, dtype=np.float32)
-            _corr[1, 1] = _ca; _corr[1, 2] = -_sa
-            _corr[2, 1] = _sa; _corr[2, 2] = _ca
-            model_mat = (grip_mat @ _corr).astype(np.float32)
-            mvp = (vp_mat @ model_mat).astype(np.float32)
+        # Lighting parameters
+        # Extract camera position (headset) from view_mat, point light follows head
+        view_inv = np.linalg.inv(view_mat)
+        cam_pos = view_inv[:3, 3].astype(np.float32)
 
+        # light_color (diffuse) is slightly bluish to look more like the PICO 4's built-in light;
+        # ambient_color is dim to avoid washing out the dark controller textures.
+        light_color = np.array([0.37, 0.37, 0.40], dtype=np.float32)
+        ambient_color = np.array([0.22, 0.22, 0.24], dtype=np.float32)
+
+        for _dist, grip_mat, prims in controllers:
+            # Translate first (independent Y/Z), then rotate -30° around X
+            T_mat = np.eye(4, dtype=np.float32)
+            T_mat[0, 3] = self._x_offset
+            T_mat[1, 3] = self._y_offset
+            T_mat[2, 3] = self._z_offset
+
+            _ang = math.radians(-20)
+            _ca, _sa = math.cos(_ang), math.sin(_ang)
+            R_mat = np.eye(4, dtype=np.float32)
+            R_mat[1, 1] = _ca; R_mat[1, 2] = -_sa
+            R_mat[2, 1] = _sa; R_mat[2, 2] = _ca
+
+            _corr = (R_mat @ T_mat).astype(np.float32)
+            model_mat = (grip_mat @ _corr).astype(np.float32)
+
+            # Set common uniforms for the current controller
+            # u_model: model → world (grip @ _corr)
+            # u_mvp: world → clip (VP only, no model, because shader computes world_pos = u_model * v)
+            self._controller_prog['u_mvp'].write(vp_mat.astype(np.float32).T.tobytes())
+            self._controller_prog['u_model'].write(model_mat.T.tobytes())
+            self._controller_prog['u_light_color'].write((light_color).tobytes())
+            self._controller_prog['u_ambient_color'].write((ambient_color).tobytes())
+            self._controller_prog['u_camera_pos'].write((cam_pos).tobytes())
+
+            # Sort primitives by triangle count (descending): larger items rendered first (bottom), smaller ones later (top)
             sorted_prims = sorted(prims, key=lambda p: p['tri_count'], reverse=True)
+
+            if self._use_d3d11:
+                glFrontFace(GL_CW)
+
             for prim in sorted_prims:
-                if prim['tri_count'] > 120:
-                    self.ctx.enable(moderngl.CULL_FACE)
-                else:
-                    self.ctx.disable(moderngl.CULL_FACE)
                 tex = self._ctrl_tex_cache.get(prim['tex_id'])
                 if tex is not None:
                     tex.use(location=3)
-                self._controller_prog['u_mvp'].write(mvp.T.tobytes())
                 prim['vao'].render(moderngl.TRIANGLES)
-            self.ctx.disable(moderngl.CULL_FACE)
+
+            if self._use_d3d11:
+                glFrontFace(GL_CCW)
 
     def _render_border(self, mgl_fbo, vp_mat):
         """Render a thin solid-color border slightly larger than the screen.
@@ -3881,10 +3943,14 @@ class OpenXRViewer:
             # screen_height+2B tall, and pushed 1 mm behind the screen surface.
             bw = self.screen_width  + 2 * BORDER
             bh = self.screen_height + 2 * BORDER
-            border_verts = self._build_curved_screen_verts(
-                width_override=bw, height_override=bh, dist_offset=0.001,
-            )
-            self._curved_border_vbo.write(border_verts.tobytes())
+            params = (bw, bh, self.screen_distance, self.screen_pan_x,
+                      self.screen_pan_y, self.screen_yaw, self.screen_pitch)
+            if self._curved_border_verts_params != params:
+                border_verts = self._build_curved_screen_verts(
+                    width_override=bw, height_override=bh, dist_offset=0.001,
+                )
+                self._curved_border_vbo.write(border_verts.tobytes())
+                self._curved_border_verts_params = params
             self._curved_border_prog['u_mvp'].write(vp_mat.T.tobytes())
             self._curved_border_prog['u_color'].value = color
             n_verts = (48 + 1) * 2
@@ -3961,8 +4027,12 @@ class OpenXRViewer:
         if self._screen_curved and self._curved_prog is not None:
             # Curved path: build world-space arc verts, upload, draw with vp_mat only
             prog = self._curved_prog
-            arc_verts = self._build_curved_screen_verts()
-            self._curved_vbo.write(arc_verts.tobytes())
+            params = (self.screen_width, self.screen_height, self.screen_distance,
+                      self.screen_pan_x, self.screen_pan_y, self.screen_yaw, self.screen_pitch)
+            if self._curved_verts_params != params:
+                arc_verts = self._build_curved_screen_verts()
+                self._curved_vbo.write(arc_verts.tobytes())
+                self._curved_verts_params = params
             prog['u_mvp'].write(vp_mat.T.tobytes())
             prog['u_eye_offset'].value     = eye_sign * self.ipd_uv / 2.0
             prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
@@ -3986,40 +4056,39 @@ class OpenXRViewer:
             # opaque black clear, creating a persistent dark halo visible at all times.
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-        # 3. FPS overlay (behind lasers and keyboard)
-        if self._fps_overlay_visible and self._overlay_tex is not None:
-            self.ctx.viewport = (0, 0, sc_w, sc_h)
-            self._render_fps_overlay(eye_index, mgl_fbo, vp_mat)
-
-        # 4. Depth OSD (floating panel, always checked — method handles its own alpha)
-        if self._depth_osd_tex is not None:
-            self.ctx.viewport = (0, 0, sc_w, sc_h)
-            self._render_depth_osd(eye_index, mgl_fbo, vp_mat)
-
-        # 5. Screen-info OSD (size + distance, shown while right grip + stick adjusts)
-        if self._screen_osd_tex is not None:
-            self.ctx.viewport = (0, 0, sc_w, sc_h)
-            self._render_screen_osd(eye_index, mgl_fbo, vp_mat)
-
-        # 6. Virtual keyboard
+        # 3. Keyboard
         if self._keyboard_visible and self._keyboard_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_keyboard(mgl_fbo, vp_mat)
 
-        # 7. VR Controller models (PICO 4 Ultra) — rendered before beams
+        # 5. Depth OSD (floating panel, always checked — method handles its own alpha)
+        if self._depth_osd_tex is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_depth_osd(eye_index, mgl_fbo, vp_mat)
+
+        # 5b. Screen-info OSD (size + distance, shown while right grip + stick adjusts)
+        if self._screen_osd_tex is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_screen_osd(eye_index, mgl_fbo, vp_mat)
+
+        # 7. VR Controller models (PICO 4 Ultra)
         if self._ctrl_prims_l or self._ctrl_prims_r:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_controllers(mgl_fbo, vp_mat, view_mat)
 
-        # 7b. Laser beam (opaque rainbow, rendered on top of controllers)
+        # 8. Laser beam (opaque rainbow, rendered on top of controllers)
         self.ctx.viewport = (0, 0, sc_w, sc_h)
         self._render_lasers(mgl_fbo, vp_mat, blend=False)
-        # 7c. Hit-point circles (semi-transparent)
         self.ctx.viewport = (0, 0, sc_w, sc_h)
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         self._render_lasers(mgl_fbo, vp_mat, blend=True)
         self.ctx.disable(moderngl.BLEND)
+
+        # 9. FPS overlay — topmost UI, occludes laser beams
+        if self._fps_overlay_visible and self._overlay_tex is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_fps_overlay(eye_index, mgl_fbo, vp_mat)
 
         self.ctx.screen.use()
 
@@ -4253,30 +4322,43 @@ class OpenXRViewer:
                 self._cursor_smooth_uv = None
                 return
 
+        def _beam_origin_dir(aim_mat, grip_mat):
+            """Calculate the laser beam's origin point and forward direction in world space."""
+            fw = -aim_mat[:3, 2].astype('f8')
+            # 向上旋转15度
+            right = aim_mat[:3, 0].astype('f8')
+            ang = math.radians(12); ca, sa = math.cos(ang), math.sin(ang)
+            k = right / (np.linalg.norm(right) + 1e-10)
+            fw = fw * ca + np.cross(k, fw) * sa + k * np.dot(k, fw) * (1 - ca)
+            # 起点与_laser_beam_setup保持同步
+            if grip_mat is not None:
+                cp = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
+            else:
+                cp = aim_mat[:3, 3].astype('f8')
+            cp = cp + fw * 0.11
+            return cp, fw
+
         dw, dh = _get_desktop_size()
         hit_l = hit_r = None
         if self._aim_mat_l is not None:
-            cp, fw = self._beam_origin_dir(self._aim_mat_l, self._grip_mat_l)
+            cp, fw = _beam_origin_dir(self._aim_mat_l, self._grip_mat_l)
             if not (self._keyboard_visible and self._keyboard_laser_hit(cp, fw)[0] is not None):
                 hit_l = self._laser_screen_hit_uv(cp, fw)
         if self._aim_mat_r is not None:
-            cp, fw = self._beam_origin_dir(self._aim_mat_r, self._grip_mat_r)
+            cp, fw = _beam_origin_dir(self._aim_mat_r, self._grip_mat_r)
             if not (self._keyboard_visible and self._keyboard_laser_hit(cp, fw)[0] is not None):
                 hit_r = self._laser_screen_hit_uv(cp, fw)
 
         self._cursor_uv_l = hit_l if hit_l else None   # (u, v, t) or None
         self._cursor_uv_r = hit_r if hit_r else None   # (u, v, t) or None
 
-        # Pick active controller — sticky priority avoids ping-ponging when both hit.
+        # Pick active controller — right always wins when both lasers hit screen.
+        # Avoids ping-ponging: once a controller takes over, the other can't steal.
         prev_ctrl = self._cursor_ctrl
-        if hit_l and self._cursor_ctrl == 'left':
-            ctrl, u, v = 'left', hit_l[0], hit_l[1]
-        elif hit_r and self._cursor_ctrl == 'right':
+        if hit_r:
             ctrl, u, v = 'right', hit_r[0], hit_r[1]
         elif hit_l:
             ctrl, u, v = 'left', hit_l[0], hit_l[1]
-        elif hit_r:
-            ctrl, u, v = 'right', hit_r[0], hit_r[1]
         else:
             self._cursor_ctrl = None
             self._cursor_smooth_uv = None   # reset so next entry doesn't drag
@@ -4423,15 +4505,26 @@ class OpenXRViewer:
         lt = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
         rt = self._read_float_action(self._act_right_trigger, "/user/hand/right")
 
-        for trig_now, trig_prev_attr, hover_attr, held_key_attr, held_mods_attr, aim_mat, grip_mat in [
-            (lt, '_kb_trig_prev_l', '_kb_hover_l', '_kb_held_key_l', '_kb_held_mods_l', self._aim_mat_l, self._grip_mat_l),
-            (rt, '_kb_trig_prev_r', '_kb_hover_r', '_kb_held_key_r', '_kb_held_mods_r', self._aim_mat_r, self._grip_mat_r),
+        for trig_now, trig_prev_attr, hover_attr, held_key_attr, held_mods_attr, aim_mat in [
+            (lt, '_kb_trig_prev_l', '_kb_hover_l', '_kb_held_key_l', '_kb_held_mods_l', self._aim_mat_l),
+            (rt, '_kb_trig_prev_r', '_kb_hover_r', '_kb_held_key_r', '_kb_held_mods_r', self._aim_mat_r),
         ]:
             trig_prev = getattr(self, trig_prev_attr)
             held_key  = getattr(self, held_key_attr)
             held_mods = getattr(self, held_mods_attr)
             if aim_mat is not None:
-                cp, fw = self._beam_origin_dir(aim_mat, grip_mat)
+                # Calculate the laser beam's origin point and forward direction in world space
+                grip_mat = self._grip_mat_l if aim_mat is self._aim_mat_l else self._grip_mat_r
+                fw = -aim_mat[:3, 2].astype('f8')
+                right = aim_mat[:3, 0].astype('f8')
+                _ang = math.radians(12); _ca, _sa = math.cos(_ang), math.sin(_ang)
+                _k = right / (np.linalg.norm(right) + 1e-10)
+                fw = fw * _ca + np.cross(_k, fw) * _sa + _k * np.dot(_k, fw) * (1 - _ca)
+                if grip_mat is not None:
+                    cp = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
+                else:
+                    cp = aim_mat[:3, 3].astype('f8')
+                cp = cp + fw * 0.11
                 idx, _ = self._keyboard_laser_hit(cp, fw)
             else:
                 idx = None
@@ -4584,7 +4677,7 @@ class OpenXRViewer:
         self._grabbed  = active
         self._resizing = False
 
-        # ── Left grip + left stick ─────────────────────────────────────────
+        # Left grip + left stick
         # Keyboard visible → translate keyboard (X=horizontal, Y=vertical, Z=depth).
         # Keyboard hidden  → rotate screen yaw (X) / pitch (Y).
         # No grip → mouse scroll (same axes as right stick).
@@ -4607,7 +4700,7 @@ class OpenXRViewer:
             self._accum_scroll(lx, ly, dt)
 
         # ── Right grip + right stick X: resize screen (left=smaller, right=larger) ──
-        # ── Right grip + right stick Y: distance (up=closer, down=further) ─────────
+        # ── Right grip + right stick Y: distance (up=further, down=closer) ─────────
         # ── Left grip + right stick Y: depth strength (parallax intensity) ────────
         #    Push stick up to increase 3-D depth effect; down to flatten/remove it.
         #    Right stick click while left grip held = toggle depth off/on instantly.
@@ -4624,7 +4717,7 @@ class OpenXRViewer:
                     self._keyboard_height = None  # recalc from aspect
                 elif abs(ry) > abs(rx) and abs(ry) > DEAD:
                     self._keyboard_distance = max(0.2,
-                        self._keyboard_distance - ry * DIST_SPEED * dt)
+                        self._keyboard_distance + ry * DIST_SPEED * dt)
             else:
                 if laser_on_screen and abs(rx) > abs(ry) and abs(rx) > DEAD:
                     self.screen_width = max(0.3,
@@ -4634,14 +4727,14 @@ class OpenXRViewer:
                     self._screen_osd_show_t = time.perf_counter()
                 elif laser_on_screen and abs(ry) > abs(rx) and abs(ry) > DEAD:
                     self.screen_distance = max(0.3,
-                                            self.screen_distance + ry * DIST_SPEED * dt)  # Changed: -ry → +ry
+                                               self.screen_distance + ry * DIST_SPEED * dt)
                     self._screen_osd_show_t = time.perf_counter()
         elif grip_l and not grip_r:
             if self._keyboard_visible and self._kb_hover_r is not None:
                 # Right stick Y = keyboard depth (only when laser is on keyboard)
                 if abs(ry) > DEAD:
                     self._keyboard_distance = max(0.2,
-                        self._keyboard_distance - ry * KB_MOVE_SPEED * dt)
+                        self._keyboard_distance + ry * KB_MOVE_SPEED * dt)
             else:
                 # Left grip + right stick Y → adjust depth strength
                 if laser_on_screen and abs(ry) > DEAD:
@@ -4703,17 +4796,18 @@ class OpenXRViewer:
         # Y (left):
         #   short press  → reset screen to upright default (same as session start)
         #   long press   → reset screen to face current head gaze (same as home long-press)
-        Y_LONG = 0.6   # seconds to trigger long-press
+        Y_LONG = 0.6   # seconds to trigger long-press action
         y_now = self._read_bool_action(self._act_y_btn, "/user/hand/left")
         if y_now and not self._y_last:
             self._y_press_t    = time.perf_counter()
             self._y_long_fired = False
         if y_now and not self._y_long_fired:
             if time.perf_counter() - self._y_press_t >= Y_LONG:
-                self._reset_screen_to_gaze(show_border=True)
+                nxt = (self._preset_index + 1) % len(self._screen_presets)
+                self._apply_preset(nxt)
                 self._y_long_fired = True
         if not y_now and self._y_last and not self._y_long_fired:
-            self._reset_screen_to_default(show_border=True)
+            self._apply_preset(3)  # short press = preset combo 4
         self._y_last = y_now
 
         # X (left): toggle virtual keyboard. When turning it on, snap the keyboard

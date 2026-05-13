@@ -130,6 +130,10 @@ elif "AMD" in DEVICE_INFO:
                 os.path.join(site_packages, "_rocm_sdk_core", "lib"),
                 os.path.join(site_packages, "_rocm_sdk_devel", "bin"),
                 os.path.join(site_packages, "_rocm_sdk_devel", "lib"),
+                os.path.join(os.environ["HIP_PATH"], "bin"),
+                # system level hip
+                "/opt/rocm/lib/",
+                "/usr/lib/x86_64-linux-gnu",
             ]
 
             hip_path = None
