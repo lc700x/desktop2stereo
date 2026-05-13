@@ -339,7 +339,7 @@ DEFAULTS = {
     "Anti-aliasing": 2,
     "Foreground Scale": 0.5,
     "IPD": 0.064,
-    "Convergence": 0.0,
+    "Convergence": 0.5,
     "Display Mode": "Half-SBS",
     "FP16": True,
     "torch.compile": False,
