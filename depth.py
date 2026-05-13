@@ -1,6 +1,7 @@
 # depth.py
 import os, warnings
 import torch
+import contextlib
 
 # Support for old AMD GPU with ZLUDA support (hide)
 # try:
@@ -235,7 +236,7 @@ def maybe_autocast(device, enabled=True):
     return (
         torch.autocast(device_type=device.type, enabled=enabled)
         if device.type != "privateuseone"  # privateuseone is DirectMLDirectML
-        else torch.nullcontext()
+        else contextlib.nullcontext()
     )
 
 # check if it is metric model

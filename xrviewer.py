@@ -2749,10 +2749,11 @@ class OpenXRViewer:
             self.frame_size = (w, h)
             self.screen_height = None
 
-        # Lazy GPU interop init
+        # Lazy GPU interop init (includes PBO registration to verify interop)
         if self._cuda_gl is None and CUDART_GL is not None and BACKEND in ("CUDA", "HIP"):
             try:
                 self._cuda_gl = CUDART_GL()
+                self._init_cuda_pbos(w, h)   # create PBOs + register with HIP
                 print(f"[OpenXRViewer] GPU interop active ({BACKEND})")
             except Exception as e:
                 print(f"[OpenXRViewer] GPU interop unavailable: {e}")

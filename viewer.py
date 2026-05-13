@@ -1321,15 +1321,7 @@ class StereoWindow:
 
         # Recreate textures and PBOs if size changed
         if self._texture_size != (w, h):
-            if self.color_tex:
-                self.color_tex.release()
-            if self.depth_tex:
-                self.depth_tex.release()
-            self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
-            self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
-            self.prog['tex_color'].value = 0
-            self.prog['tex_depth'].value = 1
-            self._texture_size = (w, h)
+            self._create_or_resize_textures(w, h)
 
             # Reinit CUDA PBOs if needed (may disable CUDA on failure)
             if self.use_cuda:
@@ -1460,6 +1452,28 @@ class StereoWindow:
 
         # Note: the very first call will return None (no previous frame ready)
         return image
+    
+    def _create_or_resize_textures(self, w, h):
+        """Create/recreate textures and force nearest-neighbor sampling."""
+        if self.color_tex:
+            self.color_tex.release()
+        if self.depth_tex:
+            self.depth_tex.release()
+
+        # RGB texture
+        self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
+        self.color_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+        self.color_tex.swizzle = "RGB"
+
+        # Depth texture
+        self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
+        self.depth_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+
+        # Bind samplers
+        self.prog['tex_color'].value = 0
+        self.prog['tex_depth'].value = 1
+
+        self._texture_size = (w, h)
 
     def render(self):
         """Ultra-optimized rendering with minimal GL calls"""
