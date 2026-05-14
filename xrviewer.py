@@ -6,6 +6,7 @@
 # The depth-parallax FRAGMENT_SHADER from viewer.py is reused unchanged.
 
 import sys
+import os
 import math
 import time
 import ctypes
@@ -1328,10 +1329,9 @@ class OpenXRViewer:
         # Right thumbstick click state
         self._right_stick_click_prev = False
 
-        # VR controller model offsets
-        self._y_offset = -0.02       # Y offset (down 2cm)
-        self._z_offset = -0.03       # Z offset
-        self._x_offset = 0.0         # X offset (left/right)
+        # VR controller model offsets — defaults (overridden per profile)
+        self._ctrl_model_offset = [0.0, -0.02, -0.03]
+        self._ctrl_model_rot_deg = -20.0
 
         # Right grip + A/B → depth_ratio control (hold A = increase, hold B = decrease)
         # Reset to default: right grip + right thumbstick click
@@ -1630,7 +1630,7 @@ class OpenXRViewer:
             [(self._curved_border_vbo, '3f 8x', 'in_position')],
         )
 
-        # VR controller 3D model loading
+        # VR controller 3D model shader
         self._controller_prog = self.ctx.program(
             vertex_shader=_CTRL_VERT,
             fragment_shader=_CTRL_FRAG,
@@ -1641,23 +1641,60 @@ class OpenXRViewer:
         self._controller_prog['u_light_color'].value = (0.37, 0.37, 0.40)
         self._controller_prog['u_ambient_color'].value = (0.22, 0.22, 0.24)
 
-        import os as _os
-        _base = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                            'controllers', 'pico-4u')
-
         self._ctrl_tex_cache = {}
         self._ctrl_prims_l = []
         self._ctrl_prims_r = []
 
+        # Load default controller models (PICO 4U); profile detection may reload
+        import os as _os
+        _controllers_root = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                          'controllers')
+        self._controllers_root = _controllers_root
+        self._load_controller_models(_os.path.join(_controllers_root, 'pico'))
+
+    def _load_controller_models(self, base_dir):
+        """Load left/right GLB controller models from base_dir.
+        Also reads base_dir/profile.json for overrides (model_offset, model_rotation_deg).
+        Resets to zero offset before applying per-profile overrides.
+        """
+        self._ctrl_prims_l.clear()
+        self._ctrl_prims_r.clear()
+
+        # Reset to zero offset — profile.json overrides will set the correct values
+        self._ctrl_model_offset = [0.0, 0.0, 0.0]
+        self._ctrl_model_rot_deg = 0.0
+
+        # Read profile.json overrides if present
+        profile_path = os.path.join(base_dir, 'profile.json')
+        if os.path.isfile(profile_path):
+            try:
+                import json as _json
+                with open(profile_path, 'r') as f:
+                    prof = _json.load(f)
+                overrides = prof.get('overrides', {})
+                if overrides.get('model_offset'):
+                    self._ctrl_model_offset = [float(v) for v in overrides['model_offset']]
+                if 'model_rotation_deg' in overrides:
+                    self._ctrl_model_rot_deg = float(overrides['model_rotation_deg'])
+            except Exception as e:
+                print(f"[OpenXRViewer] Failed to read {profile_path}: {e}")
+
+        # Use directory+file-scoped cache keys to avoid cross-profile texture collisions
+        _dir_key = os.path.basename(os.path.normpath(base_dir))
+
         def _create_prims(glb_path, target_list):
             prims_data, textures = load_glb_model(glb_path)
+            _file_stem = os.path.splitext(os.path.basename(glb_path))[0]
+            _prefix = f"{_dir_key}/{_file_stem}"
             for tid, tex_arr in enumerate(textures):
-                if tex_arr is not None and tid not in self._ctrl_tex_cache:
-                    h, w = tex_arr.shape[:2]
-                    mtex = self.ctx.texture((w, h), 4, tex_arr.tobytes())
-                    mtex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
-                    mtex.build_mipmaps()
-                    self._ctrl_tex_cache[tid] = mtex
+                if tex_arr is not None:
+                    cache_key = f"{_prefix}:{tid}"
+                    if cache_key not in self._ctrl_tex_cache:
+                        h, w = tex_arr.shape[:2]
+                        mtex = self.ctx.texture((w, h), 4, tex_arr.tobytes())
+                        mtex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+                        mtex.build_mipmaps()
+                        self._ctrl_tex_cache[cache_key] = mtex
             for pd in prims_data:
                 vbo = self.ctx.buffer(pd['vertices'].tobytes())
                 ibo = self.ctx.buffer(pd['indices'].tobytes())
@@ -1668,17 +1705,57 @@ class OpenXRViewer:
                 )
                 target_list.append({
                     'vao': vao, 'vbo': vbo, 'ibo': ibo,
-                    'tex_id': pd['tex_id'],
+                    'tex_key': f"{_prefix}:{pd['tex_id']}" if pd['tex_id'] >= 0 else None,
                     'tri_count': len(pd['indices']) // 3,
                 })
 
         try:
-            _create_prims(_os.path.join(_base, 'right.glb'), self._ctrl_prims_r)
-            _create_prims(_os.path.join(_base, 'left.glb'),  self._ctrl_prims_l)
+            _create_prims(os.path.join(base_dir, 'right.glb'), self._ctrl_prims_r)
+            _create_prims(os.path.join(base_dir, 'left.glb'),  self._ctrl_prims_l)
+            print(f"[OpenXRViewer] Loaded controller models from {base_dir}")
         except Exception as e:
             print(f"[OpenXRViewer] Controller model load failed: {e}")
             self._ctrl_prims_l = []
             self._ctrl_prims_r = []
+
+    def _detect_and_load_controller_profile(self):
+        """Detect headset from system name and load matching controller models.
+        Uses xr.get_system_properties().system_name to match against
+        controller directories (case-insensitive substring match).
+        """
+        if self._xr_instance is None or self._xr_system_id is None:
+            return
+        try:
+            props = xr.get_system_properties(self._xr_instance, self._xr_system_id)
+            sys_name = props.system_name
+            if isinstance(sys_name, bytes):
+                sys_name = sys_name.decode('utf-8', errors='replace')
+            print(f"[OpenXRViewer] Headset: {sys_name}")
+        except Exception as e:
+            print(f"[OpenXRViewer] Failed to get system properties: {e}")
+            return
+
+        # Case-insensitive substring match against controller directory names
+        sys_lower = sys_name.lower()
+        dir_name = None
+        for candidate in os.listdir(self._controllers_root):
+            cand_path = os.path.join(self._controllers_root, candidate)
+            if not os.path.isdir(cand_path):
+                continue
+            if candidate.lower() in sys_lower or sys_lower in candidate.lower():
+                if os.path.isfile(os.path.join(cand_path, 'left.glb')):
+                    dir_name = candidate
+                    break
+
+        if dir_name is None:
+            print(f"[OpenXRViewer] No controller model match for headset '{sys_name}', keeping default")
+            return
+        
+        target_dir = os.path.join(self._controllers_root, dir_name)
+        self._load_controller_models(target_dir)
+        print(f"[OpenXRViewer] Matched headset '{sys_name}' → controllers/{dir_name}")
+        print(f"[OpenXRViewer] Controller offset: {self._ctrl_model_offset}, "
+              f"rotation: {self._ctrl_model_rot_deg} deg")
 
     def _init_openxr(self):
         """Try OpenGL first; fall back to D3D11 on Windows if OpenGL fails."""
@@ -2442,6 +2519,9 @@ class OpenXRViewer:
                 setattr(self, attr, space)
             except Exception as e:
                 print(f"[OpenXRViewer] Grip space creation failed: {e}")
+
+        # Detect active interaction profile and load matching controller models
+        self._detect_and_load_controller_profile()
 
     def _init_textures(self, w, h):
         if self.color_tex:
@@ -3876,13 +3956,13 @@ class OpenXRViewer:
         ambient_color = np.array([0.22, 0.22, 0.24], dtype=np.float32)
 
         for _dist, grip_mat, prims in controllers:
-            # Translate first (independent Y/Z), then rotate -30° around X
+            # Apply per-profile model offset + X-axis rotation correction
             T_mat = np.eye(4, dtype=np.float32)
-            T_mat[0, 3] = self._x_offset
-            T_mat[1, 3] = self._y_offset
-            T_mat[2, 3] = self._z_offset
+            T_mat[0, 3] = self._ctrl_model_offset[0]
+            T_mat[1, 3] = self._ctrl_model_offset[1]
+            T_mat[2, 3] = self._ctrl_model_offset[2]
 
-            _ang = math.radians(-20)
+            _ang = math.radians(self._ctrl_model_rot_deg)
             _ca, _sa = math.cos(_ang), math.sin(_ang)
             R_mat = np.eye(4, dtype=np.float32)
             R_mat[1, 1] = _ca; R_mat[1, 2] = -_sa
@@ -3907,7 +3987,7 @@ class OpenXRViewer:
                 glFrontFace(GL_CW)
 
             for prim in sorted_prims:
-                tex = self._ctrl_tex_cache.get(prim['tex_id'])
+                tex = self._ctrl_tex_cache.get(prim['tex_key'])
                 if tex is not None:
                     tex.use(location=3)
                 prim['vao'].render(moderngl.TRIANGLES)
