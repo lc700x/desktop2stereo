@@ -944,23 +944,26 @@ class DepthModelWrapper:
         elif 'da3' in MODEL_ID.lower():
             model = get_da3_model(MODEL_ID, dtype=self.dtype)
         else:
-            # Load depth model without network warning when local cache exists
             try:
-                model = AutoModelForDepthEstimation.from_pretrained(
-                    MODEL_ID,
-                    dtype=self.dtype,
-                    cache_dir=CACHE_PATH,
-                    weights_only=True,
-                    local_files_only=True
-                ).to(DEVICE)
-            except Exception:
-                model = AutoModelForDepthEstimation.from_pretrained(
-                    MODEL_ID,
-                    dtype=self.dtype,
-                    cache_dir=CACHE_PATH,
-                    weights_only=True
-                ).to(DEVICE)
-            
+                # Load depth model without network warning when local cache exists
+                try:
+                    model = AutoModelForDepthEstimation.from_pretrained(
+                        MODEL_ID,
+                        dtype=self.dtype,
+                        cache_dir=CACHE_PATH,
+                        weights_only=True,
+                        local_files_only=True
+                    ).to(DEVICE)
+                except Exception:
+                    model = AutoModelForDepthEstimation.from_pretrained(
+                        MODEL_ID,
+                        dtype=self.dtype,
+                        cache_dir=CACHE_PATH,
+                        weights_only=True
+                    ).to(DEVICE)
+            except Exception as e:
+                print(f"[Error]: Failed to load model, please check your local model file and network connection. Details: {e}")
+        
         if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() and "video-depth-anything" not in MODEL_ID.lower()):
             model.half()
             

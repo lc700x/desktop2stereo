@@ -1202,7 +1202,7 @@ def main(mode="Viewer"):
                 )
                 viewer.run(first_rgb=rgb, first_depth=depth)
             except Exception as e:
-                print(f"[Main] OpenXR Viewer error: {e}")
+                print(f"[Main] OpenXR Link error: {e}")
 
         else:
             from depth import make_sbs, DEVICE_INFO
