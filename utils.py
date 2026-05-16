@@ -346,6 +346,97 @@ STEREOMIX_DEVICE = settings["Stereo Mix"] # RTMP StereoMix Device
 STREAM_KEY = settings["Stream Key"]
 AUDIO_DELAY = settings["Audio Delay"]
 CRF = settings["CRF"]
+LANG = settings["Language"]
+
+# Handheld Controller Operation Guide for OpenXR Viewer, can be easily extended for in-game usage
+if LANG == "CN":
+    ROWS = [
+        ("[手柄操作指南]", "", "", True),
+        ("", "", "", False),
+        ("左/右手激光指向屏幕/键盘", "握持", "激光锚点拖拽屏幕", False),
+        ("右握持+右摇杆 X", "左右推", "调整屏幕宽度", False),
+        ("右握持+右摇杆 Y", "上下推", "调整屏幕距离(加速)", False),
+        ("右摇杆按键", "短按", "切换平面/曲面屏幕", False),
+        ("右摇杆按键", "长按", "重置屏幕方向(保持距离/大小)", False),
+        ("左摇杆按键", "短按", "切换背景颜色(5种)", False),
+        ("左摇杆按键", "长按", "切换FPS/帮助面板", False),
+        ("左 Y 键", "短按", "重置屏幕位置与朝向", False),
+        ("左 Y 键", "长按", "切换屏幕预设", False),
+        ("左握持+左摇杆 X/Y", "上下左右推", "平移屏幕位置", False),
+        ("左握持+右摇杆 X", "左右推", "屏幕水平旋转(Yaw)", False),
+        ("左握持+右摇杆 Y", "上下推", "屏幕前后倾斜(Pitch)", False),
+        ("", "", "", False),
+
+        ("[实时深度调整]", "", "", True), 
+        ("右握持+左摇杆 Y", "上下推", "调整深度倍率(0-10)", False),
+        ("右握持+左摇杆按键", "短按", "深度强度归零/恢复", False),
+        ("右握持+右摇杆按键", "短按", "重置深度倍率为2.0", False),
+        ("", "", "", False),
+
+        ("[鼠标操作]", "", "", True),
+        ("左/右手激光指向屏幕", "无握持", "控制鼠标光标（右手优先）", False),
+        ("左/右手激光指向屏幕", "扳机", "鼠标左键单击", False),
+        ("左/右摇杆激光指向屏幕", "无握持", "上下左右滚动(鼠标滚轮)", False),
+        ("右 A 键", "短按", "鼠标左键单击", False),
+        ("右 B 键", "短按", "鼠标右键单击", False),
+        ("", "", "", False),
+
+        ("[虚拟键盘操作]", "", "", True),
+        ("左 X 键", "短按", "显示/隐藏虚拟键盘", False),
+        ("左/右激光指向键盘", "扳机", "按键输入(按下松开)", False),
+        ("Shift/Ctrl/Alt/Win", "单击/双击", "单次/锁定修饰键", False),
+        ("左握持+左摇杆(指向键盘)", "上下左右推", "平移键盘位置", False),
+        ("右握持+右摇杆(指向键盘)", "上下/左右推", "调整键盘大小/距离", False),
+        ("", "", "", False),
+
+        ("[手柄模型调节]", "", "", True),
+        ("右 A+B 键", "同时长按0.5秒", "切换手柄模型品牌", False),
+        ("左菜单+右A+右B", "同时长按1秒", "进入/退出手柄校准模式", False),
+    ]
+else:
+    ROWS = [
+        ("[Controller Operation Guide]", "", "", True),
+        ("", "", "", False),
+        ("Left/right controller laser points at screen/keyboard", "Hold", "Drag screen with laser anchor", False),
+        ("Right grip + right stick X", "Push left/right", "Adjust screen width", False),
+        ("Right grip + right stick Y", "Push up/down", "Adjust screen distance (accelerated)", False),
+        ("Right stick button", "Short press", "Toggle flat/curved screen", False),
+        ("Right stick button", "Long press", "Reset screen orientation (preserve distance/size)", False),
+        ("Left stick button", "Short press", "Cycle background color (5 options)", False),
+        ("Left stick button", "Long press", "Toggle FPS/help panel", False),
+        ("Left Y button", "Short press", "Reset screen position and orientation", False),
+        ("Left Y button", "Long press", "Cycle screen presets", False),
+        ("Left grip + left stick X/Y", "Push up/down/left/right", "Translate screen position", False),
+        ("Left grip + right stick X", "Push left/right", "Screen horizontal rotation (Yaw)", False),
+        ("Left grip + right stick Y", "Push up/down", "Screen tilt (Pitch)", False),
+        ("", "", "", False),
+
+        ("[Real-time Depth Adjustment]", "", "", True),
+        ("Right grip + left stick Y", "Push up/down", "Adjust depth scale (0-10)", False),
+        ("Right grip + left stick button", "Short press", "Reset depth intensity to zero / restore", False),
+        ("Right grip + right stick button", "Short press", "Reset depth scale to 2.0", False),
+        ("", "", "", False),
+
+        ("[Mouse Operation]", "", "", True),
+        ("Left/right controller laser points at screen", "No grip", "Control mouse cursor (right priority)", False),
+        ("Left/right controller laser points at screen", "Trigger", "Left mouse button click", False),
+        ("Left/right stick laser points at screen", "No grip", "Scroll up/down/left/right (mouse wheel)", False),
+        ("Right A button", "Short press", "Left mouse button click", False),
+        ("Right B button", "Short press", "Right mouse button click", False),
+        ("", "", "", False),
+
+        ("[Virtual Keyboard Operation]", "", "", True),
+        ("Left X button", "Short press", "Show/hide virtual keyboard", False),
+        ("Left/right controller laser points at keyboard", "Trigger", "Key input (press and release)", False),
+        ("Shift/Ctrl/Alt/Win", "Single press / double press", "Momentary / locked modifier key", False),
+        ("Left grip + left stick (pointing at keyboard)", "Push up/down/left/right", "Translate keyboard position", False),
+        ("Right grip + right stick (pointing at keyboard)", "Push up/down / left/right", "Adjust keyboard size / distance", False),
+        ("", "", "", False),
+
+        ("[Controller Model Adjustment]", "", "", True),
+        ("Right A+B buttons", "Press and hold both for 0.5 sec", "Toggle controller model brand", False),
+        ("Left menu + right A + right B", "Press and hold all for 1 sec", "Enter/exit controller calibration mode", False),
+    ]
 
 # Determin the run mode and stream mode
 if RUN_MODE == "Local Viewer":
@@ -370,7 +461,7 @@ else:
 # Specify the Stereo Display for output
 STEREO_DISPLAY_SELECTION = settings["Specify Display"]
 STEREO_DISPLAY_INDEX = settings["Stereo Monitor"]
-
+CONTROLLER_MODEL = settings["Controller Model"]
 
 # Initialize Device
 import torch

@@ -17,7 +17,7 @@ import glfw
 import moderngl
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from utils import get_font_type
+from utils import get_font_type, ROWS
 from OpenGL.GL import (
     glGenFramebuffers, glBindFramebuffer, glFramebufferTexture2D,
     glDeleteFramebuffers, glCheckFramebufferStatus,
@@ -70,7 +70,7 @@ def _read_glb_chunks(data):
 
 
 _DTYPE_MAP = {5120: np.int8, 5121: np.uint8, 5122: np.int16,
-              5123: np.uint16, 5125: np.uint32, 5126: np.float32}
+            5123: np.uint16, 5125: np.uint32, 5126: np.float32}
 _TYPE_NC = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4,
             'MAT2': 4, 'MAT3': 9, 'MAT4': 16}
 
@@ -267,7 +267,7 @@ def load_glb_model(path):
                         tex_id = tid
 
             primitives.append({'vertices': vertices, 'indices': indices,
-                               'tex_id': tex_id})
+                            'tex_id': tex_id})
 
     return primitives, all_textures
 
@@ -359,7 +359,7 @@ if sys.platform == "win32":
         _load_d3d11()
         factory = ctypes.c_void_p(0)
         hr = _dxgi.CreateDXGIFactory1(ctypes.byref((ctypes.c_byte * 16)(*_IID_IDXGIFactory1)),
-                                      ctypes.byref(factory))
+                                    ctypes.byref(factory))
         if hr != 0:
             raise RuntimeError(f"CreateDXGIFactory1 failed: 0x{hr & 0xFFFFFFFF:08x}")
 
@@ -492,7 +492,7 @@ if sys.platform == "win32":
         except (ImportError, AttributeError):
             return False
 
-    # ── EXT_memory_object_win32 helpers (cross-vendor, GL 4.5+) ──────────
+    # EXT_memory_object_win32 helpers (cross-vendor, GL 4.5+) ──────────
     _ext_mem_available       = False
     _glImportMemoryWin32HandleEXT  = None
     _glTextureStorageMem2DEXT      = None
@@ -883,16 +883,11 @@ if sys.platform == "win32":
     _KEYEVENTF_KEYUP      = 0x0002
 
     def _set_cursor_pos(x, y):
-        # Use SendInput with MOVE+ABSOLUTE so apps receive WM_MOUSEMOVE/WM_INPUT
-        # events while a button is held — SetCursorPos alone is invisible to apps
-        # that rely on raw input for drag tracking.
-        sw = _U32.GetSystemMetrics(0)
-        sh = _U32.GetSystemMetrics(1)
-        inp = _INPUT(type=0)
-        inp.mi.dwFlags = _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE
-        inp.mi.dx = ctypes.c_long(max(0, min(65535, int(x) * 65535 // max(sw - 1, 1))))
-        inp.mi.dy = ctypes.c_long(max(0, min(65535, int(y) * 65535 // max(sh - 1, 1))))
-        ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+        # Use SetCursorPos with virtual-desktop pixel coordinates — works across all
+        # monitors.  The old SendInput+MOVE+ABSOLUTE approach required manual
+        # normalisation against the primary-monitor size and was fragile for
+        # multi-monitor setups where the primary monitor isn't at (0,0).
+        ctypes.windll.user32.SetCursorPos(int(x), int(y))
 
     def _send_mouse_flags(flags):
         inp = _INPUT(type=0)
@@ -956,49 +951,49 @@ _KB_UNITS_WIDE = 18   # total horizontal units per row
 _KB_ROWS = [
     # Row F: Esc + F1–F12 + PrtSc/ScrLk/Pause   (1.5 + 12 + 4.5 = 18)
     [('Esc',0x1B,None,0x1B,1.5),
-     ('F1',0x70,None,0x70,1),('F2',0x71,None,0x71,1),
-     ('F3',0x72,None,0x72,1),('F4',0x73,None,0x73,1),
-     ('F5',0x74,None,0x74,1),('F6',0x75,None,0x75,1),
-     ('F7',0x76,None,0x76,1),('F8',0x77,None,0x77,1),
-     ('F9',0x78,None,0x78,1),('F10',0x79,None,0x79,1),
-     ('F11',0x7A,None,0x7A,1),('F12',0x7B,None,0x7B,1),
-     ('PrtSc',0x2C,None,0x2C,1.5),('ScrLk',0x91,None,0x91,1.5),('Pause',0x13,None,0x13,1.5)],
+    ('F1',0x70,None,0x70,1),('F2',0x71,None,0x71,1),
+    ('F3',0x72,None,0x72,1),('F4',0x73,None,0x73,1),
+    ('F5',0x74,None,0x74,1),('F6',0x75,None,0x75,1),
+    ('F7',0x76,None,0x76,1),('F8',0x77,None,0x77,1),
+    ('F9',0x78,None,0x78,1),('F10',0x79,None,0x79,1),
+    ('F11',0x7A,None,0x7A,1),('F12',0x7B,None,0x7B,1),
+    ('PrtSc',0x2C,None,0x2C,1.5),('ScrLk',0x91,None,0x91,1.5),('Pause',0x13,None,0x13,1.5)],
     # Row 0: number row + Ins/Hom/PgUp        (13 + 2 + 3 = 18)
     [('`',0xC0,'~',0xC0,1),('1',0x31,'!',0x31,1),('2',0x32,'@',0x32,1),
-     ('3',0x33,'#',0x33,1),('4',0x34,'$',0x34,1),('5',0x35,'%',0x35,1),
-     ('6',0x36,'^',0x36,1),('7',0x37,'&',0x37,1),('8',0x38,'*',0x38,1),
-     ('9',0x39,'(',0x39,1),('0',0x30,')',0x30,1),('-',0xBD,'_',0xBD,1),
-     ('=',0xBB,'+',0xBB,1),('Bksp',0x08,None,0x08,2),
-     ('Ins',0x2D,None,0x2D,1),('Hom',0x24,None,0x24,1),('PgU',0x21,None,0x21,1)],
+    ('3',0x33,'#',0x33,1),('4',0x34,'$',0x34,1),('5',0x35,'%',0x35,1),
+    ('6',0x36,'^',0x36,1),('7',0x37,'&',0x37,1),('8',0x38,'*',0x38,1),
+    ('9',0x39,'(',0x39,1),('0',0x30,')',0x30,1),('-',0xBD,'_',0xBD,1),
+    ('=',0xBB,'+',0xBB,1),('Bksp',0x08,None,0x08,2),
+    ('Ins',0x2D,None,0x2D,1),('Hom',0x24,None,0x24,1),('PgU',0x21,None,0x21,1)],
     # Row 1: QWERTY + Del/End/PgDn            (1.5 + 12 + 1.5 + 3 = 18)
     [('Tab',0x09,None,0x09,1.5),('Q',0x51,None,0x51,1),('W',0x57,None,0x57,1),
-     ('E',0x45,None,0x45,1),('R',0x52,None,0x52,1),('T',0x54,None,0x54,1),
-     ('Y',0x59,None,0x59,1),('U',0x55,None,0x55,1),('I',0x49,None,0x49,1),
-     ('O',0x4F,None,0x4F,1),('P',0x50,None,0x50,1),('[',0xDB,'{',0xDB,1),
-     (']',0xDD,'}',0xDD,1),('\\',0xDC,'|',0xDC,1.5),
-     ('Del',0x2E,None,0x2E,1),('End',0x23,None,0x23,1),('PgD',0x22,None,0x22,1)],
+    ('E',0x45,None,0x45,1),('R',0x52,None,0x52,1),('T',0x54,None,0x54,1),
+    ('Y',0x59,None,0x59,1),('U',0x55,None,0x55,1),('I',0x49,None,0x49,1),
+    ('O',0x4F,None,0x4F,1),('P',0x50,None,0x50,1),('[',0xDB,'{',0xDB,1),
+    (']',0xDD,'}',0xDD,1),('\\',0xDC,'|',0xDC,1.5),
+    ('Del',0x2E,None,0x2E,1),('End',0x23,None,0x23,1),('PgD',0x22,None,0x22,1)],
     # Row 2: ASDF + 3-unit gap                (1.75 + 11 + 2.25 + 3 = 18)
     [('Caps',0x14,None,0x14,1.75),('A',0x41,None,0x41,1),('S',0x53,None,0x53,1),
-     ('D',0x44,None,0x44,1),('F',0x46,None,0x46,1),('G',0x47,None,0x47,1),
-     ('H',0x48,None,0x48,1),('J',0x4A,None,0x4A,1),('K',0x4B,None,0x4B,1),
-     ('L',0x4C,None,0x4C,1),(';',0xBA,':',0xBA,1),("'",0xDE,'"',0xDE,1),
-     ('Enter',0x0D,None,0x0D,2.25),
-     ('',-1,None,-1,3)],
+    ('D',0x44,None,0x44,1),('F',0x46,None,0x46,1),('G',0x47,None,0x47,1),
+    ('H',0x48,None,0x48,1),('J',0x4A,None,0x4A,1),('K',0x4B,None,0x4B,1),
+    ('L',0x4C,None,0x4C,1),(';',0xBA,':',0xBA,1),("'",0xDE,'"',0xDE,1),
+    ('Enter',0x0D,None,0x0D,2.25),
+    ('',-1,None,-1,3)],
     # Row 3: ZXCV + Up arrow directly above Down
     # 2.25 + 10 + 2.75 = 15.0   then  gap(1) | ↑(1) | gap(1)  →  ↑ occupies col 16-17 (same as ↓)
     [('Shift',0x10,None,0x10,2.25),('Z',0x5A,None,0x5A,1),('X',0x58,None,0x58,1),
-     ('C',0x43,None,0x43,1),('V',0x56,None,0x56,1),('B',0x42,None,0x42,1),
-     ('N',0x4E,None,0x4E,1),('M',0x4D,None,0x4D,1),(',',0xBC,'<',0xBC,1),
-     ('.',0xBE,'>',0xBE,1),('/',0xBF,'?',0xBF,1),('Shift',0x10,None,0x10,2.75),
-     ('',-1,None,-1,1),('↑',0x26,None,0x26,1),('',-1,None,-1,1)],
+    ('C',0x43,None,0x43,1),('V',0x56,None,0x56,1),('B',0x42,None,0x42,1),
+    ('N',0x4E,None,0x4E,1),('M',0x4D,None,0x4D,1),(',',0xBC,'<',0xBC,1),
+    ('.',0xBE,'>',0xBE,1),('/',0xBF,'?',0xBF,1),('Shift',0x10,None,0x10,2.75),
+    ('',-1,None,-1,1),('↑',0x26,None,0x26,1),('',-1,None,-1,1)],
     # Row 4: bottom + arrow cluster — Down sits directly under Up at col 16-17.
     # 1.5+1+1.25+7.5+1.25+1+1.5 = 15.0   then  ←(1) | ↓(1) | →(1)
     [('Ctrl',0x11,None,0x11,1.5),('Win',0x5B,None,0x5B,1),
-     ('Alt',0x12,None,0x12,1.25),
-     ('Space',0x20,None,0x20,7.5),
-     ('Alt',0x12,None,0x12,1.25),('Apps',0x5D,None,0x5D,1),
-     ('Ctrl',0x11,None,0x11,1.5),
-     ('←',0x25,None,0x25,1),('↓',0x28,None,0x28,1),('→',0x27,None,0x27,1)],
+    ('Alt',0x12,None,0x12,1.25),
+    ('Space',0x20,None,0x20,7.5),
+    ('Alt',0x12,None,0x12,1.25),('Apps',0x5D,None,0x5D,1),
+    ('Ctrl',0x11,None,0x11,1.5),
+    ('←',0x25,None,0x25,1),('↓',0x28,None,0x28,1),('→',0x27,None,0x27,1)],
 ]
 
 import collections as _collections
@@ -1030,8 +1025,8 @@ def _pose_to_view_mat4(pose):
     """XrPosef → standard 4×4 view matrix (numpy, math row/col convention).
 
     The view matrix is the inverse of the head-pose model matrix:
-      V = [ R^T | -R^T @ pos ]
-          [  0  |      1     ]
+    V = [ R^T | -R^T @ pos ]
+        [  0  |      1     ]
     Caller must transpose before writing to OpenGL.
     """
     R  = _xr_quat_to_mat4(pose.orientation)[:3, :3]
@@ -1073,6 +1068,115 @@ def _fov_to_proj_mat4(fov, near=0.05, far=100.0):
     return p
 
 
+class OneEuroFilter:
+    """Adaptive low-pass filter for hand-jitter reduction.
+
+    Algorithm (from "1€ Filter" by Géry Casiez et al.):
+    dx  = (x - x_prev) / dt                  raw derivative
+    dx^ = low_pass(dx, f_Cd, dt)             smoothed derivative
+    f_C = min_cutoff + beta * |dx^|          adaptive cutoff (Hz)
+    x^  = low_pass(x, f_C, dt)               filtered output
+
+    The low-pass is a 1st-order RC filter:
+    α   = 1 / (1 + τ / dt)                   smoothing factor
+    τ   = 1 / (2π · f_C)                     time constant
+    y   = α·x + (1-α)·y_prev
+
+    Tuning guide:
+    min_cutoff (Hz):      1.0–3.0 for hand tracking. Lower = smoother, more lag.
+                            Start at 1.2.
+    beta:                 0.007–0.05. Speed sensitivity — higher responds faster
+                            to quick moves but transmits more jitter. Start at 0.01.
+    derivative_cutoff (Hz): 1.0 is typical. Lower = smoother derivative estimate.
+    """
+    __slots__ = ('min_cutoff', 'beta', 'derivative_cutoff', '_x_prev', '_dx_prev')
+
+    def __init__(self, min_cutoff=1.2, beta=0.01, derivative_cutoff=1.0):
+        self.min_cutoff = float(min_cutoff)
+        self.beta = float(beta)
+        self.derivative_cutoff = float(derivative_cutoff)
+        self._x_prev = None    # previous filtered value
+        self._dx_prev = None   # previous smoothed derivative
+
+    def reset(self):
+        self._x_prev = None
+        self._dx_prev = None
+
+    def _alpha(self, cutoff, dt):
+        if dt <= 0.0:
+            return 1.0
+        tau = 1.0 / (2.0 * math.pi * max(cutoff, 0.001))
+        return 1.0 / (1.0 + tau / dt)
+
+    def filter(self, x, dt):
+        if dt <= 0.0 or self._x_prev is None:
+            self._x_prev = float(x)
+            self._dx_prev = 0.0
+            return float(x)
+
+        # Derivative of the raw signal
+        dx = (float(x) - self._x_prev) / dt
+
+        # Smooth the derivative with fixed cutoff
+        alpha_d = self._alpha(self.derivative_cutoff, dt)
+        dx_hat = alpha_d * dx + (1.0 - alpha_d) * self._dx_prev
+
+        # Adaptive cutoff: rises with speed → less lag during fast motion
+        cutoff = self.min_cutoff + self.beta * abs(dx_hat)
+
+        # Low-pass with adaptive cutoff
+        alpha = self._alpha(cutoff, dt)
+        x_hat = alpha * float(x) + (1.0 - alpha) * self._x_prev
+
+        self._x_prev = x_hat
+        self._dx_prev = dx_hat
+        return x_hat
+
+
+class EMAPositionFilter:
+    """Simple exponential moving average — fallback for debugging.
+
+    y = α·x + (1-α)·y_prev
+    """
+    __slots__ = ('alpha', '_prev')
+
+    def __init__(self, alpha=0.15):
+        self.alpha = float(alpha)
+        self._prev = None
+
+    def reset(self):
+        self._prev = None
+
+    def filter(self, x):
+        if self._prev is None:
+            self._prev = float(x)
+            return float(x)
+        x_hat = self.alpha * float(x) + (1.0 - self.alpha) * self._prev
+        self._prev = x_hat
+        return x_hat
+
+
+class OneEuroFilter3D:
+    """Three independent One Euro Filters for 3D position (X, Y, Z)."""
+    __slots__ = ('_fx', '_fy', '_fz')
+
+    def __init__(self, min_cutoff=1.2, beta=0.01, derivative_cutoff=1.0):
+        self._fx = OneEuroFilter(min_cutoff, beta, derivative_cutoff)
+        self._fy = OneEuroFilter(min_cutoff, beta, derivative_cutoff)
+        self._fz = OneEuroFilter(min_cutoff, beta, derivative_cutoff)
+
+    def reset(self):
+        self._fx.reset()
+        self._fy.reset()
+        self._fz.reset()
+
+    def filter(self, pos, dt):
+        x = self._fx.filter(float(pos[0]), dt)
+        y = self._fy.filter(float(pos[1]), dt)
+        z = self._fz.filter(float(pos[2]), dt)
+        return np.array([x, y, z], dtype='f8')
+
+
 class OpenXRViewer:
     """
     Renders the depth-parallax stereo views into a VR headset using OpenXR.
@@ -1096,8 +1200,14 @@ class OpenXRViewer:
         fps=60,
         depth_q=None,
         show_fps=True,
+        controller_model='pico',
+        capture_mode='Monitor',
+        monitor_index=1,
         **kwargs,
     ):
+        self._controller_model = controller_model
+        self._capture_mode = capture_mode
+        self._input_monitor_index = monitor_index
         self.ipd_uv = ipd
         self.depth_strength = 0.1 # multiplied by depth_ratio; effective = depth_strength * depth_ratio
         self.depth_ratio = depth_ratio
@@ -1106,6 +1216,29 @@ class OpenXRViewer:
         self.fps = fps
         self.depth_q = depth_q
         self.show_fps = show_fps
+
+        self._screen_grab_local_l = None
+        self._screen_grab_local_r = None
+        # Keyboard grip-to-move anchor — local (lx, ly) on keyboard plane
+        # at the moment the grip was pressed.  Mirrors _screen_grab_local_*.
+        self._kb_grab_local_l     = None
+        self._kb_grab_local_r     = None
+        # Standalone offsets for keyboard orientation, applied on top of the
+        # auto-orientation that aims the panel at the head.  Defaults are 0
+        # because the auto-orientation already produces the natural tilt that
+        # makes the keyboard face the head (e.g. a keyboard below the head
+        # gets a negative base_pitch that tilts the surface up toward the user).
+        self._kb_yaw_offset       = 0.0
+        self._kb_pitch_offset     = 0.0
+        # Per-hand grip lock — once a grip press latches onto 'screen' or
+        # 'keyboard', it stays there until release.  Enforces "only grip one
+        # item at a time" so a single press cannot jump between objects.
+        self._grip_target_l       = None   # None | 'screen' | 'keyboard'
+        self._grip_target_r       = None
+        # Suppress keyboard typing while any grip is held (avoids accidental
+        # key presses while repositioning the keyboard).
+        self._grip_l_now          = False
+        self._grip_r_now          = False
 
         # FPS display — timestamp ring: (len-1)/(last-first) is exact over the window
         self.actual_fps      = 0.0   # XR composition rate (this loop)
@@ -1134,12 +1267,12 @@ class OpenXRViewer:
 
         # screen presets: (name, width_m, distance_m) — height is derived from width and frame aspect ratio
         self._screen_presets = [
-            ("10-inch Tablet",        0.30, 0.4),
-            ("27-inch Monitor",       0.60, 0.6),
-            ("65-inch TV",            1.44, 2.0),
-            ("100-inch Projector 1",  2.40, 2.0),
-            ("100-inch Projector 2",  2.21, 2.5),
-            ("1000-inch IMAX",       22.0,  20),
+            ("10\" Tablet",        0.30, 0.4),
+            ("27\" Monitor",       0.60, 0.6),
+            ("65\" TV",            1.44, 2.0),
+            ("100\" Projector 1",  2.40, 2.0),
+            ("100\" Projector 2",  2.21, 2.5),
+            ("1000\" IMAX",       22.0,  20),
         ]
         self._preset_index = 3  # default 4: 100-inch projector with 2.0 m distance
         self._preset_name_overlay = None   # preset name overlay (permanently visible)
@@ -1147,13 +1280,17 @@ class OpenXRViewer:
         self.screen_pan_y    = 0.0
         self.screen_yaw      = 0.0    # rotation around Y axis
         self.screen_pitch    = 0.0    # rotation around X axis
+        self._yaw_offset     = 0.0    # manual yaw offset (relative to face-head baseline)
+        self._pitch_offset   = 0.0    # manual pitch offset
 
-        # Interaction speeds (per second)
-        self._dist_speed  = 0.5
-        self._size_speed  = 0.5
-        self._pan_speed   = 0.5
-        self._rot_speed   = 0.5
-        self._pitch_speed = 0.5
+        # Interaction speeds (per second at full stick deflection)
+        self._pan_speed   = 0.5    # screen translate X/Y (m/s)
+        self._rot_speed   = 0.35   # screen yaw rotation (rad/s)
+        self._size_speed  = 0.5    # screen width resize (m/s)
+        # Distance: acceleration curve params (speed = base + (max-base) * t^exp)
+        self._dist_speed_base = 0.5   # min speed at deadzone edge (m/s)
+        self._dist_speed_max  = 3.0   # max speed at full deflection (m/s)
+        self._dist_speed_exp  = 2.5   # exponent (>1: fine near centre, fast at edge)
 
         # OpenXR handles
         self._xr_instance = None
@@ -1165,6 +1302,17 @@ class OpenXRViewer:
         self._swapchain_sizes = {}      # {eye_index: (w, h)}
         self._fbo_cache = {}            # {(eye_index, image_index): (raw_id, mgl_fbo)}
         self._session_running = False
+
+        # Pre-built XR call argument structs — stateless inputs reused every
+        # frame to avoid 6+ ctypes allocations per frame (per eye for swapchain
+        # acquire/wait/release). pyopenxr structs are read-only inputs to the
+        # runtime so reusing them across calls is safe.
+        self._xr_frame_wait_info     = xr.FrameWaitInfo()
+        self._xr_frame_begin_info    = xr.FrameBeginInfo()
+        self._xr_sc_acquire_info     = xr.SwapchainImageAcquireInfo()
+        self._xr_sc_wait_info        = xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION)
+        self._xr_sc_release_info     = xr.SwapchainImageReleaseInfo()
+        self._xr_actions_sync_info   = None   # built once _action_set is created
 
         # Controller action handles (set by _init_controller_actions)
         self._action_set          = None
@@ -1191,6 +1339,8 @@ class OpenXRViewer:
         # Quest-like window state
         self._screen_visible = True   # hide-all toggle (A double-press)
         self._grabbed        = False  # left grip held  → move mode
+        self._screen_grab_grip_l = None  # grab offset (screen_centre - grip_pos) for left
+        self._screen_grab_grip_r = None  # grab offset (screen_centre - grip_pos) for right
         self._resizing       = False  # right grip held → resize mode
         self._a_last         = False  # A-button previous frame state
         self._a_last_t       = 0.0   # timestamp of last A press (double-press detection)
@@ -1226,6 +1376,9 @@ class OpenXRViewer:
         # controller changes so we don't drag the cursor across the screen on swap.
         self._cursor_smooth_uv    = None
         self._left_btn_down       = False # left mouse button held via left trigger
+
+        # Target monitor for cursor mapping (multi-monitor support)
+        self._target_mon_rect = None  # cached (left, top, width, height) in virtual-desktop pixels
 
         # Virtual keyboard
         self._keyboard_visible     = False
@@ -1305,7 +1458,12 @@ class OpenXRViewer:
         self._overlay_prog     = None
         self._overlay_vao      = None
         self._overlay_tex      = None
-        self._overlay_tex_size = (768, 150)  # 3-row info panel
+        self._overlay_tex_size = (768, 190)  # 4-row info panel
+
+        # Help panel: follows right controller, shows key functions
+        self._help_tex      = None
+        self._help_vao      = None
+        self._help_tex_size = (1, 1)  # Dynamic, _build_help_texture sets the actual size based on text layout
 
         # Depth-ratio OSD: floating panel that appears when depth_ratio changes
         self._depth_osd_tex       = None   # moderngl Texture (RGBA, 256×64)
@@ -1314,6 +1472,34 @@ class OpenXRViewer:
         self._depth_osd_alpha     = 0.0    # current alpha (1 = fully visible, 0 = hidden)
         self._depth_osd_show_t    = -999.0 # perf_counter when OSD was last triggered
         self._depth_osd_last_val  = None   # last depth_ratio value rendered into the texture
+
+        # Screen-preset OSD: shows preset name when user cycles through presets
+        self._preset_osd_tex      = None   # moderngl Texture (RGBA, w×64)
+        self._preset_osd_vao      = None
+        self._preset_osd_tex_size = (768, 78)  # wide enough for long preset names
+        self._preset_osd_alpha    = 0.0
+        self._preset_osd_show_t   = -999.0
+        self._preset_osd_last_key = None   # last preset index rendered into the texture
+
+        # Brand switch OSD: right-controller-attached indicator
+        self._brand_osd_tex       = None
+        self._brand_osd_vao       = None
+        self._brand_osd_tex_size  = (256, 78)
+        self._brand_osd_alpha     = 0.0
+        self._brand_osd_show_t    = -999.0
+        self._brand_osd_last_name = None
+
+        # Multi-brand controller models
+        import os as _os
+        _controllers_root = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                        'controllers')
+        self._controllers_root = _controllers_root
+        self._all_models = {}
+        self._available_brands = []
+        self._current_brand = None
+        self._brand_switch_osd_t = 0.0
+        self._brand_sw_start = 0.0
+        self._brand_sw_fired = False
 
         # Screen-info OSD: shows size + distance while right grip + right stick adjusts
         self._screen_osd_tex      = None   # moderngl Texture (RGBA, 512×64)
@@ -1329,9 +1515,26 @@ class OpenXRViewer:
         # Right thumbstick click state
         self._right_stick_click_prev = False
 
-        # VR controller model offsets — defaults (overridden per profile)
-        self._ctrl_model_offset = [0.0, -0.02, -0.03]
-        self._ctrl_model_rot_deg = -20.0
+        # Stick click long-press + both-sticks overlay toggle
+        self._lsc_press_t        = 0.0    # left stick click press start
+        self._lsc_long_fired     = False
+        self._rsc_press_t        = 0.0    # right stick click press start
+        self._rsc_long_fired     = False
+        self._both_stick_start   = 0.0    # both sticks pressed together timer
+        self._both_stick_fired   = False
+
+        # VR controller model offsets — default zero, absolute offset loaded from profile.json
+        self._ctrl_model_offset = [0.0, 0.0, 0.0]
+        self._ctrl_model_rot_deg = 0.0
+
+        # Controller real-time calibration
+        self._calibration_mode = False
+        self._calibration_temp_offset = [0.0, 0.0, 0.0]
+        self._calibration_temp_rot = 0.0
+        self._calib_combo_start = 0.0
+        self._calib_combo_fired = False
+        self._calib_tex = None
+        self._calib_tex_size = (420, 200)  # Calibration combo instructions texture size
 
         # Right grip + A/B → depth_ratio control (hold A = increase, hold B = decrease)
         # Reset to default: right grip + right thumbstick click
@@ -1386,12 +1589,54 @@ class OpenXRViewer:
 
         # Laser auto-hide: track last movement time and previous pose per controller
         _now = time.perf_counter()
+        self._frame_now = _now   # per-frame timestamp; refreshed at top of main loop
         self._laser_last_move_l  = _now
         self._laser_last_move_r  = _now
         self._laser_prev_mat_l   = None
         self._laser_prev_mat_r   = None
-        self._LASER_HIDE_AFTER   = 5.0   # seconds of idle before hiding
+        self._LASER_HIDE_AFTER   = 10.0   # seconds of idle before hiding
         self._LASER_MOVE_THRESH  = 0.015 # metres or radians — minimum motion to count
+
+        # Ray smoothing (quaternion SLERP + position EMA, simulates VD damping effect)
+        self._smooth_ray_origin_l = None   # left hand smoothed position
+        self._smooth_ray_origin_r = None   # right hand smoothed position
+        self._smooth_ray_quat_l = None     # left hand smoothed direction (quaternion xyzw)
+        self._smooth_ray_quat_r = None     # right hand smoothed direction (quaternion xyzw)
+        self._smooth_ray_fwd_l  = None     # cached forward vector (pre-computed per frame)
+        self._smooth_ray_fwd_r  = None
+        self._pos_smooth = 0.04   # position smoothing (base damping)
+        self._rot_smooth = 0.05   # rotation smoothing (base damping)
+        self._ray_deadzone_rad = 0.0052  # angle dead zone (~0.3 degrees)
+        self._ray_deadzone_pos = 0.002   # position dead zone (2mm)
+        self._ray_edge_deadzone_rad = 0.1745  # edge snap release angle (~10 degrees)
+        self._ray_edge_margin = 0.04   # edge deceleration region (~10cm at 2.4m screen)
+        self._ray_edge_slow = 0.012  # smoothing factor after edge deceleration
+        self._ray_prev_uv_l = None
+        self._ray_prev_uv_r = None
+        self._smooth_ray_prev_fwd_l = None  # previous frame smoothed direction (used for edge lock)
+        self._smooth_ray_prev_fwd_r = None
+
+        # One Euro Filter for raw controller position — replaces EMA in
+        # _apply_ray_smoothing.  Smooths the source data so laser beam,
+        # cursor, and grip-to-move all benefit from the same stabilized input.
+        # Tuned for VR controller tracking (meter-scale, ~90 fps):
+        #   min_cutoff=3 Hz → α≈0.17 at rest  (smooth but responsive)
+        #   beta=15        → α≈0.42 at 0.5 m/s (tight tracking at speed)
+        self._ray_filter_min_cutoff       = 3.0   # Hz
+        self._ray_filter_beta             = 15.0  # speed sensitivity
+        self._ray_filter_derivative_cutoff = 3.0  # Hz (faster speed adaptation)
+        self._ray_filter_l = OneEuroFilter3D(
+            self._ray_filter_min_cutoff,
+            self._ray_filter_beta,
+            self._ray_filter_derivative_cutoff)
+        self._ray_filter_r = OneEuroFilter3D(
+            self._ray_filter_min_cutoff,
+            self._ray_filter_beta,
+            self._ray_filter_derivative_cutoff)
+        self._last_frame_dt = 0.011  # ~90fps default, updated each frame
+        self._frame_count   = 0      # incremented each frame (cache invalidation)
+        self._cached_beams  = None
+        self._beams_frame   = -1
 
         # Screen position animation — used by home-button gaze-reset to glide
         # smoothly instead of snapping.  None = no animation in progress.
@@ -1429,10 +1674,7 @@ class OpenXRViewer:
         self.depth_tex = None
         self._texture_size = None
 
-    # ------------------------------------------------------------------
     # Initialisation helpers
-    # ------------------------------------------------------------------
-
     def _init_glfw(self):
         if not glfw.init():
             raise RuntimeError("[OpenXRViewer] GLFW init failed")
@@ -1481,6 +1723,7 @@ class OpenXRViewer:
             elif key == glfw.KEY_X:
                 viewer.depth_strength = 0.0   # flat mode — no parallax distortion
             elif key == glfw.KEY_R:
+                viewer._reset_orientation_offsets()
                 viewer.screen_distance = 2.0; viewer.screen_pan_x = 0.0
                 viewer.screen_pan_y = 0.0;    viewer.screen_yaw = 0.0
                 viewer.screen_pitch = 0.0;    viewer.screen_width = 2.4
@@ -1501,9 +1744,9 @@ class OpenXRViewer:
 
         vertices = np.array([
             -1, -1, 0, 0,
-             1, -1, 1, 0,
+            1, -1, 1, 0,
             -1,  1, 0, 1,
-             1,  1, 1, 1,
+            1,  1, 1, 1,
         ], dtype='f4')
         vbo = self.ctx.buffer(vertices)
         self.quad_vao = self.ctx.vertex_array(
@@ -1524,9 +1767,9 @@ class OpenXRViewer:
         # in local space X=[-0.5,0.5], Y=[-1,1]; we scale X to beam_w, Y to half-length
         laser_verts = np.array([
             -1, -1, 0, 0,
-             1, -1, 1, 0,
+            1, -1, 1, 0,
             -1,  1, 0, 1,
-             1,  1, 1, 1,
+            1,  1, 1, 1,
         ], dtype='f4')
         self._laser_vao = self.ctx.vertex_array(
             self._border_prog,
@@ -1540,9 +1783,9 @@ class OpenXRViewer:
         # Single quadrilateral: Y=0(base, thick) → Y=1(tip, thin)
         beam_verts = np.array([
             -1.0, 0.0, 0.0, 0.0,   # bottom-left, v=0
-             1.0, 0.0, 0.0, 0.0,   # bottom-right, v=0
+            1.0, 0.0, 0.0, 0.0,   # bottom-right, v=0
             -0.15, 1.0, 0.0, 1.0,   # top-left, v=1
-             0.15, 1.0, 0.0, 1.0,   # top-right, v=1
+            0.15, 1.0, 0.0, 1.0,   # top-right, v=1
         ], dtype='f4')
         beam_vbo = self.ctx.buffer(beam_verts.tobytes())
         self._beam_vao = self.ctx.vertex_array(
@@ -1589,6 +1832,24 @@ class OpenXRViewer:
             self._overlay_prog, [(vbo_dosd, '2f 2f', 'in_position', 'in_uv')]
         )
 
+        # Preset OSD: preset name panel (reuses _overlay_prog)
+        pw, ph = self._preset_osd_tex_size
+        self._preset_osd_tex = self.ctx.texture((pw, ph), 4, dtype='f1')
+        self._preset_osd_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        vbo_posd = self.ctx.buffer(vertices.tobytes())
+        self._preset_osd_vao = self.ctx.vertex_array(
+            self._overlay_prog, [(vbo_posd, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        # Brand switch OSD: controller model indicator (reuses _overlay_prog)
+        bw, bh = self._brand_osd_tex_size
+        self._brand_osd_tex = self.ctx.texture((bw, bh), 4, dtype='f1')
+        self._brand_osd_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        vbo_bosd = self.ctx.buffer(vertices.tobytes())
+        self._brand_osd_vao = self.ctx.vertex_array(
+            self._overlay_prog, [(vbo_bosd, '2f 2f', 'in_position', 'in_uv')]
+        )
+
         # Screen-info OSD: size + distance panel (reuses _overlay_prog)
         sw, sh = self._screen_osd_tex_size
         self._screen_osd_tex = self.ctx.texture((sw, sh), 4, dtype='f1')
@@ -1597,6 +1858,16 @@ class OpenXRViewer:
         self._screen_osd_vao = self.ctx.vertex_array(
             self._overlay_prog, [(vbo_sosd, '2f 2f', 'in_position', 'in_uv')]
         )
+
+        # Help panel: follows right controller, shows key functions (reuses _overlay_prog)
+        hw, hh = self._help_tex_size
+        self._help_tex = self.ctx.texture((hw, hh), 4, dtype='f1')
+        self._help_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        vbo_help = self.ctx.buffer(vertices.tobytes())
+        self._help_vao = self.ctx.vertex_array(
+            self._overlay_prog, [(vbo_help, '2f 2f', 'in_position', 'in_uv')]
+        )
+        self._build_help_texture()
 
         # Curved screen program: same fragment shader, but world-space arc geometry
         # (no model matrix — verts are built directly in world space each frame).
@@ -1638,33 +1909,22 @@ class OpenXRViewer:
         self._controller_prog['u_tex'].value = 3
         self._controller_prog['u_use_texture'].value = 1
         self._controller_prog['u_base_color_factor'].value = (1.0, 1.0, 1.0)
-        self._controller_prog['u_light_color'].value = (0.37, 0.37, 0.40)
+        self._controller_prog['u_light_color'].value = (0.60, 0.60, 0.65)
         self._controller_prog['u_ambient_color'].value = (0.22, 0.22, 0.24)
 
         self._ctrl_tex_cache = {}
         self._ctrl_prims_l = []
         self._ctrl_prims_r = []
+        self._init_all_controller_models()
 
-        # Load default controller models (PICO 4U); profile detection may reload
-        import os as _os
-        _controllers_root = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                                          'controllers')
-        self._controllers_root = _controllers_root
-        self._load_controller_models(_os.path.join(_controllers_root, 'pico'))
-
-    def _load_controller_models(self, base_dir):
-        """Load left/right GLB controller models from base_dir.
-        Also reads base_dir/profile.json for overrides (model_offset, model_rotation_deg).
-        Resets to zero offset before applying per-profile overrides.
-        """
-        self._ctrl_prims_l.clear()
-        self._ctrl_prims_r.clear()
-
-        # Reset to zero offset — profile.json overrides will set the correct values
-        self._ctrl_model_offset = [0.0, 0.0, 0.0]
-        self._ctrl_model_rot_deg = 0.0
-
-        # Read profile.json overrides if present
+    def _load_brand_models(self, brand_name):
+        """Load models and configuration for a specific brand, returning {prims_l, prims_r, tex_cache, offset, rot_deg}."""
+        base_dir = os.path.join(self._controllers_root, brand_name)
+        result = {
+            'prims_l': [], 'prims_r': [], 'tex_cache': {},
+            'offset': [0.0, 0.0, 0.0], 'rot_deg': 0.0,
+        }
+        # Read profile.json
         profile_path = os.path.join(base_dir, 'profile.json')
         if os.path.isfile(profile_path):
             try:
@@ -1673,14 +1933,13 @@ class OpenXRViewer:
                     prof = _json.load(f)
                 overrides = prof.get('overrides', {})
                 if overrides.get('model_offset'):
-                    self._ctrl_model_offset = [float(v) for v in overrides['model_offset']]
+                    result['offset'] = [float(v) for v in overrides['model_offset']]
                 if 'model_rotation_deg' in overrides:
-                    self._ctrl_model_rot_deg = float(overrides['model_rotation_deg'])
+                    result['rot_deg'] = float(overrides['model_rotation_deg'])
             except Exception as e:
                 print(f"[OpenXRViewer] Failed to read {profile_path}: {e}")
 
-        # Use directory+file-scoped cache keys to avoid cross-profile texture collisions
-        _dir_key = os.path.basename(os.path.normpath(base_dir))
+        _dir_key = brand_name
 
         def _create_prims(glb_path, target_list):
             prims_data, textures = load_glb_model(glb_path)
@@ -1689,12 +1948,12 @@ class OpenXRViewer:
             for tid, tex_arr in enumerate(textures):
                 if tex_arr is not None:
                     cache_key = f"{_prefix}:{tid}"
-                    if cache_key not in self._ctrl_tex_cache:
+                    if cache_key not in result['tex_cache']:
                         h, w = tex_arr.shape[:2]
                         mtex = self.ctx.texture((w, h), 4, tex_arr.tobytes())
                         mtex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
                         mtex.build_mipmaps()
-                        self._ctrl_tex_cache[cache_key] = mtex
+                        result['tex_cache'][cache_key] = mtex
             for pd in prims_data:
                 vbo = self.ctx.buffer(pd['vertices'].tobytes())
                 ibo = self.ctx.buffer(pd['indices'].tobytes())
@@ -1710,52 +1969,46 @@ class OpenXRViewer:
                 })
 
         try:
-            _create_prims(os.path.join(base_dir, 'right.glb'), self._ctrl_prims_r)
-            _create_prims(os.path.join(base_dir, 'left.glb'),  self._ctrl_prims_l)
-            print(f"[OpenXRViewer] Loaded controller models from {base_dir}")
+            _create_prims(os.path.join(base_dir, 'right.glb'), result['prims_r'])
+            _create_prims(os.path.join(base_dir, 'left.glb'),  result['prims_l'])
         except Exception as e:
-            print(f"[OpenXRViewer] Controller model load failed: {e}")
-            self._ctrl_prims_l = []
-            self._ctrl_prims_r = []
+            print(f"[OpenXRViewer] {brand_name} model load failed: {e}")
+            result['prims_l'], result['prims_r'] = [], []
+        return result
 
-    def _detect_and_load_controller_profile(self):
-        """Detect headset from system name and load matching controller models.
-        Uses xr.get_system_properties().system_name to match against
-        controller directories (case-insensitive substring match).
-        """
-        if self._xr_instance is None or self._xr_system_id is None:
+    def _init_all_controller_models(self):
+        """预加载 controllers/ 下所有品牌模型。"""
+        if not os.path.isdir(self._controllers_root):
             return
-        try:
-            props = xr.get_system_properties(self._xr_instance, self._xr_system_id)
-            sys_name = props.system_name
-            if isinstance(sys_name, bytes):
-                sys_name = sys_name.decode('utf-8', errors='replace')
-            print(f"[OpenXRViewer] Headset: {sys_name}")
-        except Exception as e:
-            print(f"[OpenXRViewer] Failed to get system properties: {e}")
+        brands = sorted(d for d in os.listdir(self._controllers_root)
+                    if os.path.isdir(os.path.join(self._controllers_root, d)))
+        for bn in brands:
+            model = self._load_brand_models(bn)
+            self._all_models[bn] = model
+            self._available_brands.append(bn)
+        # 设置默认品牌
+        default = self._controller_model if self._controller_model in self._all_models else (
+            self._available_brands[0] if self._available_brands else None)
+        if default is None:
+            print("[OpenXRViewer] No controller brands available!")
             return
+        self._switch_brand(default)
+        print(f"[OpenXRViewer] Controller: {self._current_brand}")
 
-        # Case-insensitive substring match against controller directory names
-        sys_lower = sys_name.lower()
-        dir_name = None
-        for candidate in os.listdir(self._controllers_root):
-            cand_path = os.path.join(self._controllers_root, candidate)
-            if not os.path.isdir(cand_path):
-                continue
-            if candidate.lower() in sys_lower or sys_lower in candidate.lower():
-                if os.path.isfile(os.path.join(cand_path, 'left.glb')):
-                    dir_name = candidate
-                    break
-
-        if dir_name is None:
-            print(f"[OpenXRViewer] No controller model match for headset '{sys_name}', keeping default")
+    def _switch_brand(self, brand_name):
+        """零延迟切换当前手柄品牌。"""
+        if brand_name not in self._all_models:
             return
-        
-        target_dir = os.path.join(self._controllers_root, dir_name)
-        self._load_controller_models(target_dir)
-        print(f"[OpenXRViewer] Matched headset '{sys_name}' → controllers/{dir_name}")
-        print(f"[OpenXRViewer] Controller offset: {self._ctrl_model_offset}, "
-              f"rotation: {self._ctrl_model_rot_deg} deg")
+        m = self._all_models[brand_name]
+        self._ctrl_prims_l      = m['prims_l']
+        self._ctrl_prims_r      = m['prims_r']
+        self._ctrl_tex_cache    = m['tex_cache']
+        self._ctrl_model_offset = m['offset']
+        self._ctrl_model_rot_deg = m['rot_deg']
+        self._current_brand      = brand_name
+        self._brand_switch_osd_t = time.perf_counter()
+        print(f"[OpenXRViewer] Switched to: {brand_name} "
+            f"offset={self._ctrl_model_offset} rot={self._ctrl_model_rot_deg}")
 
     def _init_openxr(self):
         """Try OpenGL first; fall back to D3D11 on Windows if OpenGL fails."""
@@ -1918,7 +2171,7 @@ class OpenXRViewer:
             _DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, _DXGI_FORMAT_B8G8R8A8_UNORM,
         )
         print(f"[OpenXRViewer] D3D11 swapchain format: {chosen_fmt}"
-              f"{' (BGRA)' if self._swapchain_is_bgra else ''}")
+            f"{' (BGRA)' if self._swapchain_is_bgra else ''}")
 
         for eye_index, vcv in enumerate(view_configs):
             rec_w = vcv.recommended_image_rect_width
@@ -1955,7 +2208,7 @@ class OpenXRViewer:
         except Exception as e:
             print(f"[OpenXRViewer] Controller actions unavailable: {e}")
 
-    # ── GPU interop helpers ────────────────────────────────────────────
+    # GPU interop helpers───────────────
 
     @staticmethod
     def _is_nvidia_gpu():
@@ -2112,7 +2365,7 @@ class OpenXRViewer:
             ctypes.c_void_p,  # pDstResource
             ctypes.c_void_p,  # pSrcResource
         )(ctypes.cast(vtbl + 47 * ctypes.sizeof(ctypes.c_void_p),
-                      ctypes.POINTER(ctypes.c_void_p)).contents.value)
+                    ctypes.POINTER(ctypes.c_void_p)).contents.value)
         # Sync: ensure GL is done before D3D11 reads the shared texture
         glFinish()
         copy_fn(ctx, d3d11_swapchain_tex, d3d11_shared_tex)
@@ -2368,7 +2621,7 @@ class OpenXRViewer:
             ),
         )
 
-        # Grip pose actions ── used for placing controller 3D models
+        # Grip pose actions used for placing controller 3D models
         self._act_grip_left = xr.create_action(
             self._action_set,
             xr.ActionCreateInfo(
@@ -2484,6 +2737,16 @@ class OpenXRViewer:
             xr.SessionActionSetsAttachInfo(action_sets=[self._action_set]),
         )
 
+        # Pre-build the sync_actions arg now that the action set exists.
+        # Same struct is reused every frame — saves a list+struct allocation
+        # per frame inside the hot loop.
+        self._xr_actions_sync_info = xr.ActionsSyncInfo(active_action_sets=[
+            xr.ActiveActionSet(
+                action_set=self._action_set,
+                subaction_path=xr.NULL_PATH,
+            )
+        ])
+
         # Create action spaces for aim poses (used to locate controller each frame)
         for act, attr in [
             (self._act_aim_left,  "_aim_space_l"),
@@ -2520,9 +2783,6 @@ class OpenXRViewer:
             except Exception as e:
                 print(f"[OpenXRViewer] Grip space creation failed: {e}")
 
-        # Detect active interaction profile and load matching controller models
-        self._detect_and_load_controller_profile()
-
     def _init_textures(self, w, h):
         if self.color_tex:
             self.color_tex.release()
@@ -2541,9 +2801,14 @@ class OpenXRViewer:
         glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
         glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, -0.5)
         glBindTexture(GL_TEXTURE_2D, 0)
+        # Depth texture: plain LINEAR — NO mipmaps.
+        # Mipmapping depth averages foreground+background values at edges,
+        # producing wrong depth that breaks the DIBR shift formula and
+        # disocclusion detection. viewer.py (FullSBS reference) also uses
+        # default LINEAR; this keeps openxr_viewer DIBR output numerically
+        # consistent with viewer.py for the same RGB+depth input.
         self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
-        self.depth_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
-        self.depth_tex.build_mipmaps()
+        self.depth_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._texture_size = (w, h)
 
     def _build_keyboard_texture(self):
@@ -2565,8 +2830,8 @@ class OpenXRViewer:
 
         fnt = None
         for candidate in (r"C:\Windows\Fonts\seguisym.ttf",
-                          r"C:\Windows\Fonts\segoeui.ttf",
-                          self.font_type):
+                        r"C:\Windows\Fonts\segoeui.ttf",
+                        self.font_type):
             if not candidate:
                 continue
             try:
@@ -2598,7 +2863,7 @@ class OpenXRViewer:
 
                 # Key background
                 draw.rectangle([px + PAD, py0 + PAD, px_end - PAD, py1 - PAD],
-                               fill=(60, 62, 70, 255), outline=(130, 132, 140, 255))
+                            fill=(60, 62, 70, 255), outline=(130, 132, 140, 255))
 
                 # Pick label: shifted version if available and shift is active
                 display_label = label
@@ -2609,10 +2874,10 @@ class OpenXRViewer:
                     tx = (px + px_end) / 2
                     ty = (py0 + py1) / 2
                     draw.text((tx, ty), display_label, font=fnt,
-                              fill=(220, 220, 225, 255), anchor='mm')
+                            fill=(220, 220, 225, 255), anchor='mm')
                 else:
                     draw.text((int(px + PAD + 2), int(py0 + PAD + 2)),
-                              display_label, fill=(220, 220, 225, 255))
+                            display_label, fill=(220, 220, 225, 255))
 
                 uv_rect   = (px / TW, py0 / TH, px_end / TW, py1 / TH)
                 loc_rect  = (lx, ly0, lx_end, ly1)
@@ -2660,13 +2925,13 @@ class OpenXRViewer:
         cp = math.cos(self._keyboard_pitch); sp = math.sin(self._keyboard_pitch)
         cy = math.cos(self._keyboard_yaw);   sy = math.sin(self._keyboard_yaw)
         rot_y = np.array([[ cy, 0, sy, 0],
-                          [  0, 1,  0, 0],
-                          [-sy, 0, cy, 0],
-                          [  0, 0,  0, 1]], dtype=np.float32)
+                        [  0, 1,  0, 0],
+                        [-sy, 0, cy, 0],
+                        [  0, 0,  0, 1]], dtype=np.float32)
         rot_x = np.array([[1,  0,   0, 0],
-                          [0, cp, -sp, 0],
-                          [0, sp,  cp, 0],
-                          [0,  0,   0, 1]], dtype=np.float32)
+                        [0, cp, -sp, 0],
+                        [0, sp,  cp, 0],
+                        [0,  0,   0, 1]], dtype=np.float32)
         trans = np.eye(4, dtype=np.float32)
         # Translate to (pan_x, pan_y, -distance) — matches the world-anchor convention
         # used by the main screen.
@@ -2691,11 +2956,29 @@ class OpenXRViewer:
         # Place keyboard below the FPS overlay panel, same distance + yaw
         self._keyboard_pan_x    = self.screen_pan_x
         self._keyboard_pan_y    = (self.screen_pan_y - sh / 2.0
-                                   - FPS_GAP - FPS_H - KB_GAP
-                                   - self._keyboard_height / 2.0)
+                                - FPS_GAP - FPS_H - KB_GAP
+                                - self._keyboard_height / 2.0)
         self._keyboard_distance = self.screen_distance
-        self._keyboard_yaw      = self.screen_yaw
-        self._keyboard_pitch    = math.radians(-30.0)  # tilt up toward user
+        # Auto-orient keyboard toward the head (sphere center), same logic as screen.
+        head = getattr(self, '_head_pos_w', None)
+        if head is not None:
+            hx, hy, hz = float(head[0]), float(head[1]), float(head[2])
+            dx = self._keyboard_pan_x - hx
+            dy = self._keyboard_pan_y - hy
+            dz = -self._keyboard_distance - hz
+            r = math.sqrt(dx*dx + dy*dy + dz*dz)
+            if r > 1e-4:
+                nx, ny, nz = dx / r, dy / r, dz / r
+                base_yaw   = math.atan2(-nx, -nz)
+                base_pitch = math.asin(max(-1.0, min(1.0, ny)))
+                self._keyboard_yaw   = base_yaw   + self._kb_yaw_offset
+                self._keyboard_pitch = base_pitch + self._kb_pitch_offset
+            else:
+                self._keyboard_yaw   = self.screen_yaw + self._kb_yaw_offset
+                self._keyboard_pitch = self._kb_pitch_offset
+        else:
+            self._keyboard_yaw      = self.screen_yaw + self._kb_yaw_offset
+            self._keyboard_pitch    = self._kb_pitch_offset
 
     def _render_keyboard(self, mgl_fbo, vp_mat):
         """Render the virtual keyboard quad and highlight hovered keys."""
@@ -2709,9 +2992,9 @@ class OpenXRViewer:
 
         # Keyboard quad: vertices are in [-1, +1] in X and Y, so scale by half-extents.
         scale_kb = np.array([[kw2, 0,   0, 0],
-                             [0,   kh2, 0, 0],
-                             [0,   0,   1, 0],
-                             [0,   0,   0, 1]], dtype=np.float32)
+                            [0,   kh2, 0, 0],
+                            [0,   0,   1, 0],
+                            [0,   0,   0, 1]], dtype=np.float32)
         mvp = vp_kb @ scale_kb
 
         mgl_fbo.use()
@@ -2724,9 +3007,9 @@ class OpenXRViewer:
             bx = kw2 + BORDER
             by = kh2 + BORDER
             border_scale = np.array([[bx, 0, 0, 0],
-                                     [0, by, 0, 0],
-                                     [0, 0,  1, -0.001],
-                                     [0, 0,  0, 1]], dtype=np.float32)
+                                    [0, by, 0, 0],
+                                    [0, 0,  1, -0.001],
+                                    [0, 0,  0, 1]], dtype=np.float32)
             border_mvp = vp_kb @ border_scale
             self._border_prog['u_mvp'].write(border_mvp.T.tobytes())
             self._border_prog['u_color'].value = (0.3, 0.7, 1.0, self._kb_border_alpha)
@@ -2744,9 +3027,9 @@ class OpenXRViewer:
             cx = (x0 + x1) / 2.0; cy_ = (y0 + y1) / 2.0
             hw = (x1 - x0) / 2.0; hh  = (y1 - y0) / 2.0
             hl_local = np.array([[hw, 0,  0, cx ],
-                                 [0,  hh, 0, cy_],
-                                 [0,  0,  1, 0.001],
-                                 [0,  0,  0, 1  ]], dtype=np.float32)
+                                [0,  hh, 0, cy_],
+                                [0,  0,  1, 0.001],
+                                [0,  0,  0, 1  ]], dtype=np.float32)
             hl_mvp = vp_kb @ hl_local
             self._border_prog['u_mvp'].write(hl_mvp.T.tobytes())
             self._border_prog['u_color'].value = color
@@ -2757,7 +3040,7 @@ class OpenXRViewer:
         VK_SHIFT = 0x10; VK_CAPS = 0x14; VK_CTRL = 0x11; VK_ALT = 0x12; VK_WIN = 0x5B
         oneshot_vks = set(); locked_vks = set()
         for name, vk in (('shift', VK_SHIFT), ('ctrl', VK_CTRL),
-                         ('alt', VK_ALT), ('win', VK_WIN)):
+                        ('alt', VK_ALT), ('win', VK_WIN)):
             active, locked, _ = self._mod_state[name]
             if locked:   locked_vks.add(vk)
             elif active: oneshot_vks.add(vk)
@@ -2768,9 +3051,10 @@ class OpenXRViewer:
             elif key.vk in oneshot_vks:
                 _hl_quad(key.rect_local, (1.0, 0.7, 0.15, 0.45))
 
-        # Cyan highlight on keys hovered by either laser
-        for hover_idx in set(x for x in [self._kb_hover_l, self._kb_hover_r] if x is not None):
-            _hl_quad(self._keyboard_keys[hover_idx].rect_local, (0.2, 0.7, 1.0, 0.35))
+        # Cyan highlight on keys hovered by either laser (suppressed while gripping)
+        if not (self._grip_l_now or self._grip_r_now):
+            for hover_idx in set(x for x in [self._kb_hover_l, self._kb_hover_r] if x is not None):
+                _hl_quad(self._keyboard_keys[hover_idx].rect_local, (0.2, 0.7, 1.0, 0.35))
 
         self.ctx.disable(moderngl.BLEND)
 
@@ -2804,10 +3088,7 @@ class OpenXRViewer:
         self._pbo_texture_size = (w, h)
         print(f"[OpenXRViewer] GPU interop PBOs created ({BACKEND}) {w}x{h}")
 
-    # ------------------------------------------------------------------
     # Per-frame helpers
-    # ------------------------------------------------------------------
-
     def _update_frame(self, rgb, depth):
         """Upload RGB and depth to GL textures — GPU path when available, CPU fallback."""
         import torch
@@ -2862,7 +3143,8 @@ class OpenXRViewer:
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_depth)
             glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, ctypes.c_void_p(0))
-            glGenerateMipmap(GL_TEXTURE_2D)
+            # No glGenerateMipmap for depth: keep DIBR sampling at full-res
+            # to match viewer.py FullSBS numerics.
             glBindTexture(GL_TEXTURE_2D, 0)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
         else:
@@ -2881,16 +3163,12 @@ class OpenXRViewer:
             glGenerateMipmap(GL_TEXTURE_2D)
             glBindTexture(GL_TEXTURE_2D, 0)
             self.depth_tex.write(depth_np.tobytes())
-            glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
-            glGenerateMipmap(GL_TEXTURE_2D)
-            glBindTexture(GL_TEXTURE_2D, 0)
+            # No glGenerateMipmap for depth: keep DIBR sampling at full-res
+            # to match viewer.py FullSBS numerics.
 
     def _build_model_mat4(self):
-        """Construct the screen quad's world-space model matrix (math row/col convention).
-
-        The quad's in_position spans [-1,+1] in X and Y in model space.
-        We scale to physical metres, translate to (pan_x, pan_y, -distance) in world
-        space (OpenXR: right-hand Y-up, forward = -Z), then apply pitch and yaw.
+        """
+        Build the model matrix for the screen in world space.
         Caller must transpose before writing to OpenGL.
         """
         if self.screen_height is None:
@@ -2918,15 +3196,14 @@ class OpenXRViewer:
             [0,  0,   0,  1],
         ], dtype=np.float32)
 
-        # Scale + translate: translation in last column, row 3 = [0,0,0,1]
-        model = np.array([
-            [sx,  0,  0, self.screen_pan_x    ],
-            [ 0, sy,  0, self.screen_pan_y    ],
-            [ 0,  0,  1, -self.screen_distance],
-            [ 0,  0,  0, 1                    ],
-        ], dtype=np.float32)
+        S = np.diag([sx, sy, 1.0, 1.0]).astype(np.float32)
+        R = rot_y @ rot_x
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x
+        T[1, 3] = self.screen_pan_y
+        T[2, 3] = -self.screen_distance
 
-        return rot_y @ rot_x @ model
+        return T @ R @ S
 
     def _build_curved_screen_verts(self, N=48, width_override=None, height_override=None, dist_offset=0.0):
         """Return a float32 numpy array for a TRIANGLE_STRIP curved screen arc.
@@ -2967,9 +3244,11 @@ class OpenXRViewer:
             ang  = -half_ang + 2.0 * half_ang * t   # angle from left to right
             u    = t
 
-            # Local arc point: x along arc, z = depth into screen
+            # Local arc point: x along arc, z = depth into screen.
+            # Surface centre (ang=0) is at local origin so that yaw/pitch
+            # rotate around the surface centre — matching flat-screen behaviour.
             lx   = R * math.sin(ang)
-            lz   = -(R * math.cos(ang))          # -Z = forward in OpenXR
+            lz   = R * (1.0 - math.cos(ang))
 
             # Apply yaw around Y, then pitch around X, then translate
             # Yaw: (lx, 0, lz) → (lx*cy + lz*sy_, 0, -lx*sy_ + lz*cy)
@@ -2987,7 +3266,7 @@ class OpenXRViewer:
                 # Translate to world position
                 wx += cx
                 wy += cy_pan
-                wz += 0.0          # translation already encoded in lz via R
+                wz += -R
 
                 verts.extend([wx, wy, wz, u, v])
 
@@ -3043,7 +3322,7 @@ class OpenXRViewer:
         mgl_tex = self.ctx.texture((w, h), 4, dtype='f1')
         glBindFramebuffer(GL_FRAMEBUFFER, raw_id)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D, mgl_tex.glo, 0)
+                            GL_TEXTURE_2D, mgl_tex.glo, 0)
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         if status != GL_FRAMEBUFFER_COMPLETE:
@@ -3112,7 +3391,7 @@ class OpenXRViewer:
         if self.screen_height is None:
             return
 
-        now = time.perf_counter()
+        now = self._frame_now
         
         # Update cached values once per second
         if now - self._last_overlay_update >= 1.0:
@@ -3149,12 +3428,13 @@ class OpenXRViewer:
                 bfont   = self.bold_font or self.font   # bold for labels
 
                 PAD    = 14
-                ROW0   = 22   # y baseline: 3 rows centred in 150px
+                ROW0   = 22   # y baseline: 4 rows
                 ROW1   = 56
                 ROW2   = 90
+                ROW3   = 124
 
                 # Compute VAL_X from the widest label so all values align
-                labels = ["[Performance]", "[3D Display]", "[Resolution]"]
+                labels = ["[Performance]", "[3D Display]", "[Resolution]", "[Controller]"]
                 try:
                     max_lw = max(int(draw.textlength(l, font=bfont)) for l in labels)
                 except AttributeError:
@@ -3170,13 +3450,17 @@ class OpenXRViewer:
 
                 lat_str   = f"{self._cached_latency:.0f}ms" if self._cached_latency > 0 else "—"
                 fps_str   = (f"XR {self._cached_actual_fps:.0f} FPS"
-                             f"   SBS {self._cached_sbs_fps:.0f} FPS"
-                             f"   Latency {lat_str}")
+                            f"   SBS {self._cached_sbs_fps:.0f} FPS"
+                            f"   Latency {lat_str}")
                 _draw_row(ROW0, "[Performance]", C_LABEL, fps_str, C_GREEN)
+                # Current controller brand (always displayed)
+                if self._current_brand:
+                    brand_str = f"Model: {self._current_brand}"
+                    _draw_row(ROW3, "[Controller]", C_LABEL, brand_str, C_CYAN)
                 scr_str   = (f"{self._cached_screen_width:.2f}"
-                             f" x {self._cached_screen_height:.2f} m"
-                             f"  @  {self._cached_screen_dist:.2f} m"
-                             f"   Depth {self._cached_depth_ratio:.2f}")
+                            f" x {self._cached_screen_height:.2f} m"
+                            f"  @  {self._cached_screen_dist:.2f} m"
+                            f"   Depth {self._cached_depth_ratio:.2f}")
                 _draw_row(ROW1, "[3D Display]", C_LABEL, scr_str, C_CYAN)
 
                 vw, vh  = self._cached_vr_res
@@ -3279,13 +3563,18 @@ class OpenXRViewer:
         if self._depth_osd_tex is None or self.screen_height is None:
             return
 
-        now = time.perf_counter()
+        now = self._frame_now
 
-        # Detect change and (re)trigger on left eye only to avoid double writes
+        # Detect change and (re)trigger on left eye only to avoid double writes.
+        # Composite key encodes both depth_ratio and the on/off state from
+        # depth_strength so the right-grip + left-stick-click toggle also
+        # fires the indicator.
         if eye_index == 0:
-            cur_val = round(self.depth_ratio, 3)
-            if cur_val != self._depth_osd_last_val:
-                self._depth_osd_last_val = cur_val
+            depth_on = self.depth_strength > 0.0
+            cur_val  = round(self.depth_ratio, 3)
+            cur_key  = (cur_val, depth_on)
+            if cur_key != self._depth_osd_last_val:
+                self._depth_osd_last_val = cur_key
                 self._depth_osd_show_t   = now
                 self._depth_osd_alpha    = 1.0
 
@@ -3300,7 +3589,7 @@ class OpenXRViewer:
                         fill=(32, 32, 36, 210),
                     )
                     label = "Depth"
-                    value = f"{cur_val:.2f}"
+                    value = f"{cur_val:.2f}" if depth_on else "0.00"
                     bfont = self.bold_font or self.font
                     C_LABEL = (150, 158, 185, 255)
                     C_VALUE = (  0, 210, 230, 255)
@@ -3330,18 +3619,15 @@ class OpenXRViewer:
         if alpha <= 0.0:
             return
 
-        # Position: centred horizontally, vertically above FPS bar.
-        # Distance from the screen surface scales with depth_ratio so the panel
-        # visually "floats out" as the user increases depth.
-        OSD_H = 0.06
+        # Screen-relative positioning above the screen; text size scales with screen width
+        OSD_H = self.screen_width * 0.03  # scales with screen size (0.072m @ 2.4m default)
         dw, dh = self._depth_osd_tex_size
-        OSD_W  = OSD_H * (dw / dh)
+        OSD_W = OSD_H * (dw / dh)
 
-        # Floats above-centre of the screen; z-offset grows with depth_ratio
-        BASE_Z_EXTRA = 0.05   # extra forward offset at depth_ratio = 0
-        SCALE_Z      = 0.028  # 0.8× old max (0.41 m @ depth=3) spread over new range 0–10
+        BASE_Z_EXTRA = 0.05
+        SCALE_Z      = 0.028
         z_extra = BASE_Z_EXTRA + self.depth_ratio * SCALE_Z
-        dist = self.screen_distance - z_extra   # smaller = closer to viewer
+        dist = self.screen_distance - z_extra
 
         cy_  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
         cp   = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
@@ -3358,15 +3644,12 @@ class OpenXRViewer:
             [0,  0,   0,  1],
         ], dtype=np.float32)
 
-        y_pos = self.screen_pan_y + self.screen_height / 2.0 + 0.04 + OSD_H / 2.0
-        osd_model = np.array([
-            [OSD_W / 2, 0,          0, self.screen_pan_x],
-            [0,         OSD_H / 2,  0, y_pos            ],
-            [0,         0,          1, -dist            ],
-            [0,         0,          0, 1                ],
-        ], dtype=np.float32)
-
-        mvp = vp_mat @ rot_y @ rot_x @ osd_model
+        y_pos = self.screen_pan_y + self.screen_height / 2.0 + self.screen_width * 0.016 + OSD_H / 2.0
+        S = np.diag([OSD_W / 2.0, OSD_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        R = rot_y @ rot_x
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x; T[1, 3] = y_pos; T[2, 3] = -dist
+        mvp = vp_mat @ T @ R @ S
 
         mgl_fbo.use()
         self.ctx.enable(moderngl.BLEND)
@@ -3378,12 +3661,106 @@ class OpenXRViewer:
         self._overlay_prog['u_alpha'].value = 1.0   # restore for other overlays
         self.ctx.disable(moderngl.BLEND)
 
+    def _render_preset_osd(self, eye_index, mgl_fbo, vp_mat):
+        """Floating preset-name indicator panel.
+
+        Appears when the user cycles screen presets (Y button); fades out automatically.
+        Same style as the depth-ratio OSD.
+        """
+        if self._preset_osd_tex is None or self.screen_height is None:
+            return
+
+        now = self._frame_now
+
+        if eye_index == 0:
+            cur_key = self._preset_index
+            if cur_key != self._preset_osd_last_key:
+                self._preset_osd_last_key = cur_key
+                self._preset_osd_show_t   = now
+                self._preset_osd_alpha    = 1.0
+
+                if self.font is not None and self._preset_name_overlay:
+                    dw, dh = self._preset_osd_tex_size
+                    img  = Image.new('RGBA', (dw, dh), (0, 0, 0, 0))
+                    draw = ImageDraw.Draw(img)
+                    draw.rounded_rectangle(
+                        [0, 0, dw - 1, dh - 1],
+                        radius=12,
+                        fill=(32, 32, 36, 210),
+                    )
+                    bfont = self.bold_font or self.font
+                    C_LABEL = (150, 158, 185, 255)
+                    C_VALUE = (  0, 210, 230, 255)
+                    PAD = 12
+                    cy  = (dh - 32) // 2
+                    draw.text((PAD, cy), "Preset", font=bfont, fill=C_LABEL)
+                    try:
+                        lw = int(draw.textlength("Preset", font=bfont))
+                    except AttributeError:
+                        lw = int(bfont.getsize("Preset")[0]) if hasattr(bfont, 'getsize') else 60
+                    draw.text((PAD + lw + 8, cy), self._preset_name_overlay,
+                            font=self.font, fill=C_VALUE)
+                    data = np.flipud(np.array(img, dtype=np.uint8))
+                    self._preset_osd_tex.write(data.tobytes())
+
+        # Fade: hold 1.5 s then decay over 0.8 s
+        HOLD  = 1.5
+        DECAY = 0.8
+        elapsed = now - self._preset_osd_show_t
+        if elapsed < HOLD:
+            alpha = 1.0
+        elif elapsed < HOLD + DECAY:
+            alpha = 1.0 - (elapsed - HOLD) / DECAY
+        else:
+            alpha = 0.0
+        self._preset_osd_alpha = alpha
+
+        if alpha <= 0.0:
+            return
+
+        # Screen-relative positioning; text size scales with screen width
+        OSD_H = self.screen_width * 0.03
+        dw, dh = self._preset_osd_tex_size
+        OSD_W  = OSD_H * (dw / dh)
+
+        cy_  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+        cp   = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+        rot_y = np.array([
+            [ cy_,  0, sy_, 0],
+            [  0,   1,   0, 0],
+            [-sy_,  0, cy_, 0],
+            [  0,   0,   0, 1],
+        ], dtype=np.float32)
+        rot_x = np.array([
+            [1,  0,   0, 0],
+            [0,  cp, -sp, 0],
+            [0,  sp,  cp, 0],
+            [0,  0,   0,  1],
+        ], dtype=np.float32)
+
+        y_pos = self.screen_pan_y + self.screen_height / 2.0 + self.screen_width * 0.016 + OSD_H / 2.0
+        S = np.diag([OSD_W / 2.0, OSD_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        R = rot_y @ rot_x
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x; T[1, 3] = y_pos; T[2, 3] = -(self.screen_distance - 0.05)
+        mvp = vp_mat @ T @ R @ S
+
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self._preset_osd_tex.use(location=2)
+        self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = alpha
+        self._preset_osd_vao.render(moderngl.TRIANGLE_STRIP)
+        self._overlay_prog['u_alpha'].value = 1.0
+        self.ctx.disable(moderngl.BLEND)
+
     def _render_screen_osd(self, eye_index, mgl_fbo, vp_mat):
         """Floating size+distance indicator shown while right grip + right stick adjusts."""
         if self._screen_osd_tex is None or self.screen_height is None:
             return
 
-        now = time.perf_counter()
+        now = self._frame_now
 
         # Rebuild texture on left eye whenever values change
         if eye_index == 0 and self.font is not None:
@@ -3445,10 +3822,10 @@ class OpenXRViewer:
         if alpha <= 0.0:
             return
 
-        # Place panel above the screen, stacked one slot higher than the depth OSD
-        OSD_H = 0.06
+        # Screen-relative positioning; text size scales with screen width
+        OSD_H = self.screen_width * 0.03
         sw, sh = self._screen_osd_tex_size
-        OSD_W  = OSD_H * (sw / sh)
+        OSD_W = OSD_H * (sw / sh)
 
         cy_  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
         cp   = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
@@ -3465,15 +3842,12 @@ class OpenXRViewer:
             [0,  0,   0,  1],
         ], dtype=np.float32)
 
-        y_pos = self.screen_pan_y + self.screen_height / 2.0 + 0.04 + OSD_H / 2.0
-        osd_model = np.array([
-            [OSD_W / 2, 0,          0, self.screen_pan_x    ],
-            [0,         OSD_H / 2,  0, y_pos                ],
-            [0,         0,          1, -self.screen_distance ],
-            [0,         0,          0, 1                     ],
-        ], dtype=np.float32)
-
-        mvp = vp_mat @ rot_y @ rot_x @ osd_model
+        y_pos = self.screen_pan_y + self.screen_height / 2.0 + self.screen_width * 0.016 + OSD_H / 2.0
+        S = np.diag([OSD_W / 2.0, OSD_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        R = rot_y @ rot_x
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x; T[1, 3] = y_pos; T[2, 3] = -self.screen_distance
+        mvp = vp_mat @ T @ R @ S
 
         mgl_fbo.use()
         self.ctx.enable(moderngl.BLEND)
@@ -3485,9 +3859,115 @@ class OpenXRViewer:
         self._overlay_prog['u_alpha'].value = 1.0
         self.ctx.disable(moderngl.BLEND)
 
+    def _render_brand_osd(self, eye_index, mgl_fbo, vp_mat):
+        """Controller brand indicator attached to the right controller.
+
+        Appears on the left side of the right controller when the user switches
+        controller models via A+B combo.  Auto-fades after a short hold.
+        """
+        if self._brand_osd_tex is None or self._current_brand is None:
+            return
+
+        now = self._frame_now
+
+        if eye_index == 0 and self.font is not None:
+            cur_name = self._current_brand
+            if cur_name != self._brand_osd_last_name:
+                self._brand_osd_last_name = cur_name
+                self._brand_osd_show_t = now
+                self._brand_osd_alpha = 1.0
+
+                bw, bh = self._brand_osd_tex_size
+                img = Image.new('RGBA', (bw, bh), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+                draw.rounded_rectangle(
+                    [0, 0, bw - 1, bh - 1],
+                    radius=12,
+                    fill=(32, 32, 36, 210),
+                )
+                bfont = self.bold_font or self.font
+                C_LABEL = (150, 158, 185, 255)
+                C_VALUE = (  0, 210, 230, 255)
+                PAD = 12
+                cy = (bh - 32) // 2
+                label = "Controller"
+                draw.text((PAD, cy), label, font=bfont, fill=C_LABEL)
+                try:
+                    lw = int(draw.textlength(label, font=bfont))
+                except AttributeError:
+                    lw = int(bfont.getsize(label)[0]) if hasattr(bfont, 'getsize') else 60
+                draw.text((PAD + lw + 8, cy), cur_name, font=self.font, fill=C_VALUE)
+                data = np.flipud(np.array(img, dtype=np.uint8))
+                self._brand_osd_tex.write(data.tobytes())
+
+        # Fade: hold 1.5 s then decay over 0.8 s
+        HOLD  = 1.5
+        DECAY = 0.8
+        elapsed = now - self._brand_osd_show_t
+        if elapsed < HOLD:
+            alpha = 1.0
+        elif elapsed < HOLD + DECAY:
+            alpha = 1.0 - (elapsed - HOLD) / DECAY
+        else:
+            alpha = 0.0
+        self._brand_osd_alpha = alpha
+
+        if alpha <= 0.0:
+            return
+
+        OSD_H = self.screen_width * 0.03
+        bw, bh = self._brand_osd_tex_size
+        OSD_W = OSD_H * (bw / bh)
+
+        # Anchor to the left of the right controller grip
+        if self._grip_mat_r is None:
+            return
+
+        grip_pos = self._grip_mat_r[:3, 3].astype('f8')
+        # Midpoint between screen bottom-edge centre and the controller grip
+        sh = self.screen_height
+        if sh is None:
+            fw, fh = self.frame_size
+            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
+        bottom_edge = np.array([self.screen_pan_x,
+                                self.screen_pan_y - sh / 2.0,
+                                -self.screen_distance], dtype='f8')
+        panel_pos = (bottom_edge + grip_pos) * 0.5
+
+        if self._head_pos_w is not None:
+            toward = np.array(self._head_pos_w, dtype='f8') - panel_pos
+            toward /= np.linalg.norm(toward) + 1e-10
+            panel_fwd = toward
+        else:
+            panel_fwd = np.array([0.0, 0.0, -1.0], dtype='f8')
+        panel_up = np.array([0.0, 1.0, 0.0], dtype='f8')
+
+        S = np.diag([OSD_W / 2.0, OSD_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        panel_right = np.cross(panel_up, panel_fwd)
+        panel_right /= np.linalg.norm(panel_right) + 1e-10
+        panel_up2 = np.cross(panel_fwd, panel_right)
+        panel_up2 /= np.linalg.norm(panel_up2) + 1e-10
+        R = np.eye(4, dtype=np.float32)
+        R[:3, 0] = panel_right.astype(np.float32)
+        R[:3, 1] = panel_up2.astype(np.float32)
+        R[:3, 2] = panel_fwd.astype(np.float32)
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = panel_pos[0]; T[1, 3] = panel_pos[1]; T[2, 3] = panel_pos[2]
+        mvp = vp_mat @ T @ R @ S
+
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self._brand_osd_tex.use(location=2)
+        self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = alpha
+        self._brand_osd_vao.render(moderngl.TRIANGLE_STRIP)
+        self._overlay_prog['u_alpha'].value = 1.0
+        self.ctx.disable(moderngl.BLEND)
+
     def _update_aim_poses(self, display_time):
         """Locate both controller aim spaces and cache their world-space 4×4 matrices."""
-        now = time.perf_counter()
+        now = self._frame_now
         for space, mat_attr, prev_attr, move_attr in [
             (self._aim_space_l, "_aim_mat_l", "_laser_prev_mat_l", "_laser_last_move_l"),
             (self._aim_space_r, "_aim_mat_r", "_laser_prev_mat_r", "_laser_last_move_r"),
@@ -3521,7 +4001,7 @@ class OpenXRViewer:
         """Locate controller grip spaces and cache 4x4 world-space matrices.
         Controller 3D models are placed at the grip center (aim pose is at the tracking ring).
         Also update movement timestamps for 5-second idle auto-hide."""
-        now = time.perf_counter()
+        now = self._frame_now
         for space, mat_attr, move_attr in [
             (self._grip_space_l, "_grip_mat_l", "_laser_last_move_l"),
             (self._grip_space_r, "_grip_mat_r", "_laser_last_move_r"),
@@ -3548,6 +4028,11 @@ class OpenXRViewer:
             except Exception:
                 setattr(self, mat_attr, None)
 
+    def _reset_orientation_offsets(self):
+        """Clear manual yaw/pitch offsets so screen faces head baseline."""
+        self._yaw_offset   = 0.0
+        self._pitch_offset = 0.0
+
     def _reset_screen_to_gaze(self, show_border=False):
         """Instantly snap the screen to 2 m in front of the current head gaze.
 
@@ -3555,6 +4040,7 @@ class OpenXRViewer:
         """
         RESET_DIST = 2.0
         self._anim_target_pan_x = None  # cancel any stale animation
+        self._reset_orientation_offsets()
         if self._head_pos_w is not None and self._head_fwd_w is not None:
             hx, hy, hz = self._head_pos_w
             fx, fy, fz = self._head_fwd_w
@@ -3639,17 +4125,68 @@ class OpenXRViewer:
             self.screen_pitch    = self._anim_target_pitch
             self._anim_target_pan_x = None   # clear — animation complete
 
+    def _reset_screen_direction(self):
+        """Reset screen to face the user's current gaze, preserving distance and size."""
+        if self._head_pos_w is None or self._head_fwd_w is None:
+            return
+        hx, hy, hz = self._head_pos_w
+        fx, fy, fz = self._head_fwd_w
+        flen = math.sqrt(fx*fx + fy*fy + fz*fz)
+        if flen > 1e-4:
+            fx /= flen; fy /= flen; fz /= flen
+        else:
+            fx, fy, fz = 0.0, 0.0, -1.0
+
+        # Preserve Euclidean distance from head to screen centre
+        dx = self.screen_pan_x - hx
+        dy = self.screen_pan_y - hy
+        dz = -self.screen_distance - hz
+        dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+
+        # Target screen centre in world space, following head gaze
+        tx = hx + fx * dist
+        ty = hy + fy * dist
+        tz = hz + fz * dist
+        pitch = math.asin(max(-0.999, min(0.999, fy)))
+
+        self.screen_pan_x = tx
+        self.screen_pan_y = ty
+        self.screen_distance = -tz
+        self.screen_yaw = math.atan2(-fx, -fz)
+        self.screen_pitch = pitch
+
+        self._border_alpha = 1.0
+        self._border_idle_t = time.perf_counter()
+
     def _apply_preset(self, index):
-        """Apply screen preset combination."""
+        """Apply screen preset: size, distance, and reposition to face the user."""
         name, width, dist = self._screen_presets[index]
+        self._reset_orientation_offsets()
         self.screen_width    = width
-        self.screen_distance = dist
         self.screen_height   = None
-        self.screen_pitch    = 0.0   # perpendicular to floor
+        self.screen_pitch    = 0.0
         self._screen_curved  = False
         self._preset_index            = index
-        self._preset_name_overlay     = f"{name}  {width:.2f}m / {dist:.2f}m"
-        self._last_overlay_update     = 0.0  # force overlay refresh
+        self.screen_pan_y    = float(self._initial_head_y)
+
+        if self._head_pos_w is not None and self._head_fwd_w is not None:
+            hx, _, hz = self._head_pos_w
+            fx, fy, fz = self._head_fwd_w
+            flen = math.sqrt(fx*fx + fy*fy + fz*fz)
+            if flen > 1e-4:
+                fx /= flen; fy /= flen; fz /= flen
+            else:
+                fx, fy, fz = 0.0, 0.0, -1.0
+            self.screen_pan_x    = hx + fx * dist
+            self.screen_distance = -(hz + fz * dist)
+            self.screen_yaw      = math.atan2(-fx, -fz)
+        else:
+            self.screen_pan_x    = 0.0
+            self.screen_distance = dist
+            self.screen_yaw      = 0.0
+
+        self._preset_name_overlay = f"{name}  {width:.2f}m / {dist:.2f}m"
+        self._last_overlay_update = 0.0
         self._border_alpha  = 1.0
         self._border_idle_t = time.perf_counter()
 
@@ -3662,6 +4199,7 @@ class OpenXRViewer:
         Called at session start and by the Y button.
         """
         RESET_DIST = 2.0
+        self._reset_orientation_offsets()
         self.screen_width    = 2.4
         self.screen_height   = None
         self.screen_pitch    = 0.0   # always vertical — perpendicular to floor
@@ -3705,6 +4243,38 @@ class OpenXRViewer:
         if sh is None:
             fw, fh = self.frame_size
             sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
+
+        # Curved-screen mapping: parametric cylindrical arc (world-space verts
+        # are generated in _build_curved_screen_verts). For a given (u,v) we can
+        # reconstruct the same world-space vertex analytically.
+        if self._screen_curved:
+            R = self.screen_distance
+            half_w = self.screen_width / 2.0
+            half_h = sh / 2.0
+            # angular half-span so arc length == screen_width
+            half_ang = min(half_w / max(R, 1e-6), math.pi / 2)
+
+            cy = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+            cp = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+
+            cx = self.screen_pan_x
+            cy_pan = self.screen_pan_y
+
+            ang = -half_ang + 2.0 * half_ang * float(u)
+            lx = R * math.sin(ang)
+            lz = -(R * math.cos(ang))
+            ly = (v - 0.5) * sh
+
+            # Apply yaw (around Y) then pitch (around X) then translate
+            rx = lx * cy + lz * sy_
+            rz = -lx * sy_ + lz * cy
+            wy = ly * cp - rz * sp
+            wz = ly * sp + rz * cp
+            wx = rx + cx
+            wy += cy_pan
+            return np.array([wx, wy, wz], dtype='f8')
+
+        # Flat screen mapping (original behaviour)
         cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
         cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
         screen_pos = self._screen_world_pos(cy, sy_, cp, sp)
@@ -3713,59 +4283,65 @@ class OpenXRViewer:
         return screen_pos + r_ax * ((u - 0.5) * self.screen_width) + u_ax * ((v - 0.5) * sh)
 
     def _screen_world_pos(self, cy, sy_, cp, sp):
-        """Return the world-space centre of the screen as a float64 numpy vec3.
-
-        screen_pan_x/y and screen_distance live in the pre-rotation (local) frame:
-        the model matrix applies rot_y @ rot_x before the translation, so the actual
-        world centre is rot_y(yaw) @ rot_x(pitch) @ [pan_x, pan_y, -dist].
-        Using the raw pre-rotation values as a world position is only correct when
-        yaw == pitch == 0 and is the root cause of cursor/laser misalignment at any
-        other orientation.
+        """Return the world-space position of the screen centre based on current pan/pitch/yaw.
+        Used by both _screen_uv_to_world and _laser_screen_hit_dist, which are called frequently during aiming — so we take pan/pitch/yaw as arguments to avoid redundant trig calls.
         """
-        lx, ly, lz = self.screen_pan_x, self.screen_pan_y, -self.screen_distance
-        # Apply rot_x (pitch) first — matches _build_model_mat4's rot_y @ rot_x order
-        ix = lx
-        iy = ly * cp - lz * sp
-        iz = ly * sp + lz * cp
-        # Then apply rot_y (yaw)
-        return np.array([ix * cy + iz * sy_, iy, -ix * sy_ + iz * cy], dtype='f8')
+        return np.array([self.screen_pan_x, self.screen_pan_y, -self.screen_distance], dtype='f8')
+
+    def _get_target_monitor_rect(self):
+        """Return (left, top, width, height) of the captured monitor in virtual-desktop pixels.
+
+        Uses Win32 EnumDisplayMonitors.  Monitor indices follow the MSS 1-based convention
+        used in utils.py / viewer.py.  Falls back to the primary monitor.
+        Result is cached in self._target_mon_rect.
+        """
+        if self._target_mon_rect is not None:
+            return self._target_mon_rect
+        if sys.platform != 'win32':
+            self._target_mon_rect = (0, 0, 1920, 1080)
+            return self._target_mon_rect
+
+        import ctypes
+        from ctypes import wintypes
+
+        class RECT(ctypes.Structure):
+            _fields_ = [('left', wintypes.LONG), ('top', wintypes.LONG),
+                        ('right', wintypes.LONG), ('bottom', wintypes.LONG)]
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', RECT),
+                        ('rcWork', RECT), ('dwFlags', wintypes.DWORD)]
+
+        monitors = []
+        def _callback(h_mon, hdc, p_rect, _):
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            ctypes.windll.user32.GetMonitorInfoW(h_mon, ctypes.byref(mi))
+            r = mi.rcMonitor
+            monitors.append((r.left, r.top, r.right - r.left, r.bottom - r.top))
+            return True
+
+        _CBFUNC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC,
+                                    ctypes.POINTER(RECT), wintypes.LPARAM)
+        ctypes.windll.user32.EnumDisplayMonitors(None, None, _CBFUNC(_callback), 0)
+
+        idx = max(1, self._input_monitor_index) - 1  # MSS is 1-based → 0-based
+        if idx < len(monitors):
+            self._target_mon_rect = monitors[idx]
+        else:
+            self._target_mon_rect = monitors[0] if monitors else (0, 0, 1920, 1080)
+        return self._target_mon_rect
 
     def _laser_screen_hit_dist(self, ctrl_pos, fwd_w):
-        """Return the distance along fwd_w where the aim ray hits the visible screen rect.
+        """Return the distance along fwd_w where the aim ray hits the screen.
 
-        Returns BEAM_MAX (5 m) if the ray misses the screen rectangle entirely or
-        is parallel to it — so the laser only clips when it actually hits the screen.
+        Delegates to _laser_screen_hit_uv to avoid duplicating ray-plane math.
+        Returns BEAM_MAX (30 m) on miss.
         """
-        BEAM_MAX = 30.0   # long enough to look infinite in any room-scale space
-        # Compute height inline during resize (when screen_height is temporarily None)
-        sh = self.screen_height
-        if sh is None:
-            fw, fh = self.frame_size
-            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
-        # Protect against degenerate screen dimensions
-        safe_w = max(self.screen_width, 1e-6)
-        safe_h = max(sh, 1e-6)
-
-        cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
-        cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
-        screen_n   = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
-        screen_pos = self._screen_world_pos(cy, sy_, cp, sp)
-        denom = float(np.dot(screen_n, fwd_w))
-        if abs(denom) < 1e-6:
-            return BEAM_MAX
-        t = float(np.dot(screen_n, screen_pos - ctrl_pos)) / denom
-        if t < 0.01:
-            return BEAM_MAX   # screen is behind controller
-        # Check hit is within the actual screen rectangle (not the infinite plane)
-        hit   = ctrl_pos + fwd_w * t
-        diff  = hit - screen_pos
-        r_ax  = np.array([cy, 0.0, -sy_], dtype='f8')
-        u_ax  = np.array([sp*sy_, cp, sp*cy], dtype='f8')
-        loc_x = float(np.dot(diff, r_ax))
-        loc_y = float(np.dot(diff, u_ax))
-        if abs(loc_x) <= safe_w / 2.0 and abs(loc_y) <= safe_h / 2.0:
-            return max(0.01, t - 0.005)   # hit within screen — stop 5 mm before
-        return BEAM_MAX   # outside screen rectangle — let laser go to max
+        result = self._laser_screen_hit_uv(ctrl_pos, fwd_w)
+        if result is not None:
+            return max(0.01, result[2] - 0.005)
+        return 30.0
 
     def _keyboard_laser_hit_dist(self, ctrl_pos, fwd_w):
         """Return the distance along fwd_w where the ray hits the keyboard quad.
@@ -3782,8 +4358,8 @@ class OpenXRViewer:
         kb_y = np.array([ sy * sp,  cp,   cy * sp ], dtype='f8')
         kb_n = np.array([ sy * cp, -sp,   cy * cp ], dtype='f8')
         kb_pos = np.array([self._keyboard_pan_x,
-                           self._keyboard_pan_y,
-                           -self._keyboard_distance], dtype='f8')
+                        self._keyboard_pan_y,
+                        -self._keyboard_distance], dtype='f8')
         denom = float(np.dot(kb_n, fwd_w))
         if abs(denom) < 1e-6:
             return BEAM_MAX
@@ -3847,28 +4423,211 @@ class OpenXRViewer:
             return max(0.01, t - 0.005)
         return BEAM_MAX
 
+    # Controller pose smoothing for stable cursor/laser aiming
+    @staticmethod
+    def _mat3_to_quat(m33):
+        """ 3x3 rotation matrix to (x,y,z,w) quaternion. """
+        t  = m33[0, 0] + m33[1, 1] + m33[2, 2]
+        if t > 0.0:
+            s  = np.sqrt(t + 1.0) * 2.0
+            w  = 0.25 * s
+            x  = (m33[2, 1] - m33[1, 2]) / s
+            y  = (m33[0, 2] - m33[2, 0]) / s
+            z  = (m33[1, 0] - m33[0, 1]) / s
+        elif m33[0, 0] > m33[1, 1] and m33[0, 0] > m33[2, 2]:
+            s  = np.sqrt(1.0 + m33[0, 0] - m33[1, 1] - m33[2, 2]) * 2.0
+            w  = (m33[2, 1] - m33[1, 2]) / s
+            x  = 0.25 * s
+            y  = (m33[0, 1] + m33[1, 0]) / s
+            z  = (m33[0, 2] + m33[2, 0]) / s
+        elif m33[1, 1] > m33[2, 2]:
+            s  = np.sqrt(1.0 + m33[1, 1] - m33[0, 0] - m33[2, 2]) * 2.0
+            w  = (m33[0, 2] - m33[2, 0]) / s
+            x  = (m33[0, 1] + m33[1, 0]) / s
+            y  = 0.25 * s
+            z  = (m33[1, 2] + m33[2, 1]) / s
+        else:
+            s  = np.sqrt(1.0 + m33[2, 2] - m33[0, 0] - m33[1, 1]) * 2.0
+            w  = (m33[1, 0] - m33[0, 1]) / s
+            x  = (m33[0, 2] + m33[2, 0]) / s
+            y  = (m33[1, 2] + m33[2, 1]) / s
+            z  = 0.25 * s
+        q = np.array([x, y, z, w], dtype='f8')
+        return q / np.linalg.norm(q)
+
+    def _slerp_quat(self, q1, q2, t):
+        """球面线性插值: t=0→q1, t=1→q2。输入/输出均为 (x,y,z,w) numpy数组。"""
+        dot = np.dot(q1, q2)
+        if dot < 0.0:
+            q2 = -q2
+            dot = -dot
+        if dot > 0.9995:
+            result = q1 + t * (q2 - q1)
+            return result / np.linalg.norm(result)
+        theta_0 = math.acos(min(dot, 1.0))
+        theta   = theta_0 * t
+        sin_t   = math.sin(theta)
+        sin_t0  = math.sin(theta_0)
+        s1 = math.cos(theta) - dot * sin_t / sin_t0
+        s2 = sin_t / sin_t0
+        return s1 * q1 + s2 * q2
+
+    def _smooth_controller_poses(self):
+        """Pre-smooth both controller poses once per frame.
+
+        Must be called after _update_aim_poses / _update_grip_poses and
+        before any consumer (grip-to-move, cursor, laser rendering).
+        Stores smoothed position + forward in _smooth_ray_* attrs.
+        """
+        for is_left, aim_mat_attr, grip_mat_attr, pos_attr, quat_attr in [
+            (True,  '_aim_mat_l', '_grip_mat_l',
+             '_smooth_ray_origin_l', '_smooth_ray_quat_l'),
+            (False, '_aim_mat_r', '_grip_mat_r',
+             '_smooth_ray_origin_r', '_smooth_ray_quat_r'),
+        ]:
+            aim_mat = getattr(self, aim_mat_attr)
+            if aim_mat is None:
+                continue
+            grip_mat = getattr(self, grip_mat_attr)
+            if grip_mat is not None:
+                raw_pos = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
+            else:
+                raw_pos = aim_mat[:3, 3].astype('f8')
+            self._apply_ray_smoothing(raw_pos, aim_mat, pos_attr, quat_attr)
+            # Pre-compute forward vector from smoothed quaternion (done once
+            # per frame, shared by all consumers — avoids 12x 3x3 rebuilds).
+            sm_quat = getattr(self, quat_attr)
+            if sm_quat is not None:
+                x, y, z, w = sm_quat
+                fwd = np.array([
+                    -(2*x*z + 2*w*y),
+                    -(2*y*z - 2*w*x),
+                    -(1 - 2*x*x - 2*y*y),
+                ], dtype='f8')
+                if is_left:
+                    self._smooth_ray_fwd_l = fwd
+                else:
+                    self._smooth_ray_fwd_r = fwd
+
+    def _get_smoothed_ray(self, is_left):
+        """Return (smoothed_pos, smoothed_fwd) from pre-computed attrs."""
+        pos_attr = '_smooth_ray_origin_l' if is_left else '_smooth_ray_origin_r'
+        fwd_attr = '_smooth_ray_fwd_l' if is_left else '_smooth_ray_fwd_r'
+        sm_pos = getattr(self, pos_attr)
+        sm_fwd = getattr(self, fwd_attr)
+        if sm_pos is None or sm_fwd is None:
+            return None, None
+        return sm_pos.copy(), sm_fwd.copy()
+
+    def _apply_ray_smoothing(self, raw_pos, aim_mat, smooth_pos_attr, smooth_quat_attr):
+        """位置EMA + 四元数SLERP平滑(含死区)。返回 (smoothed_pos, smoothed_fwd_world)。"""
+        raw_quat = self._mat3_to_quat(aim_mat[:3, :3].astype('f8'))
+
+        prev_pos  = getattr(self, smooth_pos_attr)
+        prev_quat = getattr(self, smooth_quat_attr)
+
+        # One Euro Filter 位置平滑 (替代自适应EMA) ──
+        # Filters raw controller position at source — laser beam, cursor,
+        # and grip-to-move all consume the same stabilized data.
+        # No dead zone needed: adaptive cutoff naturally filters micro-jitter
+        # while responding quickly to intentional movement.
+        _filter = self._ray_filter_l if smooth_pos_attr.endswith('_l') else self._ray_filter_r
+        if prev_pos is None:
+            _filter.reset()
+        sm_pos = _filter.filter(raw_pos, self._last_frame_dt)
+        setattr(self, smooth_pos_attr, sm_pos.copy())
+
+        # Adaptive SLERP angle smoothing with dead zone
+        if prev_quat is not None:
+            _dot = abs(np.dot(raw_quat, prev_quat))
+            _dot = min(_dot, 1.0)
+            _ang = 2.0 * math.acos(_dot) if _dot < 1.0 else 0.0
+            # Normal Deadzone + SLERP (Not affect the movement on screen)
+            if _ang < self._ray_deadzone_rad:
+                sm_quat = prev_quat  # Not changed in Deadzone
+            else:
+                # The greater the angular velocity, the larger the smoothing factor, resulting in tighter tracking. When hand motion stops, the factor decreases, leading to a smooth, gradual deceleration.
+                _adaptive = self._rot_smooth * (1.0 + min(_ang * 30.0, 2.0))
+                _adaptive = min(_adaptive, 0.20)
+                sm_quat = self._slerp_quat(prev_quat, raw_quat, _adaptive)
+        else:
+            sm_quat = raw_quat
+        setattr(self, smooth_quat_attr, sm_quat.copy())
+        x, y, z, w = sm_quat
+        R33 = np.array([
+            [1-2*y*y-2*z*z,   2*x*y-2*w*z,   2*x*z+2*w*y],
+            [  2*x*y+2*w*z, 1-2*x*x-2*z*z,   2*y*z-2*w*x],
+            [  2*x*z-2*w*y,   2*y*z+2*w*x, 1-2*x*x-2*y*y],
+        ], dtype='f8')
+        fwd_w = -R33[:, 2]  # -Z = forward
+        return sm_pos, fwd_w
+
     def _laser_beam_setup(self):
-        """Return shared beam calculations (position, direction) for each ray."""
-        now = time.perf_counter()
+        """Ray sharing: Quaternion SLERP (direction) + Position EMA → simulates VD damping."""
+        now = self._frame_now
         beams = []
-        for aim_mat, grip_mat, last_move_attr, ctrl_name in [
-            (self._aim_mat_l, self._grip_mat_l, "_laser_last_move_l", 'left'),
-            (self._aim_mat_r, self._grip_mat_r, "_laser_last_move_r", 'right'),
+        for aim_mat, grip_mat, last_move_attr, ctrl_name, \
+            smooth_pos_attr, smooth_quat_attr in [
+            (self._aim_mat_l, self._grip_mat_l, "_laser_last_move_l", 'left',
+            "_smooth_ray_origin_l", "_smooth_ray_quat_l"),
+            (self._aim_mat_r, self._grip_mat_r, "_laser_last_move_r", 'right',
+            "_smooth_ray_origin_r", "_smooth_ray_quat_r"),
         ]:
             if aim_mat is None:
                 continue
             if (now - getattr(self, last_move_attr)) > self._LASER_HIDE_AFTER:
+                setattr(self, smooth_pos_attr, None)
+                setattr(self, smooth_quat_attr, None)
                 continue
-            fwd_w = -aim_mat[:3, 2].astype('f8')
+
+            # Use pre-smoothed pose (One Euro Filter applied once per frame)
+            is_left = (ctrl_name == 'left')
+            ctrl_pos, fwd_w = self._get_smoothed_ray(is_left)
+            if ctrl_pos is None:
+                continue
+
+            # Raw origin (for edge constraint — uses unsmoothed position)
+            if grip_mat is not None:
+                raw_pos = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
+            else:
+                raw_pos = aim_mat[:3, 3].astype('f8')
+
+            # Laser direction: apply a fixed 12° upward tilt to the smoothed forward vector, around the right axis (parallel to the screen when facing it head-on) — mimics the natural resting pose of the hand and makes it easier to point at things without needing to tilt the wrist up.
             right_w = aim_mat[:3, 0].astype('f8')
             _ang = math.radians(12); _ca, _sa = math.cos(_ang), math.sin(_ang)
             _k = right_w / (np.linalg.norm(right_w) + 1e-10)
             fwd_w = fwd_w * _ca + np.cross(_k, fwd_w) * _sa + _k * np.dot(_k, fwd_w) * (1 - _ca)
-            if grip_mat is not None:
-                ctrl_pos = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
+
+            # Screen edge constraint: if the smoothed ray goes off-screen, try the raw ray (with the same 12° tilt) before giving up and snapping to the edge.  This lets the laser stay more stable near edges while still allowing the user to intentionally point off-screen by moving steadily in that direction.
+            if self._laser_screen_hit_uv(raw_pos, fwd_w) is None:
+                # Smoothed ray misses screen → check raw ray (same tilt)
+                _raw_fwd = -aim_mat[:3, 2].astype('f8')
+                _raw_rw = aim_mat[:3, 0].astype('f8')
+                _raw_fwd = _raw_fwd * _ca + np.cross(_k, _raw_fwd) * _sa + _k * np.dot(_k, _raw_fwd) * (1 - _ca)
+                if self._laser_screen_hit_uv(raw_pos, _raw_fwd) is None:
+                    # Raw ray also goes off-screen → snap to edge (ring follows manual movement along the edge)
+                    _plane_uv = self._laser_plane_uv(raw_pos, fwd_w)
+                    if _plane_uv is not None:
+                        _cu = max(0.0, min(1.0, _plane_uv[0]))
+                        _cv = max(0.0, min(1.0, _plane_uv[1]))
+                        _clamped_wp = self._screen_uv_to_world(_cu, _cv)
+                        _edge_dir = _clamped_wp - raw_pos
+                        _norm = np.linalg.norm(_edge_dir)
+                        if _norm > 1e-6:
+                            _edge_dir /= _norm
+                            _dot2 = np.dot(_raw_fwd, _edge_dir)
+                            _dot2 = max(-1.0, min(1.0, _dot2))
+                            _ang2 = math.acos(_dot2)
+                            if _ang2 < self._ray_edge_deadzone_rad:
+                                fwd_w = _edge_dir  # 吸附边缘滑动
+            if ctrl_name == 'left':
+                self._smooth_ray_prev_fwd_l = fwd_w.copy()
             else:
-                ctrl_pos = aim_mat[:3, 3].astype('f8')
-            ctrl_pos = ctrl_pos + fwd_w * 0.11
+                self._smooth_ray_prev_fwd_r = fwd_w.copy()
+
+            # Beam starts from raw controller position (aligned with model)
+            ctrl_pos = raw_pos + fwd_w * 0.11
+
             right = aim_mat[:3, 0].astype('f4')
             fwd = fwd_w.astype('f4')
             up = np.cross(right, fwd); up = up / (np.linalg.norm(up) + 1e-10)
@@ -3878,16 +4637,35 @@ class OpenXRViewer:
 
     def _render_lasers(self, mgl_fbo, vp_mat, blend=False):
         """blend=False: opaque rainbow beam; blend=True: semi-transparent hit circles."""
-        beams = self._laser_beam_setup()
+        # Cache beam setup once per frame (called 4x: 2 eyes × 2 blend passes).
+        if getattr(self, '_beams_frame', -1) != self._frame_count:
+            self._cached_beams = self._laser_beam_setup()
+            self._beams_frame = self._frame_count
+        beams = self._cached_beams
         if not beams:
             return
         if blend:
             self._render_laser_hit_circles(mgl_fbo, vp_mat, beams)
             return
         mgl_fbo.use()
+        BEAM_MAX_LEN = 0.4
         for now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up in beams:
-            draw_len = 0.4
-            BEAM_R = 0.004
+            # Auto-shorten beam when target is closer than the default length —
+            # mirrors the priority logic in _render_laser_hit_circles so the
+            # beam tip lines up with the hit circle (no over/undershoot).
+            cursor_uv = self._cursor_uv_l if ctrl_name == 'left' else self._cursor_uv_r
+            if (self._cursor_ctrl == ctrl_name and cursor_uv is not None):
+                hit_dist = max(0.01, float(cursor_uv[2]))
+            else:
+                kb_dist = self._keyboard_laser_hit_dist(ctrl_pos, fwd_w)
+                sc_dist = self._laser_screen_hit_dist(ctrl_pos, fwd_w)
+                ov_dist = self._overlay_panel_hit_dist(ctrl_pos, fwd_w)
+                if self._keyboard_visible and kb_dist < 5.0:
+                    hit_dist = kb_dist
+                else:
+                    hit_dist = min(sc_dist, kb_dist, ov_dist)
+            draw_len = min(BEAM_MAX_LEN, max(0.01, hit_dist))
+            BEAM_R = 0.006  # Radius of the beam cylinder (matches cursor stroke size for a consistent look)
             S = np.diag([BEAM_R, draw_len, BEAM_R, 1.0]).astype('f4')
             R = np.eye(4, dtype='f4'); R[:3, 0] = right2; R[:3, 1] = fwd; R[:3, 2] = up
             T = np.eye(4, dtype='f4'); T[:3, 3] = ctrl_pos.astype('f4')
@@ -3897,19 +4675,23 @@ class OpenXRViewer:
             self._beam_vao.render(moderngl.TRIANGLE_STRIP)
     def _render_laser_hit_circles(self, mgl_fbo, vp_mat, beams):
         mgl_fbo.use()
+        # Per-beam keyboard priority: each controller's laser independently
+        # chooses keyboard hit over screen hit (no cross-controller suppression).
         for now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up in beams:
             cursor_uv = self._cursor_uv_l if ctrl_name == 'left' else self._cursor_uv_r
             if (self._cursor_ctrl == ctrl_name and cursor_uv is not None):
                 beam_len = max(0.01, float(cursor_uv[2]))
             else:
-                beam_len = min(
-                    self._laser_screen_hit_dist(ctrl_pos, fwd_w),
-                    self._keyboard_laser_hit_dist(ctrl_pos, fwd_w),
-                    self._overlay_panel_hit_dist(ctrl_pos, fwd_w),
-                )
+                kb_dist = self._keyboard_laser_hit_dist(ctrl_pos, fwd_w)
+                sc_dist = self._laser_screen_hit_dist(ctrl_pos, fwd_w)
+                ov_dist = self._overlay_panel_hit_dist(ctrl_pos, fwd_w)
+                if self._keyboard_visible and kb_dist < 5.0:
+                    beam_len = kb_dist
+                else:
+                    beam_len = min(sc_dist, kb_dist, ov_dist)
             if beam_len >= 5.0:
                 continue
-            HIT_OFFSET = 0.003
+            HIT_OFFSET = 0.0    # Fix hit circle position slightly before the actual hit point, to avoid z-fighting with the screen/keyboard surface and create a nicer visual effect of "sticking" to the surface rather than flickering when the ray moves.
             hit_pos = ctrl_pos + fwd_w * (beam_len - HIT_OFFSET)
             STROKE_R = 0.0096; FILL_R = 0.0056
             for radius, color in [(STROKE_R, (0.2, 0.6, 1.0, 0.75)), (FILL_R, (1.0, 1.0, 1.0, 0.75))]:
@@ -3923,7 +4705,7 @@ class OpenXRViewer:
 
     def _render_controllers(self, mgl_fbo, vp_mat, view_mat):
         """Render PICO 4 Ultra 3D controller models with Blinn-Phong lighting."""
-        now = time.perf_counter()
+        now = self._frame_now
         controllers = []
         for grip_mat, prims, last_move_attr in [
             (self._grip_mat_l, self._ctrl_prims_l, "_laser_last_move_l"),
@@ -3952,17 +4734,22 @@ class OpenXRViewer:
 
         # light_color (diffuse) is slightly bluish to look more like the PICO 4's built-in light;
         # ambient_color is dim to avoid washing out the dark controller textures.
-        light_color = np.array([0.37, 0.37, 0.40], dtype=np.float32)
-        ambient_color = np.array([0.22, 0.22, 0.24], dtype=np.float32)
+        light_color = np.array([0.60, 0.60, 0.65], dtype=np.float32)
+        ambient_color = np.array([0.15, 0.15, 0.17], dtype=np.float32)
 
         for _dist, grip_mat, prims in controllers:
             # Apply per-profile model offset + X-axis rotation correction
             T_mat = np.eye(4, dtype=np.float32)
-            T_mat[0, 3] = self._ctrl_model_offset[0]
-            T_mat[1, 3] = self._ctrl_model_offset[1]
-            T_mat[2, 3] = self._ctrl_model_offset[2]
+            # Calibration mode: use temporary offset/rotation values that can be interactively adjusted with the thumbsticks, without affecting the saved profile until the user confirms the changes. Regular mode: use the saved offset/rotation from the profile.
+            _off = (self._calibration_temp_offset if self._calibration_mode
+                    else self._ctrl_model_offset)
+            _rot = (self._calibration_temp_rot if self._calibration_mode
+                    else self._ctrl_model_rot_deg)
+            T_mat[0, 3] = _off[0]
+            T_mat[1, 3] = _off[1]
+            T_mat[2, 3] = _off[2]
 
-            _ang = math.radians(self._ctrl_model_rot_deg)
+            _ang = math.radians(_rot)
             _ca, _sa = math.cos(_ang), math.sin(_ang)
             R_mat = np.eye(4, dtype=np.float32)
             R_mat[1, 1] = _ca; R_mat[1, 2] = -_sa
@@ -3995,6 +4782,326 @@ class OpenXRViewer:
             if self._use_d3d11:
                 glFrontFace(GL_CCW)
 
+    # Controller real-time calibration
+    def _enter_calibration_mode(self):
+        """Enter calibration mode: copy current offset to temporary values, disable regular controller operations."""
+        self._calibration_mode = True
+        self._calibration_temp_offset = list(self._ctrl_model_offset)
+        self._calibration_temp_rot = self._ctrl_model_rot_deg
+        _brand = self._current_brand or self._controller_model
+        print(f"[Calibration] Entered mode. Brand: {_brand}")
+        print(f"  L-stick U/D = Y, R-stick U/D = Z, R-stick L/R = Rotation")
+        print(f"  B button = Save & exit, long Menu+A+B = Discard & exit")
+
+    def _exit_calibration_mode(self, save=True):
+        """Exit calibration mode. When save=True, write to profile.json."""
+        if save:
+            # Save to controllers/<brand>/profile.json
+            import json as _json, os as _os
+            _brand = self._current_brand or self._controller_model
+            _base = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                'controllers', _brand)
+            _os.makedirs(_base, exist_ok=True)
+            _path = _os.path.join(_base, 'profile.json')
+            # Read existing profile if exists, to preserve unrelated fields (e.g. model name, other overrides) and only update the offset/rotation overrides.
+            _prof = {}
+            if _os.path.isfile(_path):
+                try:
+                    with open(_path, 'r') as f:
+                        _prof = _json.load(f)
+                except Exception:
+                    pass
+            _prof['profileId'] = self._controller_model
+            _prof['overrides'] = {
+                'model_offset': self._calibration_temp_offset,
+                'model_rotation_deg': self._calibration_temp_rot,
+            }
+            with open(_path, 'w') as f:
+                _json.dump(_prof, f, indent=2)
+            # Update the runtime values immediately so the user can see the effect without needing to re-enter calibration mode, and also update the _all_models cache so that if they later calibrate another model of the same brand, it will use the newly saved values as the starting point.
+            self._ctrl_model_offset = list(self._calibration_temp_offset)
+            self._ctrl_model_rot_deg = self._calibration_temp_rot
+            # Sync the cache in case of multiple models of the same brand sharing the same profile overrides (common use case: same profile for both left/right controllers, or multiple models from the same brand that don't have separate profiles).
+            if _brand in self._all_models:
+                self._all_models[_brand]['offset'] = list(self._ctrl_model_offset)
+                self._all_models[_brand]['rot_deg'] = self._ctrl_model_rot_deg
+            print(f"[Calibration] Saved to {_path}: "
+                f"offset={self._ctrl_model_offset}, rot={self._ctrl_model_rot_deg}")
+        else:
+            print("[Calibration] Discarded changes.")
+        self._calibration_mode = False
+        self._calib_combo_fired = False
+
+    def _render_calibration_panel(self, mgl_fbo, vp_mat):
+        """Draw semi-transparent calibration panel in VR (reuses FPS overlay shader)."""
+        if self._overlay_prog is None:
+            return
+        now = self._frame_now
+        # stale data check: only update texture every 0.5s to avoid excessive PIL overhead when using sticks to adjust values
+        if not hasattr(self, '_calib_last_update'):
+            self._calib_last_update = 0.0
+        if now - self._calib_last_update < 0.5:
+            if self._calib_tex is not None:
+                self._render_overlay_quad(mgl_fbo, vp_mat, self._calib_tex,
+                                        self._calib_tex_size, 0.6)
+            return
+        self._calib_last_update = now
+
+        # Generate panel content with PIL: controller model + current temp offsets/rotation + instructions.
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            return
+        off = self._calibration_temp_offset
+        rot = self._calibration_temp_rot
+        lines = [
+            f"Calibration: {self._current_brand or self._controller_model}",
+            f"Y offset: {off[1]:.3f} m",
+            f"Z offset: {off[2]:.3f} m",
+            f"Rotation: {rot:.1f} deg",
+            "",
+            "L-stick U/D: Y  |  R-stick U/D: Z",
+            "R-stick L/R: Rotation",
+            "B: Save  Menu+A+B: Quit",
+        ]
+        fw, fh = 420, 200
+        img = Image.new('RGBA', (fw, fh), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.rounded_rectangle([0, 0, fw - 1, fh - 1], radius=12,
+                            fill=(20, 20, 28, 200))
+        # Cache the consola font once — re-loading from disk every 0.5s
+        # (the panel's rebuild cadence) is wasted I/O.
+        if not hasattr(self, '_calib_font') or self._calib_font is None:
+            try:
+                self._calib_font = ImageFont.truetype("consola.ttf", 20)
+            except Exception:
+                self._calib_font = ImageFont.load_default()
+        font = self._calib_font
+        y = 16
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            draw.text((16, y), line, font=font, fill=(200, 220, 255, 255))
+            y += bbox[3] - bbox[1] + 4
+
+        data = np.flipud(np.array(img, dtype=np.uint8))
+        if self._calib_tex is None:
+            self._calib_tex = self.ctx.texture((fw, fh), 4, dtype='f1')
+            self._calib_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._calib_tex.write(data.tobytes())
+        self._calib_tex_size = (fw, fh)
+
+        self._render_overlay_quad(mgl_fbo, vp_mat, self._calib_tex,
+                                (fw, fh), 0.6)
+
+    def _render_overlay_quad(self, mgl_fbo, vp_mat, tex, tex_size, alpha):
+        """Generate MVP for a quad in front of the user's view, with size based on tex_size and distance based on typical arm's length, then render with the given texture and alpha."""
+        tex_w, tex_h = tex_size
+        OVERLAY_H = 0.10
+        OVERLAY_W = OVERLAY_H * (tex_w / tex_h)
+
+        # Head-Locked Overlay: position the quad in front of the user's head, slightly below eye level, and oriented to always face the user. This is more comfortable for reading text and ensures the overlay is always visible regardless of head orientation. The quad's forward direction is aligned with the headset's forward direction projected onto the horizontal plane, so it remains readable even when looking down or up.
+        if self._head_pos_w is not None and self._head_fwd_w is not None:
+            hx, hy, hz = self._head_pos_w
+            fx, fy, fz = self._head_fwd_w
+            wx = hx + fx * 1.2
+            wy = hy + fy * 1.2 - 0.1
+            wz = hz + fz * 1.2
+            V3 = vp_mat[:3, :3]
+            right = V3[0, :].copy(); right = right / (np.linalg.norm(right) + 1e-10)
+            up    = V3[1, :].copy(); up    = up    / (np.linalg.norm(up)    + 1e-10)
+            fwd   = -V3[2,:].copy(); fwd  = fwd  / (np.linalg.norm(fwd)   + 1e-10)
+            S = np.diag([OVERLAY_W/2.0, OVERLAY_H/2.0, 1.0, 1.0]).astype(np.float32)
+            R = np.eye(4, dtype=np.float32)
+            R[:3, 0] = right; R[:3, 1] = up; R[:3, 2] = fwd
+            T = np.eye(4, dtype=np.float32)
+            T[0, 3] = wx; T[1, 3] = wy; T[2, 3] = wz
+            mvp = vp_mat @ T @ R @ S
+        else:
+            return
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        tex.use(location=2)
+        self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = alpha
+        self._overlay_vao.render(moderngl.TRIANGLE_STRIP)
+        self.ctx.disable(moderngl.BLEND)
+
+    # Shortcuts help panel (right controller attachment)
+    def _build_help_texture(self):
+        """Generate help panel texture (3-column layout, adaptive size, Chinese font priority)."""
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            return
+
+        # font loading with fallback: first look for "font.ttf" in project root, then common system fonts (Windows/macOS/Linux), finally default PIL font.
+        _font_paths = [
+            # internal project font (supports Chinese, bundled with the app)
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "font.ttf"),
+            # Windows system fonts
+            r"C:\Windows\Fonts\msyh.ttc",
+            r"C:\Windows\Fonts\simhei.ttf",
+            # macOS system fonts
+            "/System/Library/Fonts/PingFang.ttc",
+            # Linux common Chinese fonts
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        ]
+        _font_size = 21
+        _title_size = 21
+        font = None
+        for fp in _font_paths:
+            if os.path.isfile(fp):
+                try:
+                    font  = ImageFont.truetype(fp, _font_size)
+                    bfont = ImageFont.truetype(fp, _title_size)
+                    break
+                except Exception:
+                    continue
+        if font is None:
+            try:
+                font  = ImageFont.truetype("consola.ttf", _font_size)
+                bfont = ImageFont.truetype("consolab.ttf", _title_size)
+            except Exception:
+                font  = ImageFont.load_default()
+                bfont = font
+
+        draw = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+        # Measure maximum width for each column
+        col_w = [0, 0, 0]
+        for r in ROWS:
+            for ci in range(3):
+                b = draw.textbbox((0, 0), r[ci], font=bfont if r[3] else font)
+                w = b[2] - b[0]
+                if w > col_w[ci]:
+                    col_w[ci] = w
+
+        GAP = 20    # Column spacing
+        PAD_X = 30  # Left and right padding
+        PAD_Y = 20  # Top and bottom padding
+        LINE_H = (_font_size + 6) if font else 20
+        tw = col_w[0] + GAP + col_w[1] + GAP + col_w[2] + PAD_X * 2
+        th = len(ROWS) * LINE_H + PAD_Y * 2
+
+        # Rebuild texture with correct dimensions
+        if hasattr(self, '_help_tex') and self._help_tex is not None:
+            try:
+                self._help_tex.release()
+            except Exception:
+                pass
+        self._help_tex = self.ctx.texture((tw, th), 4, dtype='f1')
+        self._help_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._help_tex_size = (tw, th)
+
+        img = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.rounded_rectangle([0, 0, tw - 1, th - 1], radius=14,
+                            fill=(18, 18, 28, 210))
+
+        col_x = [PAD_X, PAD_X + col_w[0] + GAP,
+                PAD_X + col_w[0] + GAP + col_w[1] + GAP]
+        for ri, (c1, c2, c3, is_title) in enumerate(ROWS):
+            y = PAD_Y + ri * LINE_H
+            f = bfont if is_title else font
+            color = (90, 190, 255, 255) if is_title else (200, 210, 235, 255)
+            for ci, txt in enumerate([c1, c2, c3]):
+                if txt:
+                    draw.text((col_x[ci], y), txt, font=f, fill=color)
+
+        data = np.flipud(np.array(img, dtype=np.uint8))
+        self._help_tex.write(data.tobytes())
+
+    def _render_help_panel(self, mgl_fbo, vp_mat):
+        """Render the help/shortcut panel attached to the right controller.
+
+        Attach exactly like the left-controller status panel: compute a controller-
+        relative origin and basis so the panel moves/rotates with the right grip
+        (no head-facing billboard behaviour).
+        """
+        if self._help_tex is None:
+            return
+
+        # Default panel size (world metres)
+        tex_w, tex_h = self._help_tex_size
+        PANEL_H = 0.375
+        PANEL_W = PANEL_H * (tex_w / tex_h)
+
+        panel_pos = None
+        panel_fwd = None
+        panel_up = None
+
+        # Prefer right-controller attachment; fall back to head-relative placement
+        if self._grip_mat_r is not None and self._aim_mat_r is not None:
+            # Grip axes in world space (columns of grip_mat)
+            grip_right = self._grip_mat_r[:3, 0].astype('f8')
+            grip_up    = self._grip_mat_r[:3, 1].astype('f8')
+            grip_fwd   = self._grip_mat_r[:3, 2].astype('f8')
+            grip_right /= np.linalg.norm(grip_right) + 1e-10
+            grip_up    /= np.linalg.norm(grip_up) + 1e-10
+            grip_fwd   /= np.linalg.norm(grip_fwd) + 1e-10
+
+            # Laser forward (same offset used for laser beam)
+            fwd_w = -self._aim_mat_r[:3, 2].astype('f8')
+            right_w = self._aim_mat_r[:3, 0].astype('f8')
+            _ang = math.radians(12); _ca, _sa = math.cos(_ang), math.sin(_ang)
+            _k = right_w / (np.linalg.norm(right_w) + 1e-10)
+            laser_fwd = fwd_w * _ca + np.cross(_k, fwd_w) * _sa + _k * np.dot(_k, fwd_w) * (1 - _ca)
+            laser_fwd /= np.linalg.norm(laser_fwd) + 1e-10
+
+            # Laser origin similar to status panel
+            grip_pos = self._grip_mat_r[:3, 3].astype('f8')
+            laser_origin = grip_pos + grip_up * 0.020 + laser_fwd * 0.11
+
+            # Panel forward: blend grip_up (button surface normal) with toward_user
+            toward_user = (-laser_fwd).astype('f8')
+            panel_fwd = grip_up + toward_user
+            panel_fwd /= np.linalg.norm(panel_fwd) + 1e-10
+            panel_up = grip_up.copy()
+
+            # Pre-compute orthonormal basis
+            _pr = np.cross(panel_up, panel_fwd)
+            _pr /= np.linalg.norm(_pr) + 1e-10
+            _pu2 = np.cross(panel_fwd, _pr)
+            _pu2 /= np.linalg.norm(_pu2) + 1e-10
+
+            PANEL_OFFSET = 0.05
+            _top_ref = PANEL_H + 0.025  # bottom edge gap matches status panel (0.025)
+            panel_pos = laser_origin + panel_fwd * PANEL_OFFSET + _pu2 * (_top_ref - PANEL_H / 2.0)
+
+        if panel_pos is None and self._head_pos_w is not None and self._head_fwd_w is not None:
+            hx, hy, hz = self._head_pos_w
+            fx, fy, fz = self._head_fwd_w
+            panel_pos = np.array([hx + fx * 1.2, hy + fy * 1.2 - 0.3, hz + fz * 1.2], dtype='f8')
+            panel_fwd = np.array([-fx, -fy, -fz], dtype='f8')
+            panel_up  = np.array([0.0, 1.0, 0.0], dtype='f8')
+
+        if panel_pos is not None:
+
+            S = np.diag([PANEL_W/2.0, PANEL_H/2.0, 1.0, 1.0]).astype(np.float32)
+            panel_right = np.cross(panel_up, panel_fwd)
+            panel_right /= np.linalg.norm(panel_right) + 1e-10
+            panel_up2 = np.cross(panel_fwd, panel_right)
+            panel_up2 /= np.linalg.norm(panel_up2) + 1e-10
+            R = np.eye(4, dtype=np.float32)
+            R[:3, 0] = panel_right.astype(np.float32)
+            R[:3, 1] = panel_up2.astype(np.float32)
+            R[:3, 2] = panel_fwd.astype(np.float32)
+            T = np.eye(4, dtype=np.float32)
+            T[0, 3] = panel_pos[0]; T[1, 3] = panel_pos[1]; T[2, 3] = panel_pos[2]
+            mvp = vp_mat @ T @ R @ S
+        else:
+            return
+
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self._help_tex.use(location=2)
+        self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = 0.75
+        self._help_vao.render(moderngl.TRIANGLE_STRIP)
+        self.ctx.disable(moderngl.BLEND)
+
     def _render_border(self, mgl_fbo, vp_mat):
         """Render a thin solid-color border slightly larger than the screen.
 
@@ -4013,7 +5120,7 @@ class OpenXRViewer:
         else:
             color = (0.75, 0.75, 0.75, alpha * 0.9)
 
-        BORDER = 0.008   # metres of extra half-width on each side
+        BORDER = self.screen_width / 300.0   # proportional to screen width
 
         mgl_fbo.use()
         self.ctx.enable(moderngl.BLEND)
@@ -4025,7 +5132,7 @@ class OpenXRViewer:
             bw = self.screen_width  + 2 * BORDER
             bh = self.screen_height + 2 * BORDER
             params = (bw, bh, self.screen_distance, self.screen_pan_x,
-                      self.screen_pan_y, self.screen_yaw, self.screen_pitch)
+                    self.screen_pan_y, self.screen_yaw, self.screen_pitch)
             if self._curved_border_verts_params != params:
                 border_verts = self._build_curved_screen_verts(
                     width_override=bw, height_override=bh, dist_offset=0.001,
@@ -4043,13 +5150,14 @@ class OpenXRViewer:
             cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
             rot_y = np.array([[ cy, 0, sy_, 0], [0, 1, 0, 0], [-sy_, 0, cy, 0], [0, 0, 0, 1]], dtype='f4')
             rot_x = np.array([[1, 0, 0, 0], [0, cp, -sp, 0], [0, sp, cp, 0], [0, 0, 0, 1]], dtype='f4')
-            border_model = np.array([
-                [sx, 0, 0, self.screen_pan_x],
-                [0, sy, 0, self.screen_pan_y],
-                [0, 0, 1, -self.screen_distance - 0.001],
-                [0, 0, 0, 1],
-            ], dtype='f4')
-            mvp = vp_mat @ rot_y @ rot_x @ border_model
+            S = np.diag([sx, sy, 1.0, 1.0]).astype('f4')
+            R = rot_y @ rot_x
+            T = np.eye(4, dtype='f4')
+            T[0, 3] = self.screen_pan_x
+            T[1, 3] = self.screen_pan_y
+            T[2, 3] = -self.screen_distance - 0.001
+            border_model = T @ R @ S
+            mvp = vp_mat @ border_model
             self._border_prog['u_mvp'].write(mvp.T.astype('f4').tobytes())
             self._border_prog['u_color'].value = color
             self._border_vao.render(moderngl.TRIANGLE_STRIP)
@@ -4109,7 +5217,7 @@ class OpenXRViewer:
             # Curved path: build world-space arc verts, upload, draw with vp_mat only
             prog = self._curved_prog
             params = (self.screen_width, self.screen_height, self.screen_distance,
-                      self.screen_pan_x, self.screen_pan_y, self.screen_yaw, self.screen_pitch)
+                    self.screen_pan_x, self.screen_pan_y, self.screen_yaw, self.screen_pitch)
             if self._curved_verts_params != params:
                 arc_verts = self._build_curved_screen_verts()
                 self._curved_vbo.write(arc_verts.tobytes())
@@ -4152,31 +5260,51 @@ class OpenXRViewer:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_screen_osd(eye_index, mgl_fbo, vp_mat)
 
-        # 7. VR Controller models (PICO 4 Ultra)
+        # 5c. Preset OSD (name, shown briefly after cycling presets with Y button)
+        if self._preset_osd_tex is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_preset_osd(eye_index, mgl_fbo, vp_mat)
+
+        # 6b. Brand OSD (controller model indicator, attached to right controller)
+        if self._brand_osd_tex is not None and self._grip_mat_r is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_brand_osd(eye_index, mgl_fbo, vp_mat)
+
+        # 7. Laser beam (opaque rainbow) — rendered behind controllers so the
+        # controller ring and body correctly occlude the beam near its origin.
+        self.ctx.viewport = (0, 0, sc_w, sc_h)
+        self._render_lasers(mgl_fbo, vp_mat, blend=False)
+
+        # 8. VR Controller models — rendered on top of the opaque laser beam.
         if self._ctrl_prims_l or self._ctrl_prims_r:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_controllers(mgl_fbo, vp_mat, view_mat)
 
-        # 8. Laser beam (opaque rainbow, rendered on top of controllers)
-        self.ctx.viewport = (0, 0, sc_w, sc_h)
-        self._render_lasers(mgl_fbo, vp_mat, blend=False)
+        # 9. Laser hit circles (semi-transparent) — rendered on top of controllers.
         self.ctx.viewport = (0, 0, sc_w, sc_h)
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         self._render_lasers(mgl_fbo, vp_mat, blend=True)
         self.ctx.disable(moderngl.BLEND)
 
-        # 9. FPS overlay — topmost UI, occludes laser beams
+        # 10. FPS overlay — topmost UI, occludes laser beams
         if self._fps_overlay_visible and self._overlay_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_fps_overlay(eye_index, mgl_fbo, vp_mat)
 
+        # 11. Calibration panel (also topmost, shown when in calibration mode — occludes everything else)
+        if self._calibration_mode:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_calibration_panel(mgl_fbo, vp_mat)
+
+        # 12. Help panel (linked with FPS panel)
+        if self._fps_overlay_visible and self._help_tex is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_help_panel(mgl_fbo, vp_mat)
+
         self.ctx.screen.use()
-
-    # ------------------------------------------------------------------
+    
     # OpenXR event loop
-    # ------------------------------------------------------------------
-
     def _poll_xr_events(self):
         """Drain the OpenXR event queue and handle session state transitions."""
         from utils import shutdown_event
@@ -4216,9 +5344,9 @@ class OpenXRViewer:
 
             elif event_type == xr.StructureType.EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING:
                 # Long-pressing the Oculus/home button triggers a playspace recenter,
-                # which emits this event.  Reset the screen to face the new forward
-                # direction so the virtual display stays comfortably in front of the user.
-                self._reset_screen_to_gaze(show_border=True)
+                # which emits this event.  Reset the screen direction to face the user
+                # while preserving current distance and screen size.
+                self._reset_screen_direction()
 
             elif event_type == xr.StructureType.EVENT_DATA_INSTANCE_LOSS_PENDING:
                 print("[OpenXRViewer] Instance loss pending — shutting down")
@@ -4313,6 +5441,91 @@ class OpenXRViewer:
         safe_w = max(self.screen_width, 1e-6)
         safe_h = max(sh, 1e-6)
 
+        # Curved screen: solve ray <-> cylindrical arc intersection by transforming
+        # the world-space ray into the screen-local parametric frame used by
+        # _build_curved_screen_verts. In that local frame the surface satisfies
+        # sqrt(x^2+z^2) == R where R == screen_distance.
+        if self._screen_curved:
+            BEAM_MAX = 30.0
+            R = max(self.screen_distance, 1e-6)
+            half_w = self.screen_width / 2.0
+            half_h = sh / 2.0
+            half_ang = min(half_w / R, math.pi / 2)
+
+            # Rotation matrices (same convention as _build_curved_screen_verts)
+            cy = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+            cp = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+            yaw_rot = np.array([[cy, 0.0, sy_], [0.0, 1.0, 0.0], [-sy_, 0.0, cy]], dtype='f8')
+            pitch_rot = np.array([[1.0, 0.0, 0.0], [0.0, cp, -sp], [0.0, sp, cp]], dtype='f8')
+            # Inverse mapping: v_local = Yaw.T @ Pitch.T @ (W - T)
+            # New local frame has surface centre at origin and cylinder axis at (0,0,R)
+            M_inv = yaw_rot.T @ pitch_rot.T
+            T = np.array([self.screen_pan_x, self.screen_pan_y, -R], dtype='f8')
+
+            def f_dist(t):
+                P = ctrl_pos + fwd_w * t
+                vl = M_inv @ (P - T)
+                return math.hypot(float(vl[0]), float(vl[2]) - R) - R
+
+            t0 = 0.01
+            t1 = BEAM_MAX
+            f0 = f_dist(t0)
+            f1 = f_dist(t1)
+            bracket = None
+            if abs(f0) < 1e-6:
+                bracket = (t0, t0)
+            elif f0 * f1 < 0:
+                bracket = (t0, t1)
+            else:
+                # Try coarse sampling to find a sign change
+                N = 48
+                a = t0
+                fa = f0
+                for i in range(1, N + 1):
+                    b = t0 + (t1 - t0) * (i / N)
+                    fb = f_dist(b)
+                    if abs(fb) < 1e-6 or fa * fb < 0:
+                        bracket = (a, b)
+                        break
+                    a = b; fa = fb
+
+            if bracket is None:
+                return None
+
+            a, b = bracket
+            fa = f_dist(a)
+            fb = f_dist(b)
+            if fa * fb > 0:
+                return None
+
+            # Bisection refine
+            for _ in range(40):
+                m = 0.5 * (a + b)
+                fm = f_dist(m)
+                if abs(fm) < 1e-6:
+                    a = b = m
+                    break
+                if fa * fm <= 0:
+                    b = m; fb = fm
+                else:
+                    a = m; fa = fm
+            t_hit = 0.5 * (a + b)
+            if t_hit < 0.01 or t_hit > BEAM_MAX:
+                return None
+
+            P = ctrl_pos + fwd_w * t_hit
+            vl = M_inv @ (P - T)
+            lx = float(vl[0]); ly = float(vl[1]); lz = float(vl[2])
+            if abs(ly) > half_h + 1e-6:
+                return None
+            ang = math.atan2(lx, R - lz)
+            if ang < -half_ang - 1e-6 or ang > half_ang + 1e-6:
+                return None
+            u = (ang + half_ang) / (2.0 * half_ang) if half_ang > 1e-9 else 0.5
+            v = (ly + half_h) / (2.0 * half_h) if half_h > 1e-9 else 0.5
+            return float(u), float(v), float(t_hit)
+
+        # Flat-screen (plane) fallback
         cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
         cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
         screen_n   = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
@@ -4335,6 +5548,34 @@ class OpenXRViewer:
             return u, v, t
         return None
 
+    def _laser_plane_uv(self, ctrl_pos, fwd_w):
+        """Return (u, v) where the aim ray hits the infinite plane of the screen, ignoring bounds."""
+        sh = self.screen_height
+        if sh is None:
+            fw, fh = self.frame_size
+            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
+        safe_w = max(self.screen_width, 1e-6)
+        safe_h = max(sh, 1e-6)
+        cp = math.cos(self.screen_pitch); sp = math.sin(self.screen_pitch)
+        cy = math.cos(self.screen_yaw); sy_ = math.sin(self.screen_yaw)
+        screen_n = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
+        screen_pos = self._screen_world_pos(cy, sy_, cp, sp)
+        denom = float(np.dot(screen_n, fwd_w))
+        if abs(denom) < 1e-6:
+            return None
+        t = float(np.dot(screen_n, screen_pos - ctrl_pos)) / denom
+        if t < 0.01:
+            return None
+        hit = ctrl_pos + fwd_w * t
+        diff = hit - screen_pos
+        r_ax = np.array([cy, 0.0, -sy_], dtype='f8')
+        u_ax = np.array([sp * sy_, cp, sp * cy], dtype='f8')
+        loc_x = float(np.dot(diff, r_ax))
+        loc_y = float(np.dot(diff, u_ax))
+        u = 0.5 + loc_x / safe_w
+        v = 0.5 + loc_y / safe_h
+        return u, v
+
     def _keyboard_laser_hit(self, ctrl_pos, fwd_w):
         """Return (key_index, t) if the aim ray hits a key on the virtual keyboard, else (None, None).
 
@@ -4354,8 +5595,8 @@ class OpenXRViewer:
         kb_y = np.array([ sy * sp,     cp,      cy * sp   ], dtype='f8')
         kb_n = np.array([ sy * cp,    -sp,      cy * cp   ], dtype='f8')
         kb_pos = np.array([self._keyboard_pan_x,
-                           self._keyboard_pan_y,
-                           -self._keyboard_distance], dtype='f8')
+                        self._keyboard_pan_y,
+                        -self._keyboard_distance], dtype='f8')
         denom = float(np.dot(kb_n, fwd_w))
         if abs(denom) < 1e-6:
             return None, None
@@ -4384,6 +5625,95 @@ class OpenXRViewer:
         screen quad. When no laser hits the screen, the physical mouse has full control.
         """
         PHYS_TIMEOUT = 3.0
+
+        def _beam_origin_dir(aim_mat, grip_mat, smooth_pos_attr, smooth_quat_attr):
+            """Same logic as _laser_beam_setup for smoothing and edge constraints."""
+            is_left = smooth_pos_attr.endswith('_l')
+            cp, fw = self._get_smoothed_ray(is_left)
+            if cp is None:
+                if grip_mat is not None:
+                    raw_pos = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
+                else:
+                    raw_pos = aim_mat[:3, 3].astype('f8')
+                fw = -aim_mat[:3, 2].astype('f8')
+                cp = raw_pos + fw * 0.11
+                return cp, fw
+            # raw_pos for edge constraint (unsmoothed origin)
+            if grip_mat is not None:
+                raw_pos = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
+            else:
+                raw_pos = aim_mat[:3, 3].astype('f8')
+            right = aim_mat[:3, 0].astype('f8')
+            ang = math.radians(12); ca, sa = math.cos(ang), math.sin(ang)
+            k = right / (np.linalg.norm(right) + 1e-10)
+            fw = fw * ca + np.cross(k, fw) * sa + k * np.dot(k, fw) * (1 - ca)
+            # Screen edge constraint: if the smoothed ray misses the screen but the raw ray is close, clamp to the edge.
+            if self._laser_screen_hit_uv(raw_pos, fw) is None:
+                _raw_fw = -aim_mat[:3, 2].astype('f8')
+                _raw_rw = aim_mat[:3, 0].astype('f8')
+                _raw_k = _raw_rw / (np.linalg.norm(_raw_rw) + 1e-10)
+                _raw_fw = _raw_fw * ca + np.cross(_raw_k, _raw_fw) * sa + _raw_k * np.dot(_raw_k, _raw_fw) * (1 - ca)
+                if self._laser_screen_hit_uv(raw_pos, _raw_fw) is None:
+                    _plane_uv = self._laser_plane_uv(raw_pos, fw)
+                    if _plane_uv is not None:
+                        _cu = max(0.0, min(1.0, _plane_uv[0]))
+                        _cv = max(0.0, min(1.0, _plane_uv[1]))
+                        _clamped_wp = self._screen_uv_to_world(_cu, _cv)
+                        _edge_dir = _clamped_wp - raw_pos
+                        _norm = np.linalg.norm(_edge_dir)
+                        if _norm > 1e-6:
+                            _edge_dir /= _norm
+                            _dot2 = np.dot(_raw_fw, _edge_dir)
+                            _dot2 = max(-1.0, min(1.0, _dot2))
+                            _ang2 = math.acos(_dot2)
+                            if _ang2 < self._ray_edge_deadzone_rad:
+                                fw = _edge_dir
+            # Beam starts from raw grip position (matches _laser_beam_setup)
+            cp = raw_pos + fw * 0.11
+            return cp, fw
+
+        # If keyboard is visible and a controller's laser hits a key, suppress
+        # screen cursor for that specific controller (per-controller priority).
+        kb_claim_l = False
+        kb_claim_r = False
+        if self._keyboard_visible:
+            for is_left, _aim_mat, _grip_mat, _pos_attr, _quat_attr in [
+                (True,  self._aim_mat_l, self._grip_mat_l,
+                 "_smooth_ray_origin_l", "_smooth_ray_quat_l"),
+                (False, self._aim_mat_r, self._grip_mat_r,
+                 "_smooth_ray_origin_r", "_smooth_ray_quat_r"),
+            ]:
+                if _aim_mat is None:
+                    continue
+                _cp, _fw = _beam_origin_dir(_aim_mat, _grip_mat, _pos_attr, _quat_attr)
+                if self._keyboard_laser_hit(_cp, _fw)[0] is not None:
+                    if is_left:
+                        kb_claim_l = True
+                    else:
+                        kb_claim_r = True
+
+        hit_l = hit_r = None
+        if self._aim_mat_l is not None:
+            cp, fw = _beam_origin_dir(self._aim_mat_l, self._grip_mat_l,
+                                    "_smooth_ray_origin_l", "_smooth_ray_quat_l")
+            if not kb_claim_l:
+                hit_l = self._laser_screen_hit_uv(cp, fw)
+        if self._aim_mat_r is not None:
+            cp, fw = _beam_origin_dir(self._aim_mat_r, self._grip_mat_r,
+                                    "_smooth_ray_origin_r", "_smooth_ray_quat_r")
+            if not kb_claim_r:
+                hit_r = self._laser_screen_hit_uv(cp, fw)
+
+        self._cursor_uv_l = hit_l if hit_l else None   # (u, v, t) or None
+        self._cursor_uv_r = hit_r if hit_r else None   # (u, v, t) or None
+        # 缓存上帧UV用于边缘阻挡检测
+        self._ray_prev_uv_l = self._cursor_uv_l
+        self._ray_prev_uv_r = self._cursor_uv_r
+
+        # Physical mouse detection: if the physical mouse has moved recently,
+        # suppress VR cursor control unconditionally so the user can use the
+        # physical mouse without fighting the VR cursor.  VR resumes after a
+        # quiet period with no physical mouse movement.
         if sys.platform == "win32":
             class _POINT(ctypes.Structure):
                 _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -4391,9 +5721,6 @@ class OpenXRViewer:
             ctypes.windll.user32.GetCursorPos(ctypes.byref(_pt))
             _cur_pos = (_pt.x, _pt.y)
             if self._phys_mouse_pos is not None and _cur_pos != self._phys_mouse_pos:
-                # Only count as physical movement if the position change wasn't caused
-                # by our own VR cursor write — otherwise every laser-driven cursor move
-                # would stamp _phys_mouse_last_move and suppress VR cursor control.
                 vcp = self._vr_cursor_screen_pos
                 if vcp is None or abs(_cur_pos[0] - vcp[0]) > 4 or abs(_cur_pos[1] - vcp[1]) > 4:
                     self._phys_mouse_last_move = time.perf_counter()
@@ -4402,36 +5729,6 @@ class OpenXRViewer:
                 self._cursor_ctrl = None
                 self._cursor_smooth_uv = None
                 return
-
-        def _beam_origin_dir(aim_mat, grip_mat):
-            """Calculate the laser beam's origin point and forward direction in world space."""
-            fw = -aim_mat[:3, 2].astype('f8')
-            # 向上旋转15度
-            right = aim_mat[:3, 0].astype('f8')
-            ang = math.radians(12); ca, sa = math.cos(ang), math.sin(ang)
-            k = right / (np.linalg.norm(right) + 1e-10)
-            fw = fw * ca + np.cross(k, fw) * sa + k * np.dot(k, fw) * (1 - ca)
-            # 起点与_laser_beam_setup保持同步
-            if grip_mat is not None:
-                cp = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
-            else:
-                cp = aim_mat[:3, 3].astype('f8')
-            cp = cp + fw * 0.11
-            return cp, fw
-
-        dw, dh = _get_desktop_size()
-        hit_l = hit_r = None
-        if self._aim_mat_l is not None:
-            cp, fw = _beam_origin_dir(self._aim_mat_l, self._grip_mat_l)
-            if not (self._keyboard_visible and self._keyboard_laser_hit(cp, fw)[0] is not None):
-                hit_l = self._laser_screen_hit_uv(cp, fw)
-        if self._aim_mat_r is not None:
-            cp, fw = _beam_origin_dir(self._aim_mat_r, self._grip_mat_r)
-            if not (self._keyboard_visible and self._keyboard_laser_hit(cp, fw)[0] is not None):
-                hit_r = self._laser_screen_hit_uv(cp, fw)
-
-        self._cursor_uv_l = hit_l if hit_l else None   # (u, v, t) or None
-        self._cursor_uv_r = hit_r if hit_r else None   # (u, v, t) or None
 
         # Pick active controller — right always wins when both lasers hit screen.
         # Avoids ping-ponging: once a controller takes over, the other can't steal.
@@ -4451,43 +5748,39 @@ class OpenXRViewer:
         if prev_ctrl != ctrl or self._cursor_smooth_uv is None:
             self._cursor_smooth_uv = (u, v)
         else:
-            ALPHA = 0.35   # higher = snappier, lower = smoother
+            ALPHA = 0.35   # EMA cursor smoothing — low lag, filters jitter
             su, sv = self._cursor_smooth_uv
             su += ALPHA * (u - su)
             sv += ALPHA * (v - sv)
             self._cursor_smooth_uv = (su, sv)
 
         su, sv = self._cursor_smooth_uv
-        px = int(su * dw)
-        py = int((1.0 - sv) * dh)
+        mon_left, mon_top, mon_w, mon_h = self._get_target_monitor_rect()
+        px = mon_left + int(su * mon_w)
+        py = mon_top + int((1.0 - sv) * mon_h)
+        # Always track the VR cursor position so the physical-mouse detector
+        # doesn't falsely fire when grip ends and the cursor resumes moving.
         self._vr_cursor_screen_pos = (px, py)
-        _set_cursor_pos(px, py)
+        # Suppress cursor movement while gripping — user is manipulating the screen
+        if not self._grabbed:
+            _set_cursor_pos(px, py)
 
     def _handle_triggers(self):
         """Map controller triggers to mouse clicks and drag.
 
-        Three-state machine per trigger: idle → pressed → dragging.
-
-        • Rising edge (idle → pressed):
-            Send LEFTDOWN + LEFTUP immediately — a complete click pulse.
-            The OS sees two clean press+release pairs within GetDoubleClickTime
-            for double-click, just like a real mouse double-click.
-
-        • Held past HOLD_TIME (pressed → dragging):
-            Send LEFTDOWN (hold) — the OS sees button-down + subsequent
-            MOUSEMOVE events = drag.
-
-        • Released from dragging:
-            Send LEFTUP to end the drag.
-
-        This gives all three: single-click, double-click, and drag —
-        without requiring the user to do two complete trigger cycles quickly.
+        Three-state machine per trigger: idle -> pressed -> dragging.
+        Rising edge: send LEFTDOWN+LEFTUP click pulse.
+        Held past HOLD_TIME: send LEFTDOWN for drag.
+        Released from dragging: send LEFTUP.
         """
+        # Suppress mouse clicks while gripping — user is manipulating the screen
+        if self._grabbed:
+            return
         PRESS_THRESH   = 0.55   # rising edge
         RELEASE_THRESH = 0.30   # falling edge (hysteresis)
         HOLD_TIME      = 0.22   # seconds trigger must stay held to enter drag mode
 
-        now = time.perf_counter()
+        now = self._frame_now
         lt  = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
         rt  = self._read_float_action(self._act_right_trigger, "/user/hand/right")
 
@@ -4495,11 +5788,11 @@ class OpenXRViewer:
         right_on_kb = self._kb_hover_r is not None
 
         left_laser_usable  = (not left_on_kb and
-                              (self._cursor_uv_l is not None or
-                               self._cursor_ctrl == 'left'))
+                            (self._cursor_uv_l is not None or
+                            self._cursor_ctrl == 'left'))
         right_laser_usable = (not right_on_kb and
-                              (self._cursor_uv_r is not None or
-                               self._cursor_ctrl == 'right'))
+                            (self._cursor_uv_r is not None or
+                            self._cursor_ctrl == 'right'))
 
         any_drag = False
 
@@ -4583,8 +5876,18 @@ class OpenXRViewer:
         VK_WIN        = 0x5B
         kbd           = ctypes.windll.user32.keybd_event
 
-        lt = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
-        rt = self._read_float_action(self._act_right_trigger, "/user/hand/right")
+        # Suppress keystrokes while any grip is held — the user is repositioning
+        # the keyboard, not typing.  Still update hover for the laser cursor /
+        # grip-to-move logic, but force trigger inputs to "released" so no
+        # rising-edge fires and any held key is released cleanly.
+        gripping = bool(self._grip_l_now or self._grip_r_now)
+
+        if gripping:
+            lt = 0.0
+            rt = 0.0
+        else:
+            lt = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
+            rt = self._read_float_action(self._act_right_trigger, "/user/hand/right")
 
         for trig_now, trig_prev_attr, hover_attr, held_key_attr, held_mods_attr, aim_mat in [
             (lt, '_kb_trig_prev_l', '_kb_hover_l', '_kb_held_key_l', '_kb_held_mods_l', self._aim_mat_l),
@@ -4710,25 +6013,20 @@ class OpenXRViewer:
             setattr(self, accum_attr, accum)
 
     def _poll_controller_input(self, dt):
-        """Hand-split controls:
-          Left  stick (no grip) → mouse scroll (X = horizontal, Y = vertical).
-          Left  grip + L stick  → rotate screen (X = yaw, Y = pitch) at half speed.
-          Right stick (no grip) → mouse scroll (X = horizontal, Y = vertical).
-          Right grip + R stick X → resize screen (left = smaller, right = larger).
-          Right grip + R stick Y → screen distance (up = further, down = closer).
-          Left  trigger    → hold = left mouse button held (drag).
-          Right trigger    → hold = left mouse button held (drag, same as left).
-          A (right, no grip) → left click   B (right, no grip) → right click
-          Right grip + A hold → increase depth_ratio   B hold → decrease depth_ratio
-          Right grip + R stick click → reset depth_ratio to 1.0
-          X (left)         → toggle virtual keyboard (re-anchored under current gaze)
-          Y (left)         → reset screen to upright default position
-          Menu (left)      → toggle FPS overlay
-          Oculus home button long press → reset screen to face current head gaze
-          Right stick click (short) → toggle curved screen   (long ≥0.6 s) → toggle cinema glow
-          L grip + R stick Y    → adjust depth-parallax strength (up=more, down=less/flat)
-          L grip + R stick click → toggle depth off/on (flat mode ↔ last strength)
-          Keyboard Z/C     → depth strength −/+ 0.01   X → depth = 0 (flat)
+        """Controller interaction mapping:
+        Left stick (no grip)       → Mouse wheel
+        Left grip + Left stick X/Y → Screen pan horizontally/vertically (always parallel to ground)
+        Left grip + Right stick X  → Screen yaw rotation around its center
+        Left grip + Right stick Y  → Screen pitch tilt forward/backward
+        Right grip + Left stick Y  → Depth intensity
+        Right stick (no grip)      → Mouse wheel
+        Right grip + Right stick X → Screen width adjustment
+        Right grip + Right stick Y → Screen distance (with acceleration curve)
+        Left grip + Left stick (when keyboard visible) → Keyboard pan (preserved)
+        Left stick press hold 1s    → Toggle background color
+        Right stick press hold 1s   → Toggle curved/flat (when no grip)
+        Both sticks press 0.5s       → Toggle FPS/help panel
+        A/B/X/Y/Menu/Triggers      → Original functions unchanged
         """
         if self._action_set is None:
             return
@@ -4750,126 +6048,666 @@ class OpenXRViewer:
         lx, ly = vec2(self._act_left_stick,  "/user/hand/left")
         rx, ry = vec2(self._act_right_stick, "/user/hand/right")
 
+        # Controller real-time calibration
+        menu_now = self._read_bool_action(self._act_menu_btn, "/user/hand/left")
+        a_now = self._read_bool_action(self._act_a_btn, "/user/hand/right")
+        b_now = self._read_bool_action(self._act_b_btn, "/user/hand/right")
+
+        # Calibration combo: Left Menu + Right A + Right B held for 1 second
+        calib_combo = menu_now and a_now and b_now
+        if calib_combo and not self._calib_combo_fired:
+            if self._calib_combo_start == 0.0:
+                self._calib_combo_start = time.perf_counter()
+            elif time.perf_counter() - self._calib_combo_start >= 1.0:
+                if self._calibration_mode:
+                    self._exit_calibration_mode(save=False)
+                else:
+                    self._enter_calibration_mode()
+                self._calib_combo_fired = True
+                self._menu_long_fired = True  # suppress status-panel toggle on menu release
+        if not calib_combo:
+            self._calib_combo_start = 0.0
+            self._calib_combo_fired = False
+
+        # calibration mode: use sticks to adjust screen position/rotation with visual feedback, no cursor control
+        if self._calibration_mode:
+            CALIB_STEP = 0.005   # step size in meters for position adjustment
+            ROT_STEP   = 0.5     # rotation step size in degrees
+            if abs(ly) > 0.15:
+                self._calibration_temp_offset[1] += ly * CALIB_STEP * 0.5
+            if abs(ry) > 0.15:
+                self._calibration_temp_offset[2] += ry * CALIB_STEP * 0.5
+            if abs(rx) > 0.15:
+                self._calibration_temp_rot += rx * ROT_STEP * 0.5
+            # Button B to save and exit calibration mode on press (rising edge)
+            b_edge = self._read_bool_edge(self._act_b_btn, "/user/hand/right", self._b_last)
+            if b_edge:
+                self._exit_calibration_mode(save=True)
+            # calibration mode: disable normal stick operations
+            lx, ly, rx, ry = 0.0, 0.0, 0.0, 0.0
+
+        # Brand switching: Right A+B held for 1 second. Ensure ab_held is always defined for later A/B handling
+        ab_held = False
+        if not self._calibration_mode and self._available_brands:
+            a_now2 = self._read_bool_action(self._act_a_btn, "/user/hand/right")
+            b_now2 = self._read_bool_action(self._act_b_btn, "/user/hand/right")
+            ab_held = a_now2 and b_now2
+            if ab_held and not getattr(self, '_brand_sw_fired', False):
+                _t = getattr(self, '_brand_sw_start', 0.0)
+                if _t == 0.0:
+                    self._brand_sw_start = time.perf_counter()
+                elif time.perf_counter() - _t >= 0.5:
+                    _idx = self._available_brands.index(self._current_brand) if self._current_brand in self._available_brands else 0
+                    _next = self._available_brands[(_idx + 1) % len(self._available_brands)]
+                    self._switch_brand(_next)
+                    self._brand_sw_fired = True
+            if not ab_held:
+                self._brand_sw_start = 0.0
+                self._brand_sw_fired = False
+
         grip_l = self._read_bool_action(self._act_left_grip,  "/user/hand/left")
         grip_r = self._read_bool_action(self._act_right_grip, "/user/hand/right")
+        # Stash for _handle_keyboard_input — used to suppress typing while
+        # the user is repositioning the keyboard with a grip press.
+        self._grip_l_now = grip_l
+        self._grip_r_now = grip_r
 
-        laser_on_screen = (self._cursor_uv_l is not None) or (self._cursor_uv_r is not None)
+        # Compute fresh cursor UVs + keyboard hits before grip-to-move
+        # so laser-on-screen checks use current-frame data (no 1-frame lag).
+        self._handle_keyboard_input()
+        self._handle_cursor()
+        laser_l_on_screen = self._cursor_uv_l is not None
+        laser_r_on_screen = self._cursor_uv_r is not None
+        laser_on_screen = laser_l_on_screen or laser_r_on_screen
         active = (grip_l or grip_r) and laser_on_screen
         self._grabbed  = active
         self._resizing = False
 
-        # Left grip + left stick
-        # Keyboard visible → translate keyboard (X=horizontal, Y=vertical, Z=depth).
-        # Keyboard hidden  → rotate screen yaw (X) / pitch (Y).
-        # No grip → mouse scroll (same axes as right stick).
-        KB_MOVE_SPEED = 0.4    # m/s at full deflection
-        ROT_SPEED     = 0.35   # rad/s
-        if grip_l:
-            if self._keyboard_visible and self._kb_hover_l is not None:
-                # Left grip + left stick → keyboard x,y translation (only when laser is on keyboard)
-                if abs(lx) > DEAD:
-                    self._keyboard_pan_x += lx * KB_MOVE_SPEED * dt
-                if abs(ly) > DEAD:
-                    self._keyboard_pan_y += ly * KB_MOVE_SPEED * dt  # up → raise keyboard
-            else:
-                if laser_on_screen and abs(lx) > DEAD:
-                    self.screen_yaw   -= lx * ROT_SPEED * dt
-                if laser_on_screen and abs(ly) > DEAD:
-                    self.screen_pitch += ly * ROT_SPEED * dt
-        else:
-            # No left grip → left stick accumulates scroll (flushed below with right stick)
-            self._accum_scroll(lx, ly, dt)
+        # Grip-to-move: screen follows laser beam origin 1:1, Skip while stick is actively used (outside deadzone) — stick takes priority.
+        stick_active_l = abs(lx) > DEAD or abs(ly) > DEAD
+        stick_active_r = abs(rx) > DEAD or abs(ry) > DEAD
+        # Laser-anchored grip dragging
 
-        # ── Right grip + right stick X: resize screen (left=smaller, right=larger) ──
-        # ── Right grip + right stick Y: distance (up=further, down=closer) ─────────
-        # ── Left grip + right stick Y: depth strength (parallax intensity) ────────
-        #    Push stick up to increase 3-D depth effect; down to flatten/remove it.
-        #    Right stick click while left grip held = toggle depth off/on instantly.
-        # ── Right stick (no grip): mouse scroll ──────────────────────────────────
-        DIST_SPEED   = 0.7    # m/s
+        both_grips = grip_l and grip_r
+
+        # Latch per-hand grip target on rising edge
+        # "Only grip one item at a time": once a grip press locks onto the
+        # screen or keyboard, it stays on that target until the grip is
+        # released.  Decided on rising edge by what the laser is hitting:
+        # keyboard takes priority if hovered, else screen.
+        for grip_now, target_attr, kb_hover in [
+            (grip_l, '_grip_target_l', self._kb_hover_l),
+            (grip_r, '_grip_target_r', self._kb_hover_r),
+        ]:
+            if not grip_now:
+                setattr(self, target_attr, None)
+            elif getattr(self, target_attr) is None:
+                if self._keyboard_visible and kb_hover is not None:
+                    setattr(self, target_attr, 'keyboard')
+                elif (target_attr == '_grip_target_l' and laser_l_on_screen) \
+                        or (target_attr == '_grip_target_r' and laser_r_on_screen):
+                    setattr(self, target_attr, 'screen')
+                # else: laser on nothing — leave unlatched; next frame may catch it
+
+        # Per-controller laser requirement: grip only moves screen when
+        # its corresponding laser hits the screen.
+        for grip_now, aim_mat, grab_attr, local_attr, stick_active, laser_on, grip_target in [
+            (grip_l, self._aim_mat_l,
+            '_screen_grab_grip_l', '_screen_grab_local_l', stick_active_l,
+             laser_l_on_screen, self._grip_target_l),
+
+            (grip_r, self._aim_mat_r,
+            '_screen_grab_grip_r', '_screen_grab_local_r', stick_active_r,
+             laser_r_on_screen, self._grip_target_r),
+        ]:
+            if grip_now and not stick_active and not both_grips and laser_on \
+                    and grip_target == 'screen':
+
+                if aim_mat is None:
+                    continue
+
+                # Use pre-smoothed controller pose (shared with laser/cursor).
+                # One Euro Filter applied once per frame — no double-filtering.
+                is_left = (grab_attr == '_screen_grab_grip_l')
+                grip_mat = self._grip_mat_l if is_left else self._grip_mat_r
+                # Raw grip position for responsive drag (no smoothing lag)
+                if grip_mat is not None:
+                    ray_origin = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
+                else:
+                    ray_origin = aim_mat[:3, 3].astype(np.float64)
+                # Smoothed forward direction for jitter-free pointing
+                _, ray_dir = self._get_smoothed_ray(is_left)
+                if ray_dir is None:
+                    ray_dir = -aim_mat[:3, 2].astype(np.float64)
+                ray_dir /= np.linalg.norm(ray_dir) + 1e-10
+
+                # Screen orientation
+                cp = math.cos(self.screen_pitch)
+                sp = math.sin(self.screen_pitch)
+
+                cy = math.cos(self.screen_yaw)
+                sy = math.sin(self.screen_yaw)
+
+                screen_normal = np.array([
+                    cp * sy,
+                    -sp,
+                    cp * cy
+                ], dtype=np.float64)
+
+                screen_center = self._screen_world_pos(cy, sy, cp, sp).astype(np.float64)
+
+                denom = np.dot(screen_normal, ray_dir)
+
+                if abs(denom) < 1e-6:
+                    continue
+
+                t = np.dot(screen_normal, screen_center - ray_origin) / denom
+
+                if t < 0.0:
+                    continue
+
+                hit_world = ray_origin + ray_dir * t
+
+                # Screen local axes
+                right_axis = np.array([cy, 0.0, -sy], dtype=np.float64)
+                up_axis = np.array([sp * sy, cp, sp * cy], dtype=np.float64)
+
+                local_x = np.dot(hit_world - screen_center, right_axis)
+                local_y = np.dot(hit_world - screen_center, up_axis)
+
+                saved_local = getattr(self, local_attr)
+
+                # Initial grab
+                if saved_local is None:
+
+                    setattr(self, local_attr, np.array([local_x, local_y], dtype=np.float64))
+
+                else:
+
+                    target_local = saved_local
+
+                    # Move screen center so laser continues hitting same local point
+                    desired_center = (
+                        hit_world
+                        - right_axis * target_local[0]
+                        - up_axis * target_local[1]
+                    )
+
+                    # Project onto sphere around head — preserves 3D Euclidean
+                    # distance so movement in any direction doesn't change
+                    # apparent screen size.
+                    if self._head_pos_w is not None:
+                        hx, hy, hz = self._head_pos_w
+
+                        # 3D vector from head to desired center
+                        dx = desired_center[0] - hx
+                        dy = desired_center[1] - hy
+                        dz = desired_center[2] - hz
+
+                        # Current 3D Euclidean distance from head to screen
+                        csx = self.screen_pan_x - hx
+                        csy = self.screen_pan_y - hy
+                        csz = -self.screen_distance - hz
+                        R3 = math.sqrt(csx * csx + csy * csy + csz * csz)
+
+                        if R3 > 0.01:
+                            d_len = math.sqrt(dx * dx + dy * dy + dz * dz)
+                            if d_len > 0.001:
+                                dx /= d_len
+                                dy /= d_len
+                                dz /= d_len
+
+                            self.screen_pan_x    = float(hx + dx * R3)
+                            self.screen_pan_y    = float(hy + dy * R3)
+                            self.screen_distance = float(-(hz + dz * R3))
+
+                            # Baseline orientation faces head; manual offset on top
+                            base_yaw   = math.atan2(-dx, -dz)
+                            base_pitch = math.asin(max(-1.0, min(1.0, dy)))
+                            self.screen_yaw   = base_yaw   + self._yaw_offset
+                            self.screen_pitch = base_pitch + self._pitch_offset
+
+            elif both_grips and not grip_now:
+                # One grip released while both were held — clear grab state
+                setattr(self, local_attr, None)
+            elif not grip_now:
+                # Grip released — clear grab state so next press starts fresh
+                setattr(self, local_attr, None)
+            elif stick_active:
+                # Stick fine-tuning is moving the screen — old anchor is stale.
+                # Clear it so grip-to-move re-acquires at the current pose
+                # when the stick returns to neutral (avoids snap-back).
+                setattr(self, local_attr, None)
+            # else: grip held but laser transiently off screen — keep anchor so
+            # the grab resumes as soon as the laser re-enters the screen quad.
+
+        # Keyboard grip-to-move: panel follows laser hit on head-sphere ──
+        # Mirrors the screen grip-to-move loop: laser stays anchored on the
+        # same local key point while the panel slides along the sphere
+        # centred on the head.  Preserves Euclidean head→panel distance so
+        # apparent size doesn't change, and auto-orients the panel toward
+        # the head with standalone yaw/pitch offsets applied on top.
+        if self._keyboard_visible:
+            for grip_now, aim_mat, kb_local_attr, stick_active, grip_target in [
+                (grip_l, self._aim_mat_l, '_kb_grab_local_l',
+                 stick_active_l, self._grip_target_l),
+                (grip_r, self._aim_mat_r, '_kb_grab_local_r',
+                 stick_active_r, self._grip_target_r),
+            ]:
+                # Don't require a per-key hover during drag: a fast-moving
+                # laser often falls in gaps between keys, which would drop
+                # the grip.  Once latched onto the keyboard, just keep
+                # following the ray against the keyboard plane.
+                if grip_now and not stick_active and not both_grips \
+                        and grip_target == 'keyboard':
+                    if aim_mat is None:
+                        continue
+                    is_left = (kb_local_attr == '_kb_grab_local_l')
+                    grip_mat = self._grip_mat_l if is_left else self._grip_mat_r
+                    if grip_mat is not None:
+                        ray_origin = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
+                    else:
+                        ray_origin = aim_mat[:3, 3].astype(np.float64)
+                    _, ray_dir = self._get_smoothed_ray(is_left)
+                    if ray_dir is None:
+                        ray_dir = -aim_mat[:3, 2].astype(np.float64)
+                    ray_dir /= np.linalg.norm(ray_dir) + 1e-10
+
+                    # Keyboard plane axes (match _keyboard_laser_hit)
+                    cp = math.cos(self._keyboard_pitch); sp = math.sin(self._keyboard_pitch)
+                    cy = math.cos(self._keyboard_yaw);   sy = math.sin(self._keyboard_yaw)
+                    kb_x_ax = np.array([cy,        0.0,  -sy      ], dtype=np.float64)
+                    kb_y_ax = np.array([sy * sp,   cp,    cy * sp ], dtype=np.float64)
+                    kb_n    = np.array([sy * cp,  -sp,    cy * cp ], dtype=np.float64)
+                    kb_pos  = np.array([self._keyboard_pan_x,
+                                        self._keyboard_pan_y,
+                                        -self._keyboard_distance], dtype=np.float64)
+                    denom = float(np.dot(kb_n, ray_dir))
+                    if abs(denom) < 1e-6:
+                        continue
+                    t_hit = float(np.dot(kb_n, kb_pos - ray_origin)) / denom
+                    if t_hit < 0.05:
+                        continue
+                    hit_world = ray_origin + ray_dir * t_hit
+                    diff = hit_world - kb_pos
+                    local_x = float(np.dot(diff, kb_x_ax))
+                    local_y = float(np.dot(diff, kb_y_ax))
+
+                    saved_local = getattr(self, kb_local_attr)
+                    if saved_local is None:
+                        # First frame of grab — anchor the local hit point
+                        setattr(self, kb_local_attr,
+                                np.array([local_x, local_y], dtype=np.float64))
+                    else:
+                        target_local = saved_local
+
+                        # Desired panel centre so laser still hits same local key
+                        desired_center = (
+                            hit_world
+                            - kb_x_ax * target_local[0]
+                            - kb_y_ax * target_local[1]
+                        )
+
+                        # Sphere projection around the head — preserves the
+                        # Euclidean head→keyboard distance so the panel doesn't
+                        # grow/shrink as the user drags it through space.
+                        if self._head_pos_w is not None:
+                            hx, hy, hz = self._head_pos_w
+                            dx = desired_center[0] - hx
+                            dy = desired_center[1] - hy
+                            dz = desired_center[2] - hz
+                            ksx = self._keyboard_pan_x - hx
+                            ksy = self._keyboard_pan_y - hy
+                            ksz = -self._keyboard_distance - hz
+                            R3 = math.sqrt(ksx * ksx + ksy * ksy + ksz * ksz)
+                            if R3 > 0.01:
+                                d_len = math.sqrt(dx * dx + dy * dy + dz * dz)
+                                if d_len > 0.001:
+                                    dx /= d_len; dy /= d_len; dz /= d_len
+                                self._keyboard_pan_x    = float(hx + dx * R3)
+                                self._keyboard_pan_y    = float(hy + dy * R3)
+                                self._keyboard_distance = float(max(0.2, -(hz + dz * R3)))
+
+                                # Auto-orient toward head; standalone offsets on top
+                                base_yaw   = math.atan2(-dx, -dz)
+                                base_pitch = math.asin(max(-1.0, min(1.0, dy)))
+                                self._keyboard_yaw   = base_yaw   + self._kb_yaw_offset
+                                self._keyboard_pitch = base_pitch + self._kb_pitch_offset
+                        else:
+                            # No head pose yet — fall back to direct translation
+                            self._keyboard_pan_x    = float(desired_center[0])
+                            self._keyboard_pan_y    = float(desired_center[1])
+                            self._keyboard_distance = float(max(0.2, -desired_center[2]))
+                elif both_grips and not grip_now:
+                    setattr(self, kb_local_attr, None)
+                elif not grip_now:
+                    setattr(self, kb_local_attr, None)
+                elif stick_active:
+                    # Stick fine-tuning the keyboard — clear stale anchor so
+                    # grip-to-move re-acquires at current pose on neutral.
+                    setattr(self, kb_local_attr, None)
+                # else: grip held but laser transiently off keyboard — keep
+                # anchor so the grab resumes when laser re-enters the panel.
+        else:
+            # Keyboard hidden — clear any stale anchors
+            self._kb_grab_local_l = None
+            self._kb_grab_local_r = None
+
+        # Both grips held: system move─────
+        # Average the two laser hit positions, project onto sphere around
+        # head, and move the screen as a single rigid system.  This allows
+        # two-handed repositioning without individual grip fighting.
+        if both_grips and not stick_active_l and not stick_active_r \
+                and laser_l_on_screen and laser_r_on_screen:
+            mats = []
+            for aim_mat, grab_attr, local_attr in [
+                (self._aim_mat_l, '_screen_grab_grip_l', '_screen_grab_local_l'),
+                (self._aim_mat_r, '_screen_grab_grip_r', '_screen_grab_local_r'),
+            ]:
+                if aim_mat is None:
+                    continue
+                is_left = (grab_attr == '_screen_grab_grip_l')
+                grip_mat = self._grip_mat_l if is_left else self._grip_mat_r
+                if grip_mat is not None:
+                    ray_origin = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
+                else:
+                    ray_origin = aim_mat[:3, 3].astype(np.float64)
+                _, ray_dir = self._get_smoothed_ray(is_left)
+                if ray_dir is None:
+                    ray_dir = -aim_mat[:3, 2].astype(np.float64)
+                ray_dir /= np.linalg.norm(ray_dir) + 1e-10
+                cp = math.cos(self.screen_pitch)
+                sp = math.sin(self.screen_pitch)
+                cy = math.cos(self.screen_yaw)
+                sy = math.sin(self.screen_yaw)
+                screen_normal = np.array([cp * sy, -sp, cp * cy], dtype=np.float64)
+                screen_center = self._screen_world_pos(cy, sy, cp, sp).astype(np.float64)
+                denom = np.dot(screen_normal, ray_dir)
+                if abs(denom) < 1e-6:
+                    continue
+                t_hit = np.dot(screen_normal, screen_center - ray_origin) / denom
+                if t_hit < 0.0:
+                    continue
+                hit_world = ray_origin + ray_dir * t_hit
+                right_axis = np.array([cy, 0.0, -sy], dtype=np.float64)
+                up_axis = np.array([sp * sy, cp, sp * cy], dtype=np.float64)
+                local_x = np.dot(hit_world - screen_center, right_axis)
+                local_y = np.dot(hit_world - screen_center, up_axis)
+                saved_local = getattr(self, local_attr)
+                if saved_local is None:
+                    setattr(self, local_attr, np.array([local_x, local_y], dtype=np.float64))
+                    saved_local = np.array([local_x, local_y], dtype=np.float64)
+                target_local = saved_local
+                dc = hit_world - right_axis * target_local[0] - up_axis * target_local[1]
+                mats.append(dc)
+
+            if mats and self._head_pos_w is not None:
+                # Average desired centers from both controllers
+                avg_center = sum(mats) / len(mats)
+                hx, hy, hz = self._head_pos_w
+                dx = avg_center[0] - hx
+                dy = avg_center[1] - hy
+                dz = avg_center[2] - hz
+                csx = self.screen_pan_x - hx
+                csy = self.screen_pan_y - hy
+                csz = -self.screen_distance - hz
+                R3 = math.sqrt(csx * csx + csy * csy + csz * csz)
+                if R3 > 0.01:
+                    d_len = math.sqrt(dx * dx + dy * dy + dz * dz)
+                    if d_len > 0.001:
+                        dx /= d_len; dy /= d_len; dz /= d_len
+                    self.screen_pan_x    = float(hx + dx * R3)
+                    self.screen_pan_y    = float(hy + dy * R3)
+                    self.screen_distance = float(-(hz + dz * R3))
+                    base_yaw   = math.atan2(-dx, -dz)
+                    base_pitch = math.asin(max(-1.0, min(1.0, dy)))
+                    self.screen_yaw   = base_yaw   + self._yaw_offset
+                    self.screen_pitch = base_pitch + self._pitch_offset
+
+        # Grip + stick fine-tuning (pan, resize, rotate, depth) ──────────
+        KB_MOVE_SPEED = 0.4    # m/s at full deflection
+        DEPTH_SPEED  = 0.08    # depth_strength units/s at full deflection
+        # Depth-ratio stick control: replaces A/B + right-grip mapping
+        DEPTH_RATIO_SPEED = 0.5   # units/s at full deflection
+        DEPTH_RATIO_MIN   = 0.0
+        DEPTH_RATIO_MAX   = 10.0
+        if grip_l:
+            if self._keyboard_visible and self._grip_target_l == 'keyboard':
+                # Left grip latched to keyboard + left stick → standalone
+                # translation: orbit the keyboard around the head on a sphere
+                # of preserved Euclidean radius, then re-aim at the head with
+                # the user yaw/pitch offsets layered on top (mirrors the
+                # yaw/pitch standalone pattern).
+                if (abs(lx) > DEAD or abs(ly) > DEAD) and self._head_pos_w is not None:
+                    hx, hy, hz = self._head_pos_w
+                    ckx = self._keyboard_pan_x - hx
+                    cky = self._keyboard_pan_y - hy
+                    ckz = -self._keyboard_distance - hz
+                    R3 = math.sqrt(ckx * ckx + cky * cky + ckz * ckz)
+                    if R3 > 0.01:
+                        az = math.atan2(ckx, -ckz)
+                        el = math.asin(max(-1.0, min(1.0, cky / R3)))
+                        # Convert linear speed at object distance to angular rate.
+                        ang = KB_MOVE_SPEED * dt / max(R3, 0.3)
+                        if abs(lx) > DEAD:
+                            az += lx * ang
+                        if abs(ly) > DEAD:
+                            el = max(-1.4, min(1.4, el + ly * ang))
+                        cel = math.cos(el)
+                        ux = cel * math.sin(az)
+                        uy = math.sin(el)
+                        uz = -cel * math.cos(az)
+                        self._keyboard_pan_x   = float(hx + ux * R3)
+                        self._keyboard_pan_y   = float(hy + uy * R3)
+                        self._keyboard_distance = float(-(hz + uz * R3))
+                        base_yaw   = math.atan2(-ux, -uz)
+                        base_pitch = math.asin(max(-1.0, min(1.0, uy)))
+                        self._keyboard_yaw   = base_yaw   + self._kb_yaw_offset
+                        self._keyboard_pitch = base_pitch + self._kb_pitch_offset
+            else:
+                # Left grip + left stick → standalone screen translation:
+                # orbit the screen around the head on a sphere of preserved
+                # Euclidean radius, then re-aim at the head with the user
+                # yaw/pitch offsets layered on top.
+                if laser_on_screen and (abs(lx) > DEAD or abs(ly) > DEAD) \
+                        and self._head_pos_w is not None:
+                    hx, hy, hz = self._head_pos_w
+                    csx = self.screen_pan_x - hx
+                    csy = self.screen_pan_y - hy
+                    csz = -self.screen_distance - hz
+                    R3 = math.sqrt(csx * csx + csy * csy + csz * csz)
+                    if R3 > 0.01:
+                        az = math.atan2(csx, -csz)
+                        el = math.asin(max(-1.0, min(1.0, csy / R3)))
+                        ang = self._pan_speed * dt / max(R3, 0.3)
+                        if abs(lx) > DEAD:
+                            az += lx * ang
+                        if abs(ly) > DEAD:
+                            el = max(-1.4, min(1.4, el + ly * ang))
+                        cel = math.cos(el)
+                        ux = cel * math.sin(az)
+                        uy = math.sin(el)
+                        uz = -cel * math.cos(az)
+                        self.screen_pan_x    = float(hx + ux * R3)
+                        self.screen_pan_y    = float(hy + uy * R3)
+                        self.screen_distance = float(-(hz + uz * R3))
+                        base_yaw   = math.atan2(-ux, -uz)
+                        base_pitch = math.asin(max(-1.0, min(1.0, uy)))
+                        self.screen_yaw   = base_yaw   + self._yaw_offset
+                        self.screen_pitch = base_pitch + self._pitch_offset
+        elif grip_r:
+            # Right grip + left stick Y → depth_ratio (no laser required)
+            if abs(ly) > DEAD:
+                old_val = self.depth_ratio
+                self.depth_ratio = max(DEPTH_RATIO_MIN,
+                                    min(DEPTH_RATIO_MAX,
+                                        self.depth_ratio + ly * DEPTH_RATIO_SPEED * dt))
+                if self.depth_ratio != old_val:
+                    self._depth_osd_show_t = time.perf_counter()
+            # Don't send desktop scroll events while keyboard visible or the screen is being
+            # grabbed/manipulated — avoid accidental scrolls while adjusting UI.
+            if not (self._keyboard_visible or self._grabbed or grip_l or grip_r):
+                self._accum_scroll(lx, 0.0, dt)
+        else:
+            if not (self._keyboard_visible or self._grabbed or grip_l or grip_r):
+                self._accum_scroll(lx, ly, dt)
+
+        # Right grip + right stick X: resize screen width ──────────────────────
+        # Right grip + right stick Y: screen distance (acceleration curve) ─────
+        # Left grip + right stick X: rotate screen yaw around its centre ───────
+        # Left grip + right stick Y: depth strength (unchanged) ────────────────
+        # Right stick (no grip): mouse scroll─────
         RESIZE_SPEED = 1.2    # m/s of width change at full deflection
-        DEPTH_SPEED  = 0.08   # depth_strength units/s at full deflection
         if grip_r and not grip_l:
-            # When pointing at the keyboard, right stick acts on keyboard instead of screen
-            if self._keyboard_visible and self._kb_hover_r is not None:
+            if self._keyboard_visible and self._grip_target_r == 'keyboard':
                 if abs(rx) > abs(ry) and abs(rx) > DEAD:
                     self._keyboard_width = max(0.3,
                         self._keyboard_width + rx * RESIZE_SPEED * dt)
                     self._keyboard_height = None  # recalc from aspect
                 elif abs(ry) > abs(rx) and abs(ry) > DEAD:
-                    self._keyboard_distance = max(0.2,
-                        self._keyboard_distance + ry * DIST_SPEED * dt)
+                    # Right-grip + right-stick Y → radial distance along head→keyboard ray
+                    _t = (abs(ry) - DEAD) / (1.0 - DEAD)
+                    _speed = (self._dist_speed_base
+                            + (self._dist_speed_max - self._dist_speed_base) * (_t ** self._dist_speed_exp))
+                    if self._head_pos_w is not None:
+                        hx, hy, hz = self._head_pos_w
+                        ckx = self._keyboard_pan_x - hx
+                        cky = self._keyboard_pan_y - hy
+                        ckz = -self._keyboard_distance - hz
+                        R3 = math.sqrt(ckx * ckx + cky * cky + ckz * ckz)
+                        if R3 > 0.01:
+                            ux = ckx / R3
+                            uy = cky / R3
+                            uz = ckz / R3
+                            delta = _speed * (1.0 if ry > 0 else -1.0) * dt
+                            R3_new = max(0.2, R3 + delta)
+                            self._keyboard_pan_x   = float(hx + ux * R3_new)
+                            self._keyboard_pan_y   = float(hy + uy * R3_new)
+                            self._keyboard_distance = float(-(hz + uz * R3_new))
+                            # Re-aim keyboard at the head (auto-orientation),
+                            # layering user-configured offsets on top.
+                            base_yaw   = math.atan2(-ux, -uz)
+                            base_pitch = math.asin(max(-1.0, min(1.0, uy)))
+                            self._keyboard_yaw   = base_yaw   + self._kb_yaw_offset
+                            self._keyboard_pitch = base_pitch + self._kb_pitch_offset
+                    else:
+                        self._keyboard_distance = max(0.2,
+                            self._keyboard_distance + ry * self._dist_speed_base * dt)
             else:
-                if laser_on_screen and abs(rx) > abs(ry) and abs(rx) > DEAD:
+                if abs(rx) > abs(ry) and abs(rx) > DEAD:
                     self.screen_width = max(0.3,
                                             self.screen_width + rx * RESIZE_SPEED * dt)
                     self.screen_height = None
                     self._resizing = True
                     self._screen_osd_show_t = time.perf_counter()
-                elif laser_on_screen and abs(ry) > abs(rx) and abs(ry) > DEAD:
-                    self.screen_distance = max(0.3,
-                                               self.screen_distance + ry * DIST_SPEED * dt)
+                elif abs(ry) > abs(rx) and abs(ry) > DEAD:
+                    # Right-grip + right-stick Y → radial distance along head→screen ray
+                    _t = (abs(ry) - DEAD) / (1.0 - DEAD)
+                    _speed = (self._dist_speed_base
+                            + (self._dist_speed_max - self._dist_speed_base) * (_t ** self._dist_speed_exp))
+                    # Move screen along the head→screen radial direction
+                    if self._head_pos_w is not None:
+                        hx, hy, hz = self._head_pos_w
+                        csx = self.screen_pan_x - hx
+                        csy = self.screen_pan_y - hy
+                        csz = -self.screen_distance - hz
+                        R3 = math.sqrt(csx * csx + csy * csy + csz * csz)
+                        if R3 > 0.01:
+                            ux = csx / R3
+                            uy = csy / R3
+                            uz = csz / R3
+                            delta = _speed * (1.0 if ry > 0 else -1.0) * dt
+                            R3_new = max(0.3, R3 + delta)
+                            self.screen_pan_x    = float(hx + ux * R3_new)
+                            self.screen_pan_y    = float(hy + uy * R3_new)
+                            self.screen_distance = float(-(hz + uz * R3_new))
                     self._screen_osd_show_t = time.perf_counter()
         elif grip_l and not grip_r:
-            if self._keyboard_visible and self._kb_hover_r is not None:
-                # Right stick Y = keyboard depth (only when laser is on keyboard)
+            if self._keyboard_visible and self._grip_target_l == 'keyboard':
+                # Left grip latched onto keyboard + right stick → standalone
+                # keyboard yaw / pitch offsets (auto-orientation still aims at
+                # head, these offsets are layered on top).
+                if abs(rx) > DEAD:
+                    self._kb_yaw_offset   -= rx * self._rot_speed * dt
+                    self._keyboard_yaw    -= rx * self._rot_speed * dt
                 if abs(ry) > DEAD:
-                    self._keyboard_distance = max(0.2,
-                        self._keyboard_distance + ry * KB_MOVE_SPEED * dt)
+                    self._kb_pitch_offset += ry * self._rot_speed * dt
+                    self._keyboard_pitch  += ry * self._rot_speed * dt
             else:
-                # Left grip + right stick Y → adjust depth strength
+                # Left grip + right stick X → screen yaw rotation
+                if laser_on_screen and abs(rx) > DEAD:
+                    self._yaw_offset -= rx * self._rot_speed * dt
+                    self.screen_yaw  -= rx * self._rot_speed * dt
+                # Left grip + right stick Y → screen pitch rotation
                 if laser_on_screen and abs(ry) > DEAD:
-                    self.depth_strength = max(0.0, min(0.5,
-                                              self.depth_strength + ry * DEPTH_SPEED * dt))
+                    self._pitch_offset += ry * self._rot_speed * dt
+                    self.screen_pitch  += ry * self._rot_speed * dt
         self._grip_r_prev = grip_r
+        # Re-sync grab offsets after stick fine-tuning.  Grip-to-move is paused
+        # while the stick is active, so full XYZ re-sync is safe here.
+        for grip_now, grip_mat, grab_attr in [
+            (grip_l, self._grip_mat_l, '_screen_grab_grip_l'),
+            (grip_r, self._grip_mat_r, '_screen_grab_grip_r'),
+        ]:
+            if grip_now and grip_mat is not None:
+                saved = getattr(self, grab_attr)
+                if saved is not None:
+                    grip_pos = grip_mat[:3, 3].astype('f8')
+                    screen_center = np.array([
+                        self.screen_pan_x, self.screen_pan_y,
+                        -self.screen_distance], dtype='f8')
+                    setattr(self, grab_attr, screen_center - grip_pos)
         if not grip_r:
             # Accelerated scroll: higher stick deflection → disproportionately faster scroll
-            self._accum_scroll(rx, ry, dt)
+            if not (self._keyboard_visible or self._grabbed or grip_l):
+                self._accum_scroll(rx, ry, dt)
 
         # Rebuild keyboard geometry if width changed
         if (self._keyboard_visible and self._keyboard_tex is not None
                 and abs(self._keyboard_width - self._kb_last_build_width) > 0.001):
             self._keyboard_height = (self._keyboard_width
-                                     * _KB_TEX_H / float(_KB_TEX_W))
+                                    * _KB_TEX_H / float(_KB_TEX_W))
             self._build_keyboard_texture()
             self._kb_last_build_width = self._keyboard_width
 
-        # Menu (left): toggle FPS overlay
+        # Menu (left): short press → toggle status/FPS panel
         menu_now = self._read_bool_action(self._act_menu_btn, "/user/hand/left")
+        MENU_LONG = 0.6  # seconds — long press reserved for calibration combo
         if menu_now and not self._menu_pressed_last:
-            self._fps_overlay_visible = not self._fps_overlay_visible
+            self._menu_press_t = time.perf_counter()
+            self._menu_long_fired = False
+        if not menu_now and self._menu_pressed_last:
+            if not self._menu_long_fired and (time.perf_counter() - self._menu_press_t) < MENU_LONG:
+                self._fps_overlay_visible = not self._fps_overlay_visible
         self._menu_pressed_last = menu_now
 
         # A / B (right):
-        #   right grip held + A hold   → increase depth_ratio continuously
-        #   right grip held + B hold   → decrease depth_ratio continuously
-        #   right grip held + RSC      → reset depth_ratio to 1.0  (handled in RSC block below)
-        #   no right grip + A          → left mouse click
-        #   no right grip + B          → right mouse click
-        DEPTH_RATIO_SPEED = 0.5   # units per second at full hold
-        DEPTH_RATIO_MIN   = 0.0
-        DEPTH_RATIO_MAX   = 10.0
-
+        #   Previously: right-grip + A/B adjusted depth_ratio. Now: right-grip +
+        #   right-stick Y adjusts depth_ratio. When A+B are held together (brand
+        #   switch combo) A/B's other functions are suppressed.
         a_now = self._read_bool_action(self._act_a_btn, "/user/hand/right")
         b_now = self._read_bool_action(self._act_b_btn, "/user/hand/right")
 
-        if grip_r:
-            if a_now:
-                self.depth_ratio = min(DEPTH_RATIO_MAX, self.depth_ratio + DEPTH_RATIO_SPEED * dt)
-            if b_now:
-                self.depth_ratio = max(DEPTH_RATIO_MIN, self.depth_ratio - DEPTH_RATIO_SPEED * dt)
-        else:
-            # Use XR runtime's `changed` flag when available — more reliable than
-            # manual frame-to-frame tracking when a button sits under a resting thumb.
-            # Fall back to manual edge detection if pyopenxr doesn't expose it.
-            a_edge = self._read_bool_edge(self._act_a_btn, "/user/hand/right", self._a_last)
-            b_edge = self._read_bool_edge(self._act_b_btn, "/user/hand/right", self._b_last)
-            if a_edge:
-                _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
-                _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
-            if b_edge:
-                _send_mouse_flags(_MOUSEEVENTF_RIGHTDOWN)
-                _send_mouse_flags(_MOUSEEVENTF_RIGHTUP)
+        if not ab_held:
+            # When A+B are not held together, A/B keep their normal behaviour.
+            # If right-grip is held we intentionally do not perform A/B immediate
+            # actions here (depth_ratio is adjusted via right-stick Y below).
+            if not grip_r:
+                # Use XR runtime's `changed` flag when available — more reliable than
+                # manual frame-to-frame tracking when a button sits under a resting thumb.
+                # Fall back to manual edge detection if pyopenxr doesn't expose it.
+                a_edge = self._read_bool_edge(self._act_a_btn, "/user/hand/right", self._a_last)
+                b_edge = self._read_bool_edge(self._act_b_btn, "/user/hand/right", self._b_last)
+                # Only send OS mouse clicks if the controller laser is currently
+                # intersecting the virtual screen. This prevents A/B from clicking
+                # when pointing off-screen.
+                is_gripping = self._grabbed
+                if a_edge and laser_on_screen and not is_gripping:
+                    _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
+                    _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
+                if b_edge and laser_on_screen and not is_gripping:
+                    _send_mouse_flags(_MOUSEEVENTF_RIGHTDOWN)
+                    _send_mouse_flags(_MOUSEEVENTF_RIGHTUP)
 
         self._a_last = a_now
         self._b_last = b_now
@@ -4888,7 +6726,7 @@ class OpenXRViewer:
                 self._apply_preset(nxt)
                 self._y_long_fired = True
         if not y_now and self._y_last and not self._y_long_fired:
-            self._apply_preset(3)  # short press = preset combo 4
+            self._apply_preset(3)  # short press = default preset
         self._y_last = y_now
 
         # X (left): toggle virtual keyboard. When turning it on, snap the keyboard
@@ -4903,28 +6741,70 @@ class OpenXRViewer:
                 self._anchor_keyboard_below_screen()
         self._x_last = x_now
 
-        # Left thumbstick click: cycle background color through _BG_COLORS presets.
+        # Thumbstick buttons: distinguish between single and double thumbstick presses
         lsc_now = self._read_bool_action(self._act_left_stick_click, "/user/hand/left")
-        if lsc_now and not self._left_stick_click_prev:
-            self._bg_color_idx = (self._bg_color_idx + 1) % len(_BG_COLORS)
-        self._left_stick_click_prev = lsc_now
-
-        # Right thumbstick click:
-        #   • right grip              → reset depth_ratio to 1.0
-        #   • left grip (no R grip)   → toggle depth strength off/on
-        #   • no grip                 → toggle curved screen
         rsc_now = self._read_bool_action(self._act_right_stick_click, "/user/hand/right")
-        if not rsc_now and self._right_stick_click_prev:
-            if grip_r:
-                self.depth_ratio = 2.0
-            elif grip_l:
-                if self.depth_strength > 0.0:
-                    self._depth_strength_saved = self.depth_strength
-                    self.depth_strength = 0.0
-                else:
-                    self.depth_strength = getattr(self, '_depth_strength_saved', 0.1)
-            else:
-                self._screen_curved = not self._screen_curved
+        BOTH_LONG  = 0.5   # Duration to trigger FPS/help panel toggle with both sticks
+        SINGLE_LONG = 1.0  # Duration for single thumbstick long press to switch shortcut panels
+
+        # Both thumbsticks pressed → toggle FPS/help panel after 0.5 seconds (unchanged)
+        both_clicked = lsc_now and rsc_now
+        if both_clicked and not self._both_stick_fired:
+            if self._both_stick_start == 0.0:
+                self._both_stick_start = time.perf_counter()
+            elif time.perf_counter() - self._both_stick_start >= BOTH_LONG:
+                self._fps_overlay_visible = not self._fps_overlay_visible
+                self._both_stick_fired = True
+                # Mark single-stick long-fired to suppress their short actions
+                self._lsc_long_fired = True
+                self._rsc_long_fired = True
+        if not both_clicked:
+            self._both_stick_start = 0.0
+            self._both_stick_fired = False
+
+        # Non-double-press case: handle each thumbstick separately
+        # - Long press (>= SINGLE_LONG) triggers shortcut panel (same as double press);
+        # - Short press (released when < SINGLE_LONG) performs background/curved surface switching or grip modifier actions;
+        if not both_clicked:
+            now = self._frame_now
+
+            # Left thumbstick: long-press → toggle status/shortcut panel; short-press cycles background
+            if lsc_now and not self._left_stick_click_prev:
+                self._lsc_press_t = now
+                self._lsc_long_fired = False
+            if lsc_now and not self._lsc_long_fired:
+                if now - getattr(self, '_lsc_press_t', 0.0) >= SINGLE_LONG:
+                    self._fps_overlay_visible = not self._fps_overlay_visible
+                    self._lsc_long_fired = True
+            if not lsc_now and self._left_stick_click_prev:
+                # Released — if long-press wasn't fired, treat as short press
+                if not self._lsc_long_fired:
+                    if grip_r:
+                        if self.depth_strength > 0.0:
+                            self._depth_strength_saved = self.depth_strength
+                            self.depth_strength = 0.0
+                        else:
+                            self.depth_strength = getattr(self, '_depth_strength_saved', 0.1)
+                    else:
+                        self._bg_color_idx = (self._bg_color_idx + 1) % len(_BG_COLORS)
+
+            # Right thumbstick: long-press → reset screen direction (keep distance + size);
+            #          short-press → toggle curved/flat
+            if rsc_now and not self._right_stick_click_prev:
+                self._rsc_press_t = now
+                self._rsc_long_fired = False
+            if rsc_now and not self._rsc_long_fired:
+                if now - getattr(self, '_rsc_press_t', 0.0) >= SINGLE_LONG:
+                    self._reset_screen_direction()
+                    self._rsc_long_fired = True
+            if not rsc_now and self._right_stick_click_prev:
+                if not self._rsc_long_fired:
+                    if not grip_r and not grip_l:
+                        self._screen_curved = not self._screen_curved
+                    elif grip_r:
+                        self.depth_ratio = 2.0
+
+        self._left_stick_click_prev = lsc_now
         self._right_stick_click_prev = rsc_now
 
         # Border fade: snap to 1 while the user is actively re-positioning, fade out
@@ -4949,15 +6829,10 @@ class OpenXRViewer:
             if idle > FADE_DELAY:
                 self._kb_border_alpha = max(0.0, 1.0 - (idle - FADE_DELAY) / FADE_DUR)
 
-        # Cursor + trigger input (runs every frame regardless of grip state)
-        self._handle_keyboard_input()   # updates _kb_hover_l/r, consumes keyboard triggers
-        self._handle_cursor()           # moves Windows cursor when laser hits screen
-        self._handle_triggers()         # fires mouse clicks (skips keys claimed by keyboard)
+        # Trigger input — fires mouse clicks (skips keys claimed by keyboard)
+        self._handle_triggers()
 
-    # ------------------------------------------------------------------
     # Main blocking loop
-    # ------------------------------------------------------------------
-
     def run(self, first_rgb=None, first_depth=None):
         """
         Blocking render loop. Exits when the OpenXR session ends, the GLFW
@@ -5006,8 +6881,11 @@ class OpenXRViewer:
             and not shutdown_event.is_set()
         ):
             now = time.perf_counter()
+            self._frame_now = now   # shared per-frame timestamp (overlays/input reuse)
             dt = now - last_input_t
             last_input_t = now
+            self._last_frame_dt = dt
+            self._frame_count += 1
 
             glfw.poll_events()
             self._poll_xr_events()
@@ -5017,28 +6895,24 @@ class OpenXRViewer:
                 continue
 
             # — Wait for the runtime to signal frame timing —
-            frame_state = xr.wait_frame(self._xr_session, xr.FrameWaitInfo())
-            xr.begin_frame(self._xr_session, xr.FrameBeginInfo())
+            frame_state = xr.wait_frame(self._xr_session, self._xr_frame_wait_info)
+            xr.begin_frame(self._xr_session, self._xr_frame_begin_info)
 
             # sync_actions must happen before xr.locate_space for action spaces.
             # Do it here so _update_aim_poses gets fresh locations this frame.
-            if self._action_set is not None:
+            if self._xr_actions_sync_info is not None:
                 try:
-                    xr.sync_actions(
-                        self._xr_session,
-                        xr.ActionsSyncInfo(active_action_sets=[
-                            xr.ActiveActionSet(
-                                action_set=self._action_set,
-                                subaction_path=xr.NULL_PATH,
-                            )
-                        ]),
-                    )
+                    xr.sync_actions(self._xr_session, self._xr_actions_sync_info)
                 except Exception:
                     pass
 
             # Locate controller spaces (now valid after sync_actions)
             self._update_aim_poses(frame_state.predicted_display_time)
             self._update_grip_poses(frame_state.predicted_display_time)
+            # Pre-smooth controller poses once per frame (One Euro Filter).
+            # Grip-to-move, laser rendering, and cursor all share the same
+            # stabilized output — no double-filtering.
+            self._smooth_controller_poses()
             # Poll button/stick states (sync already done above)
             self._poll_controller_input(dt)
 
@@ -5116,7 +6990,7 @@ class OpenXRViewer:
                 eye_layer_views = []
 
                 if self._use_d3d11:
-                    # ── D3D11 rendering ──────────────────────────────────
+                    # D3D11 rendering─────
                     #
                     # Prefer GPU interop (NV_DX_interop2 or EXT_memory_object)
                     # which avoids the CPU round-trip entirely.
@@ -5126,8 +7000,8 @@ class OpenXRViewer:
                         # NV_DX_interop2: render directly into swapchain textures
                         for eye_index in range(2):
                             swapchain = self._xr_swapchains[eye_index]
-                            img_index = xr.acquire_swapchain_image(swapchain, xr.SwapchainImageAcquireInfo())
-                            xr.wait_swapchain_image(swapchain, xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION))
+                            img_index = xr.acquire_swapchain_image(swapchain, self._xr_sc_acquire_info)
+                            xr.wait_swapchain_image(swapchain, self._xr_sc_wait_info)
                             sc_image = self._swapchain_images[eye_index][img_index]
                             sc_w, sc_h = self._swapchain_sizes[eye_index]
                             view = views[eye_index] if views and views[eye_index] else None
@@ -5145,7 +7019,7 @@ class OpenXRViewer:
                             finally:
                                 _wglDXUnlockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
 
-                            xr.release_swapchain_image(swapchain, xr.SwapchainImageReleaseInfo())
+                            xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
                             eye_layer_views.append(xr.CompositionLayerProjectionView(
                                 pose=view.pose if view else xr.Posef(),
                                 fov=view.fov   if view else _default_fov,
@@ -5162,8 +7036,8 @@ class OpenXRViewer:
                         # EXT_memory_object: render to shared GL FBO, GPU-side blit to swapchain
                         for eye_index in range(2):
                             swapchain = self._xr_swapchains[eye_index]
-                            img_index = xr.acquire_swapchain_image(swapchain, xr.SwapchainImageAcquireInfo())
-                            xr.wait_swapchain_image(swapchain, xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION))
+                            img_index = xr.acquire_swapchain_image(swapchain, self._xr_sc_acquire_info)
+                            xr.wait_swapchain_image(swapchain, self._xr_sc_wait_info)
                             sc_image = self._swapchain_images[eye_index][img_index]
                             sc_w, sc_h = self._swapchain_sizes[eye_index]
                             view = views[eye_index] if views and views[eye_index] else None
@@ -5174,7 +7048,7 @@ class OpenXRViewer:
                             self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
                             self._blit_ext_to_swapchain(eye_index, sc_image.texture)
 
-                            xr.release_swapchain_image(swapchain, xr.SwapchainImageReleaseInfo())
+                            xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
                             eye_layer_views.append(xr.CompositionLayerProjectionView(
                                 pose=view.pose if view else xr.Posef(),
                                 fov=view.fov   if view else _default_fov,
@@ -5193,8 +7067,8 @@ class OpenXRViewer:
 
                         for eye_index in range(2):
                             swapchain = self._xr_swapchains[eye_index]
-                            img_index = xr.acquire_swapchain_image(swapchain, xr.SwapchainImageAcquireInfo())
-                            xr.wait_swapchain_image(swapchain, xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION))
+                            img_index = xr.acquire_swapchain_image(swapchain, self._xr_sc_acquire_info)
+                            xr.wait_swapchain_image(swapchain, self._xr_sc_wait_info)
                             sc_image = self._swapchain_images[eye_index][img_index]
                             sc_w, sc_h = self._swapchain_sizes[eye_index]
                             view = views[eye_index] if views and views[eye_index] else None
@@ -5211,7 +7085,7 @@ class OpenXRViewer:
                         # Phase 2: map PBOs (DMA should be done), upload, release.
                         for eye_index, pbo_id, d3d11_tex, sc_w, sc_h, swapchain, view in d3d11_pending:
                             self._upload_pbo_to_d3d11(pbo_id, d3d11_tex, sc_w, sc_h)
-                            xr.release_swapchain_image(swapchain, xr.SwapchainImageReleaseInfo())
+                            xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
                             eye_layer_views.append(xr.CompositionLayerProjectionView(
                                 pose=view.pose if view else xr.Posef(),
                                 fov=view.fov   if view else _default_fov,
@@ -5229,12 +7103,9 @@ class OpenXRViewer:
                         swapchain = self._xr_swapchains[eye_index]
 
                         img_index = xr.acquire_swapchain_image(
-                            swapchain, xr.SwapchainImageAcquireInfo()
+                            swapchain, self._xr_sc_acquire_info
                         )
-                        xr.wait_swapchain_image(
-                            swapchain,
-                            xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
-                        )
+                        xr.wait_swapchain_image(swapchain, self._xr_sc_wait_info)
 
                         sc_image = self._swapchain_images[eye_index][img_index]
                         sc_w, sc_h = self._swapchain_sizes[eye_index]
@@ -5246,7 +7117,7 @@ class OpenXRViewer:
                         _, mgl_fbo = self._get_or_create_fbo(eye_index, img_index, sc_image.image)
                         self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat)
 
-                        xr.release_swapchain_image(swapchain, xr.SwapchainImageReleaseInfo())
+                        xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
 
                         eye_layer_views.append(xr.CompositionLayerProjectionView(
                             pose=view.pose if view else xr.Posef(),
@@ -5289,10 +7160,7 @@ class OpenXRViewer:
 
         self.cleanup()
 
-    # ------------------------------------------------------------------
     # Cleanup
-    # ------------------------------------------------------------------
-
     def cleanup(self):
         """Release all OpenXR and OpenGL resources."""
         if sys.platform == "win32" and self._saved_dclick_time is not None:
@@ -5357,13 +7225,26 @@ class OpenXRViewer:
         self._pbo_color = self._pbo_depth = None
 
         for tex in (self._overlay_tex, self._depth_osd_tex, self._screen_osd_tex,
+                    self._preset_osd_tex, self._brand_osd_tex,
                     self.color_tex, self.depth_tex):
             if tex:
                 try:
                     tex.release()
                 except Exception:
                     pass
-        self._overlay_tex = self._depth_osd_tex = self._screen_osd_tex = None
+        self._overlay_tex = self._depth_osd_tex = self._screen_osd_tex = self._preset_osd_tex = self._brand_osd_tex = None
+        if self._calib_tex:
+            try:
+                self._calib_tex.release()
+            except Exception:
+                pass
+            self._calib_tex = None
+        if self._help_tex:
+            try:
+                self._help_tex.release()
+            except Exception:
+                pass
+            self._help_tex = None
         self.color_tex = self.depth_tex = None
 
         # Release controller model GL resources

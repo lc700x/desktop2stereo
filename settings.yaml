@@ -413,6 +413,7 @@ Recompile CoreML: false
 OpenVINO: false
 Recompile OpenVINO: false
 Capture Tool: none
+Controller Model: PICO
 Fill 16:9: true
 Fix Viewer Aspect: false
 Lossless Scaling Support: false

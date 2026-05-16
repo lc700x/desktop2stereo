@@ -361,6 +361,7 @@ DEFAULTS = {
     "Stereo Mix": None,
     "CRF": 20,
     "Audio Delay": -0.15,
+    "Controller Model": "PICO",
     "Lossless Scaling Support": False,
     "Capture Tool": get_default_windows_capture_tool(),
     "Fill 16:9": True,  # force 16:9 output
@@ -444,6 +445,7 @@ UI_TEXTS = {
         "Failed to open browser": "Failed to open browser",
         "Copied URL": "Copied URL",
         "Opening URL in browser": "Opening URL in browser",
+        "Controller:": "Controller:",
         "Capture Tool:": "Capture Tool:",
         "Fill 16:9": "Fill 16:9",
         "Fix Viewer Aspect": "Fix Viewer Aspect",
@@ -526,6 +528,7 @@ UI_TEXTS = {
         "Failed to open browser": "打开浏览器失败",
         "Copied URL": "已复制网址",
         "Opening URL in browser": "正在浏览器中打开网址",
+        "Controller:": "手柄模型：",
         "Capture Tool:": "捕获工具:",  
         "Fill 16:9": "填充16:9",
         "Fix Viewer Aspect": "固定窗口比例",
@@ -869,11 +872,25 @@ class ConfigGUI(tk.Tk):
         self.foreground_scale_cb.grid(row=10, column=3, sticky="ew", **self.pad)
 
         # Display Mode
+        self.ctrl_model_var = tk.StringVar()
         self.label_display_mode = ttk.Label(self.content_frame, text="Display Mode:")
         self.label_display_mode.grid(row=11, column=0, sticky="w", **self.pad)
         self.display_mode_values = ["Half-SBS", "Full-SBS", "TAB", "Depth Map"]
         self.display_mode_cb = ttk.Combobox(self.content_frame, values=self.display_mode_values, state="readonly")
         self.display_mode_cb.grid(row=11, column=1, sticky="ew", **self.pad)
+
+        # VR Controller Models
+        self.label_ctrl_model = ttk.Label(self.content_frame, text="Controller:")
+        
+        _ctrl_dirs = [d for d in os.listdir('controllers')
+                      if os.path.isdir(os.path.join('controllers', d))]
+        _ctrl_dirs = [d for d in os.listdir('controllers')
+              if os.path.isdir(os.path.join('controllers', d))]
+        if not _ctrl_dirs:
+            _ctrl_dirs = ["PICO"]   # ensure at least the default is available
+
+        self.ctrl_model_cb = ttk.Combobox(self.content_frame,
+            textvariable=self.ctrl_model_var, values=_ctrl_dirs, state="readonly")
         
         # IPD
         self.label_ipd = ttk.Label(self.content_frame, text="IPD (m):")
@@ -1335,28 +1352,37 @@ class ConfigGUI(tk.Tk):
             self.lossless_scaling_support_cb.grid_remove()
             
     def update_display_mode_options(self):
-        """Update display mode options based on current run mode"""
+        """Update display mode options based on current run mode.
+        For OpenXR Viewer, show controller model selector and hide display mode.
+        For other modes, hide controller selector and show appropriate display modes.
+        """
         if self.run_mode_key == "OpenXR Viewer":
             # OpenXR renders each eye directly — display mode is irrelevant
-            self.display_mode_cb.set("Full-SBS")
-            self.display_mode_cb.config(state="disabled")
-            self.label_display_mode.config(state="disabled")
+            self.display_mode_cb.grid_remove()
+            self.label_display_mode.grid_remove()
+            # Show controller selection widgets
+            self.label_ctrl_model.grid(row=11, column=0, sticky="w", **self.pad)
+            self.ctrl_model_cb.grid(row=11, column=1, sticky="ew", **self.pad)
             return
 
+        # For all other run modes: hide controller widgets
+        self.label_ctrl_model.grid_remove()
+        self.ctrl_model_cb.grid_remove()
+        self.display_mode_cb.grid()
+        self.label_display_mode.grid()
+
+        # Now handle display mode combobox for non‑OpenXR modes
         self.display_mode_cb.config(state="readonly")
         self.label_display_mode.config(state="normal")
 
         if self.run_mode_key in ["Legacy Streamer", "3D Monitor"]:
-            # Remove "Depth Map" from display modes for Legacy Streamer
             display_modes = ["Half-SBS", "Full-SBS", "TAB"]
         else:
             display_modes = ["Half-SBS", "Full-SBS", "TAB", "Depth Map"]
-        
-        # Update the combobox values
+
         current_value = self.display_mode_cb.get()
         self.display_mode_cb["values"] = display_modes
-        
-        # If current value is not in available options, set to first available
+
         if current_value not in display_modes and display_modes:
             self.display_mode_cb.set(display_modes[0])
         elif not display_modes:
@@ -1837,6 +1863,7 @@ class ConfigGUI(tk.Tk):
         self.label_language.config(text=texts["Set Language:"])
         # Update run mode labels & combobox values
         self.label_run_mode.config(text=texts.get("Run Mode:", "Run Mode:"))
+        self.label_ctrl_model.config(text=texts.get("Controller:", "Controller:"))
         localized_run_vals = [texts.get("Local Viewer", "Local Viewer"), texts.get("OpenXR Viewer", "OpenXR Viewer"), texts.get("RTMP Streamer", "RTMP Streamer"), texts.get("MJPEG Streamer", "MJPEG Streamer"), texts.get("Legacy Streamer", "Legacy Streamer")]
         if OS_NAME == "Windows":
             localized_run_vals.append(texts.get("3D Monitor", "3D Monitor"))
@@ -2324,6 +2351,15 @@ class ConfigGUI(tk.Tk):
         # Trigger device change to update optimizer options
         self.on_device_change()
 
+        # Load controller model
+        saved_ctrl_model = cfg.get("Controller Model", DEFAULTS.get("Controller Model", "PICO"))
+        current_ctrl_values = self.ctrl_model_cb['values']
+        if saved_ctrl_model in current_ctrl_values:
+            self.ctrl_model_var.set(saved_ctrl_model)
+        else:
+            # If saved model not found (e.g., folder missing), fall back to default
+            self.ctrl_model_var.set("PICO")
+
     def update_depth_resolution_options(self, model_name):
         """Update depth resolution options based on selected model"""
         # Get resolutions for this model
@@ -2485,6 +2521,7 @@ class ConfigGUI(tk.Tk):
             "Audio Delay": float(self.audio_delay_var.get()),
             "Specify Display": self.specify_display_var.get(),
             "Stereo Monitor": self.monitor_label_to_index.get(self.stereo_monitor_var.get(), DEFAULTS["Stereo Monitor"]),
+            "Controller Model": self.ctrl_model_var.get(),
         }
         
         success = self.save_yaml("settings.yaml", self.cfg)
