@@ -50,6 +50,8 @@ import json
 import io as _io
 from PIL import Image
 
+EDGE_STRENGTH = 0.6 # snapping strength of cursor around screen edge
+
 def _read_glb_chunks(data):
     magic = struct.unpack_from('<I', data, 0)[0]
     if magic != 0x46546C67:
@@ -4619,7 +4621,9 @@ class OpenXRViewer:
                             _dot2 = max(-1.0, min(1.0, _dot2))
                             _ang2 = math.acos(_dot2)
                             if _ang2 < self._ray_edge_deadzone_rad:
-                                fwd_w = _edge_dir  # 吸附边缘滑动
+                                # Blend 40% of the edge direction, keep 60% of the raw direction
+                                blend = (1.0 - EDGE_STRENGTH) * _raw_fwd + EDGE_STRENGTH * _edge_dir
+                                fwd_w = blend / (np.linalg.norm(blend) + 1e-10)  # edge snapping
             if ctrl_name == 'left':
                 self._smooth_ray_prev_fwd_l = fwd_w.copy()
             else:
@@ -4678,25 +4682,33 @@ class OpenXRViewer:
         # Per-beam keyboard priority: each controller's laser independently
         # chooses keyboard hit over screen hit (no cross-controller suppression).
         for now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up in beams:
-            cursor_uv = self._cursor_uv_l if ctrl_name == 'left' else self._cursor_uv_r
-            if (self._cursor_ctrl == ctrl_name and cursor_uv is not None):
-                beam_len = max(0.01, float(cursor_uv[2]))
-            else:
-                kb_dist = self._keyboard_laser_hit_dist(ctrl_pos, fwd_w)
-                sc_dist = self._laser_screen_hit_dist(ctrl_pos, fwd_w)
-                ov_dist = self._overlay_panel_hit_dist(ctrl_pos, fwd_w)
-                if self._keyboard_visible and kb_dist < 5.0:
-                    beam_len = kb_dist
-                else:
-                    beam_len = min(sc_dist, kb_dist, ov_dist)
+            # Compute all possible hit distances
+            kb_dist = self._keyboard_laser_hit_dist(ctrl_pos, fwd_w)
+            sc_dist = self._laser_screen_hit_dist(ctrl_pos, fwd_w)
+            ov_dist = self._overlay_panel_hit_dist(ctrl_pos, fwd_w)
+
+            # Pick the closest valid hit (ignore distances >= 5.0 m)
+            beam_len = 30.0
+            if self._keyboard_visible and kb_dist < 5.0:
+                beam_len = kb_dist
+            if sc_dist < beam_len:
+                beam_len = sc_dist
+            if ov_dist < beam_len:
+                beam_len = ov_dist
+
             if beam_len >= 5.0:
                 continue
-            HIT_OFFSET = 0.0    # Fix hit circle position slightly before the actual hit point, to avoid z-fighting with the screen/keyboard surface and create a nicer visual effect of "sticking" to the surface rather than flickering when the ray moves.
+
+            # Draw the hit circle at beam_len distance
+            HIT_OFFSET = 0.0
             hit_pos = ctrl_pos + fwd_w * (beam_len - HIT_OFFSET)
-            STROKE_R = 0.0096; FILL_R = 0.0056
-            for radius, color in [(STROKE_R, (0.2, 0.6, 1.0, 0.75)), (FILL_R, (1.0, 1.0, 1.0, 0.75))]:
+            STROKE_R = 0.0096
+            FILL_R   = 0.0056
+            for radius, color in [(STROKE_R, (0.2, 0.6, 1.0, 0.75)),
+                                (FILL_R,   (1.0, 1.0, 1.0, 0.75))]:
                 model = np.eye(4, dtype='f4')
-                model[0, 0] = radius; model[1, 1] = radius
+                model[0, 0] = radius
+                model[1, 1] = radius
                 model[:3, 3] = hit_pos.astype('f4')
                 circle_mvp = vp_mat @ model
                 self._border_prog['u_mvp'].write(circle_mvp.T.tobytes())
