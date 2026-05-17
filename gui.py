@@ -1579,7 +1579,6 @@ class ConfigGUI(tk.Tk):
             self.check_coreml.grid()
             self.check_openvino.grid_remove()
             self.check_recompile_openvino.grid_remove()
-            self.fp16_cb.grid_remove()
             self.update_recompile_coreml_visibility()
             self.update_coreml_visibility_based_on_model(current_model)
             
@@ -1733,10 +1732,25 @@ class ConfigGUI(tk.Tk):
         # Update run mode labels & combobox values
         self.label_run_mode.config(text=texts.get("Run Mode:", "Run Mode:"))
         self.label_ctrl_model.config(text=texts.get("Controller:", "Controller:"))
-        localized_run_vals = [texts.get("Local Viewer", "Local Viewer"), texts.get("OpenXR Link", "OpenXR Link"), texts.get("RTMP Streamer", "RTMP Streamer"), texts.get("MJPEG Streamer", "MJPEG Streamer"), texts.get("Legacy Streamer", "Legacy Streamer")]
+        
+        # Build run mode values depending on OS
+        if OS_NAME == "Darwin":
+            localized_run_vals = [
+                texts.get("Local Viewer", "Local Viewer"),
+                texts.get("RTMP Streamer", "RTMP Streamer"),
+                texts.get("MJPEG Streamer", "MJPEG Streamer"),
+                texts.get("Legacy Streamer", "Legacy Streamer")
+            ]
+        else:
+            localized_run_vals = [
+                texts.get("Local Viewer", "Local Viewer"),
+                texts.get("OpenXR Link", "OpenXR Link"),
+                texts.get("RTMP Streamer", "RTMP Streamer"),
+                texts.get("MJPEG Streamer", "MJPEG Streamer"),
+                texts.get("Legacy Streamer", "Legacy Streamer")
+            ]
         if OS_NAME == "Windows":
             localized_run_vals.append(texts.get("3D Monitor", "3D Monitor"))
-            self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
         
         self.run_mode_cb["values"] = localized_run_vals
         # Add Inference Optimizer text update
@@ -2122,6 +2136,8 @@ class ConfigGUI(tk.Tk):
             run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer"))
             if run_mode == "3D Monitor" and OS_NAME != "Windows":
                 run_mode = "Local Viewer"  # Fall back to Viewer on non-Windows
+            if run_mode == "OpenXR Link" and OS_NAME == "Darwin":
+                run_mode = "Local Viewer"   # OpenXR Link not supported on macOS
             self.run_mode_key = run_mode
             
         # Stream protocol settings
@@ -2259,6 +2275,12 @@ class ConfigGUI(tk.Tk):
         # For RTMP mode, stereo monitor default to blank
         if current_run_mode == "RTMP Streamer":
             self.stereo_monitor_var.set("")
+        if OS_NAME == "Darwin" and self.run_mode_key == "OpenXR Link":
+            self.run_mode_key = "Local Viewer"
+            self.run_mode_var_label.set(UI_TEXTS[self.language]["Local Viewer"])
+        if OS_NAME != "Windows" and self.run_mode_key == "3D Monitor":
+            self.run_mode_key = "Local Viewer"
+            self.run_mode_var_label.set(UI_TEXTS[self.language]["Local Viewer"])
         
         current_model = self.depth_model_var.get()
         # Update TensorRT visibility based on the default model
