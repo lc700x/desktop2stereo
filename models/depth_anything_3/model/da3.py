@@ -31,7 +31,7 @@ from models.depth_anything_3.utils.alignment import (
 )
 from models.depth_anything_3.utils.geometry import affine_inverse, as_homogeneous, map_pdf_to_opacity
 from models.depth_anything_3.utils.ray_utils import get_extrinsic_from_camray
-
+import contextlib
 
 
 # Model casting helper
@@ -39,7 +39,7 @@ def maybe_autocast(device, enabled=True):
     return (
         torch.autocast(device_type=device.type, enabled=enabled)
         if device.type != "privateuseone"  # privateuseone is DirectML
-        else torch.nullcontext()
+        else contextlib.nullcontext()
     )
 
 def _wrap_cfg(cfg_obj):

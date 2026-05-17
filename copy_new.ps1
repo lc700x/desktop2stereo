@@ -27,7 +27,7 @@ $filesToCopy = @(
 )
 
 # --- Directories to copy (contents only) ---
-$dirsToCopy = @("assets","models","rtmp")
+$dirsToCopy = @("assets","models","rtmp","controllers")
 
 # Ensure destination exists
 if (-not (Test-Path $DestinationFolder)) {
@@ -61,7 +61,7 @@ foreach ($dir in $dirsToCopy) {
     # Use robocopy for reliability
     # /E  = copy subdirectories including empty ones
     # /XD = exclude directories
-    $rc = robocopy $srcDir $destDir /E /XD "__pycache__" "models--*" ".locks"
+    $src = robocopy $srcDir $destDir /E /XD "__pycache__" "models--*" ".locks"
 
     if ($LASTEXITCODE -lt 8) {
         Write-Output "Copied directory: $dir (excluding __pycache__, models--*, .locks)"

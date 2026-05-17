@@ -19,7 +19,6 @@ datasets
 *.png
 *.jpg
 *.whl
-rtmp
 test*.png
 output/scene.glb
 output/depth_vis/0000.jpg

@@ -19,6 +19,7 @@ import torch.nn as nn
 # from torchvision.transforms import Compose
 # import cv2
 # import numpy as np
+import contextlib
 
 from .dinov2 import DINOv2
 from .dpt_temporal import DPTHeadTemporal
@@ -33,7 +34,7 @@ def maybe_autocast(device, enabled=True):
     return (
         torch.autocast(device_type=device.type, enabled=enabled)
         if device.type != "privateuseone"
-        else torch.nullcontext()
+        else contextlib.nullcontext()
     )
 
 class VideoDepthAnything(nn.Module):
