@@ -440,6 +440,7 @@ UI_TEXTS = {
         "Fill 16:9": "Fill 16:9",
         "Fix Viewer Aspect": "Fix Viewer Aspect",
         "Stereo Output:": "Stereo Output:",
+        "DesktopDuplication selected: Window capture mode disabled.": "DesktopDuplication selected: Window capture mode disabled."
     },
     "CN": {
         "Monitor": "输入屏幕",
@@ -515,6 +516,7 @@ UI_TEXTS = {
         "Fill 16:9": "填充16:9",
         "Fix Viewer Aspect": "固定窗口比例",
         "Stereo Output:": "立体输出:",
+        "DesktopDuplication selected: Window capture mode disabled.": "已选择DesktopDuplication：窗口捕获模式已禁用。"
     }
 }
 
