@@ -416,5 +416,5 @@ Stream Key: live
 Stereo Mix: ''
 CRF: 20
 Audio Delay: -0.15
-Stereo Monitor: null
+Stereo Output: null
 Controller Model: PICO

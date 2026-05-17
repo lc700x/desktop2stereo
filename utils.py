@@ -582,7 +582,7 @@ ALL_MODELS = settings["Model List"]
 CACHE_PATH = "./models"
 DEPTH_RESOLUTION = settings["Depth Resolution"]
 DEVICE_ID = settings["Computing Device"]
-FP16 = False if OS_NAME == "Darwin" else settings["FP16"]
+FP16 = settings["FP16"]
 MONITOR_INDEX,  DISPLAY_MODE = settings["Monitor Index"], settings["Display Mode"]
 OUTPUT_RESOLUTION = 8640
 SHOW_FPS, DEPTH_STRENGTH = settings["Show FPS"], settings["Depth Strength"]
@@ -728,7 +728,7 @@ else:
 
 # Specify the Stereo Display for output
 
-STEREO_DISPLAY_INDEX = settings["Stereo Monitor"]
+STEREO_DISPLAY_INDEX = settings["Stereo Output"]
 STEREO_DISPLAY_SELECTION = False if not STEREO_DISPLAY_INDEX else True
 CONTROLLER_MODEL = settings["Controller Model"]
 

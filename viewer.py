@@ -1316,8 +1316,10 @@ class StereoWindow:
             self.actual_fps = current_fps
         if current_latency is not None:
             self.total_latency = current_latency * 1000
-
-        h, w, _ = rgb_with_overlay.shape
+        try:
+            h, w, _ = rgb_with_overlay.shape
+        except AttributeError:
+            return
 
         # Recreate textures and PBOs if size changed
         if self._texture_size != (w, h):

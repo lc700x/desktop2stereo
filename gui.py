@@ -362,7 +362,7 @@ DEFAULTS = {
     "Capture Tool": get_default_windows_capture_tool(),
     "Fill 16:9": True,  # force 16:9 output
     "Fix Viewer Aspect": False, # keep the viewer window aspect ratio not change
-    "Stereo Monitor": None,      # None means no stereo monitor selected
+    "Stereo Output": None,      # None means no stereo monitor selected
 }
 
 UI_TEXTS = {
@@ -439,7 +439,7 @@ UI_TEXTS = {
         "Capture Tool:": "Capture Tool:",
         "Fill 16:9": "Fill 16:9",
         "Fix Viewer Aspect": "Fix Viewer Aspect",
-        "Stereo Monitor:": "Stereo Monitor:",
+        "Stereo Output:": "Stereo Output:",
     },
     "CN": {
         "Monitor": "输入屏幕",
@@ -514,7 +514,7 @@ UI_TEXTS = {
         "Capture Tool:": "捕获工具:",  
         "Fill 16:9": "填充16:9",
         "Fix Viewer Aspect": "固定窗口比例",
-        "Stereo Monitor:": "立体输出:",
+        "Stereo Output:": "立体输出:",
     }
 }
 
@@ -784,10 +784,7 @@ class ConfigGUI(tk.Tk):
         
         self.showfps_var = tk.BooleanVar()
         self.showfps_cb = ttk.Checkbutton(self.content_frame, text="Show FPS", variable=self.showfps_var)
-        if OS_NAME != "Windows":
-            self.showfps_cb.grid(row=7, column=2, sticky="w", **self.pad)
-        else:
-            self.showfps_cb.grid(row=6, column=3, sticky="w", **self.pad)
+        self.showfps_cb.grid(row=6, column=3, sticky="w", **self.pad)
         
         # Capture Tool
         self.label_capture_tool = ttk.Label(self.content_frame, text="Capture Tool:")
@@ -805,7 +802,7 @@ class ConfigGUI(tk.Tk):
         # Fill 16:9 checkbox
         self.fill_16_9_var = tk.BooleanVar()
         self.fill_16_9_cb = ttk.Checkbutton(self.content_frame, text="Fill 16:9", variable=self.fill_16_9_var)
-        self.fill_16_9_cb.grid(row=7, column=2, sticky="w", **self.pad)  # moved up from row8
+        self.fill_16_9_cb.grid(row=13, column=2, sticky="w", **self.pad)  # moved up from row8
         
         # Lossless Scaling checkbox
         self.lossless_scaling_support_var = tk.BooleanVar()
@@ -814,6 +811,7 @@ class ConfigGUI(tk.Tk):
         # Fix Viewer Aspect checkbox
         self.fix_viewer_aspect_var = tk.BooleanVar()
         self.fixed_viwer_aspect_cb = ttk.Checkbutton(self.content_frame, text="Fix Viewer Aspect", variable=self.fix_viewer_aspect_var)
+        
         
         # Depth Resolution and Depth Strength (now row 8)
         self.label_depth_res = ttk.Label(self.content_frame, text="Depth Resolution:")
@@ -929,10 +927,10 @@ class ConfigGUI(tk.Tk):
         self.check_recompile_openvino = ttk.Checkbutton(self.content_frame, text="Recompile OpenVINO", variable=self.recompile_openvino_var)
         self.check_recompile_openvino.grid(row=12, column=2, sticky="w", **self.pad)
         
-        # Stereo Monitor (row 13) - always shown for relevant run modes
+        # Stereo Output (row 13) - always shown for relevant run modes
         self.stereo_monitor_var = tk.StringVar()
-        self.label_stereo_monitor = ttk.Label(self.content_frame, text="Stereo Monitor:")
-        self.label_stereo_monitor.grid(row=13, column=0, sticky="w", **self.pad)
+        self.label_stereo_output = ttk.Label(self.content_frame, text="Stereo Output:")
+        self.label_stereo_output.grid(row=13, column=0, sticky="w", **self.pad)
         self.stereo_monitor_menu = ttk.OptionMenu(self.content_frame, self.stereo_monitor_var, "")
         self.stereo_monitor_menu.grid(row=13, column=1, sticky="w", **self.pad)
 
@@ -1036,13 +1034,14 @@ class ConfigGUI(tk.Tk):
         Update the stereo monitor menu based on currently selected input monitor.
         Excludes the currently selected input monitor from the stereo monitor dropdown.
         Adds a blank option at the top representing "no stereo monitor".
+        When input monitor changes, if stereo monitor was "Viewer Window", automatically switch to the first physical monitor (if available).
         """
         if not self.stereo_monitor_menu:
             return
-        
+
         # Get current input monitor selection
         selected_input_label = self.monitor_var.get()
-        
+
         # Get monitor list
         monitors = []
         if mss:
@@ -1052,63 +1051,74 @@ class ConfigGUI(tk.Tk):
                         monitors.append(mon)
             except Exception:
                 monitors = []
-        
+
         # Clear current stereo monitor menu
         menu = self.stereo_monitor_menu["menu"]
         menu.delete(0, "end")
-        
+
         # Add blank option (no stereo monitor)
         menu.add_command(label="Viewer Window", command=lambda: self.stereo_monitor_var.set("Viewer Window"))
-        
+
         if monitors:
             # Detect primary monitor index
             primary_index = get_primary_monitor_index()
             if primary_index < 1 or primary_index > len(monitors):
                 primary_index = 1
-            
+
             # Get current stereo monitor selection before rebuilding
             current_stereo_selection = self.stereo_monitor_var.get()
             new_selection_set = False
-            
+
             # Rebuild menu excluding selected input monitor
             for idx, mon in enumerate(monitors, start=1):
                 is_primary = (idx == primary_index)
                 label_suffix = PRIMARY_MONITOR_SUFFIX if is_primary else ""
                 label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){label_suffix}"
-                
+
                 # Skip if this is the selected input monitor (only for Monitor capture mode)
                 if self.capture_mode_key == "Monitor" and label == selected_input_label and self.run_mode_key in ["Local Viewer", "RTMP Streamer"]:
                     continue
-                
-                # Add command to menu
+
                 menu.add_command(
                     label=label,
                     command=lambda v=label: self.stereo_monitor_var.set(v)
                 )
-                
+
                 # Keep current stereo selection if still valid
                 if not new_selection_set and label == current_stereo_selection:
                     self.stereo_monitor_var.set(label)
                     new_selection_set = True
-            
-            # If previous selection was removed, select first available (skip blank)
+
+            # If previous selection was removed OR it was "Viewer Window" and there are other monitors,
+            # select first available physical monitor (excluding input)
             if not new_selection_set:
-                # Find first monitor that's not the input monitor
-                for idx, mon in enumerate(monitors, start=1):
-                    is_primary = (idx == primary_index)
-                    label_suffix = PRIMARY_MONITOR_SUFFIX if is_primary else ""
-                    label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){label_suffix}"
-                    
-                    if label != selected_input_label:
-                        self.stereo_monitor_var.set(label)
-                        break
+                # If current selection is "Viewer Window" but there is at least one other physical monitor,
+                # we switch to a physical monitor.
+                if current_stereo_selection == "Viewer Window" and len(monitors) > 1:
+                    for idx, mon in enumerate(monitors, start=1):
+                        is_primary = (idx == primary_index)
+                        label_suffix = PRIMARY_MONITOR_SUFFIX if is_primary else ""
+                        label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){label_suffix}"
+                        if label != selected_input_label:
+                            self.stereo_monitor_var.set(label)
+                            new_selection_set = True
+                            break
+                # Fallback: first physical monitor not equal to input
+                if not new_selection_set:
+                    for idx, mon in enumerate(monitors, start=1):
+                        is_primary = (idx == primary_index)
+                        label_suffix = PRIMARY_MONITOR_SUFFIX if is_primary else ""
+                        label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){label_suffix}"
+                        if label != selected_input_label:
+                            self.stereo_monitor_var.set(label)
+                            break
         else:
             # No monitors found, disable dropdown
             self.stereo_monitor_menu.config(state="disabled")
-        
-        # Ensure the dropdown is visible (always shown when run mode supports it)
+
+        # Ensure the dropdown is visible (only when run mode supports it)
         self.stereo_monitor_menu.grid()
-        self.label_stereo_monitor.grid()
+        self.label_stereo_output.grid()
             
     def auto_enable_optimizers_based_on_device(self):
         """Automatically enable appropriate optimizers based on detected device"""
@@ -1250,7 +1260,7 @@ class ConfigGUI(tk.Tk):
     def update_lossless_scaling_visibility(self):
         """Show/hide Lossless Scaling checkbox based on run mode and OS"""
         if OS_NAME == "Windows" and self.run_mode_key == "RTMP Streamer":
-            self.lossless_scaling_support_cb.grid(row=7, column=3, sticky="w", **self.pad)
+            self.lossless_scaling_support_cb.grid(row=13, column=3, sticky="w", **self.pad)
         else:
             self.lossless_scaling_support_cb.grid_remove()
             
@@ -1270,6 +1280,7 @@ class ConfigGUI(tk.Tk):
             # Show controller selection widgets
             self.label_ctrl_model.grid(row=10, column=0, sticky="w", **self.pad)
             self.ctrl_model_cb.grid(row=10, column=1, sticky="ew", **self.pad)
+            self.label_stereo_output.grid_remove()
             return
 
         # For all other run modes: hide controller widgets
@@ -1279,7 +1290,9 @@ class ConfigGUI(tk.Tk):
         self.label_display_mode.grid()
         self.showfps_cb.grid()
         self.fill_16_9_cb.grid()
-        self.fixed_viwer_aspect_cb.grid()
+        self.label_stereo_output.grid()
+        if self.run_mode_key not in ["RTMP Streamer", "OpenXR Link"]:
+            self.fixed_viwer_aspect_cb.grid(row=13, column=3, sticky="w", **self.pad)
 
         # Now handle display mode combobox for non‑OpenXR modes
         self.display_mode_cb.config(state="readonly")
@@ -1300,14 +1313,13 @@ class ConfigGUI(tk.Tk):
 
     def update_stereo_display_visibility(self):
         monitor_count = self.get_monitor_count()
-        if self.run_mode_key in ["RTMP Streamer", "Local Viewer", "3D Monitor"] and monitor_count > 1:
-            self.label_stereo_monitor.grid()
+        # Show stereo monitor only for Local Viewer, 3D Monitor, and RTMP Streamer
+        if self.run_mode_key in ["Local Viewer", "3D Monitor", "RTMP Streamer"] and monitor_count > 1:
             self.stereo_monitor_menu.grid()
             self.update_stereo_monitor_menu()
         else:
-            self.label_stereo_monitor.grid_remove()
             self.stereo_monitor_menu.grid_remove()
-            # Reset to "Viewer Window" when there is no second monitor
+            # Reset to "Viewer Window" when stereo monitor is not available
             self.stereo_monitor_var.set("Viewer Window")
         
     def update_stream_url(self, *args):
@@ -1733,50 +1745,43 @@ class ConfigGUI(tk.Tk):
         self.label_run_mode.config(text=texts.get("Run Mode:", "Run Mode:"))
         self.label_ctrl_model.config(text=texts.get("Controller:", "Controller:"))
         
-        # Build run mode values depending on OS
+        # Build run mode values depending on OS using a dictionary mapping
+        run_mode_mapping = {}
         if OS_NAME == "Darwin":
-            localized_run_vals = [
-                texts.get("Local Viewer", "Local Viewer"),
-                texts.get("RTMP Streamer", "RTMP Streamer"),
-                texts.get("MJPEG Streamer", "MJPEG Streamer"),
-                texts.get("Legacy Streamer", "Legacy Streamer")
-            ]
+            run_mode_mapping = {
+                "Local Viewer": texts.get("Local Viewer", "Local Viewer"),
+                "RTMP Streamer": texts.get("RTMP Streamer", "RTMP Streamer"),
+                "MJPEG Streamer": texts.get("MJPEG Streamer", "MJPEG Streamer"),
+                "Legacy Streamer": texts.get("Legacy Streamer", "Legacy Streamer"),
+            }
         else:
-            localized_run_vals = [
-                texts.get("Local Viewer", "Local Viewer"),
-                texts.get("OpenXR Link", "OpenXR Link"),
-                texts.get("RTMP Streamer", "RTMP Streamer"),
-                texts.get("MJPEG Streamer", "MJPEG Streamer"),
-                texts.get("Legacy Streamer", "Legacy Streamer")
-            ]
-        if OS_NAME == "Windows":
-            localized_run_vals.append(texts.get("3D Monitor", "3D Monitor"))
+            run_mode_mapping = {
+                "Local Viewer": texts.get("Local Viewer", "Local Viewer"),
+                "OpenXR Link": texts.get("OpenXR Link", "OpenXR Link"),
+                "RTMP Streamer": texts.get("RTMP Streamer", "RTMP Streamer"),
+                "MJPEG Streamer": texts.get("MJPEG Streamer", "MJPEG Streamer"),
+                "Legacy Streamer": texts.get("Legacy Streamer", "Legacy Streamer"),
+            }
+            if OS_NAME == "Windows":
+                run_mode_mapping["3D Monitor"] = texts.get("3D Monitor", "3D Monitor")
         
+        localized_run_vals = list(run_mode_mapping.values())
         self.run_mode_cb["values"] = localized_run_vals
+        
+        # Set current selection based on run_mode_key
+        if self.run_mode_key in run_mode_mapping:
+            self.run_mode_var_label.set(run_mode_mapping[self.run_mode_key])
+        else:
+            # fallback to first value if key not found
+            self.run_mode_var_label.set(localized_run_vals[0] if localized_run_vals else "")
+        
         # Add Inference Optimizer text update
         self.label_inference_optimizer.config(text=texts.get("Inference Optimizer:", "Inference Optimizer:"))
         self.check_recompile_trt.config(text=texts.get("Recompile TensorRT", "Recompile TensorRT"))
         self.check_recompile_coreml.config(text=texts.get("Recompile CoreML", "Recompile CoreML"))
-        # Select the appropriate label
-        if self.run_mode_key == "Local Viewer":
-            self.run_mode_var_label.set(localized_run_vals[0])
-            self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
-        elif self.run_mode_key == "OpenXR Link":
-            self.run_mode_var_label.set(localized_run_vals[1])
-            self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
-        elif self.run_mode_key == "RTMP Streamer":
-                self.run_mode_var_label.set(localized_run_vals[2])
-        elif self.run_mode_key == "MJPEG Streamer":
-            self.run_mode_var_label.set(localized_run_vals[3])
-        elif self.run_mode_key == "Legacy Streamer":
-            self.run_mode_var_label.set(localized_run_vals[4])
-        if OS_NAME == "Windows":
-            if self.run_mode_key == "3D Monitor":
-                self.run_mode_var_label.set(localized_run_vals[5])
-                self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
-        # elif OS_NAME == "Darwin":
-            
+        
         self.fill_16_9_cb.config(text=texts.get("Fill 16:9", "Fill 16:9"))
+        self.fixed_viwer_aspect_cb.config(text=texts.get("Fix Viewer Aspect", "Fix Viewer Aspect"))
             
         # Update capture mode combobox values
         localized_capture_vals = [texts.get("Monitor", "Monitor"), texts.get("Window", "Window")]
@@ -1808,8 +1813,11 @@ class ConfigGUI(tk.Tk):
         self.label_crf.config(text=texts.get("CRF", "CRF"))
         self.label_audio_delay.config(text=texts.get("Audio Delay", "Audio Delay"))
         
-        # Update Stereo Monitor label
-        self.label_stereo_monitor.config(text=texts.get("Stereo Monitor:", "Stereo Monitor:"))
+        # Update Stereo Output label
+        self.label_stereo_output.config(text=texts.get("Stereo Output:", "Stereo Output:"))
+        
+        # Update Capture Tool label (only visible on Windows)
+        self.label_capture_tool.config(text=texts.get("Capture Tool:", "Capture Tool:"))
         
         # language combobox values
         self.language_cb["values"] = list(UI_TEXTS.keys())
@@ -1835,6 +1843,33 @@ class ConfigGUI(tk.Tk):
         if selected in UI_TEXTS:
             self.language = selected
             self.update_language_texts()
+
+    def auto_select_stereo_monitor(self):
+        """Automatically select the first external monitor if available and current selection is invalid."""
+        monitor_count = self.get_monitor_count()
+        if monitor_count <= 1 or self.run_mode_key not in ["Local Viewer", "RTMP Streamer"]:
+            return
+
+        current_selection = self.stereo_monitor_var.get()
+        valid = False
+        if current_selection != "Viewer Window":
+            if current_selection in self.monitor_label_to_index:
+                input_label = self.monitor_var.get() if self.capture_mode_key == "Monitor" else None
+                if input_label is None or current_selection != input_label:
+                    valid = True
+
+        if not valid:
+            # Auto-select first external monitor (not the input monitor)
+            input_label = self.monitor_var.get() if self.capture_mode_key == "Monitor" else None
+            default_label = None
+            for label in self.monitor_label_to_index.keys():
+                if input_label is None or label != input_label:
+                    default_label = label
+                    break
+            if default_label:
+                self.stereo_monitor_var.set(default_label)
+            else:
+                self.stereo_monitor_var.set("Viewer Window")
 
     def on_run_mode_change(self, event=None):
         """Toggle visibility of streamer-specific controls when run mode changes."""
@@ -1866,15 +1901,19 @@ class ConfigGUI(tk.Tk):
         elif label == monitor3d_label:
             self.run_mode_key = "3D Monitor"
             self.show_viewer_controls()
-            # Set stereo monitor to match input monitor (default for 3D mode)
-            self.stereo_monitor_var.set(self.monitor_var.get())
+            self.stereo_monitor_var.set(self.monitor_var.get())  # 3D uses input monitor
         elif label == openxr_label:
             self.run_mode_key = "OpenXR Link"
             self.show_viewer_controls()
-        
+
         # Update display mode options based on run mode
         self.update_display_mode_options()
-        # Update stereo display visibility
+
+        # Auto-select external monitor for modes that support it (except 3D)
+        if self.run_mode_key in ["Local Viewer", "RTMP Streamer"]:
+            self.auto_select_stereo_monitor()
+
+        # Update stereo display visibility (enables/disables dropdown)
         self.update_stereo_display_visibility()
     
     def hide_all_streamer_controls(self):
@@ -1965,7 +2004,7 @@ class ConfigGUI(tk.Tk):
 
     def show_viewer_controls(self):
         """Show controls for Local Viewer and 3D Monitor"""
-        self.fixed_viwer_aspect_cb.grid(row=7, column=3, sticky="w", **self.pad)
+        self.fixed_viwer_aspect_cb.grid(row=13, column=3, sticky="w", **self.pad)
         
     def populate_devices(self):
         self.device_label_to_index = {}
@@ -2177,20 +2216,29 @@ class ConfigGUI(tk.Tk):
         self.update_stream_url()
         
         # Apply stereo display settings
-        # Stereo monitor: only load saved value if more than one monitor is available
         if self.get_monitor_count() > 1:
-            saved_stereo = cfg.get("Stereo Monitor")
+            saved_stereo = cfg.get("Stereo Output")
             if saved_stereo is None:
-                self.stereo_monitor_var.set("Viewer Window")
+                # Default to first physical monitor that is not the input monitor
+                input_label = self.monitor_var.get()
+                first_other = None
+                for lbl, idx in self.monitor_label_to_index.items():
+                    if lbl != input_label:
+                        first_other = lbl
+                        break
+                if first_other:
+                    self.stereo_monitor_var.set(first_other)
+                else:
+                    self.stereo_monitor_var.set("Viewer Window")  # fallback (only one monitor)
             else:
-                # saved_stereo is an integer index
                 label_for_idx = next((lbl for lbl, idx in self.monitor_label_to_index.items() if idx == saved_stereo), None)
                 if label_for_idx:
                     self.stereo_monitor_var.set(label_for_idx)
                 else:
-                    # fallback to first available monitor
-                    first_monitor = next(iter(self.monitor_label_to_index.keys()), "")
-                    self.stereo_monitor_var.set(first_monitor if first_monitor else "Viewer Window")
+                    # fallback to first physical monitor (excluding input)
+                    input_label = self.monitor_var.get()
+                    first_other = next((lbl for lbl in self.monitor_label_to_index if lbl != input_label), None)
+                    self.stereo_monitor_var.set(first_other if first_other else "Viewer Window")
         else:
             # Only one monitor – force "Viewer Window"
             self.stereo_monitor_var.set("Viewer Window")
@@ -2299,7 +2347,35 @@ class ConfigGUI(tk.Tk):
         if current_device in self.device_label_to_index.values():
             self.device_var.set(current_device)
         
-        # Ensure stereo display controls are correctly shown/hidden for the current mode
+        # Apply stereo display settings
+        if self.get_monitor_count() > 1:
+            saved_stereo = self.cfg.get("Stereo Output")
+            if saved_stereo is None:
+                # Default to first physical monitor that is not the input monitor
+                input_label = self.monitor_var.get()
+                first_other = None
+                for lbl, idx in self.monitor_label_to_index.items():
+                    if lbl != input_label:
+                        first_other = lbl
+                        break
+                if first_other:
+                    self.stereo_monitor_var.set(first_other)
+                else:
+                    self.stereo_monitor_var.set("Viewer Window")  # fallback (only one monitor)
+            else:
+                label_for_idx = next((lbl for lbl, idx in self.monitor_label_to_index.items() if idx == saved_stereo), None)
+                if label_for_idx:
+                    self.stereo_monitor_var.set(label_for_idx)
+                else:
+                    # fallback to first physical monitor (excluding input)
+                    input_label = self.monitor_var.get()
+                    first_other = next((lbl for lbl in self.monitor_label_to_index if lbl != input_label), None)
+                    self.stereo_monitor_var.set(first_other if first_other else "Viewer Window")
+        else:
+            # Only one monitor – force "Viewer Window"
+            self.stereo_monitor_var.set("Viewer Window")
+
+        # Update visibility (will also set correct enabled/disabled state)
         self.update_stereo_display_visibility()
         
     def update_status(self, msg: str):
@@ -2401,7 +2477,7 @@ class ConfigGUI(tk.Tk):
             "Stereo Mix": self.audio_device_var.get(),
             "CRF": int(self.crf_var.get()),
             "Audio Delay": float(self.audio_delay_var.get()),
-            "Stereo Monitor": stereo_idx,   # can be None or label string
+            "Stereo Output": stereo_idx,   # can be None or label string
             "Controller Model": self.ctrl_model_var.get(),
         }
         

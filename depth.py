@@ -85,7 +85,6 @@ if USE_COREML and IS_MPS:
     USE_COREML = ct is not None
     # imports for CoreML
     if USE_COREML:
-        FP16 = True
         from contextlib import contextmanager
         # export-time patch to replace bicubic -> bilinear
         @contextmanager
@@ -126,7 +125,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or ((USE_TENSORRT or USE_COREML or USE_OPENVINO) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and  MODEL_ID in COMPILE_FIX_KEYWORDS):
+if IS_DIRECTML or ((USE_TENSORRT or USE_COREML or USE_OPENVINO) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS):
     FP16 = False 
 
 # Optimization for CUDA
@@ -207,9 +206,7 @@ ONNX_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.o
 TRT_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
 
 # orchScript & CoreML paths
-TS_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.pt")
-COREML_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.mlmodel")
-
+COREML_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.mlpackage")
 # Single character digits and letters for "FPS: XX.X"
 font_dict = {
     "0": ["111","101","101","101","111"],
@@ -613,14 +610,12 @@ def export_to_coreml(model, output_path, input_size):
     if ct is None:
         raise ImportError("coremltools must be installed on macOS to convert to CoreML")
 
-    # Prepare CPU copy for export
-    model_cpu = model.to("cpu").float().eval()
 
-    # Wrap to ensure a single-tensor return (no dictconstruct)
-    wrapped = ModelForCoreML(model_cpu).eval()
+    # Wrap to ensure a single-tensor return (no dict constructs)
+    wrapped = ModelForCoreML(model).float().eval()
 
     # Dummy input for tracing (CPU, FP32)
-    dummy = torch.randn(1, 3, input_size, input_size, device="cpu", dtype=torch.float32)
+    dummy = torch.randn(1, 3, input_size, input_size, device=DEVICE, dtype=torch.float32)
 
     try:
         with torch.no_grad():
@@ -629,11 +624,10 @@ def export_to_coreml(model, output_path, input_size):
                 traced = torch.jit.trace(wrapped, dummy, strict=False)
                 traced = torch.jit.freeze(traced)
     except Exception as e:
-        # Surface the underlying TorchScript error
         raise RuntimeError(f"TorchScript export failed: {e}")
 
-    # Convert to CoreML (choose ImageType or TensorType depending on expectations), keep previous ImageType usage for compatibility with pixel-value scaling.
-    print(f"TorchScript conversion finished, CoreML compling may take a while...")
+    # Convert to CoreML
+    print("TorchScript conversion finished, CoreML compiling may take a while...")
     mlmodel = ct.convert(
         traced,
         inputs=[
@@ -887,14 +881,14 @@ class DepthModelWrapper:
         
         # Try CoreML on macOS + MPS (non-CUDA) if enabled
         if self.is_mps and USE_COREML:
-            try:
-                self.backend = "CoreML"
-                self.model = self._load_coreml_model()
-                print("Using backend: CoreML")
-                return
-            except Exception as e:
-                print(f"[CoreML] Initialization failed: {e}")
-                self.dtype = torch.float32
+            # try:
+            self.backend = "CoreML"
+            self.model = self._load_coreml_model()
+            print("Using backend: CoreML")
+            return
+            # except Exception as e:
+            #     print(f"[CoreML] Initialization failed: {e}")
+            #     self.dtype = torch.float32
 
         # Try OpenVINO for Intel GPU/CPU if requested and available
         if USE_OPENVINO and OPENVINO_AVAILABLE and OPENVINO_DEVICE is not None:
@@ -975,21 +969,16 @@ class DepthModelWrapper:
         return model.eval()
     
     def _load_coreml_model(self):
-        coreml_path = os.path.join(
-            MODEL_FOLDER,
-            f"model_{DEPTH_RESOLUTION}.mlpackage"
-        )
-
         pytorch_model = self._load_pytorch_model()
 
-        if not os.path.exists(coreml_path) or RECOMPILE_COREML:
+        if not os.path.exists(COREML_PATH) or RECOMPILE_COREML:
             export_to_coreml(
                 pytorch_model,
-                coreml_path,
+                COREML_PATH,
                 DEPTH_RESOLUTION
             )
 
-        return CoreMLEngine(coreml_path)
+        return CoreMLEngine(COREML_PATH)
 
     def _load_openvino_engine(self):
         """
