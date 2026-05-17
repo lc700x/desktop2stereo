@@ -1311,15 +1311,21 @@ class ConfigGUI(tk.Tk):
         elif not display_modes:
             self.display_mode_cb.set("")
 
+    # In update_stereo_display_visibility, hide both the label and the menu
     def update_stereo_display_visibility(self):
         monitor_count = self.get_monitor_count()
         # Show stereo monitor only for Local Viewer, 3D Monitor, and RTMP Streamer
         if self.run_mode_key in ["Local Viewer", "3D Monitor", "RTMP Streamer"] and monitor_count > 1:
+            self.label_stereo_output.grid()
             self.stereo_monitor_menu.grid()
             self.update_stereo_monitor_menu()
         else:
+            if self.run_mode_key in ["OpenXR Link"]:
+                self.label_stereo_output.grid_remove()
+            if self.run_mode_key in ["RTMP Streamer", "MJPEG Streamer", "Legacy Streamer"]:
+                self.label_stereo_output.grid()
+                self.fixed_viwer_aspect_cb.grid_remove()
             self.stereo_monitor_menu.grid_remove()
-            # Reset to "Viewer Window" when stereo monitor is not available
             self.stereo_monitor_var.set("Viewer Window")
         
     def update_stream_url(self, *args):
@@ -1793,9 +1799,6 @@ class ConfigGUI(tk.Tk):
         else:
             self.capture_mode_var_label.set(localized_capture_vals[1])
         
-        # Trigger the capture mode change handler to update UI
-        self.on_capture_mode_change()
-        
         # Update "Lossless Scaling Support"
         self.lossless_scaling_support_cb.config(text=texts.get("Lossless Scaling Support", "Lossless Scaling Support"))
 
@@ -1843,6 +1846,7 @@ class ConfigGUI(tk.Tk):
         if selected in UI_TEXTS:
             self.language = selected
             self.update_language_texts()
+        self.update_stereo_display_visibility()
 
     def auto_select_stereo_monitor(self):
         """Automatically select the first external monitor if available and current selection is invalid."""
@@ -2002,9 +2006,13 @@ class ConfigGUI(tk.Tk):
         self.rtmp_stream_key_var.trace_add("write", lambda *args: self.update_stream_url())
         self.streamer_port_var.trace_add("write", lambda *args: self.update_stream_url())
 
+    # Modify show_viewer_controls to only show Fix Viewer Aspect for Local Viewer and 3D Monitor (not OpenXR)
     def show_viewer_controls(self):
-        """Show controls for Local Viewer and 3D Monitor"""
-        self.fixed_viwer_aspect_cb.grid(row=13, column=3, sticky="w", **self.pad)
+        """Show controls for Local Viewer and 3D Monitor (not OpenXR)"""
+        if self.run_mode_key in ["Local Viewer", "3D Monitor"]:
+            self.fixed_viwer_aspect_cb.grid(row=13, column=3, sticky="w", **self.pad)
+        else:
+            self.fixed_viwer_aspect_cb.grid_remove()
         
     def populate_devices(self):
         self.device_label_to_index = {}
