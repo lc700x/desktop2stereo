@@ -45,7 +45,6 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
     import ctypes
     from ctypes import wintypes
     import threading
-    from utils import is_windows_11_24h2_or_newer
 
     # Import capture library (regular or CUDA-accelerated)
     if CAPTURE_TOOL == "WindowsCaptureROCm":
@@ -133,22 +132,12 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
     # Start worker thread (daemon so it won't block shutdown)
     alt_tab_thread = threading.Thread(target=_keyboard, name="CursorWorker", daemon=True)
     alt_tab_thread.start()
-
-    # Initialize capture object and capture loop for 24H2
-    IS_24h2 = is_windows_11_24h2_or_newer()
     
-    if IS_24h2:
-        cap = (
-            WindowsCapture(window_name=WINDOW_TITLE, minimum_update_interval=int(TIME_SLEEP * 1000))
-            if CAPTURE_MODE == "Window"
-            else WindowsCapture(monitor_index=MONITOR_INDEX)
-        )
-    else:
-        cap = (
-            WindowsCapture(window_name=WINDOW_TITLE)
-            if CAPTURE_MODE == "Window"
-            else WindowsCapture(monitor_index=MONITOR_INDEX)
-        )
+    cap = (
+        WindowsCapture(window_name=WINDOW_TITLE)
+        if CAPTURE_MODE == "Window"
+        else WindowsCapture(monitor_index=MONITOR_INDEX)
+    )
 
     def capture_loop():
         global capture_control
@@ -260,8 +249,9 @@ def cleanup_all_resources():
                 cap.stop()
             except AttributeError:
                 # stop for WindowsCapture
-                if OS_NAME == "Windows" and CAPTURE_MODE == "WindowsCapture":
-                    capture_control.stop()
+                if OS_NAME == "Windows" and CAPTURE_TOOL in ("WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"):
+                    if capture_control is not None:
+                        capture_control.stop()
             print("[Cleanup] Capture stopped")
     except Exception as e:
         print(f"[Cleanup] Error stopping capture: {e}")

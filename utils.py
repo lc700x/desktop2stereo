@@ -457,15 +457,6 @@ if OS_NAME == "Windows":
     SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
     WDA_EXCLUDEFROMCAPTURE = 0x00000011   # Windows 10 2004+
     
-    def is_windows_11_24h2_or_newer():
-        if sys.platform != "win32":
-            return False
-
-        ver = sys.getwindowsversion()
-        build = ver.build
-
-        # Windows 11 24H2 ≈ build 26100+
-        return build >= 26100
 
     def hide_window_from_capture(glfw_window):
         hwnd = glfw.get_win32_window(glfw_window)
@@ -619,7 +610,7 @@ LANG = settings["Language"]
 # Handheld Controller Operation Guide for OpenXR Link, can be easily extended for in-game usage
 if LANG == "CN":
     ROWS = [
-        ("[手柄操作指南]", "", "", True),
+        ("# 手柄操作指南", "", "", True),
         ("", "", "", False),
         ("左/右手激光指向屏幕/键盘", "握持", "激光锚点拖拽屏幕", False),
         ("右握持+右摇杆 X", "左右推", "调整屏幕宽度", False),
@@ -663,7 +654,7 @@ if LANG == "CN":
     ]
 else:
     ROWS = [
-        ("[Controller Operation Guide]", "", "", True),
+        ("# Controller Operation Guide", "", "", True),
         ("", "", "", False),
         ("Left/right controller laser points at screen/keyboard", "Hold", "Drag screen with laser anchor", False),
         ("Right grip + right stick X", "Push left/right", "Adjust screen width", False),
