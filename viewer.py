@@ -312,6 +312,7 @@ FRAGMENT_SHADER = """
     uniform float u_eye_offset;    // e.g. ±0.03 (positive = right eye)
     uniform float u_depth_strength;// parallax intensity
     uniform float u_convergence;   // depth value at screen plane (0–1)
+    uniform int u_fxaa_enabled;    // 1 = apply FXAA, 0 = off
 
     // Optimized inpainting controls
     uniform float u_search_radius = 12.0;
@@ -397,6 +398,40 @@ FRAGMENT_SHADER = """
         return texture(tex_color, uv_coord);
     }
 
+    // Lightweight FXAA — samples 4 diagonal neighbors to detect and blend edges.
+    // Cost: ~8 texture fetches + dot products per pixel, fully branchless.
+    // Reduces staircase aliasing on depth-shifted screen edges with no geometry cost.
+    vec3 fxaa_blend(sampler2D tex, vec2 coord, vec2 px) {
+        vec3 c  = texture(tex, coord).rgb;
+        vec3 nw = texture(tex, coord + px * vec2(-1.0,  1.0)).rgb;
+        vec3 ne = texture(tex, coord + px * vec2( 1.0,  1.0)).rgb;
+        vec3 sw = texture(tex, coord + px * vec2(-1.0, -1.0)).rgb;
+        vec3 se = texture(tex, coord + px * vec2( 1.0, -1.0)).rgb;
+
+        // Luma at each sample (green-weighted perceptual)
+        vec3 luma_w = vec3(0.299, 0.587, 0.114);
+        float lC  = dot(c,  luma_w);
+        float lNW = dot(nw, luma_w);
+        float lNE = dot(ne, luma_w);
+        float lSW = dot(sw, luma_w);
+        float lSE = dot(se, luma_w);
+
+        float lMin = min(lC, min(min(lNW, lNE), min(lSW, lSE)));
+        float lMax = max(lC, max(max(lNW, lNE), max(lSW, lSE)));
+        float contrast = lMax - lMin;
+
+        // Only blend where contrast exceeds the threshold — preserves fine detail
+        const float EDGE_THRESH     = 0.063;
+        const float EDGE_THRESH_MIN = 0.0312;
+        if (contrast < max(EDGE_THRESH_MIN, lMax * EDGE_THRESH)) {
+            return c;
+        }
+
+        vec3 avg = (nw + ne + sw + se) * 0.25;
+        float blend = smoothstep(0.0, 1.0, contrast * 4.0);
+        return mix(c, avg, blend * 0.5);
+    }
+
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
         float depth = texture(tex_depth, flipped_uv).r;
@@ -409,6 +444,14 @@ FRAGMENT_SHADER = """
             color = push_pull_inpaint(flipped_uv, depth_inv);
         } else {
             color = texture(tex_color, shifted_uv);
+        }
+
+        // FXAA on the parallax-shifted result (operates in tex_color space).
+        // Compute px here so it works even when u_resolution is unset (XR path).
+        if (u_fxaa_enabled == 1) {
+            vec2 tex_sz = vec2(textureSize(tex_color, 0));
+            vec2 px = 1.0 / max(tex_sz, vec2(1.0));
+            color.rgb = fxaa_blend(tex_color, shifted_uv, px);
         }
 
         vec2 border = smoothstep(0.0, 0.015, shifted_uv) *
@@ -641,6 +684,7 @@ class StereoWindow:
             fragment_shader=FRAGMENT_SHADER
         )
         self.prog['u_convergence'].value = self.convergence  # e.g. self.convergence = 0.5
+        self.prog['u_fxaa_enabled'].value = 1
         vertices = np.array([
             -1, -1, 0, 0,
             1, -1, 1, 0,

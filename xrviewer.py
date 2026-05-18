@@ -23,6 +23,9 @@ from OpenGL.GL import (
     glDeleteFramebuffers, glCheckFramebufferStatus,
     GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
     GL_FRAMEBUFFER_COMPLETE, GL_RGBA8,
+    glGenRenderbuffers, glBindRenderbuffer, glRenderbufferStorage,
+    glFramebufferRenderbuffer, glDeleteRenderbuffers,
+    GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, GL_DEPTH_ATTACHMENT,
     glGenBuffers, glDeleteBuffers, glBindBuffer, glBufferData,
     glBindTexture, glTexSubImage2D, glGenerateMipmap,
     GL_PIXEL_UNPACK_BUFFER, GL_PIXEL_PACK_BUFFER, GL_DYNAMIC_DRAW, GL_STREAM_READ,
@@ -32,7 +35,10 @@ from OpenGL.GL import (
     glTexParameterf, GL_TEXTURE_LOD_BIAS,
     glMapBuffer, glUnmapBuffer, GL_READ_ONLY, GL_MAP_UNSYNCHRONIZED_BIT,
     glReadPixels, glFlush, glGenTextures, glDeleteTextures,
-    glFinish
+    glFinish,
+    glFenceSync, glClientWaitSync, glDeleteSync,
+    GL_SYNC_GPU_COMMANDS_COMPLETE, GL_SYNC_FLUSH_COMMANDS_BIT,
+    GL_ALREADY_SIGNALED, GL_CONDITION_SATISFIED,
 )
 
 try:
@@ -410,32 +416,56 @@ if sys.platform == "win32":
             raise RuntimeError("Matching DXGI adapter not found for LUID")
         return result_adapter
 
+    # Cached per-context vtable function pointers — built once, reused every frame.
+    _d3d11_update_sr_fn  = None   # ID3D11DeviceContext::UpdateSubresource
+    _d3d11_copy_res_fn   = None   # ID3D11DeviceContext::CopyResource
+    _d3d11_cached_ctx    = None   # context ptr value these were built from
+
+    def _d3d11_resolve_context_fns(context):
+        """Cache UpdateSubresource and CopyResource function pointers for the given context.
+
+        Vtable construction via CFUNCTYPE is a per-call heap allocation in Python's
+        ctypes.  Calling it every frame adds GC pressure that can spike latency under
+        load (e.g. when grip is held and input logic runs extra code paths).  We build
+        both pointers once and reuse them for the lifetime of the D3D11 session.
+        """
+        global _d3d11_update_sr_fn, _d3d11_copy_res_fn, _d3d11_cached_ctx
+        ctx_val = context.value if hasattr(context, 'value') else int(context)
+        if _d3d11_cached_ctx == ctx_val:
+            return
+        vtbl = ctypes.cast(context, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        ptr_size = ctypes.sizeof(ctypes.c_void_p)
+        _d3d11_update_sr_fn = ctypes.CFUNCTYPE(
+            None,
+            ctypes.c_void_p,  # this
+            ctypes.c_void_p,  # pDstResource
+            ctypes.c_uint,    # DstSubresource
+            ctypes.c_void_p,  # pDstBox
+            ctypes.c_void_p,  # pSrcData
+            ctypes.c_uint,    # SrcRowPitch
+            ctypes.c_uint,    # SrcDepthPitch
+        )(ctypes.cast(vtbl + 48 * ptr_size, ctypes.POINTER(ctypes.c_void_p)).contents.value)
+
+        _d3d11_copy_res_fn = ctypes.CFUNCTYPE(
+            None,
+            ctypes.c_void_p,  # this
+            ctypes.c_void_p,  # pDstResource
+            ctypes.c_void_p,  # pSrcResource
+        )(ctypes.cast(vtbl + 47 * ptr_size, ctypes.POINTER(ctypes.c_void_p)).contents.value)
+
+        _d3d11_cached_ctx = ctx_val
+
     def _d3d11_update_subresource(context, dst, src_ptr, row_pitch):
         """Write CPU data into a D3D11 texture via UpdateSubresource (vtbl index 48).
         Works with any format including SRGB — no staging texture needed.
         src_ptr: integer address of the source data (already row-reversed).
         """
-        _UPDATE_SR_VTBL_IDX = 48
-        vtbl = ctypes.cast(context, ctypes.POINTER(ctypes.c_void_p)).contents.value
-        fn_ptr = ctypes.cast(
-            vtbl + _UPDATE_SR_VTBL_IDX * ctypes.sizeof(ctypes.c_void_p),
-            ctypes.POINTER(ctypes.c_void_p),
-        ).contents.value
-        UpdateFn = ctypes.CFUNCTYPE(
-            None,
-            ctypes.c_void_p,  # this
-            ctypes.c_void_p,  # pDstResource
-            ctypes.c_uint,    # DstSubresource
-            ctypes.c_void_p,  # pDstBox (NULL = whole texture)
-            ctypes.c_void_p,  # pSrcData
-            ctypes.c_uint,    # SrcRowPitch
-            ctypes.c_uint,    # SrcDepthPitch
-        )(fn_ptr)
-        UpdateFn(
+        _d3d11_resolve_context_fns(context)
+        _d3d11_update_sr_fn(
             context.value,
             ctypes.cast(dst, ctypes.c_void_p).value,
-            0,        # subresource 0
-            None,     # full texture
+            0,
+            None,
             src_ptr,
             row_pitch,
             0,
@@ -1302,8 +1332,12 @@ class OpenXRViewer:
         self._xr_swapchains = {}        # {eye_index: xr.Swapchain}
         self._swapchain_images = {}     # {eye_index: [XrSwapchainImageOpenGLKHR, ...]}
         self._swapchain_sizes = {}      # {eye_index: (w, h)}
-        self._fbo_cache = {}            # {(eye_index, image_index): (raw_id, mgl_fbo)}
+        self._fbo_cache = {}            # {(eye_index, image_index): (raw_id, mgl_fbo, rbo_id)}
         self._session_running = False
+        self._passthrough_supported  = False  # True if XR_FB_passthrough was successfully loaded
+        self._passthrough_handle     = None   # XrPassthroughFB
+        self._passthrough_layer      = None   # XrPassthroughLayerFB
+        self._passthrough_enabled    = False  # user toggle
 
         # Pre-built XR call argument structs — stateless inputs reused every
         # frame to avoid 6+ ctypes allocations per frame (per eye for swapchain
@@ -1354,7 +1388,9 @@ class OpenXRViewer:
         self._y_last         = False  # Y-button previous frame state (reset screen)
         self._y_press_t      = 0.0   # perf_counter when Y was pressed
         self._y_long_fired   = False # True once long-press action fired this hold
-        self._x_last         = False  # X-button previous frame state (toggle keyboard)
+        self._x_last         = False  # X-button previous frame state
+        self._x_press_t      = 0.0   # perf_counter when X was pressed
+        self._x_long_fired   = False # True once long-press action fired this hold
         # Head pose (world) cached each frame from xr.locate_views — used as the orbit
         # pivot for the left thumbstick and as the anchor when the keyboard is summoned.
         self._head_pos_w      = None   # (x, y, z) head/eye centre in world space, or None
@@ -1419,6 +1455,7 @@ class OpenXRViewer:
         self._kb_held_key_r        = None  # index of key held by right trigger, or None
         self._kb_held_mods_l       = None  # (shift, ctrl, alt, win, vk) snapshot for left held key
         self._kb_held_mods_r       = None  # (shift, ctrl, alt, win, vk) snapshot for right held key
+        self._kb_flash_keys        = {}    # {key_index: press_time} brief highlight on key press
 
         # GPU interop (CUDA / HIP) — initialised lazily on first frame
         self._cuda_gl         = None   # CUDART_GL instance, False = permanently failed
@@ -1660,12 +1697,16 @@ class OpenXRViewer:
         # PBOs for async pixel readback in the D3D11 path.
         # Key: (eye_index, img_index) → (pbo_id, w, h)
         self._d3d11_pbo_cache       = {}
+        # GL sync fences for PBO readback completion.
+        # Key: pbo_id → GL sync object (or None after consumed)
+        self._d3d11_pbo_fence       = {}
 
         # GPU interop state (NV_DX_interop2 or EXT_memory_object) for zero-copy
         self._interop_mode      = None   # 'nv_dx' | 'ext_mem' | None (PBO fallback)
         self._nv_dx_device      = None   # HANDLE from wglDXOpenDeviceNV
         self._nv_dx_objects     = {}     # {img_index: GL_tex_id} for registered swapchain textures
         self._ext_shared_tex    = {}     # {(eye): (d3d11_tex, gl_mem_obj, gl_tex, mgl_fbo)}
+
 
         # ModernGL / GL handles
         self.window = None
@@ -1743,6 +1784,7 @@ class OpenXRViewer:
         self.prog['u_convergence'].value = self.convergence
         self.prog['tex_color'].value = 0
         self.prog['tex_depth'].value = 1
+        self.prog['u_fxaa_enabled'].value = 0
 
         vertices = np.array([
             -1, -1, 0, 0,
@@ -1880,6 +1922,7 @@ class OpenXRViewer:
         self._curved_prog['u_convergence'].value = self.convergence
         self._curved_prog['tex_color'].value = 0
         self._curved_prog['tex_depth'].value  = 1
+        self._curved_prog['u_fxaa_enabled'].value = 0
         # Allocate dynamic VBO large enough for N=48 segments × 2 verts × (3+2) floats.
         _CURVED_N = 48
         _curved_buf_bytes = (_CURVED_N + 1) * 2 * (3 + 2) * 4   # f4
@@ -2093,12 +2136,21 @@ class OpenXRViewer:
             engine_version=1,
             api_version=xr.XR_CURRENT_API_VERSION,
         )
+        ext_names = [xr.KHR_D3D11_ENABLE_EXTENSION_NAME]
+        _passthrough_ext = "XR_FB_passthrough"
+        try:
+            available_exts = {p.extension_name.decode() for p in xr.enumerate_instance_extension_properties()}
+            if _passthrough_ext in available_exts:
+                ext_names.append(_passthrough_ext)
+                self._passthrough_supported = True
+        except Exception:
+            pass
         create_info = xr.InstanceCreateInfo(
             application_info=app_info,
-            enabled_extension_names=[xr.KHR_D3D11_ENABLE_EXTENSION_NAME],
+            enabled_extension_names=ext_names,
         )
         self._xr_instance = xr.create_instance(create_info)
-        print("[OpenXRViewer] XrInstance created (D3D11)")
+        # print(f"[OpenXRViewer] XrInstance created (D3D11), passthrough={'yes' if self._passthrough_supported else 'no'}")
 
         # 2. System
         self._xr_system_id = xr.get_system(
@@ -2204,7 +2256,10 @@ class OpenXRViewer:
         # 9. Try GPU interop to avoid the PBO readback path
         self._setup_gpu_interop_d3d11()
 
-        # 10. Controller actions (best-effort)
+        # 10. Passthrough (best-effort — only on Meta runtimes)
+        self._init_passthrough_fb()
+
+        # 11. Controller actions (best-effort)
         try:
             self._init_controller_actions()
         except Exception as e:
@@ -2358,19 +2413,11 @@ class OpenXRViewer:
     def _blit_ext_to_swapchain(self, eye_index, d3d11_swapchain_tex):
         """GPU-side CopyResource from our shared texture to the swapchain image."""
         d3d11_shared_tex = self._ext_shared_tex[eye_index][0]
-        # ID3D11DeviceContext::CopyResource at vtable index 47
         ctx = self._d3d11_context
-        vtbl = ctypes.cast(ctx, ctypes.POINTER(ctypes.c_void_p)).contents.value
-        copy_fn = ctypes.CFUNCTYPE(
-            None,
-            ctypes.c_void_p,  # this
-            ctypes.c_void_p,  # pDstResource
-            ctypes.c_void_p,  # pSrcResource
-        )(ctypes.cast(vtbl + 47 * ctypes.sizeof(ctypes.c_void_p),
-                    ctypes.POINTER(ctypes.c_void_p)).contents.value)
+        _d3d11_resolve_context_fns(ctx)
         # Sync: ensure GL is done before D3D11 reads the shared texture
         glFinish()
-        copy_fn(ctx, d3d11_swapchain_tex, d3d11_shared_tex)
+        _d3d11_copy_res_fn(ctx, d3d11_swapchain_tex, d3d11_shared_tex)
 
     def _cleanup_interop(self):
         """Release all GPU interop resources."""
@@ -2433,12 +2480,21 @@ class OpenXRViewer:
             engine_version=1,
             api_version=xr.XR_CURRENT_API_VERSION,
         )
+        _ext_names = [xr.KHR_OPENGL_ENABLE_EXTENSION_NAME]
+        _passthrough_ext = "XR_FB_passthrough"
+        try:
+            available_exts = {p.extension_name.decode() for p in xr.enumerate_instance_extension_properties()}
+            if _passthrough_ext in available_exts:
+                _ext_names.append(_passthrough_ext)
+                self._passthrough_supported = True
+        except Exception:
+            pass
         create_info = xr.InstanceCreateInfo(
             application_info=app_info,
-            enabled_extension_names=[xr.KHR_OPENGL_ENABLE_EXTENSION_NAME],
+            enabled_extension_names=_ext_names,
         )
         self._xr_instance = xr.create_instance(create_info)
-        print("[OpenXRViewer] XrInstance created (OpenGL)")
+        # print(f"[OpenXRViewer] XrInstance created (OpenGL), passthrough={'yes' if self._passthrough_supported else 'no'}")
 
         # 2. System
         self._xr_system_id = xr.get_system(
@@ -2526,11 +2582,125 @@ class OpenXRViewer:
             self._swapchain_images[eye_index] = images
             self._swapchain_sizes[eye_index] = (sc_w, sc_h)
 
-        # 8. Controller actions (optional — silently disabled if action set creation fails)
+        # 8. Passthrough (best-effort — only on Meta runtimes)
+        self._init_passthrough_fb()
+
+        # 9. Controller actions (optional — silently disabled if action set creation fails)
         try:
             self._init_controller_actions()
         except Exception as e:
             print(f"[OpenXRViewer] Controller actions unavailable: {e}")
+
+    def _init_passthrough_fb(self):
+        """Create XR_FB_passthrough handle and reconstruction layer (called after session creation).
+
+        Uses raw ctypes structs because pyopenxr doesn't expose XR_FB_passthrough types.
+        Struct layouts match the OpenXR 1.1 spec:
+          XrPassthroughCreateInfoFB   { type(i32), pad(32), next(ptr), flags(u64) }
+          XrPassthroughLayerCreateInfoFB { type, pad, next, passthrough(handle), flags, purpose(i32) }
+          XrCompositionLayerPassthroughFB { type, pad, next, layerFlags, space, layerHandle }
+        All handles are XR_DEFINE_OPAQUE_64 = uint64.
+        """
+        if not self._passthrough_supported:
+            return
+
+        # ── OpenXR type enum values for XR_FB_passthrough ──────────────────────
+        _XR_TYPE_PASSTHROUGH_CREATE_INFO_FB        = 1000118001
+        _XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB  = 1000118002
+        _XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB  = 1000118003
+        _XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT = 0x1   # XrPassthroughFlagsFB
+        _XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION = 0   # XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB
+
+        # ── ctypes structs ──────────────────────────────────────────────────────
+        # XrBaseInStructure layout: StructureType (i32), pad(32), next (void*)
+        # All XrXxx structs start with the same two header fields.
+        class _XrPassthroughCreateInfoFB(ctypes.Structure):
+            _fields_ = [
+                ("type",  ctypes.c_int32),
+                ("_pad",  ctypes.c_uint32),
+                ("next",  ctypes.c_void_p),
+                ("flags", ctypes.c_uint64),   # XrPassthroughFlagsFB
+            ]
+
+        class _XrPassthroughLayerCreateInfoFB(ctypes.Structure):
+            _fields_ = [
+                ("type",        ctypes.c_int32),
+                ("_pad",        ctypes.c_uint32),
+                ("next",        ctypes.c_void_p),
+                ("passthrough", ctypes.c_uint64),   # XrPassthroughFB handle
+                ("flags",       ctypes.c_uint64),   # XrPassthroughFlagsFB
+                ("purpose",     ctypes.c_int32),    # XrPassthroughLayerPurposeFB
+                ("_pad2",       ctypes.c_uint32),
+            ]
+
+        # PFN typedefs
+        _PFN_create = ctypes.CFUNCTYPE(
+            ctypes.c_int,                        # XrResult
+            ctypes.c_uint64,                     # XrSession (opaque handle)
+            ctypes.POINTER(_XrPassthroughCreateInfoFB),
+            ctypes.POINTER(ctypes.c_uint64),     # XrPassthroughFB*
+        )
+        _PFN_start = ctypes.CFUNCTYPE(
+            ctypes.c_int,
+            ctypes.c_uint64,                     # XrPassthroughFB
+        )
+        _PFN_create_layer = ctypes.CFUNCTYPE(
+            ctypes.c_int,
+            ctypes.c_uint64,                     # XrSession
+            ctypes.POINTER(_XrPassthroughLayerCreateInfoFB),
+            ctypes.POINTER(ctypes.c_uint64),     # XrPassthroughLayerFB*
+        )
+
+        try:
+            pfn_create = ctypes.cast(
+                xr.get_instance_proc_addr(self._xr_instance, "xrCreatePassthroughFB"),
+                _PFN_create,
+            )
+            pfn_start = ctypes.cast(
+                xr.get_instance_proc_addr(self._xr_instance, "xrPassthroughStartFB"),
+                _PFN_start,
+            )
+            pfn_create_layer = ctypes.cast(
+                xr.get_instance_proc_addr(self._xr_instance, "xrCreatePassthroughLayerFB"),
+                _PFN_create_layer,
+            )
+
+            # XrSession is an opaque handle; pyopenxr wraps it — extract the integer value
+            session_int = ctypes.c_uint64(ctypes.cast(self._xr_session, ctypes.c_void_p).value)
+
+            # Create passthrough object
+            pt_info = _XrPassthroughCreateInfoFB(
+                type=_XR_TYPE_PASSTHROUGH_CREATE_INFO_FB,
+                flags=_XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT,
+            )
+            pt_handle = ctypes.c_uint64(0)
+            xr.check_result(xr.Result(pfn_create(session_int, ctypes.byref(pt_info), ctypes.byref(pt_handle))))
+            self._passthrough_handle = pt_handle
+
+            # Start passthrough (session is already running-at-creation via flag, but call for explicitness)
+            xr.check_result(xr.Result(pfn_start(pt_handle)))
+
+            # Create reconstruction layer
+            layer_info = _XrPassthroughLayerCreateInfoFB(
+                type=_XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB,
+                passthrough=pt_handle.value,
+                flags=0,
+                purpose=_XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION,
+            )
+            layer_handle = ctypes.c_uint64(0)
+            xr.check_result(xr.Result(pfn_create_layer(session_int, ctypes.byref(layer_info), ctypes.byref(layer_handle))))
+            self._passthrough_layer = layer_handle
+
+            # Store the composition layer struct type and PFN for reuse at frame time
+            self._XrCompositionLayerPassthroughFB_type = _XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB
+            self._passthrough_session_int = session_int
+
+            print("[OpenXRViewer] XR_FB_passthrough initialised")
+        except Exception as e:
+            print(f"[OpenXRViewer] XR_FB_passthrough init failed (passthrough disabled): {e}")
+            self._passthrough_supported = False
+            self._passthrough_handle = None
+            self._passthrough_layer = None
 
     def _init_controller_actions(self):
         """Set up OpenXR action set with thumbstick and menu button actions."""
@@ -3053,6 +3223,22 @@ class OpenXRViewer:
             elif key.vk in oneshot_vks:
                 _hl_quad(key.rect_local, (1.0, 0.7, 0.15, 0.45))
 
+        # Held-key highlight: amber glow while the trigger is pressed down
+        for held_idx in (x for x in (self._kb_held_key_l, self._kb_held_key_r) if x is not None):
+            if held_idx < len(self._keyboard_keys):
+                _hl_quad(self._keyboard_keys[held_idx].rect_local, (1.0, 0.80, 0.15, 0.60))
+
+        # Flash effect: bright white fade-out on key press (covers both regular and modifier keys)
+        _FLASH_DUR = 0.18
+        _now_kf = time.perf_counter()
+        for _fi, _ft in list(self._kb_flash_keys.items()):
+            _elapsed = _now_kf - _ft
+            if _elapsed >= _FLASH_DUR or _fi >= len(self._keyboard_keys):
+                self._kb_flash_keys.pop(_fi, None)
+                continue
+            _fa = 1.0 - (_elapsed / _FLASH_DUR)
+            _hl_quad(self._keyboard_keys[_fi].rect_local, (1.0, 1.0, 1.0, _fa * 0.75))
+
         # Cyan highlight on keys hovered by either laser (suppressed while gripping)
         if not (self._grip_l_now or self._grip_r_now):
             for hover_idx in set(x for x in [self._kb_hover_l, self._kb_hover_r] if x is not None):
@@ -3280,26 +3466,38 @@ class OpenXRViewer:
         ctx.detect_framebuffer() is used so ModernGL's internal state tracking stays
         consistent — raw glBindFramebuffer() is invisible to ModernGL and would cause
         ctx.clear() / vao.render() to target the wrong framebuffer.
+        A depth renderbuffer is attached so DEPTH_TEST works for correct screen/keyboard ordering.
         """
         key = (eye_index, image_index)
         if key in self._fbo_cache:
             return self._fbo_cache[key]
+
+        sc_w, sc_h = self._swapchain_sizes[eye_index]
+
+        rbo_id = int(glGenRenderbuffers(1))
+        glBindRenderbuffer(GL_RENDERBUFFER, rbo_id)
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, sc_w, sc_h)
+        glBindRenderbuffer(GL_RENDERBUFFER, 0)
 
         raw_id = glGenFramebuffers(1)
         glBindFramebuffer(GL_FRAMEBUFFER, raw_id)
         glFramebufferTexture2D(
             GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture_id, 0
         )
+        glFramebufferRenderbuffer(
+            GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbo_id
+        )
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         if status != GL_FRAMEBUFFER_COMPLETE:
+            glDeleteRenderbuffers(1, [rbo_id])
             raise RuntimeError(
                 f"[OpenXRViewer] FBO incomplete for eye {eye_index}, "
                 f"image {image_index}: {status:#x}"
             )
         mgl_fbo = self.ctx.detect_framebuffer(raw_id)
-        self._fbo_cache[key] = (raw_id, mgl_fbo)
-        return raw_id, mgl_fbo
+        self._fbo_cache[key] = (raw_id, mgl_fbo, rbo_id)
+        return raw_id, mgl_fbo, rbo_id
 
     def _get_or_create_offscreen_fbo(self, eye_index, image_index, w, h):
         """Return a ModernGL FBO backed by an RGBA texture of size (w, h).
@@ -3317,22 +3515,32 @@ class OpenXRViewer:
             try:
                 cached[2].release()    # mgl Texture
                 glDeleteFramebuffers(1, [cached[1]])
+                glDeleteRenderbuffers(1, [cached[5]])
             except Exception:
                 pass
+
+        rbo_id = int(glGenRenderbuffers(1))
+        glBindRenderbuffer(GL_RENDERBUFFER, rbo_id)
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h)
+        glBindRenderbuffer(GL_RENDERBUFFER, 0)
 
         raw_id = glGenFramebuffers(1)
         mgl_tex = self.ctx.texture((w, h), 4, dtype='f1')
         glBindFramebuffer(GL_FRAMEBUFFER, raw_id)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                             GL_TEXTURE_2D, mgl_tex.glo, 0)
+        glFramebufferRenderbuffer(
+            GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbo_id
+        )
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         if status != GL_FRAMEBUFFER_COMPLETE:
+            glDeleteRenderbuffers(1, [rbo_id])
             raise RuntimeError(
                 f"[OpenXRViewer] Offscreen FBO incomplete for eye {eye_index}: {status:#x}"
             )
         mgl_fbo = self.ctx.detect_framebuffer(raw_id)
-        self._offscreen_fbo_cache[key] = (mgl_fbo, raw_id, mgl_tex, w, h)
+        self._offscreen_fbo_cache[key] = (mgl_fbo, raw_id, mgl_tex, w, h, rbo_id)
         return mgl_fbo, raw_id
 
     def _get_or_create_d3d11_pbo(self, eye_index, img_index, w, h):
@@ -3351,15 +3559,26 @@ class OpenXRViewer:
         return pbo_id
 
     def _submit_pbo_readback(self, raw_fbo_id, pbo_id, w, h):
-        """Submit an async glReadPixels into pbo_id and flush to kick off DMA immediately.
+        """Submit an async glReadPixels into pbo_id and insert a fence to track completion.
 
         Uses GL_BGRA for BGRA swapchains (WMR) so the byte order matches D3D11 directly.
+        The fence is stored in _d3d11_pbo_fence keyed by pbo_id so Phase 2 can check it
+        without blocking, falling back to a synchronized map only if the GPU is still busy.
         """
         pixel_fmt = GL_BGRA if self._swapchain_is_bgra else GL_RGBA
         glBindFramebuffer(GL_FRAMEBUFFER, raw_fbo_id)
         glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
         glReadPixels(0, 0, w, h, pixel_fmt, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
-        glFlush()  # push the DMA command to the GPU so it starts while we render eye 1
+        # Insert fence immediately after the readback command so Phase 2 can non-blockingly
+        # test whether the DMA has completed rather than relying on wall-clock timing.
+        old_fence = self._d3d11_pbo_fence.get(pbo_id)
+        if old_fence is not None:
+            try:
+                glDeleteSync(old_fence)
+            except Exception:
+                pass
+        self._d3d11_pbo_fence[pbo_id] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
+        glFlush()  # push the DMA + fence commands to the GPU immediately
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
@@ -3370,13 +3589,31 @@ class OpenXRViewer:
         produces top-down rows — no CPU row-reversal needed.  The mapped PBO
         pointer is passed directly to D3D11 UpdateSubresource, eliminating the
         intermediate flip-buffer and its per-frame memcpy.
+
+        We check the per-PBO fence first.  If the DMA is already done we map
+        UNSYNCHRONIZED (zero-wait).  If not, we map without the flag so the
+        driver inserts the minimal stall needed — this is safer than accepting
+        corrupt data with UNSYNCHRONIZED on slow DirectML/iGPU paths.
         """
         row_bytes = w * 4
         glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
-        # UNSYNCHRONIZED: the Phase-1/Phase-2 pipelining gives the DMA enough time
-        # to finish; if it hasn't, we accept a one-frame visual glitch rather than
-        # stalling the pipeline.
-        src_ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY | GL_MAP_UNSYNCHRONIZED_BIT)
+
+        fence = self._d3d11_pbo_fence.get(pbo_id)
+        dma_done = False
+        if fence is not None:
+            status = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0)
+            dma_done = status in (GL_ALREADY_SIGNALED, GL_CONDITION_SATISFIED)
+            if dma_done:
+                glDeleteSync(fence)
+                self._d3d11_pbo_fence[pbo_id] = None
+
+        if dma_done:
+            src_ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY | GL_MAP_UNSYNCHRONIZED_BIT)
+        else:
+            # DMA not confirmed done — let the driver insert a minimal stall rather
+            # than uploading stale/corrupt pixel data to the headset.
+            src_ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY)
+
         if src_ptr:
             try:
                 _d3d11_update_subresource(
@@ -5198,9 +5435,12 @@ class OpenXRViewer:
 
         mgl_fbo.use()
         self.ctx.viewport = (0, 0, sc_w, sc_h)
-        bg_a = 1.0
+        # When passthrough is active the compositor blends this eye image over the
+        # passthrough layer using the alpha channel — clear with alpha=0 so pixels not
+        # covered by the virtual screen are fully transparent and show the camera feed.
+        bg_a = 0.0 if self._passthrough_enabled else 1.0
         bg_r, bg_g, bg_b = _BG_COLORS[self._bg_color_idx]
-        mgl_fbo.clear(bg_r, bg_g, bg_b, bg_a)
+        mgl_fbo.clear(bg_r, bg_g, bg_b, bg_a, depth=1.0)
 
         if not self._screen_visible:
             self.ctx.screen.use()
@@ -5213,6 +5453,11 @@ class OpenXRViewer:
         # Pre-compute view-projection once per eye — all quads multiply their model
         # matrix against this rather than recomputing proj @ view each time.
         vp_mat = proj_mat @ view_mat
+
+        # Enable depth testing so the keyboard and screen occlude each other
+        # correctly based on their actual world-space positions.
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.depth_func = '<'
 
         # 1. Border (behind the screen, slightly larger)
         self._render_border(mgl_fbo, vp_mat)
@@ -5257,10 +5502,13 @@ class OpenXRViewer:
             # opaque black clear, creating a persistent dark halo visible at all times.
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-        # 3. Keyboard
+        # 3. Keyboard — depth test still active so it occludes/is-occluded by screen naturally
         if self._keyboard_visible and self._keyboard_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_keyboard(mgl_fbo, vp_mat)
+
+        # OSD overlays are 2D UI elements that always render on top; disable depth test.
+        self.ctx.disable(moderngl.DEPTH_TEST)
 
         # 5. Depth OSD (floating panel, always checked — method handles its own alpha)
         if self._depth_osd_tex is not None:
@@ -5950,6 +6198,7 @@ class OpenXRViewer:
 
             # —— Rising edge: modifier / caps toggles, or start holding a regular key ——
             if trig_now >= CLICK_THRESH and trig_prev < CLICK_THRESH and idx is not None:
+                self._kb_flash_keys[idx] = time.perf_counter()
                 key = self._keyboard_keys[idx]
                 mod_name = {VK_SHIFT: 'shift', VK_CTRL: 'ctrl',
                             VK_ALT: 'alt', VK_WIN: 'win'}.get(key.vk)
@@ -6741,11 +6990,20 @@ class OpenXRViewer:
             self._apply_preset(3)  # short press = default preset
         self._y_last = y_now
 
-        # X (left): toggle virtual keyboard. When turning it on, snap the keyboard
-        # anchor under the user's current gaze (in front and below) so it lands within
-        # reach instead of at the world origin.
+        # X (left): short press → toggle virtual keyboard; long press (≥0.6s) → toggle passthrough.
+        _X_LONG = 0.6
         x_now = self._read_bool_action(self._act_x_btn, "/user/hand/left")
         if x_now and not self._x_last:
+            self._x_press_t    = self._frame_now
+            self._x_long_fired = False
+        if x_now and not self._x_long_fired and (self._frame_now - self._x_press_t) >= _X_LONG:
+            # Long press: toggle passthrough (only when supported)
+            if self._passthrough_supported:
+                self._passthrough_enabled = not self._passthrough_enabled
+                print(f"[OpenXRViewer] Passthrough {'enabled' if self._passthrough_enabled else 'disabled'}")
+            self._x_long_fired = True
+        if not x_now and self._x_last and not self._x_long_fired:
+            # Short press: toggle keyboard (unchanged behaviour)
             self._keyboard_visible = not self._keyboard_visible
             if self._keyboard_visible:
                 if self._keyboard_tex is None:
@@ -6908,7 +7166,12 @@ class OpenXRViewer:
 
             # — Wait for the runtime to signal frame timing —
             frame_state = xr.wait_frame(self._xr_session, self._xr_frame_wait_info)
-            xr.begin_frame(self._xr_session, self._xr_frame_begin_info)
+            try:
+                xr.begin_frame(self._xr_session, self._xr_frame_begin_info)
+            except Exception as _bf_err:
+                if 'FrameDiscarded' in type(_bf_err).__name__:
+                    continue   # previous end_frame failed; runtime dropped the frame — continue
+                raise
 
             # sync_actions must happen before xr.locate_space for action spaces.
             # Do it here so _update_aim_poses gets fresh locations this frame.
@@ -7126,7 +7389,7 @@ class OpenXRViewer:
                         view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
                         proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
 
-                        _, mgl_fbo = self._get_or_create_fbo(eye_index, img_index, sc_image.image)
+                        _, mgl_fbo, _ = self._get_or_create_fbo(eye_index, img_index, sc_image.image)
                         self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat)
 
                         xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
@@ -7142,6 +7405,32 @@ class OpenXRViewer:
                                 ),
                             ),
                         ))
+
+                # Passthrough layer: prepend so it renders behind the projection layer.
+                # XrCompositionLayerPassthroughFB layout:
+                #   type(i32), pad(32), next(ptr), layerFlags(u64), space(u64-handle), layerHandle(u64)
+                if self._passthrough_enabled and self._passthrough_layer is not None:
+                    class _XrCompositionLayerPassthroughFB(ctypes.Structure):
+                        _fields_ = [
+                            ("type",        ctypes.c_int32),
+                            ("_pad",        ctypes.c_uint32),
+                            ("next",        ctypes.c_void_p),
+                            ("layerFlags",  ctypes.c_uint64),
+                            ("space",       ctypes.c_uint64),
+                            ("layerHandle", ctypes.c_uint64),
+                        ]
+                    # space MUST be XR_NULL_HANDLE (0) per XR_FB_passthrough spec.
+                    # Pin struct to self to prevent GC before end_frame consumes the pointer.
+                    self._pt_comp_layer_ref = _XrCompositionLayerPassthroughFB(
+                        type=self._XrCompositionLayerPassthroughFB_type,
+                        layerFlags=0,
+                        space=0,
+                        layerHandle=self._passthrough_layer.value,
+                    )
+                    composition_layers.append(
+                        ctypes.cast(ctypes.pointer(self._pt_comp_layer_ref),
+                                    ctypes.POINTER(xr.CompositionLayerBaseHeader))
+                    )
 
                 proj_layer = xr.CompositionLayerProjection(
                     space=self._xr_space,
@@ -7181,10 +7470,16 @@ class OpenXRViewer:
 
         self._cleanup_interop()
 
-        raw_ids = [raw_id for raw_id, _ in self._fbo_cache.values()]
+        raw_ids = [raw_id for raw_id, _, _rbo in self._fbo_cache.values()]
+        rbo_ids = [rbo_id for _raw, _mgl, rbo_id in self._fbo_cache.values()]
         if raw_ids:
             try:
                 glDeleteFramebuffers(len(raw_ids), raw_ids)
+            except Exception:
+                pass
+        if rbo_ids:
+            try:
+                glDeleteRenderbuffers(len(rbo_ids), rbo_ids)
             except Exception:
                 pass
         self._fbo_cache.clear()
@@ -7196,12 +7491,25 @@ class OpenXRViewer:
             except Exception:
                 pass
             self._d3d11_pbo_cache.clear()
+        for fence in self._d3d11_pbo_fence.values():
+            if fence is not None:
+                try:
+                    glDeleteSync(fence)
+                except Exception:
+                    pass
+        self._d3d11_pbo_fence.clear()
 
         # Release D3D11-path offscreen FBOs and their backing textures
         offscreen_raw_ids = [entry[1] for entry in self._offscreen_fbo_cache.values()]
+        offscreen_rbo_ids = [entry[5] for entry in self._offscreen_fbo_cache.values()]
         if offscreen_raw_ids:
             try:
                 glDeleteFramebuffers(len(offscreen_raw_ids), offscreen_raw_ids)
+            except Exception:
+                pass
+        if offscreen_rbo_ids:
+            try:
+                glDeleteRenderbuffers(len(offscreen_rbo_ids), offscreen_rbo_ids)
             except Exception:
                 pass
         for entry in self._offscreen_fbo_cache.values():
@@ -7301,6 +7609,28 @@ class OpenXRViewer:
                 except Exception:
                     pass
                 setattr(self, space_attr, None)
+
+        # Passthrough handles must be destroyed before the session
+        if self._passthrough_layer is not None and self._xr_instance:
+            try:
+                pfn_destroy_layer = ctypes.cast(
+                    xr.get_instance_proc_addr(self._xr_instance, "xrDestroyPassthroughLayerFB"),
+                    ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint64),
+                )
+                pfn_destroy_layer(self._passthrough_layer)
+            except Exception:
+                pass
+            self._passthrough_layer = None
+        if self._passthrough_handle is not None and self._xr_instance:
+            try:
+                pfn_destroy_pt = ctypes.cast(
+                    xr.get_instance_proc_addr(self._xr_instance, "xrDestroyPassthroughFB"),
+                    ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint64),
+                )
+                pfn_destroy_pt(self._passthrough_handle)
+            except Exception:
+                pass
+            self._passthrough_handle = None
 
         if self._xr_session:
             try:
