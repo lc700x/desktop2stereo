@@ -1334,10 +1334,6 @@ class OpenXRViewer:
         self._swapchain_sizes = {}      # {eye_index: (w, h)}
         self._fbo_cache = {}            # {(eye_index, image_index): (raw_id, mgl_fbo, rbo_id)}
         self._session_running = False
-        self._passthrough_supported  = False  # True if XR_FB_passthrough was successfully loaded
-        self._passthrough_handle     = None   # XrPassthroughFB
-        self._passthrough_layer      = None   # XrPassthroughLayerFB
-        self._passthrough_enabled    = False  # user toggle
 
         # Pre-built XR call argument structs — stateless inputs reused every
         # frame to avoid 6+ ctypes allocations per frame (per eye for swapchain
@@ -2136,21 +2132,12 @@ class OpenXRViewer:
             engine_version=1,
             api_version=xr.XR_CURRENT_API_VERSION,
         )
-        ext_names = [xr.KHR_D3D11_ENABLE_EXTENSION_NAME]
-        _passthrough_ext = "XR_FB_passthrough"
-        try:
-            available_exts = {p.extension_name.decode() for p in xr.enumerate_instance_extension_properties()}
-            if _passthrough_ext in available_exts:
-                ext_names.append(_passthrough_ext)
-                self._passthrough_supported = True
-        except Exception:
-            pass
         create_info = xr.InstanceCreateInfo(
             application_info=app_info,
-            enabled_extension_names=ext_names,
+            enabled_extension_names=[xr.KHR_D3D11_ENABLE_EXTENSION_NAME],
         )
         self._xr_instance = xr.create_instance(create_info)
-        # print(f"[OpenXRViewer] XrInstance created (D3D11), passthrough={'yes' if self._passthrough_supported else 'no'}")
+        print("[OpenXRViewer] XrInstance created (D3D11)")
 
         # 2. System
         self._xr_system_id = xr.get_system(
@@ -2256,10 +2243,7 @@ class OpenXRViewer:
         # 9. Try GPU interop to avoid the PBO readback path
         self._setup_gpu_interop_d3d11()
 
-        # 10. Passthrough (best-effort — only on Meta runtimes)
-        self._init_passthrough_fb()
-
-        # 11. Controller actions (best-effort)
+        # 10. Controller actions (best-effort)
         try:
             self._init_controller_actions()
         except Exception as e:
@@ -2480,21 +2464,12 @@ class OpenXRViewer:
             engine_version=1,
             api_version=xr.XR_CURRENT_API_VERSION,
         )
-        _ext_names = [xr.KHR_OPENGL_ENABLE_EXTENSION_NAME]
-        _passthrough_ext = "XR_FB_passthrough"
-        try:
-            available_exts = {p.extension_name.decode() for p in xr.enumerate_instance_extension_properties()}
-            if _passthrough_ext in available_exts:
-                _ext_names.append(_passthrough_ext)
-                self._passthrough_supported = True
-        except Exception:
-            pass
         create_info = xr.InstanceCreateInfo(
             application_info=app_info,
-            enabled_extension_names=_ext_names,
+            enabled_extension_names=[xr.KHR_OPENGL_ENABLE_EXTENSION_NAME],
         )
         self._xr_instance = xr.create_instance(create_info)
-        # print(f"[OpenXRViewer] XrInstance created (OpenGL), passthrough={'yes' if self._passthrough_supported else 'no'}")
+        print("[OpenXRViewer] XrInstance created (OpenGL)")
 
         # 2. System
         self._xr_system_id = xr.get_system(
@@ -2582,125 +2557,11 @@ class OpenXRViewer:
             self._swapchain_images[eye_index] = images
             self._swapchain_sizes[eye_index] = (sc_w, sc_h)
 
-        # 8. Passthrough (best-effort — only on Meta runtimes)
-        self._init_passthrough_fb()
-
-        # 9. Controller actions (optional — silently disabled if action set creation fails)
+        # 8. Controller actions (optional — silently disabled if action set creation fails)
         try:
             self._init_controller_actions()
         except Exception as e:
             print(f"[OpenXRViewer] Controller actions unavailable: {e}")
-
-    def _init_passthrough_fb(self):
-        """Create XR_FB_passthrough handle and reconstruction layer (called after session creation).
-
-        Uses raw ctypes structs because pyopenxr doesn't expose XR_FB_passthrough types.
-        Struct layouts match the OpenXR 1.1 spec:
-          XrPassthroughCreateInfoFB   { type(i32), pad(32), next(ptr), flags(u64) }
-          XrPassthroughLayerCreateInfoFB { type, pad, next, passthrough(handle), flags, purpose(i32) }
-          XrCompositionLayerPassthroughFB { type, pad, next, layerFlags, space, layerHandle }
-        All handles are XR_DEFINE_OPAQUE_64 = uint64.
-        """
-        if not self._passthrough_supported:
-            return
-
-        # ── OpenXR type enum values for XR_FB_passthrough ──────────────────────
-        _XR_TYPE_PASSTHROUGH_CREATE_INFO_FB        = 1000118001
-        _XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB  = 1000118002
-        _XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB  = 1000118003
-        _XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT = 0x1   # XrPassthroughFlagsFB
-        _XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION = 0   # XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB
-
-        # ── ctypes structs ──────────────────────────────────────────────────────
-        # XrBaseInStructure layout: StructureType (i32), pad(32), next (void*)
-        # All XrXxx structs start with the same two header fields.
-        class _XrPassthroughCreateInfoFB(ctypes.Structure):
-            _fields_ = [
-                ("type",  ctypes.c_int32),
-                ("_pad",  ctypes.c_uint32),
-                ("next",  ctypes.c_void_p),
-                ("flags", ctypes.c_uint64),   # XrPassthroughFlagsFB
-            ]
-
-        class _XrPassthroughLayerCreateInfoFB(ctypes.Structure):
-            _fields_ = [
-                ("type",        ctypes.c_int32),
-                ("_pad",        ctypes.c_uint32),
-                ("next",        ctypes.c_void_p),
-                ("passthrough", ctypes.c_uint64),   # XrPassthroughFB handle
-                ("flags",       ctypes.c_uint64),   # XrPassthroughFlagsFB
-                ("purpose",     ctypes.c_int32),    # XrPassthroughLayerPurposeFB
-                ("_pad2",       ctypes.c_uint32),
-            ]
-
-        # PFN typedefs
-        _PFN_create = ctypes.CFUNCTYPE(
-            ctypes.c_int,                        # XrResult
-            ctypes.c_uint64,                     # XrSession (opaque handle)
-            ctypes.POINTER(_XrPassthroughCreateInfoFB),
-            ctypes.POINTER(ctypes.c_uint64),     # XrPassthroughFB*
-        )
-        _PFN_start = ctypes.CFUNCTYPE(
-            ctypes.c_int,
-            ctypes.c_uint64,                     # XrPassthroughFB
-        )
-        _PFN_create_layer = ctypes.CFUNCTYPE(
-            ctypes.c_int,
-            ctypes.c_uint64,                     # XrSession
-            ctypes.POINTER(_XrPassthroughLayerCreateInfoFB),
-            ctypes.POINTER(ctypes.c_uint64),     # XrPassthroughLayerFB*
-        )
-
-        try:
-            pfn_create = ctypes.cast(
-                xr.get_instance_proc_addr(self._xr_instance, "xrCreatePassthroughFB"),
-                _PFN_create,
-            )
-            pfn_start = ctypes.cast(
-                xr.get_instance_proc_addr(self._xr_instance, "xrPassthroughStartFB"),
-                _PFN_start,
-            )
-            pfn_create_layer = ctypes.cast(
-                xr.get_instance_proc_addr(self._xr_instance, "xrCreatePassthroughLayerFB"),
-                _PFN_create_layer,
-            )
-
-            # XrSession is an opaque handle; pyopenxr wraps it — extract the integer value
-            session_int = ctypes.c_uint64(ctypes.cast(self._xr_session, ctypes.c_void_p).value)
-
-            # Create passthrough object
-            pt_info = _XrPassthroughCreateInfoFB(
-                type=_XR_TYPE_PASSTHROUGH_CREATE_INFO_FB,
-                flags=_XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT,
-            )
-            pt_handle = ctypes.c_uint64(0)
-            xr.check_result(xr.Result(pfn_create(session_int, ctypes.byref(pt_info), ctypes.byref(pt_handle))))
-            self._passthrough_handle = pt_handle
-
-            # Start passthrough (session is already running-at-creation via flag, but call for explicitness)
-            xr.check_result(xr.Result(pfn_start(pt_handle)))
-
-            # Create reconstruction layer
-            layer_info = _XrPassthroughLayerCreateInfoFB(
-                type=_XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB,
-                passthrough=pt_handle.value,
-                flags=0,
-                purpose=_XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION,
-            )
-            layer_handle = ctypes.c_uint64(0)
-            xr.check_result(xr.Result(pfn_create_layer(session_int, ctypes.byref(layer_info), ctypes.byref(layer_handle))))
-            self._passthrough_layer = layer_handle
-
-            # Store the composition layer struct type and PFN for reuse at frame time
-            self._XrCompositionLayerPassthroughFB_type = _XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB
-            self._passthrough_session_int = session_int
-
-            print("[OpenXRViewer] XR_FB_passthrough initialised")
-        except Exception as e:
-            print(f"[OpenXRViewer] XR_FB_passthrough init failed (passthrough disabled): {e}")
-            self._passthrough_supported = False
-            self._passthrough_handle = None
-            self._passthrough_layer = None
 
     def _init_controller_actions(self):
         """Set up OpenXR action set with thumbstick and menu button actions."""
@@ -5435,10 +5296,7 @@ class OpenXRViewer:
 
         mgl_fbo.use()
         self.ctx.viewport = (0, 0, sc_w, sc_h)
-        # When passthrough is active the compositor blends this eye image over the
-        # passthrough layer using the alpha channel — clear with alpha=0 so pixels not
-        # covered by the virtual screen are fully transparent and show the camera feed.
-        bg_a = 0.0 if self._passthrough_enabled else 1.0
+        bg_a = 1.0
         bg_r, bg_g, bg_b = _BG_COLORS[self._bg_color_idx]
         mgl_fbo.clear(bg_r, bg_g, bg_b, bg_a, depth=1.0)
 
@@ -6990,18 +6848,11 @@ class OpenXRViewer:
             self._apply_preset(3)  # short press = default preset
         self._y_last = y_now
 
-        # X (left): short press → toggle virtual keyboard; long press (≥0.6s) → toggle passthrough.
-        _X_LONG = 0.6
+        # X (left): short press → toggle virtual keyboard.
         x_now = self._read_bool_action(self._act_x_btn, "/user/hand/left")
         if x_now and not self._x_last:
             self._x_press_t    = self._frame_now
             self._x_long_fired = False
-        if x_now and not self._x_long_fired and (self._frame_now - self._x_press_t) >= _X_LONG:
-            # Long press: toggle passthrough (only when supported)
-            if self._passthrough_supported:
-                self._passthrough_enabled = not self._passthrough_enabled
-                print(f"[OpenXRViewer] Passthrough {'enabled' if self._passthrough_enabled else 'disabled'}")
-            self._x_long_fired = True
         if not x_now and self._x_last and not self._x_long_fired:
             # Short press: toggle keyboard (unchanged behaviour)
             self._keyboard_visible = not self._keyboard_visible
@@ -7406,32 +7257,6 @@ class OpenXRViewer:
                             ),
                         ))
 
-                # Passthrough layer: prepend so it renders behind the projection layer.
-                # XrCompositionLayerPassthroughFB layout:
-                #   type(i32), pad(32), next(ptr), layerFlags(u64), space(u64-handle), layerHandle(u64)
-                if self._passthrough_enabled and self._passthrough_layer is not None:
-                    class _XrCompositionLayerPassthroughFB(ctypes.Structure):
-                        _fields_ = [
-                            ("type",        ctypes.c_int32),
-                            ("_pad",        ctypes.c_uint32),
-                            ("next",        ctypes.c_void_p),
-                            ("layerFlags",  ctypes.c_uint64),
-                            ("space",       ctypes.c_uint64),
-                            ("layerHandle", ctypes.c_uint64),
-                        ]
-                    # space MUST be XR_NULL_HANDLE (0) per XR_FB_passthrough spec.
-                    # Pin struct to self to prevent GC before end_frame consumes the pointer.
-                    self._pt_comp_layer_ref = _XrCompositionLayerPassthroughFB(
-                        type=self._XrCompositionLayerPassthroughFB_type,
-                        layerFlags=0,
-                        space=0,
-                        layerHandle=self._passthrough_layer.value,
-                    )
-                    composition_layers.append(
-                        ctypes.cast(ctypes.pointer(self._pt_comp_layer_ref),
-                                    ctypes.POINTER(xr.CompositionLayerBaseHeader))
-                    )
-
                 proj_layer = xr.CompositionLayerProjection(
                     space=self._xr_space,
                     views=eye_layer_views,
@@ -7609,28 +7434,6 @@ class OpenXRViewer:
                 except Exception:
                     pass
                 setattr(self, space_attr, None)
-
-        # Passthrough handles must be destroyed before the session
-        if self._passthrough_layer is not None and self._xr_instance:
-            try:
-                pfn_destroy_layer = ctypes.cast(
-                    xr.get_instance_proc_addr(self._xr_instance, "xrDestroyPassthroughLayerFB"),
-                    ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint64),
-                )
-                pfn_destroy_layer(self._passthrough_layer)
-            except Exception:
-                pass
-            self._passthrough_layer = None
-        if self._passthrough_handle is not None and self._xr_instance:
-            try:
-                pfn_destroy_pt = ctypes.cast(
-                    xr.get_instance_proc_addr(self._xr_instance, "xrDestroyPassthroughFB"),
-                    ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint64),
-                )
-                pfn_destroy_pt(self._passthrough_handle)
-            except Exception:
-                pass
-            self._passthrough_handle = None
 
         if self._xr_session:
             try:
