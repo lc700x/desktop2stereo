@@ -1,4 +1,5 @@
 # viewer.py
+import ctypes, os, sys
 import glfw, torch
 import moderngl
 import numpy as np
@@ -12,9 +13,6 @@ if OS_NAME == "Windows":
     from utils import hide_window_from_capture, show_window_in_capture
 elif OS_NAME == "Darwin":
     from utils import send_ctrl_cmd_f
-
-import ctypes, os, sys
-
 BACKEND = None
 # NVIDIA CUDA Version
 if "NVIDIA" in DEVICE_INFO:
@@ -304,7 +302,7 @@ VERTEX_SHADER = """
 FRAGMENT_SHADER = """
     #version 330
     // Optimized stereoscopic inpainting with push-pull method
-    
+
     in vec2 uv;
     out vec4 frag_color;
 
@@ -316,92 +314,72 @@ FRAGMENT_SHADER = """
     uniform float u_convergence;   // depth value at screen plane (0–1)
 
     // Optimized inpainting controls
-    uniform float u_search_radius = 12.0;  // horizontal search distance
-    uniform float u_depth_tolerance = 0.012; // background detection threshold
-    uniform float u_blur_radius = 2.5;     // final smoothing
+    uniform float u_search_radius = 12.0;
+    uniform float u_depth_tolerance = 0.012;
+    uniform float u_blur_radius = 2.5;
+    // Edge feathering controls
+    uniform int u_feather_enabled;
+    uniform float u_feather_width;
+    uniform vec4 u_viewport;
 
     vec2 pixel_size = 1.0 / u_resolution;
 
     // FAST DISOCCLUSION DETECTION
     bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
-        // Bounds check
         if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
             shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
             return true;
 
-        // Fast depth discontinuity check (3-tap only)
         vec2 grad_dir = vec2(sign(u_eye_offset), 0.0);
         float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
         float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
-        
-        // Depth jump threshold (tuned for sharp edges)
+
         if (abs(d_left - d_right) > 0.08)
             return true;
 
         return false;
     }
 
-    // Uses directional search to find background pixels efficiently
     vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
         vec4 best_color = vec4(0.0);
         float best_weight = 0.0;
         int search_range = int(u_search_radius);
-        
-        // Directional search: prioritize searching opposite to eye shift
-        // (background pixels are more likely in that direction)
         int search_dir = u_eye_offset > 0.0 ? -1 : 1;
-        
-        // Phase 1: Directional sweep (most samples here)
+
         for (int i = 1; i <= search_range; i++) {
             vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x, 0.0);
-            
             if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
-            
             float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
-            
-            // Only accept background pixels (farther than current)
             if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
                 vec4 sample_color = texture(tex_color, sample_uv);
-                
-                // Weight by: distance + depth similarity to other background
                 float dist_weight = exp(-float(i) * 0.15);
                 float depth_weight = 1.0 + (sample_depth_inv - center_depth_inv) * 10.0;
                 float w = dist_weight * depth_weight;
-                
                 best_color += sample_color * w;
                 best_weight += w;
-                
-                // Early exit if we found strong background
                 if (best_weight > 5.0) break;
             }
         }
-        
-        // Phase 2: Opposite direction (fewer samples)
+
         if (best_weight < 2.0) {
             int opposite_range = search_range / 2;
             for (int i = 1; i <= opposite_range; i++) {
                 vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x, 0.0);
-                
                 if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
-                
                 float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
-                
                 if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
                     vec4 sample_color = texture(tex_color, sample_uv);
                     float w = exp(-float(i) * 0.2);
-                    
                     best_color += sample_color * w;
                     best_weight += w;
                 }
             }
         }
-        
-        // Phase 3: Small vertical blur for smoothness (3 taps)
+
         if (best_weight > 0.01) {
             vec4 blurred = best_color / best_weight;
             vec4 vert_accum = blurred * 0.5;
             float vert_weight = 0.5;
-            
             for (int dy = -1; dy <= 1; dy += 2) {
                 vec2 vert_uv = uv_coord + vec2(0.0, dy * pixel_size.y * u_blur_radius);
                 if (vert_uv.y >= 0.0 && vert_uv.y <= 1.0) {
@@ -413,70 +391,60 @@ FRAGMENT_SHADER = """
                     }
                 }
             }
-            
             return vert_accum / vert_weight;
         }
-        
-        // Fallback: return original pixel if no background found
+
         return texture(tex_color, uv_coord);
     }
 
-    // ALTERNATIVE: FAST SEPARABLE BLUR (Uncomment to use instead)
-    /*
-    vec4 separable_inpaint(vec2 uv_coord, float center_depth_inv) {
-        vec4 accum = vec4(0.0);
-        float total_w = 0.0;
-        int R = 4;
-        
-        // Horizontal pass only (vertical would be a second shader pass)
-        for (int x = -R; x <= R; ++x) {
-            vec2 sample_uv = uv_coord + vec2(x * pixel_size.x, 0.0);
-            
-            if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
-            
-            float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
-            
-            // Background filter
-            float depth_ok = step(center_depth_inv + 0.015, sample_depth_inv);
-            float w = exp(-float(x*x) * 0.25) * (1.0 + depth_ok * 10.0);
-            
-            accum += texture(tex_color, sample_uv) * w;
-            total_w += w;
-        }
-        
-        return total_w > 0.01 ? accum / total_w : texture(tex_color, uv_coord);
-    }
-    */
-
-    // MAIN
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
-
-        // Sample depth
         float depth = texture(tex_depth, flipped_uv).r;
         float depth_inv = -depth;
-
-        // Calculate parallax shift
         float shift = (depth_inv + u_convergence);
         vec2 shifted_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength, 0.0);
 
         vec4 color;
-        
-        // Check if this pixel needs inpainting
         if (is_disoccluded(flipped_uv, shifted_uv, depth)) {
-            // Disoccluded region → use optimized inpainting
             color = push_pull_inpaint(flipped_uv, depth_inv);
-            // Alternative: color = separable_inpaint(flipped_uv, depth_inv);
         } else {
-            // Normal sampling
             color = texture(tex_color, shifted_uv);
         }
 
-        // Subtle edge fade to hide artifacts
-        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * 
+        vec2 border = smoothstep(0.0, 0.015, shifted_uv) *
                       smoothstep(1.0, 0.985, shifted_uv);
         color.a = min(border.x, border.y);
+        frag_color = color;
 
+        // Natural edge feathering
+        if (u_feather_enabled == 1) {
+
+            vec2 uv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
+
+            // Distance to each edge
+            float left   = uv.x;
+            float right  = 1.0 - uv.x;
+            float top    = uv.y;
+            float bottom = 1.0 - uv.y;
+
+            float feather = u_feather_width;
+
+            // Smooth edge fades
+            float fadeL = smoothstep(0.0, feather, left);
+            float fadeR = smoothstep(0.0, feather, right);
+            float fadeT = smoothstep(0.0, feather, top);
+            float fadeB = smoothstep(0.0, feather, bottom);
+
+            // Combine smoothly
+            float falloff = fadeL * fadeR * fadeT * fadeB;
+
+            // Perceptual shaping
+            // <1 softer
+            // >1 harder
+            falloff = pow(falloff, 0.7);
+
+            color.rgb *= falloff;
+        }
         frag_color = color;
     }
 """
@@ -536,7 +504,7 @@ def add_logo(window):
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
 
-    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, **kwargs):
+    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, feather_enabled=False, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, **kwargs):
         # Initialize with default values
         self._has_real_frame = False
         self.use_3d = use_3d
@@ -551,6 +519,9 @@ class StereoWindow:
         self.depth_ratio = depth_ratio
         self.depth_ratio_original = depth_ratio
         self._modes = ["Full-SBS", "Half-SBS", "TAB", "Depth Map"]
+        # Edge feathering toggle
+        self.feather_enabled = feather_enabled
+        self.feather_width = 0.02       # 2% of view width
         self.display_mode = display_mode
         self._texture_size = None
         self.fill_16_9 = fill_16_9
@@ -1266,6 +1237,9 @@ class StereoWindow:
                 self.show_fps = not self.show_fps
                 # Force overlay regen when toggling show_fps
                 self._overlay_cache['last_update'] = 0.0
+            elif key == glfw.KEY_B:
+                self.feather_enabled = not self.feather_enabled
+                print(f"Edge feathering: {'ON' if self.feather_enabled else 'OFF'}")
             elif key == glfw.KEY_A:  # Toggle fill 16:0 with A key
                 self.fill_16_9 = not self.fill_16_9
                 # Force overlay regen to show aspect ratio status
@@ -1539,170 +1513,173 @@ class StereoWindow:
             glfw.set_window_aspect_ratio(self.window, glfw.DONT_CARE, glfw.DONT_CARE)
         
         # Clear screen once
-        self.ctx.clear(0.1, 0.1, 0.1)
+        self.ctx.clear(0.0, 0.0, 0.0)
         
-        # Handle other display modes...
+        # Handle other display modes (non-depth map)
         if self.fill_16_9:
             if self.display_mode in ["Full-SBS", "Half-SBS", "TAB"]:
-                # Bind textures once
                 self.color_tex.use(location=0)
                 self.depth_tex.use(location=1)
-                
-                # Set common uniform values
                 self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
-            
+
                 if self.display_mode == "Full-SBS":
-                    # Full Side-by-Side mode
                     src_w, src_h = tex_w, tex_h
                     max_w, max_h = win_w / 2.0, win_h
                     render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
                     center_y = win_h / 2.0
-                    
+
                     # Left view
-                    self.ctx.viewport = (
+                    left_vp = (
                         int(win_w / 4.0 - render_w / 2),
                         int(center_y - render_h / 2),
                         render_w, render_h
                     )
+                    self.ctx.viewport = left_vp
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self._last_eye_offset_set = -self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = left_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-                    
+
                     # Right view
-                    self.ctx.viewport = (
+                    right_vp = (
                         int(3 * win_w / 4.0 - render_w / 2),
                         int(center_y - render_h / 2),
                         render_w, render_h
                     )
+                    self.ctx.viewport = right_vp
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self._last_eye_offset_set = self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = right_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "Half-SBS":
-                    # Half Side-by-Side mode
                     src_w, src_h = tex_w / 2.0, tex_h
                     max_w, max_h = win_w / 2.0, win_h
                     render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
                     center_y = win_h / 2.0
-                    
+
                     # Left view
-                    self.ctx.viewport = (
+                    left_vp = (
                         int(win_w / 4.0 - render_w / 2),
                         int(center_y - render_h / 2),
                         render_w, render_h
                     )
+                    self.ctx.viewport = left_vp
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self._last_eye_offset_set = -self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = left_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-                    
+
                     # Right view
-                    self.ctx.viewport = (
+                    right_vp = (
                         int(3 * win_w / 4.0 - render_w / 2),
                         int(center_y - render_h / 2),
                         render_w, render_h
                     )
+                    self.ctx.viewport = right_vp
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self._last_eye_offset_set = self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = right_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "TAB":
-                    # Top-and-Bottom mode
                     src_w, src_h = tex_w, tex_h / 2.0
                     max_w, max_h = win_w, win_h / 2.0
                     render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
-                    
-                    # Top view
-                    self.ctx.viewport = (
+
+                    # Top view (left eye)
+                    top_vp = (
                         int(win_w / 2.0 - render_w / 2),
                         int(win_h / 4.0 - render_h / 2),
                         render_w, render_h
                     )
+                    self.ctx.viewport = top_vp
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self._last_eye_offset_set = -self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = top_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-                    
-                    # Bottom view
-                    self.ctx.viewport = (
+
+                    # Bottom view (right eye)
+                    bottom_vp = (
                         int(win_w / 2.0 - render_w / 2),
                         int(3 * win_h / 4.0 - render_h / 2),
                         render_w, render_h
                     )
+                    self.ctx.viewport = bottom_vp
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self._last_eye_offset_set = self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = bottom_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-        
-        else:
-            # Determine effective stereo frame size by display mode
-            if self.display_mode == "Full-SBS":
-                disp_w, disp_h = 2 * tex_w, tex_h
-            elif self.display_mode == "Half-SBS":
-                disp_w, disp_h = tex_w, tex_h
-            elif self.display_mode == "TAB":
-                disp_w, disp_h = tex_w, tex_h
-            elif self.display_mode == "Depth Map":
-                disp_w, disp_h = tex_w, tex_h
-            else:
-                disp_w, disp_h = 2 * tex_w, tex_h  # default full SBS
 
-            target_aspect = disp_h / disp_w
-            try:
-                window_aspect = win_h / win_w
-            except ZeroDivisionError:
-                window_aspect = 9/16
-
-            # Scale to fit window, preserving aspect ratio
-            if window_aspect <= target_aspect:
-                # Window is wider than content
-                view_h = win_h
-                view_w = int(view_h / target_aspect)
-            else:
-                # Window is taller than content
-                view_w = win_w
-                view_h = int(view_w * target_aspect)
-
-            offset_x = (win_w - view_w) // 2
-            offset_y = (win_h - view_h) // 2
-
+        else:  # fill_16_9 is False
             if self.display_mode in ["Full-SBS", "Half-SBS", "TAB"]:
                 self.color_tex.use(0)
                 self.depth_tex.use(1)
                 self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
-                self._last_depth_strength_set = self.depth_strength * self.depth_ratio
 
                 if self.display_mode == "Full-SBS":
                     # Left eye
-                    self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
+                    left_vp = (offset_x, offset_y, view_w // 2, view_h)
+                    self.ctx.viewport = left_vp
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self._last_eye_offset_set = -self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = left_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     # Right eye
-                    self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+                    right_vp = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+                    self.ctx.viewport = right_vp
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self._last_eye_offset_set = self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = right_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "Half-SBS":
-                    # Same as FULL but both squeezed into width
-                    self.ctx.viewport = (offset_x, offset_y, view_w // 2, view_h)
+                    # Left eye
+                    left_vp = (offset_x, offset_y, view_w // 2, view_h)
+                    self.ctx.viewport = left_vp
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self._last_eye_offset_set = -self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = left_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-                    self.ctx.viewport = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+                    # Right eye
+                    right_vp = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
+                    self.ctx.viewport = right_vp
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self._last_eye_offset_set = self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = right_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "TAB":
-                    # Top eye
-                    self.ctx.viewport = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
+                    # Top eye (left)
+                    top_vp = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
+                    self.ctx.viewport = top_vp
                     self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self._last_eye_offset_set = -self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = top_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-                    # Bottom eye
-                    self.ctx.viewport = (offset_x, offset_y, view_w, view_h // 2)
+                    # Bottom eye (right)
+                    bottom_vp = (offset_x, offset_y, view_w, view_h // 2)
+                    self.ctx.viewport = bottom_vp
                     self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self._last_eye_offset_set = self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = bottom_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+        # Skip swap buffers if window is not visible (for headless/streaming)
+        if self.stream_mode is None:
+            glfw.poll_events()
