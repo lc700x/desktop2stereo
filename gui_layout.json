@@ -1,0 +1,404 @@
+{
+  "content_frame": [
+    0,
+    0,
+    null,
+    1
+  ],
+  "status_label": [
+    1,
+    0,
+    null,
+    4
+  ],
+  "fp16_cb": [
+    2,
+    3,
+    null,
+    1
+  ],
+  "label_depth_model": [
+    2,
+    0,
+    null,
+    1
+  ],
+  "depth_model_cb": [
+    2,
+    1,
+    null,
+    2
+  ],
+  "label_depth_res": [
+    3,
+    0,
+    null,
+    1
+  ],
+  "depth_res_cb": [
+    3,
+    1,
+    null,
+    1
+  ],
+  "label_convergence": [
+    3,
+    2,
+    null,
+    1
+  ],
+  "convergence_cb": [
+    3,
+    3,
+    15,
+    1
+  ],
+  "label_depth_strength": [
+    4,
+    0,
+    null,
+    1
+  ],
+  "depth_strength_cb": [
+    4,
+    1,
+    null,
+    1
+  ],
+  "label_foreground_scale": [
+    4,
+    2,
+    null,
+    1
+  ],
+  "foreground_scale_cb": [
+    4,
+    3,
+    15,
+    1
+  ],
+  "label_antialiasing": [
+    5,
+    0,
+    null,
+    1
+  ],
+  "antialiasing_cb": [
+    5,
+    1,
+    null,
+    1
+  ],
+  "label_ipd": [
+    5,
+    2,
+    null,
+    1
+  ],
+  "ipd_spin": [
+    5,
+    3,
+    15,
+    1
+  ],
+  "label_display_mode": [
+    6,
+    0,
+    null,
+    1
+  ],
+  "display_mode_cb": [
+    6,
+    1,
+    null,
+    1
+  ],
+  "check_coreml": [
+    6,
+    2,
+    null,
+    1
+  ],
+  "check_recompile_coreml": [
+    6,
+    3,
+    null,
+    1
+  ],
+  "label_inference_optimizer": [
+    7,
+    0,
+    null,
+    1
+  ],
+  "check_torch_compile": [
+    7,
+    1,
+    null,
+    1
+  ],
+  "check_tensorrt": [
+    7,
+    2,
+    null,
+    1
+  ],
+  "check_recompile_trt": [
+    7,
+    3,
+    null,
+    1
+  ],
+  "check_openvino": [
+    8,
+    1,
+    null,
+    1
+  ],
+  "check_recompile_openvino": [
+    8,
+    2,
+    null,
+    1
+  ],
+  "label_device": [
+    9,
+    0,
+    null,
+    1
+  ],
+  "device_menu": [
+    9,
+    1,
+    null,
+    2
+  ],
+  "showfps_cb": [
+    9,
+    3,
+    null,
+    1
+  ],
+  "label_capture_tool": [
+    10,
+    0,
+    null,
+    1
+  ],
+  "capture_tool_cb": [
+    10,
+    1,
+    null,
+    1
+  ],
+  "fill_16_9_cb": [
+    10,
+    2,
+    null,
+    1
+  ],
+  "lossless_scaling_support_cb": [
+    10,
+    3,
+    null,
+    1
+  ],
+  "fixed_viwer_aspect_cb": [
+    10,
+    3,
+    null,
+    1
+  ],
+  "label_run_mode": [
+    11,
+    0,
+    null,
+    1
+  ],
+  "run_mode_cb": [
+    11,
+    1,
+    null,
+    1
+  ],
+  "label_ctrl_model": [
+    11,
+    2,
+    null,
+    1
+  ],
+  "ctrl_model_cb": [
+    11,
+    3,
+    15,
+    1
+  ],
+  "capture_mode_cb": [
+    12,
+    0,
+    null,
+    1
+  ],
+  "btn_refresh": [
+    12,
+    3,
+    null,
+    1
+  ],
+  "monitor_menu": [
+    12,
+    1,
+    null,
+    2
+  ],
+  "window_cb": [
+    12,
+    1,
+    null,
+    2
+  ],
+  "label_stereo_output": [
+    13,
+    0,
+    null,
+    1
+  ],
+  "stereo_monitor_menu": [
+    13,
+    1,
+    null,
+    1
+  ],
+  "label_stream_url": [
+    15,
+    0,
+    null,
+    1
+  ],
+  "stream_url_entry": [
+    15,
+    1,
+    null,
+    1
+  ],
+  "btn_copy_url": [
+    15,
+    3,
+    null,
+    1
+  ],
+  "btn_open_browser": [
+    15,
+    2,
+    null,
+    1
+  ],
+  "label_streamer_port": [
+    16,
+    0,
+    null,
+    1
+  ],
+  "streamer_port_entry": [
+    16,
+    1,
+    null,
+    1
+  ],
+  "label_stream_quality": [
+    16,
+    2,
+    null,
+    1
+  ],
+  "stream_quality_cb": [
+    16,
+    3,
+    15,
+    1
+  ],
+  "label_rtmp_stream_key": [
+    17,
+    0,
+    null,
+    1
+  ],
+  "rtmp_stream_key_entry": [
+    17,
+    1,
+    null,
+    1
+  ],
+  "label_crf": [
+    17,
+    2,
+    15,
+    1
+  ],
+  "crf_spin": [
+    17,
+    3,
+    15,
+    1
+  ],
+  "label_audio_device": [
+    18,
+    0,
+    null,
+    1
+  ],
+  "audio_device_cb": [
+    18,
+    1,
+    null,
+    1
+  ],
+  "label_audio_delay": [
+    18,
+    2,
+    null,
+    1
+  ],
+  "audio_delay_spin": [
+    18,
+    3,
+    15,
+    1
+  ],
+  "stream_protocol_cb": [
+    19,
+    1,
+    null,
+    1
+  ],
+  "label_stream_protocol": [
+    19,
+    0,
+    null,
+    1
+  ],
+  "language_cb": [
+    21,
+    0,
+    5,
+    1
+  ],
+  "btn_reset": [
+    21,
+    1,
+    null,
+    1
+  ],
+  "btn_stop": [
+    21,
+    2,
+    null,
+    1
+  ],
+  "btn_run": [
+    21,
+    3,
+    null,
+    1
+  ]
+}

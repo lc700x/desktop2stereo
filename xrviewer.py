@@ -23,9 +23,6 @@ from OpenGL.GL import (
     glDeleteFramebuffers, glCheckFramebufferStatus,
     GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
     GL_FRAMEBUFFER_COMPLETE, GL_RGBA8,
-    glGenRenderbuffers, glBindRenderbuffer, glRenderbufferStorage,
-    glFramebufferRenderbuffer, glDeleteRenderbuffers,
-    GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, GL_DEPTH_ATTACHMENT,
     glGenBuffers, glDeleteBuffers, glBindBuffer, glBufferData,
     glBindTexture, glTexSubImage2D, glGenerateMipmap,
     GL_PIXEL_UNPACK_BUFFER, GL_PIXEL_PACK_BUFFER, GL_DYNAMIC_DRAW, GL_STREAM_READ,
@@ -35,10 +32,7 @@ from OpenGL.GL import (
     glTexParameterf, GL_TEXTURE_LOD_BIAS,
     glMapBuffer, glUnmapBuffer, GL_READ_ONLY, GL_MAP_UNSYNCHRONIZED_BIT,
     glReadPixels, glFlush, glGenTextures, glDeleteTextures,
-    glFinish,
-    glFenceSync, glClientWaitSync, glDeleteSync,
-    GL_SYNC_GPU_COMMANDS_COMPLETE, GL_SYNC_FLUSH_COMMANDS_BIT,
-    GL_ALREADY_SIGNALED, GL_CONDITION_SATISFIED,
+    glFinish
 )
 
 try:
@@ -48,9 +42,7 @@ except ImportError:
     OPENXR_AVAILABLE = False
     print("[OpenXRViewer] pyopenxr not installed. Run: pip install pyopenxr")
 
-# ---------------------------------------------------------------------------
-# glb loader (for VR controller models)
-# ---------------------------------------------------------------------------
+# GLB loader (for VR controller models)
 import struct
 import json
 import io as _io
@@ -279,9 +271,7 @@ def load_glb_model(path):
 
     return primitives, all_textures
 
-# ---------------------------------------------------------------------------
 # D3D11 ctypes helpers (Windows only)
-# ---------------------------------------------------------------------------
 # DXGI / D3D11 format constants used for swapchain negotiation
 _DXGI_FORMAT_R8G8B8A8_UNORM_SRGB = 29
 _DXGI_FORMAT_R8G8B8A8_UNORM      = 28
@@ -416,56 +406,32 @@ if sys.platform == "win32":
             raise RuntimeError("Matching DXGI adapter not found for LUID")
         return result_adapter
 
-    # Cached per-context vtable function pointers — built once, reused every frame.
-    _d3d11_update_sr_fn  = None   # ID3D11DeviceContext::UpdateSubresource
-    _d3d11_copy_res_fn   = None   # ID3D11DeviceContext::CopyResource
-    _d3d11_cached_ctx    = None   # context ptr value these were built from
-
-    def _d3d11_resolve_context_fns(context):
-        """Cache UpdateSubresource and CopyResource function pointers for the given context.
-
-        Vtable construction via CFUNCTYPE is a per-call heap allocation in Python's
-        ctypes.  Calling it every frame adds GC pressure that can spike latency under
-        load (e.g. when grip is held and input logic runs extra code paths).  We build
-        both pointers once and reuse them for the lifetime of the D3D11 session.
-        """
-        global _d3d11_update_sr_fn, _d3d11_copy_res_fn, _d3d11_cached_ctx
-        ctx_val = context.value if hasattr(context, 'value') else int(context)
-        if _d3d11_cached_ctx == ctx_val:
-            return
-        vtbl = ctypes.cast(context, ctypes.POINTER(ctypes.c_void_p)).contents.value
-        ptr_size = ctypes.sizeof(ctypes.c_void_p)
-        _d3d11_update_sr_fn = ctypes.CFUNCTYPE(
-            None,
-            ctypes.c_void_p,  # this
-            ctypes.c_void_p,  # pDstResource
-            ctypes.c_uint,    # DstSubresource
-            ctypes.c_void_p,  # pDstBox
-            ctypes.c_void_p,  # pSrcData
-            ctypes.c_uint,    # SrcRowPitch
-            ctypes.c_uint,    # SrcDepthPitch
-        )(ctypes.cast(vtbl + 48 * ptr_size, ctypes.POINTER(ctypes.c_void_p)).contents.value)
-
-        _d3d11_copy_res_fn = ctypes.CFUNCTYPE(
-            None,
-            ctypes.c_void_p,  # this
-            ctypes.c_void_p,  # pDstResource
-            ctypes.c_void_p,  # pSrcResource
-        )(ctypes.cast(vtbl + 47 * ptr_size, ctypes.POINTER(ctypes.c_void_p)).contents.value)
-
-        _d3d11_cached_ctx = ctx_val
-
     def _d3d11_update_subresource(context, dst, src_ptr, row_pitch):
         """Write CPU data into a D3D11 texture via UpdateSubresource (vtbl index 48).
         Works with any format including SRGB — no staging texture needed.
         src_ptr: integer address of the source data (already row-reversed).
         """
-        _d3d11_resolve_context_fns(context)
-        _d3d11_update_sr_fn(
+        _UPDATE_SR_VTBL_IDX = 48
+        vtbl = ctypes.cast(context, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        fn_ptr = ctypes.cast(
+            vtbl + _UPDATE_SR_VTBL_IDX * ctypes.sizeof(ctypes.c_void_p),
+            ctypes.POINTER(ctypes.c_void_p),
+        ).contents.value
+        UpdateFn = ctypes.CFUNCTYPE(
+            None,
+            ctypes.c_void_p,  # this
+            ctypes.c_void_p,  # pDstResource
+            ctypes.c_uint,    # DstSubresource
+            ctypes.c_void_p,  # pDstBox (NULL = whole texture)
+            ctypes.c_void_p,  # pSrcData
+            ctypes.c_uint,    # SrcRowPitch
+            ctypes.c_uint,    # SrcDepthPitch
+        )(fn_ptr)
+        UpdateFn(
             context.value,
             ctypes.cast(dst, ctypes.c_void_p).value,
-            0,
-            None,
+            0,        # subresource 0
+            None,     # full texture
             src_ptr,
             row_pitch,
             0,
@@ -886,9 +852,7 @@ void main() {
 
 
 
-# ---------------------------------------------------------------------------
 # Windows input helpers (no-op on non-Windows)
-# ---------------------------------------------------------------------------
 
 if sys.platform == "win32":
     _U32 = ctypes.windll.user32
@@ -971,9 +935,7 @@ else:
 DEAD = 0.15
 
 
-# ---------------------------------------------------------------------------
 # Virtual keyboard layout
-# ---------------------------------------------------------------------------
 
 # (label, normal_vk, _, shifted_vk, width_units)
 # VK codes: https://docs.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
@@ -1034,9 +996,7 @@ _KeyEntry = _collections.namedtuple('_KeyEntry', 'label shifted_label vk shifted
 _KB_TEX_W, _KB_TEX_H = 1280, 384   # keyboard texture: 6 rows × 18 units
 
 
-# ---------------------------------------------------------------------------
 # XR math helpers (module-level, pure functions)
-# ---------------------------------------------------------------------------
 
 def _xr_quat_to_mat4(q):
     """XrQuaternionf → standard 4×4 rotation matrix (numpy, math row/col convention).
@@ -1332,7 +1292,7 @@ class OpenXRViewer:
         self._xr_swapchains = {}        # {eye_index: xr.Swapchain}
         self._swapchain_images = {}     # {eye_index: [XrSwapchainImageOpenGLKHR, ...]}
         self._swapchain_sizes = {}      # {eye_index: (w, h)}
-        self._fbo_cache = {}            # {(eye_index, image_index): (raw_id, mgl_fbo, rbo_id)}
+        self._fbo_cache = {}            # {(eye_index, image_index): (raw_id, mgl_fbo)}
         self._session_running = False
 
         # Pre-built XR call argument structs — stateless inputs reused every
@@ -1384,9 +1344,7 @@ class OpenXRViewer:
         self._y_last         = False  # Y-button previous frame state (reset screen)
         self._y_press_t      = 0.0   # perf_counter when Y was pressed
         self._y_long_fired   = False # True once long-press action fired this hold
-        self._x_last         = False  # X-button previous frame state
-        self._x_press_t      = 0.0   # perf_counter when X was pressed
-        self._x_long_fired   = False # True once long-press action fired this hold
+        self._x_last         = False  # X-button previous frame state (toggle keyboard)
         # Head pose (world) cached each frame from xr.locate_views — used as the orbit
         # pivot for the left thumbstick and as the anchor when the keyboard is summoned.
         self._head_pos_w      = None   # (x, y, z) head/eye centre in world space, or None
@@ -1451,7 +1409,6 @@ class OpenXRViewer:
         self._kb_held_key_r        = None  # index of key held by right trigger, or None
         self._kb_held_mods_l       = None  # (shift, ctrl, alt, win, vk) snapshot for left held key
         self._kb_held_mods_r       = None  # (shift, ctrl, alt, win, vk) snapshot for right held key
-        self._kb_flash_keys        = {}    # {key_index: press_time} brief highlight on key press
 
         # GPU interop (CUDA / HIP) — initialised lazily on first frame
         self._cuda_gl         = None   # CUDART_GL instance, False = permanently failed
@@ -1578,6 +1535,10 @@ class OpenXRViewer:
         self._phys_mouse_pos        = None   # (x, y) last seen physical cursor position
         self._phys_mouse_last_move  = 0.0    # perf_counter when physical mouse last moved
         self._vr_cursor_screen_pos  = None   # (px, py) last position written by VR laser
+        self._last_get_cursor_pos_time = 0.0 # throttle GetCursorPos polling
+
+        # Controller idle detection: skip input polling when no controllers tracked
+        self._controller_miss_frames = 0     # consecutive frames with no controller pose
 
         # Curved screen mode
         self._screen_curved   = False   # True = cylindrical arc; False = flat quad
@@ -1693,16 +1654,12 @@ class OpenXRViewer:
         # PBOs for async pixel readback in the D3D11 path.
         # Key: (eye_index, img_index) → (pbo_id, w, h)
         self._d3d11_pbo_cache       = {}
-        # GL sync fences for PBO readback completion.
-        # Key: pbo_id → GL sync object (or None after consumed)
-        self._d3d11_pbo_fence       = {}
 
         # GPU interop state (NV_DX_interop2 or EXT_memory_object) for zero-copy
         self._interop_mode      = None   # 'nv_dx' | 'ext_mem' | None (PBO fallback)
         self._nv_dx_device      = None   # HANDLE from wglDXOpenDeviceNV
         self._nv_dx_objects     = {}     # {img_index: GL_tex_id} for registered swapchain textures
         self._ext_shared_tex    = {}     # {(eye): (d3d11_tex, gl_mem_obj, gl_tex, mgl_fbo)}
-
 
         # ModernGL / GL handles
         self.window = None
@@ -1780,7 +1737,6 @@ class OpenXRViewer:
         self.prog['u_convergence'].value = self.convergence
         self.prog['tex_color'].value = 0
         self.prog['tex_depth'].value = 1
-        self.prog['u_fxaa_enabled'].value = 0
 
         vertices = np.array([
             -1, -1, 0, 0,
@@ -1918,7 +1874,6 @@ class OpenXRViewer:
         self._curved_prog['u_convergence'].value = self.convergence
         self._curved_prog['tex_color'].value = 0
         self._curved_prog['tex_depth'].value  = 1
-        self._curved_prog['u_fxaa_enabled'].value = 0
         # Allocate dynamic VBO large enough for N=48 segments × 2 verts × (3+2) floats.
         _CURVED_N = 48
         _curved_buf_bytes = (_CURVED_N + 1) * 2 * (3 + 2) * 4   # f4
@@ -2018,7 +1973,7 @@ class OpenXRViewer:
         return result
 
     def _init_all_controller_models(self):
-        """预加载 controllers/ 下所有品牌模型。"""
+        """Preload all controller brand models under controllers/."""
         if not os.path.isdir(self._controllers_root):
             return
         brands = sorted(d for d in os.listdir(self._controllers_root)
@@ -2027,7 +1982,7 @@ class OpenXRViewer:
             model = self._load_brand_models(bn)
             self._all_models[bn] = model
             self._available_brands.append(bn)
-        # 设置默认品牌
+        # Set default brand
         default = self._controller_model if self._controller_model in self._all_models else (
             self._available_brands[0] if self._available_brands else None)
         if default is None:
@@ -2037,7 +1992,7 @@ class OpenXRViewer:
         print(f"[OpenXRViewer] Controller: {self._current_brand}")
 
     def _switch_brand(self, brand_name):
-        """零延迟切换当前手柄品牌。"""
+        """Switch controller brand with zero latency."""
         if brand_name not in self._all_models:
             return
         m = self._all_models[brand_name]
@@ -2397,11 +2352,19 @@ class OpenXRViewer:
     def _blit_ext_to_swapchain(self, eye_index, d3d11_swapchain_tex):
         """GPU-side CopyResource from our shared texture to the swapchain image."""
         d3d11_shared_tex = self._ext_shared_tex[eye_index][0]
+        # ID3D11DeviceContext::CopyResource at vtable index 47
         ctx = self._d3d11_context
-        _d3d11_resolve_context_fns(ctx)
+        vtbl = ctypes.cast(ctx, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        copy_fn = ctypes.CFUNCTYPE(
+            None,
+            ctypes.c_void_p,  # this
+            ctypes.c_void_p,  # pDstResource
+            ctypes.c_void_p,  # pSrcResource
+        )(ctypes.cast(vtbl + 47 * ctypes.sizeof(ctypes.c_void_p),
+                    ctypes.POINTER(ctypes.c_void_p)).contents.value)
         # Sync: ensure GL is done before D3D11 reads the shared texture
         glFinish()
-        _d3d11_copy_res_fn(ctx, d3d11_swapchain_tex, d3d11_shared_tex)
+        copy_fn(ctx, d3d11_swapchain_tex, d3d11_shared_tex)
 
     def _cleanup_interop(self):
         """Release all GPU interop resources."""
@@ -3084,22 +3047,6 @@ class OpenXRViewer:
             elif key.vk in oneshot_vks:
                 _hl_quad(key.rect_local, (1.0, 0.7, 0.15, 0.45))
 
-        # Held-key highlight: amber glow while the trigger is pressed down
-        for held_idx in (x for x in (self._kb_held_key_l, self._kb_held_key_r) if x is not None):
-            if held_idx < len(self._keyboard_keys):
-                _hl_quad(self._keyboard_keys[held_idx].rect_local, (1.0, 0.80, 0.15, 0.60))
-
-        # Flash effect: bright white fade-out on key press (covers both regular and modifier keys)
-        _FLASH_DUR = 0.18
-        _now_kf = time.perf_counter()
-        for _fi, _ft in list(self._kb_flash_keys.items()):
-            _elapsed = _now_kf - _ft
-            if _elapsed >= _FLASH_DUR or _fi >= len(self._keyboard_keys):
-                self._kb_flash_keys.pop(_fi, None)
-                continue
-            _fa = 1.0 - (_elapsed / _FLASH_DUR)
-            _hl_quad(self._keyboard_keys[_fi].rect_local, (1.0, 1.0, 1.0, _fa * 0.75))
-
         # Cyan highlight on keys hovered by either laser (suppressed while gripping)
         if not (self._grip_l_now or self._grip_r_now):
             for hover_idx in set(x for x in [self._kb_hover_l, self._kb_hover_r] if x is not None):
@@ -3327,38 +3274,26 @@ class OpenXRViewer:
         ctx.detect_framebuffer() is used so ModernGL's internal state tracking stays
         consistent — raw glBindFramebuffer() is invisible to ModernGL and would cause
         ctx.clear() / vao.render() to target the wrong framebuffer.
-        A depth renderbuffer is attached so DEPTH_TEST works for correct screen/keyboard ordering.
         """
         key = (eye_index, image_index)
         if key in self._fbo_cache:
             return self._fbo_cache[key]
-
-        sc_w, sc_h = self._swapchain_sizes[eye_index]
-
-        rbo_id = int(glGenRenderbuffers(1))
-        glBindRenderbuffer(GL_RENDERBUFFER, rbo_id)
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, sc_w, sc_h)
-        glBindRenderbuffer(GL_RENDERBUFFER, 0)
 
         raw_id = glGenFramebuffers(1)
         glBindFramebuffer(GL_FRAMEBUFFER, raw_id)
         glFramebufferTexture2D(
             GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture_id, 0
         )
-        glFramebufferRenderbuffer(
-            GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbo_id
-        )
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         if status != GL_FRAMEBUFFER_COMPLETE:
-            glDeleteRenderbuffers(1, [rbo_id])
             raise RuntimeError(
                 f"[OpenXRViewer] FBO incomplete for eye {eye_index}, "
                 f"image {image_index}: {status:#x}"
             )
         mgl_fbo = self.ctx.detect_framebuffer(raw_id)
-        self._fbo_cache[key] = (raw_id, mgl_fbo, rbo_id)
-        return raw_id, mgl_fbo, rbo_id
+        self._fbo_cache[key] = (raw_id, mgl_fbo)
+        return raw_id, mgl_fbo
 
     def _get_or_create_offscreen_fbo(self, eye_index, image_index, w, h):
         """Return a ModernGL FBO backed by an RGBA texture of size (w, h).
@@ -3376,32 +3311,22 @@ class OpenXRViewer:
             try:
                 cached[2].release()    # mgl Texture
                 glDeleteFramebuffers(1, [cached[1]])
-                glDeleteRenderbuffers(1, [cached[5]])
             except Exception:
                 pass
-
-        rbo_id = int(glGenRenderbuffers(1))
-        glBindRenderbuffer(GL_RENDERBUFFER, rbo_id)
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h)
-        glBindRenderbuffer(GL_RENDERBUFFER, 0)
 
         raw_id = glGenFramebuffers(1)
         mgl_tex = self.ctx.texture((w, h), 4, dtype='f1')
         glBindFramebuffer(GL_FRAMEBUFFER, raw_id)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                             GL_TEXTURE_2D, mgl_tex.glo, 0)
-        glFramebufferRenderbuffer(
-            GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbo_id
-        )
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         if status != GL_FRAMEBUFFER_COMPLETE:
-            glDeleteRenderbuffers(1, [rbo_id])
             raise RuntimeError(
                 f"[OpenXRViewer] Offscreen FBO incomplete for eye {eye_index}: {status:#x}"
             )
         mgl_fbo = self.ctx.detect_framebuffer(raw_id)
-        self._offscreen_fbo_cache[key] = (mgl_fbo, raw_id, mgl_tex, w, h, rbo_id)
+        self._offscreen_fbo_cache[key] = (mgl_fbo, raw_id, mgl_tex, w, h)
         return mgl_fbo, raw_id
 
     def _get_or_create_d3d11_pbo(self, eye_index, img_index, w, h):
@@ -3420,26 +3345,15 @@ class OpenXRViewer:
         return pbo_id
 
     def _submit_pbo_readback(self, raw_fbo_id, pbo_id, w, h):
-        """Submit an async glReadPixels into pbo_id and insert a fence to track completion.
+        """Submit an async glReadPixels into pbo_id and flush to kick off DMA immediately.
 
         Uses GL_BGRA for BGRA swapchains (WMR) so the byte order matches D3D11 directly.
-        The fence is stored in _d3d11_pbo_fence keyed by pbo_id so Phase 2 can check it
-        without blocking, falling back to a synchronized map only if the GPU is still busy.
         """
         pixel_fmt = GL_BGRA if self._swapchain_is_bgra else GL_RGBA
         glBindFramebuffer(GL_FRAMEBUFFER, raw_fbo_id)
         glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
         glReadPixels(0, 0, w, h, pixel_fmt, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
-        # Insert fence immediately after the readback command so Phase 2 can non-blockingly
-        # test whether the DMA has completed rather than relying on wall-clock timing.
-        old_fence = self._d3d11_pbo_fence.get(pbo_id)
-        if old_fence is not None:
-            try:
-                glDeleteSync(old_fence)
-            except Exception:
-                pass
-        self._d3d11_pbo_fence[pbo_id] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
-        glFlush()  # push the DMA + fence commands to the GPU immediately
+        glFlush()  # push the DMA command to the GPU so it starts while we render eye 1
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
@@ -3450,31 +3364,13 @@ class OpenXRViewer:
         produces top-down rows — no CPU row-reversal needed.  The mapped PBO
         pointer is passed directly to D3D11 UpdateSubresource, eliminating the
         intermediate flip-buffer and its per-frame memcpy.
-
-        We check the per-PBO fence first.  If the DMA is already done we map
-        UNSYNCHRONIZED (zero-wait).  If not, we map without the flag so the
-        driver inserts the minimal stall needed — this is safer than accepting
-        corrupt data with UNSYNCHRONIZED on slow DirectML/iGPU paths.
         """
         row_bytes = w * 4
         glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
-
-        fence = self._d3d11_pbo_fence.get(pbo_id)
-        dma_done = False
-        if fence is not None:
-            status = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0)
-            dma_done = status in (GL_ALREADY_SIGNALED, GL_CONDITION_SATISFIED)
-            if dma_done:
-                glDeleteSync(fence)
-                self._d3d11_pbo_fence[pbo_id] = None
-
-        if dma_done:
-            src_ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY | GL_MAP_UNSYNCHRONIZED_BIT)
-        else:
-            # DMA not confirmed done — let the driver insert a minimal stall rather
-            # than uploading stale/corrupt pixel data to the headset.
-            src_ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY)
-
+        # UNSYNCHRONIZED: the Phase-1/Phase-2 pipelining gives the DMA enough time
+        # to finish; if it hasn't, we accept a one-frame visual glitch rather than
+        # stalling the pipeline.
+        src_ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY | GL_MAP_UNSYNCHRONIZED_BIT)
         if src_ptr:
             try:
                 _d3d11_update_subresource(
@@ -4556,7 +4452,7 @@ class OpenXRViewer:
         return q / np.linalg.norm(q)
 
     def _slerp_quat(self, q1, q2, t):
-        """球面线性插值: t=0→q1, t=1→q2。输入/输出均为 (x,y,z,w) numpy数组。"""
+        """Spherical linear interpolation: t=0 -> q1, t=1 -> q2. Input/output as (x,y,z,w) numpy arrays."""
         dot = np.dot(q1, q2)
         if dot < 0.0:
             q2 = -q2
@@ -4620,13 +4516,13 @@ class OpenXRViewer:
         return sm_pos.copy(), sm_fwd.copy()
 
     def _apply_ray_smoothing(self, raw_pos, aim_mat, smooth_pos_attr, smooth_quat_attr):
-        """位置EMA + 四元数SLERP平滑(含死区)。返回 (smoothed_pos, smoothed_fwd_world)。"""
+        """Position EMA + quaternion SLERP smoothing (with dead zone). Returns (smoothed_pos, smoothed_fwd_world)."""
         raw_quat = self._mat3_to_quat(aim_mat[:3, :3].astype('f8'))
 
         prev_pos  = getattr(self, smooth_pos_attr)
         prev_quat = getattr(self, smooth_quat_attr)
 
-        # One Euro Filter 位置平滑 (替代自适应EMA) ──
+        # One Euro Filter position smoothing (replaces adaptive EMA)
         # Filters raw controller position at source — laser beam, cursor,
         # and grip-to-move all consume the same stabilized data.
         # No dead zone needed: adaptive cutoff naturally filters micro-jitter
@@ -5298,7 +5194,7 @@ class OpenXRViewer:
         self.ctx.viewport = (0, 0, sc_w, sc_h)
         bg_a = 1.0
         bg_r, bg_g, bg_b = _BG_COLORS[self._bg_color_idx]
-        mgl_fbo.clear(bg_r, bg_g, bg_b, bg_a, depth=1.0)
+        mgl_fbo.clear(bg_r, bg_g, bg_b, bg_a)
 
         if not self._screen_visible:
             self.ctx.screen.use()
@@ -5311,11 +5207,6 @@ class OpenXRViewer:
         # Pre-compute view-projection once per eye — all quads multiply their model
         # matrix against this rather than recomputing proj @ view each time.
         vp_mat = proj_mat @ view_mat
-
-        # Enable depth testing so the keyboard and screen occlude each other
-        # correctly based on their actual world-space positions.
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.depth_func = '<'
 
         # 1. Border (behind the screen, slightly larger)
         self._render_border(mgl_fbo, vp_mat)
@@ -5360,13 +5251,10 @@ class OpenXRViewer:
             # opaque black clear, creating a persistent dark halo visible at all times.
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-        # 3. Keyboard — depth test still active so it occludes/is-occluded by screen naturally
+        # 3. Keyboard
         if self._keyboard_visible and self._keyboard_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_keyboard(mgl_fbo, vp_mat)
-
-        # OSD overlays are 2D UI elements that always render on top; disable depth test.
-        self.ctx.disable(moderngl.DEPTH_TEST)
 
         # 5. Depth OSD (floating panel, always checked — method handles its own alpha)
         if self._depth_osd_tex is not None:
@@ -5790,6 +5678,36 @@ class OpenXRViewer:
             cp = raw_pos + fw * 0.11
             return cp, fw
 
+        # Physical mouse detection: if the physical mouse has moved recently,
+        # suppress VR cursor control unconditionally so the user can use the
+        # physical mouse without fighting the VR cursor.  VR resumes after a
+        # quiet period with no physical mouse movement.
+        # Check FIRST — before expensive ray casting — to skip work when mouse is active.
+        if sys.platform == "win32":
+            if (time.perf_counter() - self._phys_mouse_last_move) < PHYS_TIMEOUT:
+                self._cursor_ctrl = None
+                self._cursor_smooth_uv = None
+                return
+            # Throttle GetCursorPos to every ~50ms (3-4 frames at 72Hz) —
+            # per-frame polling is wasteful; physical mouse detection doesn't need sub-frame precision.
+            _now = time.perf_counter()
+            if _now - getattr(self, '_last_get_cursor_pos_time', 0.0) >= 0.05:
+                class _POINT(ctypes.Structure):
+                    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+                _pt = _POINT()
+                ctypes.windll.user32.GetCursorPos(ctypes.byref(_pt))
+                self._last_get_cursor_pos_time = _now
+                _cur_pos = (_pt.x, _pt.y)
+                if self._phys_mouse_pos is not None and _cur_pos != self._phys_mouse_pos:
+                    vcp = self._vr_cursor_screen_pos
+                    if vcp is None or abs(_cur_pos[0] - vcp[0]) > 4 or abs(_cur_pos[1] - vcp[1]) > 4:
+                        self._phys_mouse_last_move = _now
+                self._phys_mouse_pos = _cur_pos
+            if (time.perf_counter() - self._phys_mouse_last_move) < PHYS_TIMEOUT:
+                self._cursor_ctrl = None
+                self._cursor_smooth_uv = None
+                return
+
         # If keyboard is visible and a controller's laser hits a key, suppress
         # screen cursor for that specific controller (per-controller priority).
         kb_claim_l = False
@@ -5824,29 +5742,8 @@ class OpenXRViewer:
 
         self._cursor_uv_l = hit_l if hit_l else None   # (u, v, t) or None
         self._cursor_uv_r = hit_r if hit_r else None   # (u, v, t) or None
-        # 缓存上帧UV用于边缘阻挡检测
         self._ray_prev_uv_l = self._cursor_uv_l
         self._ray_prev_uv_r = self._cursor_uv_r
-
-        # Physical mouse detection: if the physical mouse has moved recently,
-        # suppress VR cursor control unconditionally so the user can use the
-        # physical mouse without fighting the VR cursor.  VR resumes after a
-        # quiet period with no physical mouse movement.
-        if sys.platform == "win32":
-            class _POINT(ctypes.Structure):
-                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-            _pt = _POINT()
-            ctypes.windll.user32.GetCursorPos(ctypes.byref(_pt))
-            _cur_pos = (_pt.x, _pt.y)
-            if self._phys_mouse_pos is not None and _cur_pos != self._phys_mouse_pos:
-                vcp = self._vr_cursor_screen_pos
-                if vcp is None or abs(_cur_pos[0] - vcp[0]) > 4 or abs(_cur_pos[1] - vcp[1]) > 4:
-                    self._phys_mouse_last_move = time.perf_counter()
-            self._phys_mouse_pos = _cur_pos
-            if (time.perf_counter() - self._phys_mouse_last_move) < PHYS_TIMEOUT:
-                self._cursor_ctrl = None
-                self._cursor_smooth_uv = None
-                return
 
         # Pick active controller — right always wins when both lasers hit screen.
         # Avoids ping-ponging: once a controller takes over, the other can't steal.
@@ -6056,7 +5953,6 @@ class OpenXRViewer:
 
             # —— Rising edge: modifier / caps toggles, or start holding a regular key ——
             if trig_now >= CLICK_THRESH and trig_prev < CLICK_THRESH and idx is not None:
-                self._kb_flash_keys[idx] = time.perf_counter()
                 key = self._keyboard_keys[idx]
                 mod_name = {VK_SHIFT: 'shift', VK_CTRL: 'ctrl',
                             VK_ALT: 'alt', VK_WIN: 'win'}.get(key.vk)
@@ -6848,13 +6744,11 @@ class OpenXRViewer:
             self._apply_preset(3)  # short press = default preset
         self._y_last = y_now
 
-        # X (left): short press → toggle virtual keyboard.
+        # X (left): toggle virtual keyboard. When turning it on, snap the keyboard
+        # anchor under the user's current gaze (in front and below) so it lands within
+        # reach instead of at the world origin.
         x_now = self._read_bool_action(self._act_x_btn, "/user/hand/left")
         if x_now and not self._x_last:
-            self._x_press_t    = self._frame_now
-            self._x_long_fired = False
-        if not x_now and self._x_last and not self._x_long_fired:
-            # Short press: toggle keyboard (unchanged behaviour)
             self._keyboard_visible = not self._keyboard_visible
             if self._keyboard_visible:
                 if self._keyboard_tex is None:
@@ -7017,12 +6911,7 @@ class OpenXRViewer:
 
             # — Wait for the runtime to signal frame timing —
             frame_state = xr.wait_frame(self._xr_session, self._xr_frame_wait_info)
-            try:
-                xr.begin_frame(self._xr_session, self._xr_frame_begin_info)
-            except Exception as _bf_err:
-                if 'FrameDiscarded' in type(_bf_err).__name__:
-                    continue   # previous end_frame failed; runtime dropped the frame — continue
-                raise
+            xr.begin_frame(self._xr_session, self._xr_frame_begin_info)
 
             # sync_actions must happen before xr.locate_space for action spaces.
             # Do it here so _update_aim_poses gets fresh locations this frame.
@@ -7035,12 +6924,28 @@ class OpenXRViewer:
             # Locate controller spaces (now valid after sync_actions)
             self._update_aim_poses(frame_state.predicted_display_time)
             self._update_grip_poses(frame_state.predicted_display_time)
-            # Pre-smooth controller poses once per frame (One Euro Filter).
-            # Grip-to-move, laser rendering, and cursor all share the same
-            # stabilized output — no double-filtering.
-            self._smooth_controller_poses()
-            # Poll button/stick states (sync already done above)
-            self._poll_controller_input(dt)
+
+            # Skip smoothing + input polling when no controllers are tracked,
+            # but keep locating poses so we detect reconnection immediately.
+            # Wait 30 frames (~0.4s at 72Hz) before throttling — avoids
+            # toggling on transient tracking loss.
+            both_missing = (self._aim_mat_l is None and self._aim_mat_r is None)
+            if both_missing:
+                self._controller_miss_frames += 1
+            else:
+                self._controller_miss_frames = 0
+
+            if self._controller_miss_frames < 30:
+                self._smooth_controller_poses()
+                self._poll_controller_input(dt)
+            else:
+                # No controllers — clear cursor/grab state so downstream code
+                # (grip-to-move, trigger handling) sees no laser on screen.
+                self._cursor_uv_l = None
+                self._cursor_uv_r = None
+                self._cursor_ctrl = None
+                self._cursor_smooth_uv = None
+                self._grabbed = False
 
             composition_layers = []
 
@@ -7240,7 +7145,7 @@ class OpenXRViewer:
                         view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
                         proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
 
-                        _, mgl_fbo, _ = self._get_or_create_fbo(eye_index, img_index, sc_image.image)
+                        _, mgl_fbo = self._get_or_create_fbo(eye_index, img_index, sc_image.image)
                         self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat)
 
                         xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
@@ -7295,16 +7200,10 @@ class OpenXRViewer:
 
         self._cleanup_interop()
 
-        raw_ids = [raw_id for raw_id, _, _rbo in self._fbo_cache.values()]
-        rbo_ids = [rbo_id for _raw, _mgl, rbo_id in self._fbo_cache.values()]
+        raw_ids = [raw_id for raw_id, _ in self._fbo_cache.values()]
         if raw_ids:
             try:
                 glDeleteFramebuffers(len(raw_ids), raw_ids)
-            except Exception:
-                pass
-        if rbo_ids:
-            try:
-                glDeleteRenderbuffers(len(rbo_ids), rbo_ids)
             except Exception:
                 pass
         self._fbo_cache.clear()
@@ -7316,25 +7215,12 @@ class OpenXRViewer:
             except Exception:
                 pass
             self._d3d11_pbo_cache.clear()
-        for fence in self._d3d11_pbo_fence.values():
-            if fence is not None:
-                try:
-                    glDeleteSync(fence)
-                except Exception:
-                    pass
-        self._d3d11_pbo_fence.clear()
 
         # Release D3D11-path offscreen FBOs and their backing textures
         offscreen_raw_ids = [entry[1] for entry in self._offscreen_fbo_cache.values()]
-        offscreen_rbo_ids = [entry[5] for entry in self._offscreen_fbo_cache.values()]
         if offscreen_raw_ids:
             try:
                 glDeleteFramebuffers(len(offscreen_raw_ids), offscreen_raw_ids)
-            except Exception:
-                pass
-        if offscreen_rbo_ids:
-            try:
-                glDeleteRenderbuffers(len(offscreen_rbo_ids), offscreen_rbo_ids)
             except Exception:
                 pass
         for entry in self._offscreen_fbo_cache.values():

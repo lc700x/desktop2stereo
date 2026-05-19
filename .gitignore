@@ -27,3 +27,6 @@ output/depth_vis/0000.jpg
 .claude_cache
 .vscode
 .mcp.json
+CLAUDE.md
+*CHANGELOG.md
+.sline
