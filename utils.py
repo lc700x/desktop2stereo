@@ -619,6 +619,8 @@ if LANG == "CN":
         ("右摇杆按键", "长按", "重置屏幕方向(保持距离/大小)", False),
         ("左摇杆按键", "短按", "切换背景颜色(5种)", False),
         ("左摇杆按键", "长按", "切换FPS/帮助面板", False),
+        ("左 X 键", "短按", "显示/隐藏虚拟键盘", False),
+        ("左 X 键", "长按", "切换 VDXR 透视模式", False),
         ("左 Y 键", "短按", "重置屏幕位置与朝向", False),
         ("左 Y 键", "长按", "切换屏幕预设", False),
         ("左握持+左摇杆 X/Y", "上下左右推", "平移屏幕位置", False),
@@ -641,7 +643,6 @@ if LANG == "CN":
         ("", "", "", False),
 
         ("[虚拟键盘操作]", "", "", True),
-        ("左 X 键", "短按", "显示/隐藏虚拟键盘", False),
         ("左/右激光指向键盘", "扳机", "按键输入(按下松开)", False),
         ("Shift/Ctrl/Alt/Win", "单击/双击", "单次/锁定修饰键", False),
         ("左握持+左摇杆(指向键盘)", "上下左右推", "平移键盘位置", False),
@@ -663,6 +664,9 @@ else:
         ("Right stick button", "Long press", "Reset screen orientation (preserve distance/size)", False),
         ("Left stick button", "Short press", "Cycle background color (5 options)", False),
         ("Left stick button", "Long press", "Toggle FPS/help panel", False),
+        
+        ("Left X button", "Short press", "Show/hide virtual keyboard", False),
+        ("Left X button", "Long press", "Toggle VDXR Passthrough", False),
         ("Left Y button", "Short press", "Reset screen position and orientation", False),
         ("Left Y button", "Long press", "Cycle screen presets", False),
         ("Left grip + left stick X/Y", "Push up/down/left/right", "Translate screen position", False),
@@ -685,7 +689,6 @@ else:
         ("", "", "", False),
 
         ("[Virtual Keyboard Operation]", "", "", True),
-        ("Left X button", "Short press", "Show/hide virtual keyboard", False),
         ("Left/right controller laser points at keyboard", "Trigger", "Key input (press and release)", False),
         ("Shift/Ctrl/Alt/Win", "Single press / double press", "Momentary / locked modifier key", False),
         ("Left grip + left stick (pointing at keyboard)", "Push up/down/left/right", "Translate keyboard position", False),

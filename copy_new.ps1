@@ -27,7 +27,7 @@ $filesToCopy = @(
 )
 
 # --- Directories to copy (contents only) ---
-$dirsToCopy = @("assets","models","rtmp","controllers")
+$dirsToCopy = @("assets","models","rtmp","controllers", "bundle_scripts")
 
 # Ensure destination exists
 if (-not (Test-Path $DestinationFolder)) {
