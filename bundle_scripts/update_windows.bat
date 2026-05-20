@@ -61,14 +61,6 @@ if not exist "!PYTHON_EXE!" (
 
 echo.
 echo [Desktop2Stereo Patch]
-echo - Updating pip using: !PYTHON_EXE!
-
-"!PYTHON_EXE!" -m pip install --upgrade pip --no-cache-dir --no-warn-script-location --trusted-host mirrors.aliyun.com
-if errorlevel 1 (
-    echo Failed to update pip
-    pause
-    exit /b 1
-)
 
 echo.
 echo - Installing new requirements

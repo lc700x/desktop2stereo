@@ -25,8 +25,8 @@ echo       First launch may take 1-3 min, subsequent launches much faster
 echo [3/3] Starting Desktop2Stereo GUI ...
 
 pushd "%APP_DIR%"
-if exist "%APP_DIR%\activate.cmd" (
-    call activate.cmd
+if exist ".\activate.cmd" (
+    call "activate.cmd"
 ) 
 set "PYTHONPATH=.\python3\python.exe:$PYTHONPATH"
 Set "PYTHON_EXE=.\python3\python.exe"
