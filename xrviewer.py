@@ -773,6 +773,7 @@ _BG_COLORS = [
     (0.196, 0.196, 0.216),   # charcoal
     (0.047, 0.071, 0.149),   # dark navy
     (0.937, 0.886, 0.820),   # warm beige
+    (0.000, 0.600, 0.200),   # green screen (VD passthrough)
 ]
 
 # Curved-screen vertex shader: in_position is a world-space vec3 arc point (no model matrix).
@@ -1231,6 +1232,10 @@ class OpenXRViewer:
         # key presses while repositioning the keyboard).
         self._grip_l_now          = False
         self._grip_r_now          = False
+
+        self._x_press_t = 0.0          # timestamp when X was pressed
+        self._x_long_fired = False     # whether long‑press action already fired
+        self._prev_bg_color_idx = None # stores the index before switching to green
 
         # FPS display — timestamp ring: (len-1)/(last-first) is exact over the window
         self.actual_fps      = 0.0   # XR composition rate (this loop)
@@ -6744,16 +6749,37 @@ class OpenXRViewer:
             self._apply_preset(3)  # short press = default preset
         self._y_last = y_now
 
-        # X (left): toggle virtual keyboard. When turning it on, snap the keyboard
-        # anchor under the user's current gaze (in front and below) so it lands within
-        # reach instead of at the world origin.
+        # X (left): short press → toggle virtual keyboard.
+        #          long press  → toggle VDXR green ↔ previous background.
+        X_LONG = 0.6   # seconds
         x_now = self._read_bool_action(self._act_x_btn, "/user/hand/left")
-        if x_now and not self._x_last:
-            self._keyboard_visible = not self._keyboard_visible
-            if self._keyboard_visible:
-                if self._keyboard_tex is None:
-                    self._init_keyboard()
-                self._anchor_keyboard_below_screen()
+
+        if x_now and not self._x_last:                     # rising edge
+            self._x_press_t = time.perf_counter()
+            self._x_long_fired = False
+
+        if x_now and not self._x_long_fired:               # still held, not yet fired
+            if time.perf_counter() - self._x_press_t >= X_LONG:
+                # Toggle between green and previous background
+                if self._bg_color_idx == 5 and self._prev_bg_color_idx is not None:
+                    # Restore previous background
+                    self._bg_color_idx = self._prev_bg_color_idx
+                    self._prev_bg_color_idx = None
+                else:
+                    # Save current background (if not already saved) and switch to green
+                    if self._prev_bg_color_idx is None:
+                        self._prev_bg_color_idx = self._bg_color_idx
+                    self._bg_color_idx = 5    # VDXR green
+                self._x_long_fired = True
+
+        if not x_now and self._x_last:                     # falling edge
+            if not self._x_long_fired:                     # short press
+                self._keyboard_visible = not self._keyboard_visible
+                if self._keyboard_visible:
+                    if self._keyboard_tex is None:
+                        self._init_keyboard()
+                    self._anchor_keyboard_below_screen()
+
         self._x_last = x_now
 
         # Thumbstick buttons: distinguish between single and double thumbstick presses
