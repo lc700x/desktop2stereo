@@ -128,11 +128,16 @@ elif "AMD" in DEVICE_INFO:
                 os.path.join(site_packages, "_rocm_sdk_core", "lib"),
                 os.path.join(site_packages, "_rocm_sdk_devel", "bin"),
                 os.path.join(site_packages, "_rocm_sdk_devel", "lib"),
-                os.path.join(os.environ["HIP_PATH"], "bin"),
+                
                 # system level hip
                 "/opt/rocm/lib/",
                 "/usr/lib/x86_64-linux-gnu",
             ]
+
+            # check for HIP path in environment variables (common on Windows with AMD drivers)
+            if sys.platform == "win32":
+                if "HIP_PATH" in os.environ:
+                    candidates.append(os.path.join(os.environ["HIP_PATH"], "bin"))
 
             hip_path = None
             for lib_dir in candidates:
