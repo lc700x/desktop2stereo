@@ -55,6 +55,8 @@ if OS_NAME == "Windows":
                 self.camera = None  # DXCamera object for hardware-accelerated capture
                 self.prev_rect = None  # Previously captured window bounds to avoid redundant updates
                 self.window_title = window_title
+                self._last_frame = None  # Cached last successful frame
+                self._last_camera_rect = None  # For sub-pixel move detection
 
                 if self.capture_mode == "Monitor":
                     # Capture a specific monitor directly using MSS
@@ -158,6 +160,7 @@ if OS_NAME == "Windows":
                 """
                 Ensure the DXCamera is correctly configured to the current window position and size.
                 Reinitializes the camera if the window has moved, resized, or is newly detected.
+                Ignores sub-5px moves to avoid camera recreation storms.
                 """
                 try:
                     bounds = get_window_client_bounds(self.hwnd)
@@ -181,6 +184,15 @@ if OS_NAME == "Windows":
                     # Determine the best monitor to contain this window and adjust bounds
                     _, rect = self._choose_monitor_and_rect(bounds)
 
+                    # Skip recreation if bounds changed less than 5px (avoids camera recreation storms)
+                    if self.camera and self._last_camera_rect is not None:
+                        dx = abs(rect[0] - self._last_camera_rect[0])
+                        dy = abs(rect[1] - self._last_camera_rect[1])
+                        dw = abs(rect[2] - self._last_camera_rect[2])
+                        dh = abs(rect[3] - self._last_camera_rect[3])
+                        if max(dx, dy, dw, dh) <= 5:
+                            return
+
                     # Recreate the camera if needed
                     if self.camera:
                         try:
@@ -192,6 +204,7 @@ if OS_NAME == "Windows":
                         self.camera.__enter__()
                     except AttributeError:
                         pass
+                    self._last_camera_rect = rect
 
                 except Exception:
                     # On any error, reset the camera to avoid crashes
@@ -212,8 +225,15 @@ if OS_NAME == "Windows":
                 """
                 if self.capture_mode != "Monitor":
                     self._ensure_camera_matches_window()  # Ensure camera is up to date for window capture
-                img_array, _ = self.camera.get_bgr_frame()
-                return img_array.copy(), self.scaled_height
+                try:
+                    img_array, _ = self.camera.get_bgr_frame()
+                    self._last_frame = img_array
+                    return img_array.copy(), self.scaled_height
+                except Exception as e:
+                    print(f"[Capture] DXCamera grab failed: {e}")
+                    if self._last_frame is not None:
+                        return self._last_frame.copy(), self.scaled_height
+                    raise
 
             def stop(self):
                 """

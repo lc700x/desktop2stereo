@@ -19,6 +19,7 @@ import torch.nn as nn
 # from torchvision.transforms import Compose
 # import cv2
 # import numpy as np
+import contextlib
 
 from .dinov2 import DINOv2
 from .dpt_temporal import DPTHeadTemporal
@@ -28,6 +29,13 @@ from .dpt_temporal import DPTHeadTemporal
 INFER_LEN = 32
 OVERLAP = 10
 INTERP_LEN = 8
+
+def maybe_autocast(device, enabled=True):
+    return (
+        torch.autocast(device_type=device.type, enabled=enabled)
+        if device.type != "privateuseone"
+        else contextlib.nullcontext()
+    )
 
 class VideoDepthAnything(nn.Module):
     def __init__(
@@ -178,52 +186,39 @@ class VideoDepthAnything(nn.Module):
             # Insert newest at the end
             old[:, -new.shape[1]:] = new
     
-    def forward(self, pixel_values):
+    def forward(self, pixel_values, fp32=False):
         self.id += 1
+        device = pixel_values.device
         cur_input = pixel_values.unsqueeze(0)
 
-        if not self.transform:  # first frame
-            # Inference the first frame
-            # cur_list = [cur_input]
-
-            with torch.no_grad():
-            # with torch.autocast(device_type=device, enabled=(not fp32)):
+        with torch.no_grad(), maybe_autocast(device, enabled=not fp32):
+            if not self.transform:  # first frame
                 cur_feature = self.forward_features(cur_input)
-                x_shape = cur_input.shape
-                self.predicted_depth, cached_hidden_state_list = self.forward_depth(cur_feature, x_shape)
-        
-            
-            # Build pre-concatenated cache
-            self.hidden_cache = [
-                torch.cat([cached_hidden_state_list[i]] * (INFER_LEN  - 1), dim=1).contiguous()
-                for i in range(len(cached_hidden_state_list))
-            ]
+                self.predicted_depth, cached_hidden_state_list = self.forward_depth(
+                    cur_feature, cur_input.shape
+                )
 
-            self.frame_id_list.extend([0] * (INFER_LEN  - 1))
-            self.transform = True
-        else:
-            with torch.no_grad():
-            # with torch.autocast(device_type=device, enabled=(not fp32)):
+                # Build pre-concatenated cache
+                self.hidden_cache = [
+                    torch.cat([cached_hidden_state_list[i]] * (INFER_LEN - 1), dim=1).contiguous()
+                    for i in range(len(cached_hidden_state_list))
+                ]
+
+                self.frame_id_list.extend([0] * (INFER_LEN - 1))
+                self.transform = True
+
+            else:
                 cur_feature = self.forward_features(cur_input)
-                x_shape = cur_input.shape
-            '''
-            cur_id = self.frame_id_list[0:2] + self.frame_id_list[-INFER_LEN+3:]
-            print(f"cur_id: {cur_id}")
-            '''
-            cur_cache = self.hidden_cache
+                cur_cache = self.hidden_cache
 
-            # infer depth
-            with torch.no_grad():
-            # with torch.autocast(device_type=device, enabled=(not fp32)):
-                self.predicted_depth, new_cache = self.forward_depth(cur_feature, x_shape, cached_hidden_state_list=cur_cache)
+                self.predicted_depth, new_cache = self.forward_depth(
+                    cur_feature, cur_input.shape, cached_hidden_state_list=cur_cache
+                )
 
-            self.update_cache(new_cache)
-            # old:
-            # self.frame_id_list.append(self.id)
-            # if self.id + INFER_LEN  > self.gap + 1:
-            #     del self.frame_id_list[1]
+                self.update_cache(new_cache)
 
-            # new: write into a fixed-size circular buffer (no append/del)
-            self.frame_id_buffer[self.buffer_ptr] = self.id
-            self.buffer_ptr = (self.buffer_ptr + 1) % self.buffer_size
-        return self.predicted_depth  # return shape [T, H, W]
+                # circular buffer update (no append/del)
+                self.frame_id_buffer[self.buffer_ptr] = self.id
+                self.buffer_ptr = (self.buffer_ptr + 1) % self.buffer_size
+
+        return self.predicted_depth  # [T, H, W]

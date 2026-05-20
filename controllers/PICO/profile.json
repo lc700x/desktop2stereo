@@ -1,0 +1,7 @@
+{
+    "profileId" : "pico-4u",
+    "overrides" : {
+        "model_offset": [0.0, -0.02, -0.03],
+        "model_rotation_deg": -20.0
+    }
+}

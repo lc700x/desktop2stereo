@@ -31,7 +31,16 @@ from models.depth_anything_3.utils.alignment import (
 )
 from models.depth_anything_3.utils.geometry import affine_inverse, as_homogeneous, map_pdf_to_opacity
 from models.depth_anything_3.utils.ray_utils import get_extrinsic_from_camray
+import contextlib
 
+
+# Model casting helper
+def maybe_autocast(device, enabled=True):
+    return (
+        torch.autocast(device_type=device.type, enabled=enabled)
+        if device.type != "privateuseone"  # privateuseone is DirectML
+        else contextlib.nullcontext()
+    )
 
 def _wrap_cfg(cfg_obj):
     return OmegaConf.create(cfg_obj)
@@ -124,7 +133,7 @@ class DepthAnything3Net(nn.Module):
         """
         # Extract features using backbone
         if extrinsics is not None:
-            with torch.autocast(device_type=x.device.type, enabled=False):
+            with maybe_autocast(x.device, enabled=True):
                 cam_token = self.cam_enc(extrinsics, intrinsics, x.shape[-2:])
         else:
             cam_token = None
@@ -136,7 +145,7 @@ class DepthAnything3Net(nn.Module):
         H, W = x.shape[-2], x.shape[-1]
 
         # Process features through depth head
-        with torch.autocast(device_type=x.device.type, enabled=False):
+        with maybe_autocast(x.device, enabled=True):
             output = self._process_depth_head(feats, H, W)
             if use_ray_pose:
                 output = self._process_ray_pose_estimation(output, H, W)

@@ -7,7 +7,7 @@ import signal
 import sys
 import subprocess
 
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, CONTROLLER_MODEL
 from depth import process, predict_depth
 
 if "CUDA" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO:
@@ -45,7 +45,6 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
     import ctypes
     from ctypes import wintypes
     import threading
-    from utils import is_windows_11_24h2_or_newer
 
     # Import capture library (regular or CUDA-accelerated)
     if CAPTURE_TOOL == "WindowsCaptureROCm":
@@ -133,22 +132,12 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
     # Start worker thread (daemon so it won't block shutdown)
     alt_tab_thread = threading.Thread(target=_keyboard, name="CursorWorker", daemon=True)
     alt_tab_thread.start()
-
-    # Initialize capture object and capture loop for 24H2
-    IS_24h2 = is_windows_11_24h2_or_newer()
     
-    if IS_24h2:
-        cap = (
-            WindowsCapture(window_name=WINDOW_TITLE, minimum_update_interval=int(TIME_SLEEP * 1000))
-            if CAPTURE_MODE == "Window"
-            else WindowsCapture(monitor_index=MONITOR_INDEX)
-        )
-    else:
-        cap = (
-            WindowsCapture(window_name=WINDOW_TITLE)
-            if CAPTURE_MODE == "Window"
-            else WindowsCapture(monitor_index=MONITOR_INDEX)
-        )
+    cap = (
+        WindowsCapture(window_name=WINDOW_TITLE)
+        if CAPTURE_MODE == "Window"
+        else WindowsCapture(monitor_index=MONITOR_INDEX)
+    )
 
     def capture_loop():
         global capture_control
@@ -260,8 +249,9 @@ def cleanup_all_resources():
                 cap.stop()
             except AttributeError:
                 # stop for WindowsCapture
-                if OS_NAME == "Windows" and CAPTURE_MODE == "WindowsCapture":
-                    capture_control.stop()
+                if OS_NAME == "Windows" and CAPTURE_TOOL in ("WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"):
+                    if capture_control is not None:
+                        capture_control.stop()
             print("[Cleanup] Capture stopped")
     except Exception as e:
         print(f"[Cleanup] Error stopping capture: {e}")
@@ -1176,7 +1166,34 @@ def main(mode="Viewer"):
                 glfw.poll_events()
             
             glfw.terminate()
-            
+
+        elif mode == "OpenXR":
+            from xrviewer import OpenXRViewer, OPENXR_AVAILABLE
+            if not OPENXR_AVAILABLE:
+                raise ImportError("pyopenxr not installed — run: pip install pyopenxr")
+            rgb, depth, capture_start_time = depth_q.get()
+            import torch
+            if isinstance(rgb, torch.Tensor):
+                w, h = rgb.shape[2], rgb.shape[1]
+            else:
+                w, h = rgb.shape[1], rgb.shape[0]
+            try:
+                viewer = OpenXRViewer(
+                    ipd=IPD,
+                    depth_ratio=DEPTH_STRENGTH,
+                    convergence=CONVERGENCE,
+                    frame_size=(w, h),
+                    fps=FPS,
+                    depth_q=depth_q,
+                    show_fps=SHOW_FPS,
+                    controller_model=CONTROLLER_MODEL,
+                    capture_mode=CAPTURE_MODE,
+                    monitor_index=MONITOR_INDEX,
+                )
+                viewer.run(first_rgb=rgb, first_depth=depth)
+            except Exception as e:
+                print(f"[Main] OpenXR Link error: {e}")
+
         else:
             from depth import make_sbs, DEVICE_INFO
             from streamer import MJPEGStreamer
