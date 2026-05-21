@@ -5,7 +5,7 @@ import os, platform, socket
 # Debug Mode
 DEBUG = False
 # App Version
-VERSION = "2.4.2 Beta"
+VERSION = "2.4.2"
 # Get OS name
 OS_NAME = platform.system()
 # Define StereoMix devices
