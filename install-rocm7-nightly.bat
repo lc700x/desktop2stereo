@@ -75,21 +75,10 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+
+%PYTHON_EXE% -m rocm_sdk init
 echo Python environment deployed successfully.
-echo .
 
+echo To enable torch.compile on AMD ROCm7 supported GPUs, you must install vs_buildtools https://aka.ms/vs/17/release/vs_buildtools.exe and select the "Desktop development with C++" to install (~6GB). OR you can just run with the torch.compile unchecked. 
 
-echo --- (Optional) Running Triton Installation test ---
-
-%PYTHON_EXE% -c "import torch, triton, triton.language as tl;"
-
-if %errorlevel% neq 0 (
-    echo.
-    echo Triton/ROCm may not be working correctly.  
-    pause
-    exit /b 1
-)
-
-echo Import PASSED: Triton is installed correctly.
-echo To enable torch.compile on AMD ROCm7 supported GPUs, you may have to install vs_buildtools https://aka.ms/vs/17/release/vs_buildtools.exe and select the "Desktop development with C++" to install (~6GB). OR you can just run with the torch.compile unchecked. 
 pause
