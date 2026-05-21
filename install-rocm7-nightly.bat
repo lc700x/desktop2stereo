@@ -65,7 +65,7 @@ if %errorlevel% neq 0 (
 )
 %PYTHON_EXE% -m pip install -r %REQUIREMENTS_FILE% --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
-%PYTHON_EXE% -m pip install "triton-windows<3.6" --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
+%PYTHON_EXE% -m pip install "triton-windows<3.7" --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install windows-capture==2.0.0 --no-cache-dir --no-warn-script-location --trusted-host http://mirrors.aliyun.com/pypi/simple/
 %PYTHON_EXE% -m pip install https://ghfast.top/https://github.com/lc700x/wc_rocm/releases/download/v0.1.2/wc_rocm-0.1.2-cp310-abi3-win_amd64.whl --no-cache-dir
@@ -75,21 +75,10 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+
+%PYTHON_EXE% -m rocm_sdk init
 echo Python environment deployed successfully.
-echo .
 
+echo To enable torch.compile on AMD ROCm7 supported GPUs, you must install vs_buildtools https://aka.ms/vs/17/release/vs_buildtools.exe and select the "Desktop development with C++" to install (~6GB). OR you can just run with the torch.compile unchecked. 
 
-echo --- (Optional) Running Triton Installation test ---
-
-%PYTHON_EXE% -c "import torch, triton, triton.language as tl;"
-
-if %errorlevel% neq 0 (
-    echo.
-    echo Triton/ROCm may not be working correctly.  
-    pause
-    exit /b 1
-)
-
-echo Import PASSED: Triton is installed correctly.
-echo To enable torch.compile on AMD ROCm7 supported GPUs, you may have to install vs_buildtools https://aka.ms/vs/17/release/vs_buildtools.exe and select the "Desktop development with C++" to install (~6GB). OR you can just run with the torch.compile unchecked. 
 pause

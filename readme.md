@@ -170,12 +170,64 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 
 ### Quick Run
 
-1. Choose one of the **Run Mode** in Desktop2Stereo: `Local Viewer`, `MJPEG Streamer`, `RTMP Streamer`, `Legacy Streamer`, `3D Monitor`
+1. Choose one of the **Run Mode** in Desktop2Stereo: `OpenXR Link` (default), `Local Viewer`, `MJPEG Streamer`, `RTMP Streamer`, `Legacy Streamer`, `3D Monitor` (Windows Only)
 2. Select the **Computing Device**
 3. Select target **Monitor/Window**
 4. Just use the default settings and click **Run**.
 
 !run
+
+### OpenXR Link Mode
+> Tip: **OpenXR Link** mode (Windows/Ubuntu) is best for wireless streaming to OpenXR compatible client devices/apps with video and audio together, like **Virtual Desktop VDXR** **Meta Horizon Link** or **Pico Connect** with OpenXR support.
+ 1. Connect your OpenXR Device to your PC via Wired/Wireless Connection. For Wireless Connection, recommend using **Virtual Desktop** VDXR Runtime for best experience on Wireless Connection. 
+    ![VDXR](assets/vdxr.png)
+ 2. Choose Run Mode as **OpenXR Link**.
+ 3. Select the **Computing Device** and target **Monitor/Window**.
+ 4. Click `Run` button to run, the 3D display will be launched on your OpenXR device.
+ 5. (optional) For passthrough view, set Virtual Desktop VR passthrough settings as follows. Use `button X` on the Left VR Controller to toggle the passthrough view on/off. 
+    ![VDXR Passthrough](assets/passthrough.png)
+
+#### OpenXR VR Controller Shortcuts
+
+| Button / Combination | Action | Description |
+|---|---|---|
+| **Screen Control** |||
+| Left/Right grip (hold) | Drag screen | Move screen with laser anchor |
+| Right grip + Right stick X | Left/Right | Adjust screen width |
+| Right grip + Right stick Y | Up/Down | Adjust screen distance (accelerated) |
+| Right stick button (short press) | Toggle | Flat / Curved screen |
+| Right stick button (long press) | Reset | Reset screen orientation (preserve distance/size) |
+| Left grip + Left stick X/Y | Push direction | Translate screen position |
+| Left grip + Right stick X | Left/Right | Screen horizontal rotation (Yaw) |
+| Left grip + Right stick Y | Up/Down | Screen tilt (Pitch) |
+| Left Y button (short press) | Reset | Reset screen position and orientation |
+| Left Y button (long press) | Cycle | Cycle screen presets |
+| Left stick button (short press) | Cycle | Cycle background color (5 options) |
+| Left stick button (long press) | Toggle | FPS / Help panel overlay |
+| Left X button (short press) | Toggle | Show / Hide virtual keyboard |
+| Left X button (long press) | Toggle | VDXR Passthrough mode |
+| Left menu button (short press) | Toggle | FPS overlay |
+| Left menu button (long press) | Reset | Reset depth ratio to default |
+| **Depth Adjustment** |||
+| Right grip + Left stick Y | Up/Down | Adjust depth scale (0–10) |
+| Right grip + Left stick button (short press) | Toggle | Reset depth intensity to zero / restore |
+| Right grip + Right stick button (short press) | Reset | Reset depth scale to 2.0 |
+| Right grip + A/B (hold) | Increase/Decrease | Fine-tune depth ratio |
+| **Mouse Control** |||
+| Left/Right laser point at screen | Move | Control mouse cursor (right priority) |
+| Left/Right trigger (on screen) | Click | Left mouse button click |
+| Left/Right stick (on screen) | Direction | Scroll (mouse wheel) |
+| Right A button (short press) | Click | Left mouse button click |
+| Right B button (short press) | Click | Right mouse button click |
+| A double press | Toggle | Hide / Show all overlays |
+| **Virtual Keyboard** |||
+| Left/Right laser + trigger (on keyboard) | Press | Key input (press and release) |
+| Shift / Ctrl / Alt / Win | Single / Double press | Momentary / Locked modifier key |
+| Left grip + Left stick (on keyboard) | Direction | Translate keyboard position |
+| Right grip + Right stick (on keyboard) | Direction | Adjust keyboard size / distance |
+| **Controller Model** |||
+| Right A + B (hold 0.5s) | Toggle | Switch controller model brand |
+| Left menu + Right A + B (hold 1s) | Toggle | Enter / Exit controller calibration mode |
 
 ### Local Viewer Mode
 
@@ -195,7 +247,7 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 
     - **VR** needs to use 2nd Display/Virtual Display (VDD) with Desktop+[Steam VR] or Virtual Desktop[PC/Standalone VR] or OBS + Wolvic Browser [Standalone VR] to compose the `Half-SBS` (Half Side-by-Side) / `Full-SBS` (Full Side-by-Side) / `TAB` (Top-and-Bottom) display to 3D.
 
-      - You can use `Tab` key to toggle `Half-SBS`/`Full-SBS`/`TAB` mode.
+      - You can use `Tab` key to toggle `Half-SBS`/`Full-SBS`/`TAB`/`Depth Map` mode.
 
       !Half-SBS
       !TAB
@@ -298,16 +350,19 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 | ↓ Down     | Decrease depth strength by 0.5 (min 0)             | Local Viewer / RTMP Streamer / 3D Monitor  |
 | 0          | Reset depth strength to original value             | Local Viewer / RTMP Streamer / 3D Monitor  |
 | Tab        | Cycle to the next display mode                     | Local Viewer / RTMP Streamer / 3D Monitor  |
+| D          | Toggle between depth map and original RGB          | Local Viewer / RTMP Streamer / 3D Monitor  |
 | F          | Toggle FPS display                                 | Local Viewer / RTMP Streamer / 3D Monitor  |
+| B          | Toggle edge feathering                             | Local Viewer / RTMP Streamer / 3D Monitor  |
 | A          | Toggle “fill 16:9” mode                            | Local Viewer / RTMP Streamer / 3D Monitor  |
 | L          | Toggle lock Stereo Viewer window aspect ratio lock | Local Viewer                               |
+| M          | Toggle mouse pass-through mode                     | Local Viewer / RTMP Streamer / 3D Monitor  |
 
 ## Detailed Settings Guide
 
 All optional settings can be modified on the GUI window and saved to the [settings.yaml](http://_vscodecontentref_/3). Each time you click `Run`, the settings will be saved automatically, and clicking `Reset` will restore the default settings.
 
 1. **Run Mode**  
-   `5` **Run Mode**s are available: `Local Viewer`, `MJPEG Streamer`, `RTMP Streamer`, `Legacy Streamer`, `3D Monitor` (Windows Only).
+   `6` **Run Mode**s on Windows, `5` on other platforms. The default is `OpenXR Link`. Available modes: `OpenXR Link`, `Local Viewer`, `MJPEG Streamer`, `RTMP Streamer`, `Legacy Streamer`, `3D Monitor` (Windows Only).
 
 2. **Set Language**  
    English (`EN`) and Simplified Chinese (`CN`) are supported.
@@ -325,38 +380,35 @@ All optional settings can be modified on the GUI window and saved to the [settin
    Recommended for most computing devices for better performance. If your device does not support `FP16` DataType, disable it.
 
 6. **Show FPS**  
-   Show FPS on the titlebar of the **Stereo Viewer** and as an on-screen indicator on the output left and right eye scenes.
+   Show FPS on the titlebar of the **Stereo Viewer** and as an on-screen indicator on the output left and right eye scenes. The capture FPS is auto-detected from your monitor's refresh rate.
 
 7. **Capture Tool** (Windows Only)
 
    - **DXCamera**: Based on [wincam](https://github.com/lovettchris/wincam) using `DXGI Desktop Duplication API`, it has the highest FPS but higher CPU temperature.
    - **WindowsCapture**: Based on [Windows-Capture Python](https://github.com/NiiightmareXD/windows-capture/tree/main/windows-capture-python) using `Graphics Capture API`, it has slightly lower FPS but lower CPU usage and temperature.
+   - **WindowsCaptureCUDA**: NVIDIA CUDA-accelerated variant of WindowsCapture for reduced overhead.
+   - **WindowsCaptureROCm**: AMD ROCm-accelerated variant of WindowsCapture.
+   - **DesktopDuplication**: DXGI Desktop Duplication API via [windows-capture](https://github.com/NiiightmareXD/windows-capture). Window capture mode disabled.
 
-8. **FPS** (frames per second)  
-   FPS can be set as your monitor refresh rate, default input FPS is `60`. It determines the frequency of the screen capture process and streaming fps for streamer modes (higher FPS does not ensure smoother output, depending on your devices).
-
-9. **Output Resolution**  
-   Default is `1080` (i.e. **1080p**, `1920x1080`) for a smoother experience. `2160` (**4K**, i.e. `3840x2160`) and `1440` (**2K**, i.e. `2560x1440`) resolutions are also available if you have powerful devices. If the input source has smaller resolution than the output, the **Output Resolution** will be applied same as the smaller one. The **Output Resolution** by default keeps the aspect ratio of the input source.
-
-10. **Fill 16:9**  
+8. **Fill 16:9**  
     Enabled by default. If the aspect of input source is not `16:9`, the black background will be applied to fill it to `16:9`.
 
-11. **Fix Viewer Aspect** (Local Viewer mode Only)  
+9. **Fix Viewer Aspect** (Local Viewer mode Only)  
     Disabled by default. This option is to lock the window of **Stereo Viewer**, which may be useful for the upscaling and frame generation apps like [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/).
 
-12. **Depth Resolution**  
+10. **Depth Resolution**  
     Higher **Depth Resolution** can give better depth details but cause higher GPU usage, which is also related to the model training settings. Default **Depth Resolution** is set to `336` for balanced performance on `Depth-Anything-V2` models. The **Depth Resolution** options vary among different depth models.
 
-13. **Depth Strength**  
+11. **Depth Strength**  
     With higher **Depth Strength**, 3D depth effect of the object would be stronger. However, higher value can induce visible artifacts and distortion. Default is set to `2.0`. The recommended depth strength range is `(1, 5)`.
 
-14. **Anti-Aliasing**  
-    This can be effective to reduce jagged edges and artifacts under high **Depth Strength**, default value is set as `1` for most cases. Higher value may reduce the depth details.
+12. **Anti-Aliasing**  
+    This can be effective to reduce jagged edges and artifacts under high **Depth Strength**, default value is set as `2` for most cases. Higher value may reduce the depth details.
 
-15. **Foreground Scale**  
-    Default value is `1.0`. `Positive` value means foreground closer, background further. `Negative` value means foreground flatter, background closer. `0` is no change of foreground and background strength.
+13. **Foreground Scale**  
+    Default value is `0.5`. `Positive` value means foreground closer, background further. `Negative` value means foreground flatter, background closer. `0` is no change of foreground and background strength.
 
-16. **Display Mode**  
+14. **Display Mode**  
     It determines how the left and right eye scenes are arranged in the output. Default is `Half-SBS` for most VR devices, `TAB` is also an alternative; `Full-SBS` is mainly for AR glasses.
 
     - **Full-SBS** (Full Side-by-Side, `32:9`)  
@@ -368,38 +420,53 @@ All optional settings can be modified on the GUI window and saved to the [settin
     - **TAB** (Top-and-Bottom, `16:9`)  
       Left and right eye images are stacked vertically: one on top, one on bottom. Each image is compressed vertically to fit the frame. Common in streaming and broadcast formats; quality similar to Half-SBS.
 
-17. **IPD** (Interpupillary Distance)  
+    - **Depth Map** (`16:9`)  
+      Visualizes the depth estimation output as a color-mapped image (blue = far, red = near). Press `D` key to toggle between depth map and original RGB view. Useful for debugging depth model accuracy.
+
+15. **IPD** (Interpupillary Distance)  
     IPD is the distance between the centers of your pupils, it affects how your brain interprets stereoscopic 3D. The default IPD is `0.064` meter (m), which is the average human IPD value.  
 
-18. Convergence Point   
+16. **Convergence Point**  
     The convergence point refers to the point where the lines of sight from both eyes intersect, affecting the depth perception in stereoscopic vision. A smaller convergence point enhances the "out-of-screen" effect but may cause blurriness or ghosting at the screen edges.  
-    The default convergence point is set to `0.0` for a balanced 3D effect and screen-edge clarity.
+    The default convergence point is set to `0.5` for a balanced 3D effect and screen-edge clarity.
+
+17. **Controller Model** (OpenXR Link Only)  
+    Select the VR controller 3D model to display in-headset. Default is `PICO`. Supported models are auto-detected from the `controllers/` folder.
+
+18. **Stereo Output** (Local Viewer / RTMP Streamer / 3D Monitor)  
+    When multiple monitors are connected, select which monitor the **Stereo Viewer** window should appear on. Default is the first external monitor (not the capture input). Set to `Viewer Window` to use the default window placement.
 
 19. **Stream Protocol** (RTMP Streamer Only)  
-    Default is `HLS` for best compatibility, and `HLS M3U8` can be used in mobile **VLC Player**. [RTMP](http://_vscodecontentref_/4), `RTSP`, `HLS`, `HLS M3U8`, `WebRTC` are provided. You can toggle the protocol to show the target URL, all URLs are ready to use when the **RTMP Streamer** is working.
+    Default is `HLS` for best compatibility, and `HLS M3U8` can be used in mobile **VLC Player**. RTMP, `RTSP`, `HLS`, `HLS M3U8`, `WebRTC` are provided. You can toggle the protocol to show the target URL, all URLs are ready to use when the **RTMP Streamer** is working.
 
 20. **Streamer URL** (RTMP Streamer, MJPEG Streamer, Legacy Streamer Only)  
     Read only, dynamically determined by the streaming protocol and your local IP.
 
-21. **Streamer Key** (RTMP Streamer Only)  
+21. **Stream Key** (RTMP Streamer Only)  
     The private key string set for **RTMP Streamer**, which will be applied in the **Streamer URL**.
 
-22. **CRF** (RTMP Streamer Only)  
-    Default is `20`, you can set it in the range of `18~23`. It refers to **Constant Rate Factor** that controls the video bitrate. A **lower value** is a **higher quality**.
+22. **Stream Quality** (MJPEG Streamer / Legacy Streamer Only)  
+    JPEG encoding quality for MJPEG streaming. Range `50–100`, default is `100`.
 
-23. **Stereo Mix** (RTMP Streamer Only)  
+23. **CRF** (RTMP Streamer Only)  
+    Default is `20`, you can set it in the range of `16~27`. It refers to **Constant Rate Factor** that controls the video bitrate. A **lower value** is a **higher quality**.
+
+24. **Stereo Mix** (RTMP Streamer Only)  
     This is the **Stereo Mix** device to capture the system playback audio.
 
     - On Windows, **Stereo Mix** device is mostly `Stereo Mix (Realtek(R))` to be used with `Realtek(R) HD Audio` as the output device in Windows audio settings. Or use the virtual audio device from [Screen Capture Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest).
     - On MacOS, you can choose **Stereo Mix** device [BlackHole](https://existential.audio/blackhole/) or [Virtual Desktop Speakers](https://www.vrdesktop.net/) or [Loopback](https://rogueamoeba.com/loopback/) or other virtual audio devices. Please use the same audio output device in MacOS audio settings.
 
-24. **Audio Delay** (RTMP Streamer Only)  
+25. **Audio Delay** (RTMP Streamer Only)  
     Default is `-0.15` seconds, which is used to align the processed audio and video timestamp. A `negative value` will make the audio earlier than the video, whereas a `positive value` will make the audio later than the video.
 
-25. **Download Path**  
+26. **Lossless Scaling Support** (RTMP Streamer Only, Windows Only)  
+    When enabled, uses precise window-crop capture via `gfxcapture` to frame only the **Stereo Viewer** window instead of the full monitor. Useful when using [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/) for frame generation.
+
+27. **Download Path**  
     Default download path is the [models](http://_vscodecontentref_/5) folder under the working directory.
 
-26. **Depth Model**  
+28. **Depth Model**  
     Modify the depth model id from [HuggingFace](https://huggingface.co/), the model id under `depth_model` mostly shall end with `-hf`. Large model can cause higher GPU usage and latency. Default depth model: `depth-anything/Depth-Anything-V2-Small-hf`. You can also manually add the hugging face models in the [settings.yaml](http://_vscodecontentref_/6) which include `model.safetensors`, `config.json`, `preprocessor_config.json` files on [HuggingFace](https://huggingface.co/).
 
     Currently supported models include (partial list):
@@ -449,24 +516,25 @@ All optional settings can be modified on the GUI window and saved to the [settin
     - Intel/zoedepth-kitti
     - apple/DepthPro-hf  # Slow, NOT recommended
 
-27. **HF Endpoint** (Hugging Face)  
+29. **HF Endpoint** (Hugging Face)  
     [HF-Mirror](https://hf-mirror.com) is a mirror site of the original [Hugging Face](https://huggingface.co/) site hosting AI models. The depth model will automatically be downloaded to **Download Path** from [Hugging Face](https://huggingface.co/) at the first run.
 
-28. **Inference Optimizer** (Windows/Ubuntu Only)  
+30. **Inference Optimizer** (Windows/Ubuntu Only)  
     These optimizers can typically increase the output FPS by `30%~50%`. However, not all models support **Inference Optimizer**, if the optimization fails, the inference process will fall back to PyTorch.  
+    Use the **Recompile** checkbox to force regeneration of cached optimized models.
 
     **AMD GPUs (ROCm7)**:
     - **torch.compile**: leverages Triton under the hood to generate optimized kernels automatically, and provides slight to moderate speedups by fusing operations and reducing overhead.
     
     **NVIDIA GPUs**:
     - **torch.compile**: leverages Triton under the hood to generate optimized kernels automatically, and provides slight to moderate speedups by fusing operations and reducing overhead.
-    - **TensorRT**: NVIDIA’s high-performance deep learning inference SDK. It optimizes trained models for deployment, especially on NVIDIA GPUs, and provides significant speedups and high inference efficiency.
+    - **TensorRT**: NVIDIA’s high-performance deep learning inference SDK. It optimizes trained models for deployment, especially on NVIDIA GPUs, and provides significant speedups and high inference efficiency. Check **Recompile TensorRT** to force engine rebuild.
 
     **Apple Silicon (MPS)**:
-    - **CoreML**:  CoreML is optimized to leverage Apple silicon's CPU, GPU, and Neural Engine for fast, private, and offline predictions.
+    - **CoreML**: CoreML is optimized to leverage Apple silicon’s CPU, GPU, and Neural Engine for fast, private, and offline predictions. Check **Recompile CoreML** to force model reconversion.
 
     **Intel GPUs**:
-    - **OpenVINO**: This is Intel's deep learning inference optimization toolkit designed to improve inference performance on Intel hardware. By optimizing and accelerating models, it can significantly increase inference speed.
+    - **OpenVINO**: This is Intel’s deep learning inference optimization toolkit designed to improve inference performance on Intel hardware. By optimizing and accelerating models, it can significantly increase inference speed. Check **Recompile OpenVINO** to force cache rebuild.
 
     **AMD GPUs, etc. DirectML devices**:
     - **Unlock Threads (Legacy Streamer)**: unlock the multithreads for **Legacy Streamer** mode.

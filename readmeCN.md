@@ -129,12 +129,66 @@
 
 ### 快速运行  
 
-1.  在 Desktop2Stereo 中选择一个 **运行模式**: `本地查看`, `MJPEG推流`, `RTMP推流`, `旧网络推流`, `3D 显示器`
+1.  在 Desktop2Stereo 中选择一个 **运行模式**: `OpenXR串流` (默认), `本地查看`, `MJPEG推流`, `RTMP推流`, `旧网络推流`, `3D 显示器` (仅限 Windows)
 2.  选择 **计算设备**
 3.  选择目标 **显示器/窗口**
 4.  直接使用默认并点击 **运行**。
 
 ![run](./assets/Run.png)  
+
+### **OpenXR串流** 模式
+
+> [!Tip]
+> **OpenXR串流** 模式 (Windows/Ubuntu) 最适合将视频和音频一起无线串流到支持 OpenXR 的客户端设备/应用程序，如 **Virtual Desktop VDXR**、**Meta Horizon Link** 或 **Pico Connect**（需支持 OpenXR）。
+ 1. 通过有线/无线连接将 OpenXR 设备连接到 PC。无线连接推荐使用 **Virtual Desktop** VDXR Runtime 以获得最佳体验。
+    ![VDXR](assets/vdxr.png)
+ 2. 选择运行模式为 **OpenXR串流**。
+ 3. 选择 **计算设备** 和目标 **显示器/窗口**。
+ 4. 点击 `运行` 按钮，3D 显示将在你的 OpenXR 设备上启动。
+ 5. (可选) 如需透视视图，请按下图设置 Virtual Desktop VR 透视参数。使用左手手柄的 `X 键` 来切换透视视图的开启/关闭。
+    ![VDXR Passthrough](assets/passthrough.png)
+
+#### OpenXR VR 手柄操作指南
+
+| 按键 / 组合键 | 动作 | 说明 |
+|---|---|---|
+| **屏幕控制** |||
+| 左/右手握持键 (按住) | 拖拽屏幕 | 使用激光锚点拖拽屏幕 |
+| 右握持 + 右摇杆 X | 左右推 | 调整屏幕宽度 |
+| 右握持 + 右摇杆 Y | 上下推 | 调整屏幕距离 (加速) |
+| 右摇杆按键 (短按) | 切换 | 平面 / 曲面屏幕 |
+| 右摇杆按键 (长按) | 重置 | 重置屏幕方向 (保持距离/大小) |
+| 左握持 + 左摇杆 X/Y | 上下左右推 | 平移屏幕位置 |
+| 左握持 + 右摇杆 X | 左右推 | 屏幕水平旋转 (Yaw) |
+| 左握持 + 右摇杆 Y | 上下推 | 屏幕前后倾斜 (Pitch) |
+| 左 Y 键 (短按) | 重置 | 重置屏幕位置与朝向 |
+| 左 Y 键 (长按) | 切换 | 切换屏幕预设 |
+| 左摇杆按键 (短按) | 切换 | 切换背景颜色 (5种) |
+| 左摇杆按键 (长按) | 切换 | FPS / 帮助面板 |
+| 左 X 键 (短按) | 切换 | 显示 / 隐藏虚拟键盘 |
+| 左 X 键 (长按) | 切换 | VDXR 透视模式 |
+| 左菜单键 (短按) | 切换 | FPS 叠加层 |
+| 左菜单键 (长按) | 重置 | 重置深度比例至默认值 |
+| **深度调节** |||
+| 右握持 + 左摇杆 Y | 上下推 | 调整深度比例 (0–10) |
+| 右握持 + 左摇杆按键 (短按) | 切换 | 深度强度归零 / 恢复 |
+| 右握持 + 右摇杆按键 (短按) | 重置 | 重置深度比例为 2.0 |
+| 右握持 + A/B (按住) | 增加/减少 | 微调深度比例 |
+| **鼠标操作** |||
+| 左/右手激光指向屏幕 | 移动 | 控制鼠标光标 (右手优先) |
+| 左/右手扳机 (指向屏幕) | 点击 | 鼠标左键单击 |
+| 左/右摇杆 (指向屏幕) | 方向 | 上下左右滚动 (鼠标滚轮) |
+| 右 A 键 (短按) | 点击 | 鼠标左键单击 |
+| 右 B 键 (短按) | 点击 | 鼠标右键单击 |
+| A 键双击 | 切换 | 隐藏 / 显示所有叠加层 |
+| **虚拟键盘** |||
+| 左/右手激光 + 扳机 (指向键盘) | 按下 | 按键输入 (按下松开) |
+| Shift / Ctrl / Alt / Win | 单击 / 双击 | 单次 / 锁定修饰键 |
+| 左握持 + 左摇杆 (指向键盘) | 上下左右推 | 平移键盘位置 |
+| 右握持 + 右摇杆 (指向键盘) | 上下/左右推 | 调整键盘大小/距离 |
+| **手柄模型** |||
+| 右 A+B 键 (同时长按0.5秒) | 切换 | 切换手柄模型品牌 |
+| 左菜单 + 右A + 右B (同时长按1秒) | 切换 | 进入/退出手柄校准模式 |
 
 ### **本地查看** 模式
 
@@ -153,7 +207,7 @@
     ![Full-SBS](./assets/FullSBS.png)
 
     - **VR** 需要使用第二显示器/虚拟显示器 (VDD)，配合 Desktop+[Steam VR] 或 Virtual Desktop[PC/独立 VR] 或 OBS + Wolvic Browser [独立 VR] 将 `Half-SBS` (半并排) / `Full-SBS` (全并排) / `TAB` (上下) 显示合成 3D 效果。
-    - 您可以使用 `Tab` 键切换 `Half-SBS`/`Full-SBS`/`TAB` 模式。
+    - 您可以使用 `Tab` 键切换 `Half-SBS`/`Full-SBS`/`TAB`/`Depth Map` 模式。
 
     ![Half-SBS](./assets/HalfSBS.png)    
 
@@ -257,15 +311,18 @@
 | `↓ 下`            | 深度强度减少 0.5 (最小 0)                      | 本地查看 / RTMP推流 / 3D 显示器 |
 | `0`               | 重置深度强度为原始值                           | 本地查看 / RTMP推流 / 3D 显示器 |
 | `Tab`             | 循环切换到下一个显示模式                       | 本地查看 / RTMP推流 / 3D 显示器 |
+| `D`               | 切换深度图 / 原始 RGB 显示                      | 本地查看 / RTMP推流 / 3D 显示器 |
 | `F`               | 切换 FPS 显示                                  | 本地查看 / RTMP推流 / 3D 显示器 |
+| `B`               | 切换边缘羽化                                   | 本地查看 / RTMP推流 / 3D 显示器 |
 | `A`               | 切换"填充 16:9"模式                            | 本地查看 / RTMP推流 / 3D 显示器 |
 | `L`               | 切换锁定Stereo Viewer窗口宽高比锁定               | 本地查看 |
+| `M`               | 切换鼠标穿透模式                                | 本地查看 / RTMP推流 / 3D 显示器 |
 
 ## 详细设置指南
 所有可选设置都可以在 GUI 窗口上修改并保存到 `settings.yaml`。每次点击 `运行` 时，设置将自动保存，点击 `重置` 将恢复默认设置。
 
 1. **运行模式**  
-    提供 `5` 种运行模式：`本地查看`, `MJPEG推流`, `RTMP推流`, `旧网络推流`, `3D 显示器` (仅限 Windows)。
+    Windows 提供 `6` 种运行模式，其他平台 `5` 种。默认为 `OpenXR串流`。可用模式：`OpenXR串流`, `本地查看`, `MJPEG推流`, `RTMP推流`, `旧网络推流`, `3D 显示器` (仅限 Windows)。
 
 2. **设置语言**  
     支持英文 (`EN`) 和简体中文 (`CN`)。
@@ -282,34 +339,39 @@
 
 5. **FP16**  
     推荐用于大多数计算设备以获得更好的性能。如果您的设备不支持 `FP16` 数据类型，请禁用它。
+
 6. **显示 FPS**  
-    在 **Stereo Viewer** 的标题栏和输出左右眼画面的画面上显示 FPS 指示器。
+    在 **Stereo Viewer** 的标题栏和输出左右眼画面的画面上显示 FPS 指示器。捕获帧率将根据您的显示器刷新率自动检测。
+
 7. **捕获工具** (仅限 Windows)  
 
     - **DXCamera**: 基于 [wincam](https://github.com/lovettchris/wincam) 使用 `DXGI Desktop Duplication API`，具有最高的 FPS 但 CPU 温度较高。
-    - **WindowsCapture**: 基于 [Windows-Capture Python](https://github.com/NiiightmareXD/windows-capture/tree/main/windows-capture-python) 使用 `Graphics Capture API`，FPS 稍低但 CPU 使用率和温度较低。它需要...
-8. **FPS** (每秒帧数)  
-    FPS 可以设置为您的显示器刷新率，默认输入 FPS 是 `60`。
-    它决定了屏幕捕获过程的频率和流服务器模式的流帧率（更高的 FPS 不保证更流畅的输出，取决于您的设备）。
-9. **输出分辨率**  
-    默认为 `1080` (即 **1080p**, `1920x1080`) 以获得更流畅的体验。如果您的设备性能强大，也可以选择 `2160` (**4K**, 即 `3840x2160`) 和 `1440` (**2K**, 即 `2560x1440`) 分辨率。
-    如果输入源的分辨率小于输出分辨率，则 **输出分辨率** 将应用与较小者相同的分辨率。
-    **输出分辨率** 默认保持输入源的宽高比。
-10. **填充 16:9**  
+    - **WindowsCapture**: 基于 [Windows-Capture Python](https://github.com/NiiightmareXD/windows-capture/tree/main/windows-capture-python) 使用 `Graphics Capture API`，FPS 稍低但 CPU 使用率和温度较低。
+    - **WindowsCaptureCUDA**: NVIDIA CUDA 加速版 WindowsCapture，减少 CPU 开销。
+    - **WindowsCaptureROCm**: AMD ROCm 加速版 WindowsCapture。
+    - **DesktopDuplication**: 基于 [windows-capture](https://github.com/NiiightmareXD/windows-capture) 的 DXGI Desktop Duplication API。窗口捕获模式不可用。
+
+8. **填充 16:9**  
     默认启用。如果输入源的宽高比不是 `16:9`，将应用黑色背景将其填充为 `16:9`。
-11. **固定查看器宽高比** (仅限**本地查看** 模式)  
+
+9. **固定查看器宽高比** (仅限**本地查看** 模式)  
     默认禁用。此选项用于锁定 **Stereo Viewer** 的窗口，这对于像 [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/) 这样的放大和帧生成应用程序可能有用。
-12. **深度分辨率**  
+
+10. **深度分辨率**  
     更高的 **深度分辨率** 可以提供更好的深度细节，但会导致更高的 GPU 使用率，这也与模型训练设置有关。
     默认 **深度分辨率** 设置为 `336`，以在 `Depth-Anything-V2` 模型上获得平衡的性能。**深度分辨率** 选项因不同的深度模型而异。
-13. **深度强度**  
+
+11. **深度强度**  
     **深度强度**越高，物体的 3D 深度效果越强。然而，过高的值可能会导致可见的伪影和失真。
     默认设置为 `2.0`。推荐的深度强度范围是 `(1, 5)`。
-14. **抗锯齿**  
-    这可以有效减少在高 **深度强度** 下的锯齿边缘和伪影，默认值设置为 `1` 适用于大多数情况。更高的值可能会减少深度细节。
-15. **前景缩放**  
-    默认值为 `1.0`。`正值` 表示前景更近，背景更远。`负值` 表示前景更平，背景更近。`0` 表示前景和背景强度不变。
-16. **显示模式**  
+
+12. **抗锯齿**  
+    这可以有效减少在高 **深度强度** 下的锯齿边缘和伪影，默认值设置为 `2` 适用于大多数情况。更高的值可能会减少深度细节。
+
+13. **前景缩放**  
+    默认值为 `0.5`。`正值` 表示前景更近，背景更远。`负值` 表示前景更平，背景更近。`0` 表示前景和背景强度不变。
+
+14. **显示模式**  
     它决定了左右眼画面在输出中的排列方式。默认为大多数 VR 设备使用 `Half-SBS`，`TAB` 也是一种选择；`Full-SBS` 主要用于 AR 眼镜。
 
     - **Full-SBS** (全宽左右, `32:9`)  
@@ -325,30 +387,55 @@
     - **TAB** (上下, `16:9`)  
         左右眼图像垂直堆叠：一个在上，一个在下。
         每个图像在垂直方向上被压缩以适合帧。
-        流媒体和直播格式中常见；质量与 Half-SBS 相似。  
-17. **瞳距** (米)  
+        流媒体和直播格式中常见；质量与 Half-SBS 相似。
+
+    - **深度图** (`16:9`)  
+        将深度估计输出可视化为彩色映射图像（蓝色 = 远，红色 = 近）。按 `D` 键可在深度图和原始 RGB 视图之间切换。便于调试深度模型精度。
+
+15. **瞳距** (米)  
     瞳距 (IPD) 是您瞳孔中心之间的距离，它影响您的大脑如何解读立体 3D。  
     默认瞳距为 `0.064` (米)，这是人类的平均瞳距值。  
-18. **会聚点**      
+
+16. **会聚点**      
     会聚点是指两个眼睛的视线交汇的点，影响立体视觉的深度感。会聚点越小，出屏幕的效果越明显，但可能导致屏幕边缘内容模糊或重影。  
-    默认会聚点为 `0.0`，达到较为均衡的3D效果和画面边缘清晰度。
+    默认会聚点为 `0.5`，达到较为均衡的3D效果和画面边缘清晰度。
+
+17. **手柄模型** (仅限 OpenXR串流)  
+    选择在 VR 头显中显示的 VR 手柄 3D 模型。默认为 `PICO`。支持的模型将自动从 `controllers/` 文件夹中检测。
+
+18. **立体输出** (本地查看 / RTMP推流 / 3D 显示器)  
+    当连接多个显示器时，选择 **Stereo Viewer** 窗口应出现在哪个显示器上。默认是第一个外部显示器（非捕获输入）。设置为 `Viewer Window` 则使用默认窗口位置。
+
 19. **串流协议**（仅限 **RTMP Streamer**）  
     默认使用 `HLS` 以获得最佳兼容性，`HLS M3U8` 可在移动端 **VLC Player** 中使用。支持的协议包括 `RTMP`、`RTSP`、`HLS`、`HLS M3U8` 和 `WebRTC`。你可以切换协议以显示目标 URL，当 **RTMP Streamer** 正常工作时，所有 URL 都可直接使用。  
+
 20. **串流地址**（仅限 **RTMP Streamer**、**MJPEG Streamer**、**Legacy Streamer**）  
     只读，由所选串流协议和本地 IP 动态生成。  
+
 21. **串流密钥**（仅限 **RTMP Streamer**）  
     为 **RTMP Streamer** 设置的私密密钥字符串，将自动应用于 **串流地址** 中。  
-22. **恒定质量**（仅限 **RTMP Streamer**）  
-    默认值为 `20`，可设置范围为 `18~23`。**恒定质量（Constant Rate Factor）** 用于控制视频码率。**数值越小，视频质量越高**。  
-23. **立体声混音**（仅限 **RTMP Streamer**）  
+
+22. **推流质量**（仅限 MJPEG推流 / 旧网络推流）  
+    MJPEG 推流的 JPEG 编码质量。范围 `50–100`，默认为 `100`。
+
+23. **恒定质量**（仅限 **RTMP Streamer**）  
+    默认值为 `20`，可设置范围为 `16~27`。**恒定质量（Constant Rate Factor）** 用于控制视频码率。**数值越小，视频质量越高**。  
+
+24. **立体声混音**（仅限 **RTMP Streamer**）  
     这是用于捕捉系统播放音频的 **立体声混音（Stereo Mix）** 设备。  
     在 Windows 上，通常使用 `Stereo Mix (Realtek(R))`，并在 Windows 音频设置中将输出设备设置为 `Realtek(R) HD Audio`。也可以使用来自 [Screen Capture Recorder](https://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases/latest) 的虚拟音频设备。  
     在 macOS 上，可以选择 [BlackHole](https://existential.audio/blackhole/)、[Virtual Desktop Speakers](https://www.vrdesktop.net/)、[Loopback] 或其他虚拟音频设备。请确保在 macOS 音频设置中使用相同的输出设备。  
-24. **音频延迟**（仅限 **RTMP Streamer**）  
+
+25. **音频延迟**（仅限 **RTMP Streamer**）  
     默认值为 `-0.15` 秒，用于对齐处理后音频与视频的时间戳。`负值` 表示音频会比视频提前播放，`正值` 表示音频会比视频延后播放。  
-25. **下载路径**   
+
+26. **小黄鸭补帧支持**（仅限 RTMP推流，仅限 Windows）  
+    启用后使用基于 `gfxcapture` 的精确窗口裁剪捕获，仅捕获 **Stereo Viewer** 窗口而非整个显示器。适用于使用 [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/) 进行帧生成的场景。
+
+27. **下载路径**   
     默认下载路径是工作目录下的 `models` 文件夹。
-26. **深度模型**  
+
+28. **深度模型**  
     从 [HuggingFace](https://huggingface.co/) 修改深度模型 ID，`depth_model` 下的模型 ID 大多应以 `-hf` 结尾。
     大模型会导致更高的 GPU 使用率和延迟。
     默认深度模型: `depth-anything/Depth-Anything-V2-Small-hf`。
@@ -400,26 +487,28 @@
       - Intel/zoedepth-nyu
       - Intel/zoedepth-kitti
       - apple/DepthPro-hf # 慢，不推荐
-27. **下载节点** (Hugging Face)  
+29. **下载节点** (Hugging Face)  
     [HF-Mirror](https://hf-mirror.com) 是原始 [Hugging Face](https://huggingface.co/) 网站的镜像站点，托管 AI 模型。深度模型将在首次运行时自动从 [Hugging Face](https://huggingface.co/) 下载到 **下载路径**。  
-28. **推理优化**    
+30. **推理优化**    
     这些优化器通常可以将输出 FPS 提高 `30%~50%`。但是，并非所有模型都支持 **推理优化**，如果优化失败，推理过程将回退到 PyTorch。
-    **AMD GPU (ROCm7)**:  
+    使用 **重新编译** 复选框可强制重新生成缓存的优化模型。
+
+    **AMD GPU (ROCm7)**:
 
     - **torch.compile**：底层利用 Triton 自动生成优化的计算内核，通过融合操作和减少开销，提供轻微到中等的加速效果。
 
     **NVIDIA GPU**:
 
     - **torch.compile**：底层利用 Triton 自动生成优化的计算内核，通过融合操作和减少开销，提供轻微到中等的加速效果。
-    - **TensorRT**：这是 NVIDIA 的高性能深度学习推理 SDK。它对训练好的模型进行优化以便部署，尤其是在 NVIDIA GPU 上，能提供显著的加速效果和极高的推理效率。  
+    - **TensorRT**：这是 NVIDIA 的高性能深度学习推理 SDK。它对训练好的模型进行优化以便部署，尤其是在 NVIDIA GPU 上，能提供显著的加速效果和极高的推理效率。勾选 **重新编译TensorRT** 可强制重建引擎。
 
     **Apple Silicon (MPS)**:
 
-    - **CoreML**：这是 Apple 的机器学习框架，专为在 Apple 设备上高效运行机器学习模型而设计。通过将模型转换为 CoreML 格式，可以利用 Apple 硬件的优化功能，实现更快的推理速度和更低的能耗。
+    - **CoreML**：这是 Apple 的机器学习框架，专为在 Apple 设备上高效运行机器学习模型而设计。通过将模型转换为 CoreML 格式，可以利用 Apple 硬件的优化功能，实现更快的推理速度和更低的能耗。勾选 **重新编译CoreML** 可强制重新转换模型。
 
     **Intel GPU**:
 
-    - **OpenVINO**：这是 Intel 的深度学习推理优化工具包，旨在提高在 Intel 硬件上的推理性能。通过模型优化和加速，可以显著提高推理速度。
+    - **OpenVINO**：这是 Intel 的深度学习推理优化工具包，旨在提高在 Intel 硬件上的推理性能。通过模型优化和加速，可以显著提高推理速度。勾选 **重新编译OpenVINO** 可强制重建缓存。
 
     **DirectML** (**AMD GPU** 等):
 
@@ -427,6 +516,7 @@
 
 > [!Warning]
 > **解锁线程 (旧网络推流)** 在 Python3.11 下有时会因 `UTF-8 错误` 而失败。您可能需要多次停止和运行以获得成功的网络推流进程。
+> **torch.compile** 目前不兼容 AMD RX6000 系列 GPU。
 
 ## 参考文献
 ```BIBTEX

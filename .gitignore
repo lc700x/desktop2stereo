@@ -23,3 +23,8 @@ Python31*
 rocm*
 python3
 *.whl
+CLAUDE.md
+.claude
+.sline
+scripts/CHANGELOG.md
+.mcp.json

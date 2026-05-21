@@ -1,11 +1,9 @@
 Capture Mode: Monitor
 Monitor Index: none
 Window Title: ''
-FPS: 60
 Show FPS: false
-Output Resolution: 2160
 IPD: 0.064
-Convergence: 0.0
+Convergence: 0.5
 Display Mode: Half-SBS
 Model List:
   Depth-Anything-V2-Small-hf:
@@ -395,13 +393,11 @@ Depth Model: Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
 Anti-aliasing: 2
 Foreground Scale: 0.5
-Depth Resolution: 336
+Depth Resolution: 322
 FP16: true
-Download Path: models
-HF Endpoint: https://hf-mirror.com
 Computing Device: 0
-Language: CN
-Run Mode: Local Viewer
+Language: EN
+Run Mode: OpenXR Link
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
@@ -420,5 +416,5 @@ Stream Key: live
 Stereo Mix: ''
 CRF: 20
 Audio Delay: -0.15
-Specify Display: true
-Stereo Monitor: none
+Stereo Output: null
+Controller Model: PICO
