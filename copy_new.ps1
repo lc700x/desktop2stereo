@@ -23,7 +23,7 @@ $filesToCopy = @(
     "requirements-rocm7-7000.txt", "requirements-rocm7-nightly.txt", "requirements-rocm7-860M.txt", "requirements-rocm7-890M.txt",  "requirements-rocm7-8000S.txt", "requirements-rocm7-9000.txt", "requirements.txt",
     "run.bat","run_main.bat","run_linux.bash","main.bash","run_mac","main","run_windows.bat","main.bat","main_zluda.bat", "run_windows_zluda.bat",
     "settings.yaml","streamer.py","update.bat","update_mac_linux","update_windows.bat", "clean_cache.bat", "main.bash",
-    "utils.py","viewer.py", "xrviewer.py", 'LICNESE'
+    "utils.py","viewer.py", "xrviewer.py", 'LICENSE'
 )
 
 # --- Directories to copy (contents only) ---
