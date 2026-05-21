@@ -16,7 +16,7 @@ profile.svg
 Python3*
 settings.yaml
 datasets
-*.png
+./*.png
 *.jpg
 *.whl
 test*.png

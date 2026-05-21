@@ -175,9 +175,10 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 3. Select target **Monitor/Window**
 4. Just use the default settings and click **Run**.
 
-!run
+![run](./assets/Run.png)  
 
 ### OpenXR Link Mode
+![OpenXR Link](./assets/openxr.png)
 > Tip: **OpenXR Link** mode (Windows/Ubuntu) is best for wireless streaming to OpenXR compatible client devices/apps with video and audio together, like **Virtual Desktop VDXR** **Meta Horizon Link** or **Pico Connect** with OpenXR support.
  1. Connect your OpenXR Device to your PC via Wired/Wireless Connection. For Wireless Connection, recommend using **Virtual Desktop** VDXR Runtime for best experience on Wireless Connection. 
     ![VDXR](assets/vdxr.png)

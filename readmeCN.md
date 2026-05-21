@@ -137,7 +137,7 @@
 ![run](./assets/Run.png)  
 
 ### **OpenXR串流** 模式
-
+![OpenXR Link](./assets/openxr.png)
 > [!Tip]
 > **OpenXR串流** 模式 (Windows/Ubuntu) 最适合将视频和音频一起无线串流到支持 OpenXR 的客户端设备/应用程序，如 **Virtual Desktop VDXR**、**Meta Horizon Link** 或 **Pico Connect**（需支持 OpenXR）。
  1. 通过有线/无线连接将 OpenXR 设备连接到 PC。无线连接推荐使用 **Virtual Desktop** VDXR Runtime 以获得最佳体验。
