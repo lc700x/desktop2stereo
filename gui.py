@@ -913,24 +913,24 @@ class ConfigGUI(tk.Tk):
         # CoreML (for MPS devices)
         self.use_coreml = tk.BooleanVar()
         self.check_coreml = ttk.Checkbutton(self.content_frame, text="CoreML", variable=self.use_coreml)
-        self.check_coreml.grid(row=6, column=2, sticky="ew", **self.pad)
+        self.check_coreml.grid(row=7, column=2, sticky="ew", **self.pad)
         self.use_coreml.trace_add("write", self.update_recompile_coreml_visibility)
 
         # Recompile CoreML
         self.recompile_coreml_var = tk.BooleanVar()
         self.check_recompile_coreml = ttk.Checkbutton(self.content_frame, text="Recompile CoreML", variable=self.recompile_coreml_var)
-        self.check_recompile_coreml.grid(row=6, column=3, sticky="ew", **self.pad)
+        self.check_recompile_coreml.grid(row=7, column=3, sticky="ew", **self.pad)
         
         # OpenVINO (for XPU devices)
         self.use_openvino = tk.BooleanVar()
         self.check_openvino = ttk.Checkbutton(self.content_frame, text="OpenVINO", variable=self.use_openvino)
-        self.check_openvino.grid(row=8, column=1, sticky="ew", **self.pad)
+        self.check_openvino.grid(row=7, column=1, sticky="ew", **self.pad)
         self.use_openvino.trace_add("write", self.update_recompile_openvino_visibility)
 
         # Recompile OpenVINO
         self.recompile_openvino_var = tk.BooleanVar()
         self.check_recompile_openvino = ttk.Checkbutton(self.content_frame, text="Recompile OpenVINO", variable=self.recompile_openvino_var)
-        self.check_recompile_openvino.grid(row=8, column=2, sticky="ew", **self.pad)
+        self.check_recompile_openvino.grid(row=7, column=2, sticky="ew", **self.pad)
         
         # Stereo Output (row 13) - always shown for relevant run modes
         self.stereo_monitor_var = tk.StringVar()
