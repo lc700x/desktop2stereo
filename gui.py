@@ -333,7 +333,7 @@ DEFAULTS = {
     "Model List": DEFAULT_MODEL_LIST,
     "Depth Model": DEFAULT_MODEL_LIST[0],
     "Depth Strength": 2.0,
-    "Depth Resolution": 336,
+    "Depth Resolution": 322,
     "Anti-aliasing": 2,
     "Foreground Scale": 0.5,
     "IPD": 0.064,
@@ -2298,7 +2298,7 @@ class ConfigGUI(tk.Tk):
     def update_depth_resolution_options(self, model_name):
         """Update depth resolution options based on selected model"""
         # Get resolutions for this model
-        resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [336])  # Default to 336 if not found
+        resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [322])  # Default to 322 if not found
         
         # Update combobox values
         self.depth_res_cb["values"] = [str(res) for res in resolutions]
