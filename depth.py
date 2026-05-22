@@ -181,6 +181,29 @@ if IS_NVIDIA:
         USE_TENSORRT = False
 
 if IS_AMD_ROCM:
+    # Set up ROCm7 Path
+    torch_dir = os.path.dirname(torch.__file__)
+    site_packages = os.path.dirname(torch_dir)
+    ROCM_PATH = os.path.join(site_packages, "_rocm_sdk_devel")
+
+    os.environ["HIP_PLATFORM"] = "amd"
+    os.environ["HIP_PATH"] = ROCM_PATH
+    os.environ["HIP_CLANG_PATH"] = os.path.join(ROCM_PATH, "llvm", "bin")
+    os.environ["HIP_INCLUDE_PATH"] = os.path.join(ROCM_PATH, "include")
+    os.environ["HIP_LIB_PATH"] = os.path.join(ROCM_PATH, "lib")
+    os.environ["HIP_DEVICE_LIB_PATH"] = os.path.join(ROCM_PATH, "lib", "llvm", "amdgcn", "bitcode")
+    os.environ["PATH"] = os.pathsep.join([
+        os.path.join(ROCM_PATH, "bin"),
+        os.path.join(ROCM_PATH, "llvm", "bin"),
+        os.environ.get("PATH", "")
+    ])
+    os.environ["CPATH"] = os.path.join(ROCM_PATH, "include") + os.pathsep + os.environ.get("CPATH", "")
+    os.environ["LIBRARY_PATH"] = os.pathsep.join([
+        os.path.join(ROCM_PATH, "lib"),
+        os.path.join(ROCM_PATH, "lib64"),
+        os.environ.get("LIBRARY_PATH", "")
+    ])
+    os.environ["PKG_CONFIG_PATH"] = os.path.join(ROCM_PATH, "lib", "pkgconfig") + os.pathsep + os.environ.get("PKG_CONFIG_PATH", "")
     for gpu_id in DISABLE_CUDNN_KEYWORDS:
         if gpu_id in DEVICE_INFO:
             torch.backends.cudnn.enabled = False  # Disable cuDNN for known problematic AMD RX6000 GPUs
