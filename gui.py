@@ -1656,12 +1656,17 @@ class ConfigGUI(tk.Tk):
             )
 
     def refresh_monitor_and_window(self):
-        """Allow user to get latest monitor/window list"""
+        """Refresh monitor list, window list (if in Window mode), and audio devices (if RTMP)."""
+        # Always refresh monitor list first
+        self.populate_monitors()
+
         if self.capture_mode_key == "Window":
             self.refresh_window_list()
         if self.run_mode_key == "RTMP Streamer":
             self.populate_audio_devices()
             self.auto_select_stereo_mix()
+
+        # Update stereo monitor dropdown (in case monitor count changed or labels changed)
         self.update_stereo_display_visibility()
                 
     def copy_url_to_clipboard(self):
@@ -2051,6 +2056,7 @@ class ConfigGUI(tk.Tk):
     def populate_monitors(self):
         """
         Populate monitor dropdown.
+        If the currently selected monitor no longer exists, fallback to primary monitor.
         """
         self.monitor_label_to_index = {}
 
@@ -2077,6 +2083,7 @@ class ConfigGUI(tk.Tk):
         current_selection = self.monitor_var.get()
         found_current = False
 
+        # Build menu and store labels
         for idx, mon in enumerate(monitors, start=1):
             is_primary = (idx == primary_index)
             label_suffix = PRIMARY_MONITOR_SUFFIX if is_primary else ""
@@ -2089,12 +2096,24 @@ class ConfigGUI(tk.Tk):
             if label == current_selection:
                 found_current = True
 
-        # selection logic
+        # Set the variable
         if found_current:
             self.monitor_var.set(current_selection)
+        else:
+            # Fallback: select primary monitor label
+            primary_label = next(
+                (lbl for lbl, i in self.monitor_label_to_index.items() if i == primary_index),
+                None
+            )
+            if primary_label:
+                self.monitor_var.set(primary_label)
+            elif self.monitor_label_to_index:
+                # Fallback to first monitor
+                self.monitor_var.set(next(iter(self.monitor_label_to_index)))
+            else:
+                self.monitor_var.set("")
 
         return self.monitor_label_to_index
-    
     def read_yaml(self, path):
         try:
             with open(path, "r", encoding="utf-8") as f:
