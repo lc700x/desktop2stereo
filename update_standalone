@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+REPO_OWNER="lc700x"
+REPO_NAME="desktop2stereo"
+BRANCH="update"
+ZIP_FILE="${REPO_NAME}-${BRANCH}.zip"
+DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${BRANCH}.zip"
+
+VIRTUAL_ENV="./python3"
+PYTHON_EXE="./python3/bin/python3"
+
+# -----------------------------
+# Helper functions
+# -----------------------------
+function error_exit() {
+    echo "ERROR: $1"
+    read -p "Press Enter to exit..."
+    exit 1
+}
+
+function check_command() {
+    if ! command -v "$1" &> /dev/null; then
+        error_exit "Command '$1' not found. Please install it first."
+    fi
+}
+
+# -----------------------------
+# Start process
+# -----------------------------
+cd "$(dirname "$0")"
+
+echo "Updating project from GitHub branch '${BRANCH}'..."
+check_command "curl"
+check_command "unzip"
+check_command "$PYTHON_EXE"
+check_command "rsync"
+
+# -----------------------------
+# Download and extract
+# -----------------------------
+echo "Downloading branch '${BRANCH}'..."
+curl -L -o "$ZIP_FILE" "$DOWNLOAD_URL" || error_exit "Failed to download from GitHub."
+
+TEMP_DIR="temp_extract"
+rm -rf "$TEMP_DIR"
+mkdir -p "$TEMP_DIR"
+
+echo "Extracting files..."
+unzip -q "$ZIP_FILE" -d "$TEMP_DIR" || error_exit "Failed to extract ZIP."
+
+SRC_DIR="${TEMP_DIR}/${REPO_NAME}-${BRANCH}"
+if [ ! -d "$SRC_DIR" ]; then
+    error_exit "Extracted folder not found: $SRC_DIR"
+fi
+
+echo "Updating project files..."
+# Allow rsync exit code 24 (files vanished)
+set +e
+rsync -a "$SRC_DIR/" "./"
+RSYNC_EXIT=$?
+set -e
+
+if [[ $RSYNC_EXIT -ne 0 && $RSYNC_EXIT -ne 24 ]]; then
+    error_exit "Failed to copy files (rsync exit code $RSYNC_EXIT)."
+fi
+
+# Cleanup
+rm -rf "$TEMP_DIR" "$ZIP_FILE"
+rm -rf ./rtmp/mediamtx
+rm -rf ./rtmp/ffmpeg
+rm -rf ./*.bat
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  rm -rf ./rtmp/linux
+  chmod a+x ./update_mac_linux
+  chmod a+x ./install-mps
+  chmod a+x ./run_mac
+  chmod a+x ./run_mac_main
+  chmod -R 777 rtmp
+  rm -rf *.bash
+else
+  rm -rf ./rtmp/mac
+  rm -rf install-mps
+  rm -rf run_mac
+fi
+
+
+# -----------------------------
+# Python environment setup
+# -----------------------------
+echo "Updating virtual environment..."
+source "${VIRTUAL_ENV}/bin/activate" || error_exit "Failed to activate virtual environment."
+"$PYTHON_EXE" -m pip install --upgrade pip --no-cache-dir || error_exit "Failed to update pip."
+
+# -----------------------------
+# Install dependencies
+# -----------------------------
+if [ -f "requirements.txt" ]; then
+    echo "Installing dependencies..."
+    "$PYTHON_EXE" -m pip uninstall pyaudio -y || echo "pyaudio not installed, skipping uninstall."
+    "$PYTHON_EXE" -m pip install -r requirements.txt --no-cache-dir --trusted-host mirrors.aliyun.com \
+        || error_exit "Failed to install requirements."
+else
+    echo "No requirements.txt found. Skipping dependency installation."
+fi
+
+# -----------------------------
+# Done
+# -----------------------------
+echo
+echo "Update and environment setup completed successfully."
+
+echo "Branch '${BRANCH}' successfully updated."
+
+read -p "Press Enter to exit..."
+exit 0
