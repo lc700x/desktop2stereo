@@ -14,7 +14,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-@REM --no-cache-dir --no-warn-script-location --no-warn-script-location requirements
+@REM --no-cache-dir --no-warn-script-location requirements
 echo.
 echo - Installing the requirements
 %PYTHON_EXE% -m pip install -r requirements-dml.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/

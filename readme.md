@@ -1,4 +1,6 @@
 # Desktop2Stereo: a 2D Desktop to 3D Stereo App
+![version](https://img.shields.io/github/v/release/lc700x/desktop2stereo)  ![license](https://img.shields.io/badge/license-MIT-green) [![Buckets](https://img.shields.io/badge/Hugging%20Face-Buckets-blue?logo=huggingface)](https://huggingface.co/buckets/lc700x/desktop2stereo_release/) [![Buckets](https://img.shields.io/badge/HF%20Mirror-Buckets-purple?logo=huggingface)](https://hf-mirror.com/buckets/lc700x/desktop2stereo_release/)  
+  
 [中文版本](./readmeCN.md)
 
 ![Desktop2Stereo](./assets/Banner.png)
@@ -175,7 +177,7 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 3. Select target **Monitor/Window**
 4. Just use the default settings and click **Run**.
 
-![Run](./assets/Run.png)
+![run](./assets/Run.png)  
 
 ### OpenXR Link Mode
 ![OpenXR Link](./assets/openxr.png)

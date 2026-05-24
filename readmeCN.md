@@ -1,4 +1,7 @@
 # Desktop2Stereo：一款将2D桌面转换为3D立体的应用程序
+![version](https://img.shields.io/github/v/release/lc700x/desktop2stereo)  ![license](https://img.shields.io/badge/license-MIT-green) [![Buckets](https://img.shields.io/badge/Hugging%20Face-Buckets-blue?logo=huggingface)](https://huggingface.co/buckets/lc700x/desktop2stereo_release/) [![Buckets](https://img.shields.io/badge/HF%20Mirror-Buckets-purple?logo=huggingface)](https://hf-mirror.com/buckets/lc700x/desktop2stereo_release/)   
+
+
 [English Version](./readme.md)  
 
 ![Desktop2Stereo](./assets/Banner.png)   
