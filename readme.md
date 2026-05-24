@@ -13,6 +13,8 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
     Access code: `1vcn`  
 - [Baidu Netdisk](https://pan.baidu.com/s/1JfMpcrdplPTQSNB6rExh6A?pwd=mr64 )  
     Access code: `mr64`  
+- [HuggingFace Buckets](https://huggingface.co/buckets/lc700x/desktop2stereo_release/)  
+- [HF Mirror Buckets](https://hf-mirror.com/buckets/lc700x/desktop2stereo_release/)  
 
 ## Video Tutorials
 

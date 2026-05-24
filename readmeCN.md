@@ -12,7 +12,8 @@
 - [夸克网盘](https://pan.quark.cn/s/9d2bcf039b96)  
     提取码：`1vcn`  
 - [百度网盘](https://pan.baidu.com/s/1JfMpcrdplPTQSNB6rExh6A?pwd=mr64 )  
-    提取码: `mr64`  
+    提取码: `mr64`   
+- [HF仓库](https://hf-mirror.com/buckets/lc700x/desktop2stereo_release/)  
 
 ## 视频教程
 
