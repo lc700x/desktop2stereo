@@ -307,7 +307,7 @@ VERTEX_SHADER = """
 FRAGMENT_SHADER = """
     #version 330
     // Optimized stereoscopic inpainting with push-pull method
-
+    
     in vec2 uv;
     out vec4 frag_color;
 
@@ -320,9 +320,9 @@ FRAGMENT_SHADER = """
     uniform int u_fxaa_enabled;    // 1 = apply FXAA, 0 = off
 
     // Optimized inpainting controls
-    uniform float u_search_radius = 12.0;
-    uniform float u_depth_tolerance = 0.012;
-    uniform float u_blur_radius = 2.5;
+    uniform float u_search_radius = 12.0;  // horizontal search distance
+    uniform float u_depth_tolerance = 0.012; // background detection threshold
+    uniform float u_blur_radius = 2.5;     // final smoothing
     // Edge feathering controls
     uniform int u_feather_enabled;
     uniform float u_feather_width;
@@ -332,60 +332,84 @@ FRAGMENT_SHADER = """
 
     // FAST DISOCCLUSION DETECTION
     bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
+        // Bounds check
         if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
             shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
             return true;
 
+        // Fast depth discontinuity check (3-tap only)
         vec2 grad_dir = vec2(sign(u_eye_offset), 0.0);
         float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
         float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
-
+        
+        // Depth jump threshold (tuned for sharp edges)
         if (abs(d_left - d_right) > 0.08)
             return true;
 
         return false;
     }
 
+    // Uses directional search to find background pixels efficiently
     vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
         vec4 best_color = vec4(0.0);
         float best_weight = 0.0;
         int search_range = int(u_search_radius);
+        
+        // Directional search: prioritize searching opposite to eye shift
+        // (background pixels are more likely in that direction)
         int search_dir = u_eye_offset > 0.0 ? -1 : 1;
-
+        
+        // Phase 1: Directional sweep (most samples here)
         for (int i = 1; i <= search_range; i++) {
             vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x, 0.0);
+            
             if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
+            
             float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+            
+            // Only accept background pixels (farther than current)
             if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
                 vec4 sample_color = texture(tex_color, sample_uv);
+                
+                // Weight by: distance + depth similarity to other background
                 float dist_weight = exp(-float(i) * 0.15);
                 float depth_weight = 1.0 + (sample_depth_inv - center_depth_inv) * 10.0;
                 float w = dist_weight * depth_weight;
+                
                 best_color += sample_color * w;
                 best_weight += w;
+                
+                // Early exit if we found strong background
                 if (best_weight > 5.0) break;
             }
         }
-
+        
+        // Phase 2: Opposite direction (fewer samples)
         if (best_weight < 2.0) {
             int opposite_range = search_range / 2;
             for (int i = 1; i <= opposite_range; i++) {
                 vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x, 0.0);
+                
                 if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
+                
                 float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+                
                 if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
                     vec4 sample_color = texture(tex_color, sample_uv);
                     float w = exp(-float(i) * 0.2);
+                    
                     best_color += sample_color * w;
                     best_weight += w;
                 }
             }
         }
-
+        
+        // Phase 3: Small vertical blur for smoothness (3 taps)
         if (best_weight > 0.01) {
             vec4 blurred = best_color / best_weight;
             vec4 vert_accum = blurred * 0.5;
             float vert_weight = 0.5;
+            
             for (int dy = -1; dy <= 1; dy += 2) {
                 vec2 vert_uv = uv_coord + vec2(0.0, dy * pixel_size.y * u_blur_radius);
                 if (vert_uv.y >= 0.0 && vert_uv.y <= 1.0) {
@@ -397,9 +421,11 @@ FRAGMENT_SHADER = """
                     }
                 }
             }
+            
             return vert_accum / vert_weight;
         }
-
+        
+        // Fallback: return original pixel if no background found
         return texture(tex_color, uv_coord);
     }
 
@@ -437,17 +463,54 @@ FRAGMENT_SHADER = """
         return mix(c, avg, blend * 0.5);
     }
 
+    // ALTERNATIVE: FAST SEPARABLE BLUR (Uncomment to use instead)
+    /*
+    vec4 separable_inpaint(vec2 uv_coord, float center_depth_inv) {
+        vec4 accum = vec4(0.0);
+        float total_w = 0.0;
+        int R = 4;
+        
+        // Horizontal pass only (vertical would be a second shader pass)
+        for (int x = -R; x <= R; ++x) {
+            vec2 sample_uv = uv_coord + vec2(x * pixel_size.x, 0.0);
+            
+            if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
+            
+            float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+            
+            // Background filter
+            float depth_ok = step(center_depth_inv + 0.015, sample_depth_inv);
+            float w = exp(-float(x*x) * 0.25) * (1.0 + depth_ok * 10.0);
+            
+            accum += texture(tex_color, sample_uv) * w;
+            total_w += w;
+        }
+        
+        return total_w > 0.01 ? accum / total_w : texture(tex_color, uv_coord);
+    }
+    */
+
+    // MAIN
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
+
+        // Sample depth
         float depth = texture(tex_depth, flipped_uv).r;
         float depth_inv = -depth;
+
+        // Calculate parallax shift
         float shift = (depth_inv + u_convergence);
         vec2 shifted_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength, 0.0);
 
         vec4 color;
+        
+        // Check if this pixel needs inpainting
         if (is_disoccluded(flipped_uv, shifted_uv, depth)) {
+            // Disoccluded region → use optimized inpainting
             color = push_pull_inpaint(flipped_uv, depth_inv);
+            // Alternative: color = separable_inpaint(flipped_uv, depth_inv);
         } else {
+            // Normal sampling
             color = texture(tex_color, shifted_uv);
         }
 
@@ -459,7 +522,8 @@ FRAGMENT_SHADER = """
             color.rgb = fxaa_blend(tex_color, shifted_uv, px);
         }
 
-        vec2 border = smoothstep(0.0, 0.015, shifted_uv) *
+        // Subtle edge fade to hide artifacts
+        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * 
                       smoothstep(1.0, 0.985, shifted_uv);
         color.a = min(border.x, border.y);
         frag_color = color;
@@ -1346,7 +1410,15 @@ class StereoWindow:
 
         # Recreate textures and PBOs if size changed
         if self._texture_size != (w, h):
-            self._create_or_resize_textures(w, h)
+            if self.color_tex:
+                self.color_tex.release()
+            if self.depth_tex:
+                self.depth_tex.release()
+            self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
+            self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
+            self.prog['tex_color'].value = 0
+            self.prog['tex_depth'].value = 1
+            self._texture_size = (w, h)
 
             # Reinit CUDA PBOs if needed (may disable CUDA on failure)
             if self.use_cuda:
@@ -1477,28 +1549,6 @@ class StereoWindow:
 
         # Note: the very first call will return None (no previous frame ready)
         return image
-    
-    def _create_or_resize_textures(self, w, h):
-        """Create/recreate textures and force nearest-neighbor sampling."""
-        if self.color_tex:
-            self.color_tex.release()
-        if self.depth_tex:
-            self.depth_tex.release()
-
-        # RGB texture
-        self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
-        self.color_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
-        self.color_tex.swizzle = "RGB"
-
-        # Depth texture
-        self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
-        self.depth_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
-
-        # Bind samplers
-        self.prog['tex_color'].value = 0
-        self.prog['tex_depth'].value = 1
-
-        self._texture_size = (w, h)
 
     def render(self):
         """Ultra-optimized rendering with minimal GL calls"""
@@ -1633,6 +1683,7 @@ class StereoWindow:
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = right_vp
+                    self._last_eye_offset_set = self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "TAB":
@@ -1665,8 +1716,39 @@ class StereoWindow:
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = bottom_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+        
+        else:
+            # Determine effective stereo frame size by display mode
+            if self.display_mode == "Full-SBS":
+                disp_w, disp_h = 2 * tex_w, tex_h
+            elif self.display_mode == "Half-SBS":
+                disp_w, disp_h = tex_w, tex_h
+            elif self.display_mode == "TAB":
+                disp_w, disp_h = tex_w, tex_h
+            elif self.display_mode == "Depth Map":
+                disp_w, disp_h = tex_w, tex_h
+            else:
+                disp_w, disp_h = 2 * tex_w, tex_h  # default full SBS
 
-        else:  # fill_16_9 is False
+            target_aspect = disp_h / disp_w
+            try:
+                window_aspect = win_h / win_w
+            except ZeroDivisionError:
+                window_aspect = 9/16
+
+            # Scale to fit window, preserving aspect ratio
+            if window_aspect <= target_aspect:
+                # Window is wider than content
+                view_h = win_h
+                view_w = int(view_h / target_aspect)
+            else:
+                # Window is taller than content
+                view_w = win_w
+                view_h = int(view_w * target_aspect)
+
+            offset_x = (win_w - view_w) // 2
+            offset_y = (win_h - view_h) // 2
+
             if self.display_mode in ["Full-SBS", "Half-SBS", "TAB"]:
                 self.color_tex.use(0)
                 self.depth_tex.use(1)
