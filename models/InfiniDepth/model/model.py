@@ -132,13 +132,16 @@ class InfiniDepth(nn.Module):
         patch_h, patch_w = h // self.patch_size, w // self.patch_size
 
         x_basic = 2.0 * x - 1.0
-        basic_feat = self.basic_encoder(x_basic)
+        basic_feat = self.basic_encoder(x_basic)  # fp32: InstanceNorm runs safely in fp32
 
         # ImplicitHead contains only Linear + ReLU/ELU + grid_sample — no
         # normalization — so bf16 is safe and uses tensor cores.
+        # Cast basic_feat to match dtype *before* the autocast block so that
+        # F.grid_sample sees uniform input dtypes inside the autocast context.
+        # (ROCm autocast::prioritize crashes on mixed fp32/bf16 grid_sample inputs.)
         if use_ac:
             with torch.autocast(act, enabled=True, dtype=dtype):
-                depth = self.depth_implicit_head(features, basic_feat, patch_h, patch_w, coords)
+                depth = self.depth_implicit_head(features, basic_feat.to(dtype=dtype), patch_h, patch_w, coords)
         else:
             depth = self.depth_implicit_head(features, basic_feat, patch_h, patch_w, coords)
 
