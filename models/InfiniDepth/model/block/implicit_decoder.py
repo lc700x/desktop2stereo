@@ -105,8 +105,7 @@ class ImplicitHead(nn.Module):
         Returns:
             pred: Predicted depth [B, N, 1]
         """
-        coord_ = coord.clone()
-        coord_.clamp_(-1 + 1e-6, 1 - 1e-6)
+        coord_ = coord.clamp(-1 + 1e-6, 1 - 1e-6)
 
         # Sample DINOv3 features at query coordinates
         q_feat_dino = F.grid_sample(

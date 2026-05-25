@@ -35,6 +35,7 @@ Model List:
     - 518
   Infinity-Depth-Large:
     resolutions:
+    - 160
     - 192
     - 240
     - 304

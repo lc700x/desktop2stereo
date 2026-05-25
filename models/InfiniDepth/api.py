@@ -40,6 +40,9 @@ class InfiniDepthModel(nn.Module):
         super().__init__()
         self.model = InfiniDepth(model_path=model_path, encoder=encoder)
 
+    # Keyed by (B, H, W, device_str) — same key → reuse coord tensor.
+    _coord_cache: dict = {}
+
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Dense depth prediction.
 
@@ -62,7 +65,10 @@ class InfiniDepthModel(nn.Module):
         # inference, then restore the caller's dtype on output.
         x = pixel_values.float()
 
-        query = _make_dense_query_coord(B, H, W, device)
+        cache_key = (B, H, W, str(device))
+        if cache_key not in InfiniDepthModel._coord_cache:
+            InfiniDepthModel._coord_cache[cache_key] = _make_dense_query_coord(B, H, W, device)
+        query = InfiniDepthModel._coord_cache[cache_key]
 
         with torch.no_grad():
             # Use non-batched forward: processes all query points in a single
