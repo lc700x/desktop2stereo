@@ -33,6 +33,18 @@ Model List:
     - 392
     - 448
     - 518
+  Infinity-Depth-Large:
+    resolutions:
+    - 192
+    - 240
+    - 304
+    - 336
+    - 384
+    - 448
+    - 512
+    - 640
+    - 704
+    - 896
   Video-Depth-Anything-Small:
     resolutions:
     - 196

@@ -32,7 +32,8 @@ STEREO_MIX_NAMES = [
 DISABLE_TRT_KEYWORDS = [
     "dpt-hybrid-midas-hf",
     "depthpro",
-    "da3-giant"
+    "da3-giant",
+    # "ritianyu/InfiniDepth",
 ]
 
 ZOEDEPTH_FIX_KEYWORDS = [
@@ -45,9 +46,12 @@ TRT_FIX_KEYWORDS = [
     # DA3 models
     "depth-anything/DA3-SMALL",
     "depth-anything/DA3-BASE",
+    "depth-anything/DA3-LARGE",
+    "depth-anything/DA3-GIANT",
     "depth-anything/DA3-LARGE-1.1",
     "depth-anything/DA3-GIANT-1.1",
     "depth-anything/DA3METRIC-LARGE",
+    "depth-anything/DA3NESTED-GIANT-LARGE",
     "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
     "depth-anything/DA3MONO-LARGE",
     # Video-Depth-Anything
@@ -58,6 +62,8 @@ TRT_FIX_KEYWORDS = [
     "depth-anything/Metric-Video-Depth-Anything-Small",
     "depth-anything/Metric-Video-Depth-Anything-Base",
     "depth-anything/Metric-Video-Depth-Anything-Large",
+    # InfiniDepth models
+    "ritianyu/InfiniDepth"
 ]
 
 COMPILE_FIX_KEYWORDS = [
@@ -482,6 +488,9 @@ MODEL_MAPPING = {
     "Depth-Anything-V2-Small-hf": "depth-anything/Depth-Anything-V2-Small-hf",
     "Depth-Anything-V2-Base-hf": "depth-anything/Depth-Anything-V2-Base-hf",
     "Depth-Anything-V2-Large-hf": "depth-anything/Depth-Anything-V2-Large-hf",
+
+    # InfiniDepth
+    "Infinity-Depth-Large": "ritianyu/InfiniDepth",
     
     # Video-Depth-Anything
     "Video-Depth-Anything-Small": "depth-anything/Video-Depth-Anything-Small",
@@ -491,9 +500,12 @@ MODEL_MAPPING = {
     # DA3
     "DA3-SMALL": "depth-anything/DA3-SMALL",
     "DA3-BASE": "depth-anything/DA3-BASE",
+    "DA3-LARGE": "depth-anything/DA3-LARGE",
+    "DA3-GIANT": "depth-anything/DA3-GIANT",
     "DA3-LARGE-1.1": "depth-anything/DA3-LARGE-1.1",
     "DA3-GIANT-1.1": "depth-anything/DA3-GIANT-1.1",
     "DA3METRIC-LARGE": "depth-anything/DA3METRIC-LARGE",
+    "DA3NESTED-GIANT-LARGE": "depth-anything/DA3NESTED-GIANT-LARGE",
     "DA3NESTED-GIANT-LARGE-1.1": "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
     "DA3MONO-LARGE": "depth-anything/DA3MONO-LARGE",
     

@@ -24,3 +24,7 @@ omegaconf==2.3.0
 addict==2.4.0
 evo==1.34.2
 e3nn==0.5.9
+
+# for infinidepth
+onnxruntime==1.26.0
+scikit-learn==1.8.0

@@ -466,6 +466,22 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
     model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True), strict=True)
     return model.to(DEVICE)
 
+# Load InfiniDepth Model
+def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
+    """ Load InfiniDepth model from HuggingFace hub. """
+    from huggingface_hub import hf_hub_download
+    # Load depth model without network warning when local cache exists
+    try:
+        model_path = hf_hub_download(repo_id=model_id, filename="infinidepth.ckpt", cache_dir=CACHE_PATH, local_files_only=True)
+    except:
+        model_path = hf_hub_download(repo_id=model_id, filename="infinidepth.ckpt", cache_dir=CACHE_PATH)
+
+    from models.InfiniDepth.api import InfiniDepthModel
+    model = InfiniDepthModel(model_path=model_path)
+    # Keep model in float32 — internal autocast in the backbone handles
+    # mixed precision. Converting to float16 breaks the ImplicitHead MLP.
+    return model.to(DEVICE)
+
 # Load Depth-Anything-V3 Model
 def get_da3_model(model_id=MODEL_ID, dtype=DTYPE):
     from models.depth_anything_3.api_n import DepthAnything3
@@ -505,13 +521,18 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
 
         config = builder.create_builder_config()
 
-        # FP4, FP8, FP16 ENABLED
-        if not is_legacy_nvidia:
-            config.set_flag(trt.BuilderFlag.FP4)
-            config.set_flag(trt.BuilderFlag.FP8)
-        config.set_flag(trt.BuilderFlag.FP16)
-        config.set_flag(trt.BuilderFlag.TF32)
-
+        if "infinidepth" in MODEL_ID.lower():
+            # Transformer-based model: use TF32 only. Enabling FP16/FP8 with
+            # PREFER_PRECISION_CONSTRAINTS causes attention layers to underflow
+            # and produce all-zero depth maps.
+            config.set_flag(trt.BuilderFlag.TF32)
+        else:
+            # FP4, FP8, FP16 ENABLED
+            if not is_legacy_nvidia:
+                config.set_flag(trt.BuilderFlag.FP4)
+                config.set_flag(trt.BuilderFlag.FP8)
+            config.set_flag(trt.BuilderFlag.FP16)
+            config.set_flag(trt.BuilderFlag.TF32)
         # Optional but recommended
         config.set_flag(trt.BuilderFlag.PREFER_PRECISION_CONSTRAINTS)
         config.set_flag(trt.BuilderFlag.SPARSE_WEIGHTS)
@@ -852,32 +873,29 @@ class TensorRTEngine:
             raise ImportError("TensorRT not available")
 
     def __call__(self, tensor):
-        """Execute inference with TensorRT using native API.""" 
-        # Set input binding dimensions
-        input_shape = tuple(tensor.shape)
-        name = self.engine.get_tensor_name(0)
-        self.context.set_input_shape(name, input_shape)
-        
-        # Prepare output tensors
-        outputs = {}
-        bindings = [None] * self.engine.num_io_tensors
+        """Execute inference with TensorRT using the TRT 10 native API."""
+        # Input must be contiguous on the correct device
+        tensor = tensor.contiguous().to(device=self.device, dtype=self.dtype)
 
-        # Set input binding
-        bindings[0] = tensor.data_ptr()
-        
-        # Allocate output tensors
-        for i, binding in enumerate(self.output_binding_indices, 1):
+        # Set input shape and address
+        input_name = self.engine.get_tensor_name(0)
+        self.context.set_input_shape(input_name, tuple(tensor.shape))
+        self.context.set_tensor_address(input_name, tensor.data_ptr())
+
+        # Allocate output tensors and set their addresses
+        outputs = {}
+        for binding in self.output_binding_indices:
             name = self.engine.get_tensor_name(binding)
             dims = self.context.get_tensor_shape(name)
-            shape_tuple = tuple(dims)  # Convert Dims to tuple
-            output = torch.empty(shape_tuple, device=self.device, dtype=self.dtype)
-            outputs[name] = output
-            bindings[binding] = output.data_ptr()
-        
-        # Execute inference
-        self.context.execute_v2(bindings=bindings)
-        
-        # Return the main output (predicted_depth)
+            out = torch.empty(tuple(dims), device=self.device, dtype=self.dtype)
+            outputs[name] = out
+            self.context.set_tensor_address(name, out.data_ptr())
+
+        # Execute on the current CUDA stream and wait for completion
+        stream = torch.cuda.current_stream(self.device)
+        self.context.execute_async_v3(stream_handle=stream.cuda_stream)
+        stream.synchronize()
+
         return outputs['predicted_depth']
 
 # Model Wrapper Class
@@ -960,6 +978,8 @@ class DepthModelWrapper:
             model = get_video_depth_anything_model(MODEL_ID)
         elif 'da3' in MODEL_ID.lower():
             model = get_da3_model(MODEL_ID, dtype=self.dtype)
+        elif 'infinidepth' in MODEL_ID.lower():
+            model = get_infinidepth_model(MODEL_ID, dtype=self.dtype)
         else:
             try:
                 # Load depth model without network warning when local cache exists
@@ -981,7 +1001,7 @@ class DepthModelWrapper:
             except Exception as e:
                 print(f"[Error]: Failed to load model, please check your local model file and network connection. Details: {e}")
         
-        if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() and "video-depth-anything" not in MODEL_ID.lower()):
+        if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() and "video-depth-anything" not in MODEL_ID.lower() and "infinidepth" not in MODEL_ID.lower()):
             model.half()
             
         # Special setup precision for DA3
@@ -1048,7 +1068,7 @@ class DepthModelWrapper:
                 if self.backend == "PyTorch":
                     if "video-depth-anything" in MODEL_ID.lower():
                         return self.model(pixel_values=tensor, fp32=not FP16)
-                    elif "da3" in MODEL_ID.lower():
+                    elif "da3" in MODEL_ID.lower() or "infinidepth" in MODEL_ID.lower():
                         return self.model.predict_depth(tensor, fp32=not FP16)
                     else:
                         return self.model(pixel_values=tensor).predicted_depth
@@ -1139,11 +1159,11 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
     else:
         # Convert NumPy -> Torch tensor and move to device early
         h, w = image_rgb.shape[:2]
-        rgb_tensor = torch.from_numpy(image_rgb).to(device=DEVICE, non_blocking=True).permute(2, 0, 1).contiguous()
-    
+        rgb_tensor = torch.from_numpy(image_rgb).to(device=DEVICE, non_blocking=True).permute(2, 0, 1).contiguous()  # [C, H, W]
+
 
     tensor = rgb_tensor.unsqueeze(0)  # [1, C, H, W]
-    
+
     # Resize to fixed square size on GPU
     if (h, w) != (target_size, target_size):
         tensor = F.interpolate(
@@ -1154,7 +1174,9 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
         ) / 255.0
 
     # Normalize using ImageNet stats (or custom) — on GPU
-    tensor = (tensor - MEAN) / STD
+    # InfiniDepth applies its own normalization internally.
+    if "infinidepth" not in MODEL_ID.lower():
+        tensor = (tensor - MEAN) / STD
     tensor = tensor.contiguous()
 
     # Model inference with appropriate autocast context
