@@ -318,6 +318,7 @@ FRAGMENT_SHADER = """
     uniform float u_depth_strength;// parallax intensity
     uniform float u_convergence;   // depth value at screen plane (0–1)
     uniform int u_fxaa_enabled;    // 1 = apply FXAA, 0 = off
+    uniform float u_roll;          // screen roll (radians), rotates parallax direction
 
     // Optimized inpainting controls
     uniform float u_search_radius = 12.0;  // horizontal search distance
@@ -328,76 +329,61 @@ FRAGMENT_SHADER = """
     uniform float u_feather_width;
     uniform vec4 u_viewport;
 
+    // Rounded corners
+    uniform float u_corner_radius = 0.0;
+
     vec2 pixel_size = 1.0 / u_resolution;
 
     // FAST DISOCCLUSION DETECTION
     bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
-        // Bounds check
         if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
             shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
             return true;
 
-        // Fast depth discontinuity check (3-tap only)
-        vec2 grad_dir = vec2(sign(u_eye_offset), 0.0);
+        vec2 grad_dir = vec2(cos(u_roll), sin(u_roll)) * sign(u_eye_offset);
         float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
         float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
-        
-        // Depth jump threshold (tuned for sharp edges)
+
         if (abs(d_left - d_right) > 0.08)
             return true;
 
         return false;
     }
 
-    // Uses directional search to find background pixels efficiently
     vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
         vec4 best_color = vec4(0.0);
         float best_weight = 0.0;
         int search_range = int(u_search_radius);
-        
-        // Directional search: prioritize searching opposite to eye shift
-        // (background pixels are more likely in that direction)
         int search_dir = u_eye_offset > 0.0 ? -1 : 1;
-        
-        // Phase 1: Directional sweep (most samples here)
+
         for (int i = 1; i <= search_range; i++) {
-            vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x, 0.0);
-            
-            if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
-            
+            float c = cos(u_roll);
+            float s = sin(u_roll);
+            vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+            if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
             float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
-            
-            // Only accept background pixels (farther than current)
             if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
                 vec4 sample_color = texture(tex_color, sample_uv);
-                
-                // Weight by: distance + depth similarity to other background
                 float dist_weight = exp(-float(i) * 0.15);
                 float depth_weight = 1.0 + (sample_depth_inv - center_depth_inv) * 10.0;
                 float w = dist_weight * depth_weight;
-                
                 best_color += sample_color * w;
                 best_weight += w;
-                
-                // Early exit if we found strong background
                 if (best_weight > 5.0) break;
             }
         }
-        
-        // Phase 2: Opposite direction (fewer samples)
+
         if (best_weight < 2.0) {
             int opposite_range = search_range / 2;
             for (int i = 1; i <= opposite_range; i++) {
-                vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x, 0.0);
-                
-                if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
-                
+                float c = cos(u_roll);
+                float s = sin(u_roll);
+                vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+                if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
                 float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
-                
                 if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
                     vec4 sample_color = texture(tex_color, sample_uv);
                     float w = exp(-float(i) * 0.2);
-                    
                     best_color += sample_color * w;
                     best_weight += w;
                 }
@@ -463,34 +449,6 @@ FRAGMENT_SHADER = """
         return mix(c, avg, blend * 0.5);
     }
 
-    // ALTERNATIVE: FAST SEPARABLE BLUR (Uncomment to use instead)
-    /*
-    vec4 separable_inpaint(vec2 uv_coord, float center_depth_inv) {
-        vec4 accum = vec4(0.0);
-        float total_w = 0.0;
-        int R = 4;
-        
-        // Horizontal pass only (vertical would be a second shader pass)
-        for (int x = -R; x <= R; ++x) {
-            vec2 sample_uv = uv_coord + vec2(x * pixel_size.x, 0.0);
-            
-            if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
-            
-            float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
-            
-            // Background filter
-            float depth_ok = step(center_depth_inv + 0.015, sample_depth_inv);
-            float w = exp(-float(x*x) * 0.25) * (1.0 + depth_ok * 10.0);
-            
-            accum += texture(tex_color, sample_uv) * w;
-            total_w += w;
-        }
-        
-        return total_w > 0.01 ? accum / total_w : texture(tex_color, uv_coord);
-    }
-    */
-
-    // MAIN
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
 
@@ -500,7 +458,10 @@ FRAGMENT_SHADER = """
 
         // Calculate parallax shift
         float shift = (depth_inv + u_convergence);
-        vec2 shifted_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength, 0.0);
+        float c = cos(u_roll);
+        float s = sin(u_roll);
+        vec2 shifted_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength * c,
+                                            u_eye_offset * shift * u_depth_strength * s);
 
         vec4 color;
         
@@ -510,7 +471,6 @@ FRAGMENT_SHADER = """
             color = push_pull_inpaint(flipped_uv, depth_inv);
             // Alternative: color = separable_inpaint(flipped_uv, depth_inv);
         } else {
-            // Normal sampling
             color = texture(tex_color, shifted_uv);
         }
 
@@ -522,9 +482,7 @@ FRAGMENT_SHADER = """
             color.rgb = fxaa_blend(tex_color, shifted_uv, px);
         }
 
-        // Subtle edge fade to hide artifacts
-        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * 
-                      smoothstep(1.0, 0.985, shifted_uv);
+        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * smoothstep(1.0, 0.985, shifted_uv);
         color.a = min(border.x, border.y);
         frag_color = color;
 
@@ -557,6 +515,19 @@ FRAGMENT_SHADER = """
 
             color.rgb *= falloff;
         }
+
+        // Rounded corners via 2D SDF (screen-space uv, not shifted_uv)
+        // Inigo Quilez rounded-box SDF
+        float corner_r = u_corner_radius;
+        vec2 d = abs(uv - 0.5) - 0.5 + corner_r;
+        float corner_sdf = length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - corner_r;
+
+        // Mask out rounded corners
+        float corner_alpha = 1.0 - smoothstep(0.0, 0.01, corner_sdf);
+        color.a = min(color.a, corner_alpha);
+
+        // Glow outside the screen edge only (sdf > 0 = outside the rounded rect) — MOVED to dedicated glow quad in XR view
+
         frag_color = color;
     }
 """

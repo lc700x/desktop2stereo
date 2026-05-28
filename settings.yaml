@@ -1,10 +1,7 @@
 Capture Mode: Monitor
-Monitor Index: none
+Monitor Index: 1
 Window Title: ''
 Show FPS: false
-IPD: 0.064
-Convergence: 0.5
-Display Mode: Half-SBS
 Model List:
   Depth-Anything-V2-Small-hf:
     resolutions:
@@ -404,30 +401,33 @@ Model List:
     - 1536
 Depth Model: Depth-Anything-V2-Small-hf
 Depth Strength: 2.0
+Depth Resolution: 336
 Anti-aliasing: 2
 Foreground Scale: 0.5
-Depth Resolution: 336
+IPD: 0.064
+Convergence: 0.5
+Display Mode: Half-SBS
 FP16: true
+torch.compile: true
+TensorRT: true
+Recompile TensorRT: false
+CoreML: false
+Recompile CoreML: false
+Recompile OpenVINO: false
 Computing Device: 0
 Language: EN
 Run Mode: OpenXR Link
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
-torch.compile: false
-TensorRT: false
-Recompile TensorRT: false
-CoreML: false
-Recompile CoreML: false
-OpenVINO: false
-Recompile OpenVINO: false
-Capture Tool: none
-Fill 16:9: true
-Fix Viewer Aspect: false
-Lossless Scaling Support: false
 Stream Key: live
-Stereo Mix: ''
+Stereo Mix: null
 CRF: 20
 Audio Delay: -0.15
-Stereo Output: null
 Controller Model: PICO
+Lossless Scaling Support: false
+Capture Tool: WindowsCaptureCUDA
+Fill 16:9: true
+Fix Viewer Aspect: false
+Stereo Output: 2
+OpenVINO: false
