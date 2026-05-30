@@ -19,7 +19,7 @@ from einops import rearrange, repeat
 from plyfile import PlyData, PlyElement
 from torch import Tensor
 
-from models.depth_anything_3.specs import Gaussians
+from depth_anything_3.specs import Gaussians
 
 
 def construct_list_of_attributes(num_rest: int) -> list[str]:

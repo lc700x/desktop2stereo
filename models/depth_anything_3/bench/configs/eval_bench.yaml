@@ -1,9 +1,9 @@
 # DepthAnything3 Benchmark Evaluation Configuration
 # 
 # This config can be loaded and overridden via command line.
-# Example: python -m models.depth_anything_3.bench.evaluator --model /path/to/model --work_dir /path/to/workspace
+# Example: python -m depth_anything_3.bench.evaluator --model /path/to/model --work_dir /path/to/workspace
 #
-# See models.depth_anything_3.cfg for config utility functions.
+# See depth_anything_3.cfg for config utility functions.
 
 # ==============================================================================
 # Model Configuration

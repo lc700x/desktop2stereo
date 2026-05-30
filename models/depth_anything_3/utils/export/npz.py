@@ -15,8 +15,8 @@
 import os
 import numpy as np
 
-from models.depth_anything_3.specs import Prediction
-from models.depth_anything_3.utils.parallel_utils import async_call
+from depth_anything_3.specs import Prediction
+from depth_anything_3.utils.parallel_utils import async_call
 
 
 @async_call

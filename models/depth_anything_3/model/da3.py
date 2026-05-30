@@ -19,9 +19,9 @@ import torch.nn as nn
 from addict import Dict
 from omegaconf import DictConfig, OmegaConf
 
-from models.depth_anything_3.cfg import create_object
-from models.depth_anything_3.model.utils.transform import pose_encoding_to_extri_intri
-from models.depth_anything_3.utils.alignment import (
+from depth_anything_3.cfg import create_object
+from depth_anything_3.model.utils.transform import pose_encoding_to_extri_intri
+from depth_anything_3.utils.alignment import (
     apply_metric_scaling,
     compute_alignment_mask,
     compute_sky_mask,
@@ -133,7 +133,7 @@ class DepthAnything3Net(nn.Module):
         """
         # Extract features using backbone
         if extrinsics is not None:
-            with maybe_autocast(x.device, enabled=True):
+            with maybe_autocast(x.device, enabled=False):
                 cam_token = self.cam_enc(extrinsics, intrinsics, x.shape[-2:])
         else:
             cam_token = None
@@ -145,7 +145,7 @@ class DepthAnything3Net(nn.Module):
         H, W = x.shape[-2], x.shape[-1]
 
         # Process features through depth head
-        with maybe_autocast(x.device, enabled=True):
+        with maybe_autocast(x.device, enabled=False):
             output = self._process_depth_head(feats, H, W)
             if use_ray_pose:
                 output = self._process_ray_pose_estimation(output, H, W)

@@ -25,7 +25,7 @@ import numpy as np
 import torch
 from addict import Dict as AddictDict
 
-from models.depth_anything_3.specs import Prediction
+from depth_anything_3.specs import Prediction
 
 
 class OutputProcessor:

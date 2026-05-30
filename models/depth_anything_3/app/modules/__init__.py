@@ -18,17 +18,17 @@ Modules package for Depth Anything 3 Gradio app.
 This package contains all the modular components for the Gradio application.
 """
 
-from models.depth_anything_3.app.modules.event_handlers import EventHandlers
-from models.depth_anything_3.app.modules.file_handlers import FileHandler
-from models.depth_anything_3.app.modules.model_inference import ModelInference
-from models.depth_anything_3.app.modules.ui_components import UIComponents
-from models.depth_anything_3.app.modules.utils import (
+from depth_anything_3.app.modules.event_handlers import EventHandlers
+from depth_anything_3.app.modules.file_handlers import FileHandler
+from depth_anything_3.app.modules.model_inference import ModelInference
+from depth_anything_3.app.modules.ui_components import UIComponents
+from depth_anything_3.app.modules.utils import (
     create_depth_visualization,
     get_logo_base64,
     get_scene_info,
     save_to_gallery_func,
 )
-from models.depth_anything_3.app.modules.visualization import VisualizationHandler
+from depth_anything_3.app.modules.visualization import VisualizationHandler
 
 __all__ = [
     "ModelInference",

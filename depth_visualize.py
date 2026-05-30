@@ -39,18 +39,18 @@ from PIL import Image
 img  = Image.open("assets/cats.jpg").convert("RGB")
 image_rgb = np.array(img).astype(np.float32)
 DEBUG = True
-AA_STRENGTH = 2
-FP16 = True
+AA_STRENGTH = 0
+FP16 = False
 DTYPE = torch.float16 if FP16 else torch.float32
 CACHE_PATH = "models"
 DEVICE_ID = 0
 FILL_16_9 = True
-DEPTH_RESOLUTION = 512
+DEPTH_RESOLUTION = 504
 FOREGROUND_SCALE = 0
 
-USE_TORCH_COMPILE = True
+USE_TORCH_COMPILE = False
 
-USE_TENSORRT = True
+USE_TENSORRT = False
 RECOMPILE_TRT = True
 
 USE_COREML = False
@@ -74,7 +74,8 @@ RECOMPILE_OPENVINO = True
 # MODEL_ID = "lc700x/dpt-large-redesign-hf"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 # MODEL_ID = "Intel/dpt-beit-base-384"
-MODEL_ID = "ritianyu/InfiniDepth"
+# MODEL_ID = "ritianyu/InfiniDepth"
+MODEL_ID = "depth-anything/DA3NESTED-GIANT-LARGE"
 
 print(f"{DEVICE_INFO}")
 print(f"Model: {MODEL_ID.split('/')[-1]}")
@@ -1476,14 +1477,14 @@ if __name__ == "__main__":
     #     depth_max = depth_max + 1e-6
 
     # depth = ((depth - depth_min) / (depth_max - depth_min)).clip(0, 1)
-    # depth = 1 - depth
+    depth = 1 - depth
 
     import matplotlib.pyplot as plt
-    plt.imshow(depth, cmap='Spectral_r')
+    plt.imshow(depth, cmap='Spectral')
     plt.colorbar()
     plt.show()
     plt.close()
-    plt.imshow(depth, cmap='Spectral_r')
+    plt.imshow(depth, cmap='Spectral')
     plt.colorbar()
     plt.savefig("test.png", dpi=300)
     plt.close()

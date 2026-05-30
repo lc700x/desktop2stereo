@@ -18,8 +18,8 @@ import torch
 import torch.nn as nn
 from addict import Dict
 
-from models.depth_anything_3.model.dpt import _make_fusion_block, _make_scratch
-from models.depth_anything_3.model.utils.head_utils import (
+from depth_anything_3.model.dpt import _make_fusion_block, _make_scratch
+from depth_anything_3.model.utils.head_utils import (
     Permute,
     create_uv_grid,
     custom_interpolate,

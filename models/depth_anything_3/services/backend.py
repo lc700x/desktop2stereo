@@ -187,16 +187,16 @@ def _process_next_task():
     _executor.submit(_run_inference_task, task_id)
 
 
-# get_gpu_memory_info imported from models.depth_anything_3.utils.memory
+# get_gpu_memory_info imported from depth_anything_3.utils.memory
 
 
-# cleanup_cuda_memory imported from models.depth_anything_3.utils.memory
+# cleanup_cuda_memory imported from depth_anything_3.utils.memory
 
 
-# check_memory_availability imported from models.depth_anything_3.utils.memory
+# check_memory_availability imported from depth_anything_3.utils.memory
 
 
-# estimate_memory_requirement imported from models.depth_anything_3.utils.memory
+# estimate_memory_requirement imported from depth_anything_3.utils.memory
 
 
 def _run_inference_task(task_id: str):

@@ -28,8 +28,8 @@ import numpy as np
 import torch
 from addict import Dict
 
-from models.depth_anything_3.bench.utils import compute_pose
-from models.depth_anything_3.utils.geometry import as_homogeneous
+from depth_anything_3.bench.utils import compute_pose
+from depth_anything_3.utils.geometry import as_homogeneous
 
 
 def _wait_for_file_ready(path: str, timeout: float = 3.0, interval: float = 0.2) -> None:

@@ -184,7 +184,7 @@ def get_scene_info(examples_dir: str) -> List[Dict[str, Any]]:
 
 
 # NOTE: cleanup was moved to a single canonical helper in
-# `models.depth_anything_3.utils.memory.cleanup_cuda_memory`.
+# `depth_anything_3.utils.memory.cleanup_cuda_memory`.
 # Callers should import and call that directly instead of using this module.
 
 

@@ -19,7 +19,7 @@ Model loading and state dict conversion utilities.
 from typing import Dict, Tuple
 import torch
 
-from models.depth_anything_3.utils.logger import logger
+from depth_anything_3.utils.logger import logger
 
 
 def convert_general_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:

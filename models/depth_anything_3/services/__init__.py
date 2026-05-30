@@ -16,7 +16,7 @@
 Services module for Depth Anything 3.
 """
 
-from models.depth_anything_3.services.backend import create_app, start_server
+from depth_anything_3.services.backend import create_app, start_server
 
 __all__ = [
     start_server,

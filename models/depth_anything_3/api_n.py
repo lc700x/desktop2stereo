@@ -20,21 +20,24 @@ inference, and export capabilities. It supports both single and nested model arc
 
 from __future__ import annotations
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
 # import numpy as np
 import torch
 import torch.nn as nn
 from huggingface_hub import PyTorchModelHubMixin
 # from PIL import Image
 
-from models.depth_anything_3.cfg import create_object, load_config
-from models.depth_anything_3.registry import MODEL_REGISTRY
-# from models.depth_anything_3.specs import Prediction
-# from models.depth_anything_3.utils.export import export
-# from models.depth_anything_3.utils.geometry import affine_inverse
-# from models.depth_anything_3.utils.io.input_processor import InputProcessor
-# from models.depth_anything_3.utils.io.output_processor import OutputProcessor
-# from models.depth_anything_3.utils.logger import logger
-# from models.depth_anything_3.utils.pose_align import align_poses_umeyama
+from .cfg import create_object, load_config
+from .registry import MODEL_REGISTRY
+# from depth_anything_3.specs import Prediction
+# from depth_anything_3.utils.export import export
+# from depth_anything_3.utils.geometry import affine_inverse
+# from depth_anything_3.utils.io.input_processor import InputProcessor
+# from depth_anything_3.utils.io.output_processor import OutputProcessor
+# from depth_anything_3.utils.logger import logger
+# from depth_anything_3.utils.pose_align import align_poses_umeyama
 
 # torch.backends.cudnn.benchmark = False
 # logger.info("CUDNN Benchmark Disabled")

@@ -17,8 +17,8 @@ from typing import List, Sequence
 import torch
 import torch.nn as nn
 
-from models.depth_anything_3.model.dpt import DPT
-from models.depth_anything_3.model.utils.head_utils import activate_head_gs, custom_interpolate
+from depth_anything_3.model.dpt import DPT
+from depth_anything_3.model.utils.head_utils import activate_head_gs, custom_interpolate
 
 
 class GSDPT(DPT):
