@@ -76,11 +76,11 @@ class InfiniDepthModel(nn.Module):
             # inference cannot be traced by ONNX / TensorRT.  For 512x512
             # input (262k points) this fits comfortably in GPU memory.
             pred = self.model.forward(x=x, coords=query)
-            depth = 1.0 / torch.clamp(pred, min=5e-3)
+            # depth = 1.0 / torch.clamp(pred, min=5e-3)
 
-        depth = depth.reshape(B, 1, H, W).squeeze(1)
+        depth = pred.reshape(B, 1, H, W).squeeze(1)
         return depth.to(input_dtype)
-
+    
     def predict_depth(self, pixel_values: torch.Tensor, fp32: bool = False) -> torch.Tensor:
         """High-level inference API with autocast.
 

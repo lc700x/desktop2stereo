@@ -11,7 +11,7 @@ import contextlib
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, ZOEDEPTH_FIX_KEYWORDS
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, FORCE_FP32_KEYWORDS
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -37,8 +37,11 @@ import cv2
 print(f"{DEVICE_INFO}")
 print(f"Model: {MODEL_ID.split('/')[-1]}")
 
+
 if not DEBUG:
     warnings.filterwarnings('ignore') # disable for debug
+
+warnings.filterwarnings("ignore", message=".*ONNX export mode is set to TrainingMode.EVAL.*instance_norm.*")
 
 # Try import OpenVINO runtime
 if IS_XPU:
@@ -70,11 +73,6 @@ if IS_XPU:
             OPENVINO_DEVICE = None
 else:
     USE_OPENVINO = False
-    
-# Correction for ZoeDepth models
-ZOEDEPTH_FIX = False
-if MODEL_ID in ZOEDEPTH_FIX_KEYWORDS:
-    ZOEDEPTH_FIX = True
 
 if USE_COREML and IS_MPS:    
     try:
@@ -125,7 +123,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or ((USE_TENSORRT or USE_COREML or USE_OPENVINO) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS):
+if IS_DIRECTML or ((USE_TENSORRT or USE_COREML or USE_OPENVINO) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS) or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or (MODEL_ID in FORCE_FP32_KEYWORDS):
     FP16 = False 
 
 # Optimization for CUDA
@@ -177,7 +175,7 @@ if IS_NVIDIA:
         USE_TORCH_COMPILE = False
         # USE_TENSORRT = False  # Disable TensorRT for legacy NVIDIA GPUs due to potential compatibility issues
     # Disable TRT for unsupported models
-    if MODEL_ID in DISABLE_TRT_KEYWORDS:
+    if any(x in MODEL_ID.lower() for x in DISABLE_TRT_KEYWORDS):
         USE_TENSORRT = False
 
 if IS_AMD_ROCM:
@@ -287,12 +285,12 @@ def apply_foreground_scale(depth: torch.Tensor, scale: float, mid: float = 0.5, 
     if not (-1.0 + 1e-12 < scale):  # avoid scale <= -1
         raise ValueError("scale must be greater than -1.0")
 
-    d = depth.clamp(0.0, 1.0)
+    depth.clamp_(0.0, 1.0)
     if abs(scale) < eps:
-        return d
+        return depth  # identity for scale ~ 0
 
     exponent = 1.0 / (1.0 + scale)  # >1 if scale<0 (flatten), <1 if scale>0 (exaggerate)
-    dist = d - mid
+    dist = depth - mid
     out = mid + torch.sign(dist) * torch.pow(torch.abs(dist), exponent)
     return out.clamp(0.0, 1.0)
        
@@ -408,23 +406,12 @@ def apply_gamma(depth, gamma=1.2):
     return torch.pow(depth, gamma)
 
 def normalize_tensor(tensor: torch.tensor):
-    if ZOEDEPTH_FIX:
-        # Replace NaNs with +inf / -inf just for min/max
-        min_val = torch.min(torch.where(torch.isnan(tensor), torch.inf, tensor))
-        max_val = torch.max(torch.where(torch.isnan(tensor), -torch.inf, tensor))
-
-        denom = max_val - min_val
-        if denom == 0:
-            return torch.zeros_like(tensor)
-
-        out = (tensor - min_val) / denom
-        return torch.where(torch.isnan(tensor), torch.tensor(0.5, device=tensor.device), out)
-    else:
-        return (tensor - tensor.min()) / (tensor.max() - tensor.min() + 1e-6) 
+    
+    return (tensor - tensor.min()) / (tensor.max() - tensor.min() + 1e-6) 
 
 def post_process_depth(depth):
     if is_metric():
-        depth = 1.0 / (depth + 1e-6)
+        depth.clamp_(min=5e-3).reciprocal_()
     depth = normalize_tensor(depth).squeeze()
     depth = apply_gamma(depth)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
@@ -464,7 +451,7 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 
     model = VideoDepthAnything(**model_configs[encoder])
     model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True), strict=True)
-    return model.to(DEVICE)
+    return model.to(DEVICE, dtype=DTYPE)
 
 # Load InfiniDepth Model
 def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
@@ -472,15 +459,23 @@ def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
     from huggingface_hub import hf_hub_download
     # Load depth model without network warning when local cache exists
     try:
-        model_path = hf_hub_download(repo_id=model_id, filename="infinidepth.ckpt", cache_dir=CACHE_PATH, local_files_only=True)
+        model_path = hf_hub_download(repo_id=model_id, filename="model.pt", cache_dir=CACHE_PATH, local_files_only=True)
     except:
-        model_path = hf_hub_download(repo_id=model_id, filename="infinidepth.ckpt", cache_dir=CACHE_PATH)
+        model_path = hf_hub_download(repo_id=model_id, filename="model.pt", cache_dir=CACHE_PATH)
+
+
+    # Preparation for video depth anything models
+    encoder_dict = {'lc700x/InfiniDepth-SmallPlus': 'vits16plus',
+                    'lc700x/InfiniDepth-Small': 'vits16',
+                    'lc700x/InfiniDepth-Base': 'vitb16',
+                    'lc700x/InfiniDepth-Large': 'vitl16'}
+
 
     from models.InfiniDepth.api import InfiniDepthModel
-    model = InfiniDepthModel(model_path=model_path)
+    model = InfiniDepthModel(model_path=model_path, encoder=encoder_dict.get(model_id, 'vitl16'))
     # Keep model in float32 — internal autocast in the backbone handles
     # mixed precision. Converting to float16 breaks the ImplicitHead MLP.
-    return model.to(DEVICE)
+    return model.to(DEVICE, dtype=DTYPE)
 
 # Load Depth-Anything-V3 Model
 def get_da3_model(model_id=MODEL_ID, dtype=DTYPE):
@@ -521,7 +516,7 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
 
         config = builder.create_builder_config()
 
-        if "infinidepth" in MODEL_ID.lower():
+        if MODEL_ID in FORCE_FP32_KEYWORDS or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or 'infinidepth-large' in MODEL_ID.lower():
             # Transformer-based model: use TF32 only. Enabling FP16/FP8 with
             # PREFER_PRECISION_CONSTRAINTS causes attention layers to underflow
             # and produce all-zero depth maps.
@@ -577,7 +572,7 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
     input_names = ["pixel_values"]
     output_names = ["predicted_depth"]
     
-    # Remove dynamic axes for fixed size
+    model.eval()
     with torch.no_grad():
         torch.onnx.export(
             model,
@@ -587,7 +582,8 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
             output_names=output_names,
             do_constant_folding=True,
             export_params=True,
-            verbose=False
+            verbose=False,
+            training=torch.onnx.TrainingMode.EVAL,
         )
     
     engine_name = None
@@ -1000,10 +996,10 @@ class DepthModelWrapper:
                     ).to(DEVICE)
             except Exception as e:
                 print(f"[Error]: Failed to load model, please check your local model file and network connection. Details: {e}")
-        
-        if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() and "video-depth-anything" not in MODEL_ID.lower() and "infinidepth" not in MODEL_ID.lower()):
+
+        if self.dtype == torch.float16 and not any(kw in MODEL_ID.lower() for kw in ("da3", "video-depth-anything")):
             model.half()
-            
+
         # Special setup precision for DA3
         if self.is_cuda and self.use_torch_compile and not enable_trt:
             model = torch.compile(model)

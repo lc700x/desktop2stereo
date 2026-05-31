@@ -50,6 +50,48 @@ from utils import (
 )
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Known model size suffixes, longest-first for matching priority
+_MODEL_SIZES = ["SmallPlus", "Small", "Base", "Large", "Giant"]
+_SIZE_ORDER = {s: i for i, s in enumerate(_MODEL_SIZES)}
+
+def parse_model_name(name):
+    """Split model name into (family, size). DepthPro treated as Large."""
+    parts = name.split("-")
+    size_parts = []
+    i = len(parts) - 1
+    while i >= 0:
+        matched = None
+        for sz in _MODEL_SIZES:
+            if parts[i].upper() == sz.upper():
+                matched = sz
+                break
+        if matched:
+            size_parts.insert(0, matched)
+            i -= 1
+        else:
+            break
+    if size_parts:
+        family = "-".join(parts[:i + 1])
+        size = "-".join(size_parts)
+        return (family, size)
+    return (name, "")
+
+def build_family_size_map(model_list):
+    """Returns (families_ordered, family_to_sizes) from list of full model names."""
+    families = []
+    family_to_sizes = {}
+    for name in model_list:
+        family, size = parse_model_name(name)
+        if family not in family_to_sizes:
+            family_to_sizes[family] = []
+            families.append(family)
+        if size and size not in family_to_sizes[family]:
+            family_to_sizes[family].append(size)
+    for family in family_to_sizes:
+        family_to_sizes[family].sort(key=lambda s: _SIZE_ORDER.get(s, 99))
+    return families, family_to_sizes
+
+
 # ── Disable console Quick Edit Mode (prevents console freeze on click) ──
 try:
     kernel32 = ctypes.windll.kernel32
@@ -308,6 +350,11 @@ UI_TEXTS = {
 # Default Configuration
 # ─────────────────────────────────────────────
 DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
+DEFAULT_FAMILIES, FAMILY_TO_SIZES = build_family_size_map(DEFAULT_MODEL_LIST)
+FAMILY_SIZE_TO_MODEL = {}
+for name in DEFAULT_MODEL_LIST:
+    f, s = parse_model_name(name)
+    FAMILY_SIZE_TO_MODEL[(f, s)] = name
 DEFAULTS = {
     "Capture Mode": "Monitor",
     "Monitor Index": 1,
@@ -980,7 +1027,7 @@ class Desktop2StereoGUI:
         for inst in getattr(self, '_dropdowns', []):
             inst.reapply_width()
         if hasattr(self, '_row8_spacer'):
-            self._row8_spacer.width = max(0, final_w - 121)
+            self._row8_spacer.width = max(0, final_w - 129)
             try:
                 self._row8_spacer.update()
             except RuntimeError:
@@ -1001,15 +1048,23 @@ class Desktop2StereoGUI:
 
         # Row 1: Depth model
         self.r0_label = ft.Text("Depth Model:", size=FONT_SIZE, width=130)
+        default_family, default_size = parse_model_name(DEFAULT_MODEL_LIST[0]) if DEFAULT_MODEL_LIST else ("", "")
         self.depth_model_dd = CompactDropdown(
-            options=DEFAULT_MODEL_LIST,
-            value=DEFAULT_MODEL_LIST[0] if DEFAULT_MODEL_LIST else "",
-            on_select=self.on_depth_model_change,
-            min_width=220, max_width=400)
+            options=[f for f in DEFAULT_FAMILIES],
+            value=default_family,
+            on_select=self.on_model_family_change,
+            min_width=200, max_width=300)
+        self.model_size_dd = CompactDropdown(
+            options=FAMILY_TO_SIZES.get(default_family, []),
+            value=default_size,
+            on_select=self.on_model_size_change,
+            width=110)
         self.fp16_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="FP16")
         row0 = ft.Row([
             self.r0_label,
             self.depth_model_dd,
+            ft.Container(width=8),
+            self.model_size_dd,
         ], spacing=1)
 
         # Row 2: Depth resolution + Convergence
@@ -1141,7 +1196,7 @@ class Desktop2StereoGUI:
             options=["Monitor",
                      "Window"],
             value="Monitor", on_select=self.on_capture_mode_change,
-            width=120)
+            width=128)
         self.monitor_dd = CompactDropdown(on_select=self._on_monitor_change, max_width=300)
         self.window_dd = CompactDropdown(on_select=self.on_window_selected, max_width=300)
         self.refresh_btn = ft.Button(content=ft.Text("Refresh", size=FONT_SIZE), width=130, on_click=self.refresh_monitor_and_window)
@@ -1401,10 +1456,21 @@ class Desktop2StereoGUI:
         selected_model = cfg.get("Depth Model", DEFAULTS["Depth Model"])
         if selected_model not in model_list:
             selected_model = model_list[0] if model_list else DEFAULTS["Depth Model"]
-        self.depth_model_dd.options = model_list
-        self.depth_model_dd.value = selected_model
+        family, size = parse_model_name(selected_model)
+        if family not in DEFAULT_FAMILIES:
+            family = DEFAULT_FAMILIES[0] if DEFAULT_FAMILIES else ""
+        self.depth_model_dd.options = [f for f in DEFAULT_FAMILIES]
+        self.depth_model_dd.value = family
+        avail_sizes = FAMILY_TO_SIZES.get(family, [])
+        self.model_size_dd.options = [s for s in avail_sizes]
+        if size in avail_sizes:
+            self.model_size_dd.value = size
+        elif avail_sizes:
+            self.model_size_dd.value = avail_sizes[0]
+        else:
+            self.model_size_dd.value = ""
         self.depth_res_dd.value = str(cfg.get("Depth Resolution", DEFAULTS["Depth Resolution"]))
-        self.update_depth_resolution_options(selected_model)
+        self.update_depth_resolution_options(self.current_model_name)
         self.depth_strength_dd.value = str(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
         self.display_mode_dd.value = cfg.get("Display Mode", DEFAULTS["Display Mode"])
         self.antialiasing_dd.value = str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"]))
@@ -1522,8 +1588,28 @@ class Desktop2StereoGUI:
             self.depth_res_dd.value = str(resolutions[0])
         self.depth_res_dd.update()
 
-    def on_depth_model_change(self, e):
-        model = e.control.value
+    @property
+    def current_model_name(self):
+        family = self.depth_model_dd.value
+        size = self.model_size_dd.value
+        return FAMILY_SIZE_TO_MODEL.get((family, size), family if not size else f"{family}-{size}")
+
+    def on_model_family_change(self, e):
+        family = e.control.value
+        sizes = FAMILY_TO_SIZES.get(family, [])
+        self.model_size_dd.options = [s for s in sizes]
+        if sizes:
+            self.model_size_dd.value = sizes[0]
+        else:
+            self.model_size_dd.value = ""
+        self.model_size_dd.update()
+        self._on_model_changed()
+
+    def on_model_size_change(self, e):
+        self._on_model_changed()
+
+    def _on_model_changed(self):
+        model = self.current_model_name
         self._config["Depth Model"] = model
         self.update_depth_resolution_options(model)
         self.auto_enable_optimizers_based_on_device()
@@ -1572,7 +1658,7 @@ class Desktop2StereoGUI:
             self.recompile_coreml_cb.visible = False
             self.openvino_cb.visible = False
             self.recompile_openvino_cb.visible = False
-        current_model = self.depth_model_dd.value
+        current_model = self.current_model_name
         if cuda and not IS_ROCM:
             self.update_tensorrt_visibility_based_on_model(current_model)
         if mps:
@@ -1594,7 +1680,7 @@ class Desktop2StereoGUI:
 
     def auto_enable_optimizers_based_on_device(self):
         device_label = self.device_dd.value
-        model_lower = (self.depth_model_dd.value or "").lower()
+        model_lower = (self.current_model_name or "").lower()
         self.tensorrt_cb.value = False
         self.coreml_cb.value = False
         self.openvino_cb.value = False
@@ -1758,7 +1844,7 @@ class Desktop2StereoGUI:
         mon_count = self._get_monitor_count()
         stereo_full = mode in ["Local Viewer", "3D Monitor", "RTMP Streamer"] and mon_count > 1
         stereo_label_only = mode in ["MJPEG Streamer", "Legacy Streamer"] and mon_count > 1
-        self.r9_label.visible = stereo_full or stereo_label_only
+        self.r9_label.visible = mode == "Local Viewer" or stereo_full or stereo_label_only
         self.stereo_monitor_dd.visible = stereo_full
         if hasattr(self, '_stereo_spacer'):
             self._stereo_spacer.visible = stereo_full
@@ -1787,7 +1873,7 @@ class Desktop2StereoGUI:
         if mon_count <= 1:
             return
         cur = self.stereo_monitor_dd.value
-        valid = cur and cur in self.stereo_monitor_dd.options
+        valid = cur and cur in self.stereo_monitor_dd.options and cur != "Viewer Window"
         if not valid:
             input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
             for lbl in self.monitor_label_to_index:
@@ -1909,6 +1995,7 @@ class Desktop2StereoGUI:
         self.window_dd.set_tooltip(t["tooltip_window"])
         for ctrl, key in [
             (self.depth_model_dd, "tooltip_depth_model"),
+            (self.model_size_dd, "tooltip_depth_model"),
             (self.depth_res_dd, "tooltip_depth_res"),
             (self.convergence_dd, "tooltip_convergence"),
             (self.depth_strength_dd, "tooltip_depth_strength"),
@@ -2065,6 +2152,7 @@ class Desktop2StereoGUI:
             self.populate_audio_devices()
             self.auto_select_stereo_mix()
         self.update_stereo_monitor_menu()
+        self._sync_visibility()
         self._fit_window_to_content()
         if self.capture_mode_key == "Monitor" and self.monitor_dd.value:
             self.set_status(f"{UI_TEXTS[self.language]['Selected input monitor:']} {self.monitor_dd.value}")
@@ -2261,7 +2349,7 @@ class Desktop2StereoGUI:
             "Convergence": self._parse_float(self.convergence_dd.value, DEFAULTS["Convergence"]),
             "Display Mode": self.display_mode_dd.value,
             "Model List": ALL_MODELS,
-            "Depth Model": self.depth_model_dd.value,
+            "Depth Model": self.current_model_name,
             "Depth Strength": self._parse_float(self.depth_strength_dd.value, DEFAULTS["Depth Strength"]),
             "Anti-aliasing": self._parse_int(self.antialiasing_dd.value, DEFAULTS["Anti-aliasing"]),
             "Foreground Scale": self._parse_float(self.foreground_scale_dd.value, DEFAULTS["Foreground Scale"]),
@@ -2291,6 +2379,9 @@ class Desktop2StereoGUI:
             "Stereo Output": stereo_idx,
             "Controller Model": self.ctrl_model_dd.value,
         })
+        self.recompile_trt_cb.value = False
+        self.recompile_coreml_cb.value = False
+        self.recompile_openvino_cb.value = False
 
     async def _countdown_and_run(self, seconds):
         try:

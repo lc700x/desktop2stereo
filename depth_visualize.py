@@ -11,7 +11,7 @@ import contextlib
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, ZOEDEPTH_FIX_KEYWORDS
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, FORCE_FP32_KEYWORDS
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -40,17 +40,15 @@ img  = Image.open("assets/cats.jpg").convert("RGB")
 image_rgb = np.array(img).astype(np.float32)
 DEBUG = True
 AA_STRENGTH = 0
-FP16 = False
-DTYPE = torch.float16 if FP16 else torch.float32
-CACHE_PATH = "models"
+FP16 = True
 DEVICE_ID = 0
 FILL_16_9 = True
-DEPTH_RESOLUTION = 504
+DEPTH_RESOLUTION = 336
 FOREGROUND_SCALE = 0
 
 USE_TORCH_COMPILE = False
 
-USE_TENSORRT = False
+USE_TENSORRT = True
 RECOMPILE_TRT = True
 
 USE_COREML = False
@@ -59,30 +57,14 @@ RECOMPILE_COREML = True
 USE_OPENVINO = False
 RECOMPILE_OPENVINO = True
 
-# MODEL_ID = "LiheYoung/depth-anything-small-hf"
-# MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
-# MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
-# MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
-# MODEL_ID = "depth-anything/DA3-LARGE"
-# MODEL_ID = "depth-anything/DA3MONO-LARGE"
-# MODEL_ID = "depth-anything/DA3METRIC-LARGE"
-# MODEL_ID = "Intel/dpt-large"
-# MODEL_ID = "apple/DepthPro-hf"
-# MODEL_ID = "Intel/zoedepth-nyu"
-# MODEL_ID = "Intel/zoedepth-nyu-kitti"
-# MODEL_ID = "lc700x/dpt-hybrid-midas-hf"
-# MODEL_ID = "lc700x/dpt-large-redesign-hf"
-# MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
-# MODEL_ID = "Intel/dpt-beit-base-384"
-# MODEL_ID = "ritianyu/InfiniDepth"
-MODEL_ID = "depth-anything/DA3NESTED-GIANT-LARGE"
-
 print(f"{DEVICE_INFO}")
 print(f"Model: {MODEL_ID.split('/')[-1]}")
 
 
 if not DEBUG:
     warnings.filterwarnings('ignore') # disable for debug
+
+warnings.filterwarnings("ignore", message=".*ONNX export mode is set to TrainingMode.EVAL.*instance_norm.*")
 
 # Try import OpenVINO runtime
 if IS_XPU:
@@ -114,11 +96,6 @@ if IS_XPU:
             OPENVINO_DEVICE = None
 else:
     USE_OPENVINO = False
-    
-# Correction for ZoeDepth models
-ZOEDEPTH_FIX = False
-if MODEL_ID in ZOEDEPTH_FIX_KEYWORDS:
-    ZOEDEPTH_FIX = True
 
 if USE_COREML and IS_MPS:    
     try:
@@ -169,7 +146,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or ((USE_TENSORRT or USE_COREML or USE_OPENVINO) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS):
+if IS_DIRECTML or ((USE_TENSORRT or USE_COREML or USE_OPENVINO) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS) or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or (MODEL_ID in FORCE_FP32_KEYWORDS):
     FP16 = False 
 
 # Optimization for CUDA
@@ -221,7 +198,7 @@ if IS_NVIDIA:
         USE_TORCH_COMPILE = False
         # USE_TENSORRT = False  # Disable TensorRT for legacy NVIDIA GPUs due to potential compatibility issues
     # Disable TRT for unsupported models
-    if MODEL_ID in DISABLE_TRT_KEYWORDS:
+    if any(x in MODEL_ID.lower() for x in DISABLE_TRT_KEYWORDS):
         USE_TENSORRT = False
 
 if IS_AMD_ROCM:
@@ -331,12 +308,12 @@ def apply_foreground_scale(depth: torch.Tensor, scale: float, mid: float = 0.5, 
     if not (-1.0 + 1e-12 < scale):  # avoid scale <= -1
         raise ValueError("scale must be greater than -1.0")
 
-    d = depth.clamp(0.0, 1.0)
+    depth.clamp_(0.0, 1.0)
     if abs(scale) < eps:
-        return d
+        return depth  # identity for scale ~ 0
 
     exponent = 1.0 / (1.0 + scale)  # >1 if scale<0 (flatten), <1 if scale>0 (exaggerate)
-    dist = d - mid
+    dist = depth - mid
     out = mid + torch.sign(dist) * torch.pow(torch.abs(dist), exponent)
     return out.clamp(0.0, 1.0)
        
@@ -452,23 +429,12 @@ def apply_gamma(depth, gamma=1.2):
     return torch.pow(depth, gamma)
 
 def normalize_tensor(tensor: torch.tensor):
-    if ZOEDEPTH_FIX:
-        # Replace NaNs with +inf / -inf just for min/max
-        min_val = torch.min(torch.where(torch.isnan(tensor), torch.inf, tensor))
-        max_val = torch.max(torch.where(torch.isnan(tensor), -torch.inf, tensor))
-
-        denom = max_val - min_val
-        if denom == 0:
-            return torch.zeros_like(tensor)
-
-        out = (tensor - min_val) / denom
-        return torch.where(torch.isnan(tensor), torch.tensor(0.5, device=tensor.device), out)
-    else:
-        return (tensor - tensor.min()) / (tensor.max() - tensor.min() + 1e-6) 
+    
+    return (tensor - tensor.min()) / (tensor.max() - tensor.min() + 1e-6) 
 
 def post_process_depth(depth):
     if is_metric():
-        depth = 1.0 / (depth + 1e-6)
+        depth.clamp_(min=5e-3).reciprocal_()
     depth = normalize_tensor(depth).squeeze()
     depth = apply_gamma(depth)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
@@ -508,7 +474,7 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 
     model = VideoDepthAnything(**model_configs[encoder])
     model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True), strict=True)
-    return model.to(DEVICE)
+    return model.to(DEVICE, dtype=DTYPE)
 
 # Load InfiniDepth Model
 def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
@@ -516,15 +482,23 @@ def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
     from huggingface_hub import hf_hub_download
     # Load depth model without network warning when local cache exists
     try:
-        model_path = hf_hub_download(repo_id=model_id, filename="infinidepth.ckpt", cache_dir=CACHE_PATH, local_files_only=True)
+        model_path = hf_hub_download(repo_id=model_id, filename="model.pt", cache_dir=CACHE_PATH, local_files_only=True)
     except:
-        model_path = hf_hub_download(repo_id=model_id, filename="infinidepth.ckpt", cache_dir=CACHE_PATH)
+        model_path = hf_hub_download(repo_id=model_id, filename="model.pt", cache_dir=CACHE_PATH)
+
+
+    # Preparation for video depth anything models
+    encoder_dict = {'lc700x/InfiniDepth-SmallPlus': 'vits16plus',
+                    'lc700x/InfiniDepth-Small': 'vits16',
+                    'lc700x/InfiniDepth-Base': 'vitb16',
+                    'lc700x/InfiniDepth-Large': 'vitl16'}
+
 
     from models.InfiniDepth.api import InfiniDepthModel
-    model = InfiniDepthModel(model_path=model_path)
+    model = InfiniDepthModel(model_path=model_path, encoder=encoder_dict.get(model_id, 'vitl16'))
     # Keep model in float32 — internal autocast in the backbone handles
     # mixed precision. Converting to float16 breaks the ImplicitHead MLP.
-    return model.to(DEVICE)
+    return model.to(DEVICE, dtype=DTYPE)
 
 # Load Depth-Anything-V3 Model
 def get_da3_model(model_id=MODEL_ID, dtype=DTYPE):
@@ -565,7 +539,7 @@ def optimize_with_tensorrt(onnx_path=ONNX_PATH, trt_path=TRT_PATH):
 
         config = builder.create_builder_config()
 
-        if "infinidepth" in MODEL_ID.lower():
+        if MODEL_ID in FORCE_FP32_KEYWORDS or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or 'infinidepth-large' in MODEL_ID.lower():
             # Transformer-based model: use TF32 only. Enabling FP16/FP8 with
             # PREFER_PRECISION_CONSTRAINTS causes attention layers to underflow
             # and produce all-zero depth maps.
@@ -621,7 +595,7 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
     input_names = ["pixel_values"]
     output_names = ["predicted_depth"]
     
-    # Remove dynamic axes for fixed size
+    model.eval()
     with torch.no_grad():
         torch.onnx.export(
             model,
@@ -631,7 +605,8 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
             output_names=output_names,
             do_constant_folding=True,
             export_params=True,
-            verbose=False
+            verbose=False,
+            training=torch.onnx.TrainingMode.EVAL,
         )
     
     engine_name = None
@@ -1044,10 +1019,10 @@ class DepthModelWrapper:
                     ).to(DEVICE)
             except Exception as e:
                 print(f"[Error]: Failed to load model, please check your local model file and network connection. Details: {e}")
-        
-        if self.dtype==torch.float16 and ("da3" not in MODEL_ID.lower() and "video-depth-anything" not in MODEL_ID.lower() and "infinidepth" not in MODEL_ID.lower()):
+
+        if self.dtype == torch.float16 and not any(kw in MODEL_ID.lower() for kw in ("da3", "video-depth-anything")):
             model.half()
-            
+
         # Special setup precision for DA3
         if self.is_cuda and self.use_torch_compile and not enable_trt:
             model = torch.compile(model)
@@ -1451,109 +1426,37 @@ if USE_TORCH_COMPILE and IS_CUDA:
     make_sbs_core = torch.compile(make_sbs_core)
     
 if __name__ == "__main__":
+    import os
+    import matplotlib.pyplot as plt
+
     depth = predict_depth(image_rgb, dtype=DTYPE).squeeze(0)
-    sbs = make_sbs(image_rgb, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=-0.5, display_mode="Half-SBS", fps=None)
+    sbs = make_sbs(image_rgb, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=-0.5, display_mode="Half-SBS", fps=None, fill_16_9=False)
     depth = depth.detach().contiguous().float().cpu().numpy()
-
-    # depth = depth.copy()
-    # depth.copy()
-    # valid_mask = depth > 0
-    # depth[valid_mask] = 1 / depth[valid_mask]
-    # depth_min=None
-    # depth_max=None
-    # percentile=2
-    # if depth_min is None:
-    #     if valid_mask.sum() <= 10:
-    #         depth_min = 0
-    #     else:
-    #         depth_min = np.percentile(depth[valid_mask], percentile)
-    # if depth_max is None:
-    #     if valid_mask.sum() <= 10:
-    #         depth_max = 0
-    #     else:
-    #         depth_max = np.percentile(depth[valid_mask], 100 - percentile)
-    # if depth_min == depth_max:
-    #     depth_min = depth_min - 1e-6
-    #     depth_max = depth_max + 1e-6
-
-    # depth = ((depth - depth_min) / (depth_max - depth_min)).clip(0, 1)
+    
     depth = 1 - depth
 
-    import matplotlib.pyplot as plt
+    base_name = os.path.splitext(os.path.basename("assets/cats.jpg"))[0]
+    model_short = MODEL_ID.split("/")[-1]
+    tag = f"{model_short}_{DEPTH_RESOLUTION}"
+
+    out_dir = "output"
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Show and save depth map
     plt.imshow(depth, cmap='Spectral')
     plt.colorbar()
     plt.show()
+    depth_path = os.path.join(out_dir, f"{base_name}_{tag}_depth.png")
+    plt.imsave(depth_path, depth, cmap='Spectral')
+    print(f"Saved: {depth_path}")
     plt.close()
-    plt.imshow(depth, cmap='Spectral')
-    plt.colorbar()
-    plt.savefig("test.png", dpi=300)
-    plt.close()
 
-    import cv2
-    import mss
-
-    def show_fullscreen_opencv(image, window_name="Fullscreen Image"):
-        """
-        True fullscreen display with OpenCV (no UI elements).
-        """
-        with mss.mss() as sct:
-            # Get primary monitor
-            monitors = sct.monitors
-            monitor = monitors[1] if len(monitors) > 1 else monitors[0]
-            screen_width, screen_height = monitor['width'], monitor['height']
-        
-        # Get image dimensions
-        img_height, img_width = image.shape[:2]
-        
-        # Calculate scaling to maintain aspect ratio
-        width_ratio = screen_width / img_width
-        height_ratio = screen_height / img_height
-        scale_factor = min(width_ratio, height_ratio)
-        
-        # Calculate new dimensions
-        new_width = int(img_width * scale_factor)
-        new_height = int(img_height * scale_factor)
-        
-        # Resize image
-        resized = cv2.resize(image, (new_width, new_height), 
-                            interpolation=cv2.INTER_LINEAR)
-        
-        # Create black canvas matching screen resolution
-        if len(image.shape) == 3:  # Color image
-            # Convert to 3 channels for consistent display
-            resized = cv2.cvtColor(resized, cv2.COLOR_RGB2BGR)
-            canvas = np.zeros((screen_height, screen_width, image.shape[2]), dtype=image.dtype)
-        else:  # Grayscale
-            # Convert to 3 channels for consistent display
-            resized = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR) if len(resized.shape) == 2 else resized
-            canvas = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
-        
-        # Center the image on canvas
-        x_offset = (screen_width - new_width) // 2
-        y_offset = (screen_height - new_height) // 2
-        canvas[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = resized
-        
-        # Create fullscreen window
-        cv2.namedWindow(window_name, cv2.WND_PROP_FULLSCREEN)
-        cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        
-        # Display image
-        cv2.imshow(window_name, canvas)
-        
-        # Instructions
-        print("Fullscreen mode active. Press any key to exit, ESC to close.")
-        
-        # Wait for key press
-        key = cv2.waitKey(0)
-        
-        # Close window
-        cv2.destroyAllWindows()
-        
-        return key
-
+    # Show and save SBS
     sbs_display = np.clip(sbs, 0, 255).astype(np.uint8)
-    show_fullscreen_opencv(sbs_display)
-    plt.imshow(sbs)
+    plt.imshow(sbs_display)
     plt.axis('off')
-    plt.savefig("test_sbs.png", dpi=300, bbox_inches='tight', pad_inches=0)
+    plt.show()
+    sbs_path = os.path.join(out_dir, f"{base_name}_{tag}_sbs.png")
+    plt.imsave(sbs_path, sbs_display)
+    print(f"Saved: {sbs_path}")
     plt.close()

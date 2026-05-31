@@ -93,7 +93,19 @@ class InfiniDepth(nn.Module):
         if model_path is not None:
             if os.path.exists(model_path):
                 checkpoint = torch.load(model_path, map_location="cpu")
-                self.load_state_dict({k[9:]: v for k, v in checkpoint["state_dict"].items()})
+                if "state_dict" in checkpoint:
+                    # Lightning checkpoint — strip wrapper prefix dynamically
+                    state = checkpoint["state_dict"]
+                    keys = list(state.keys())
+                    prefix = keys[0]
+                    for k in keys:
+                        while prefix and not all(s.startswith(prefix) for s in keys):
+                            prefix = prefix.rsplit(".", 1)[0]
+                    clean = {k[len(prefix)+1:]: v for k, v in state.items()} if prefix else state
+                else:
+                    # Raw state_dict
+                    clean = checkpoint
+                self.load_state_dict(clean)
             else:
                 raise FileNotFoundError(f"Model file {model_path} not found")
 

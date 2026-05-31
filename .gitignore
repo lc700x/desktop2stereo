@@ -30,3 +30,5 @@ output/depth_vis/0000.jpg
 CLAUDE.md
 *CHANGELOG.md
 .sline
+output
+*.*pt
