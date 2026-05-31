@@ -51,7 +51,7 @@ from utils import (
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Known model size suffixes, longest-first for matching priority
-_MODEL_SIZES = ["SmallPlus", "Small", "Base", "Large", "Giant"]
+_MODEL_SIZES = ["Small", "SmallPlus", "Base", "Large", "Giant"]
 _SIZE_ORDER = {s: i for i, s in enumerate(_MODEL_SIZES)}
 
 def parse_model_name(name):
