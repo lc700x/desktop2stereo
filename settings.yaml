@@ -294,7 +294,7 @@ Model List:
   DepthPro-Large:
     resolutions:
     - 1536
-Depth Model: InfiniDepth-Large
+Depth Model: Distill-Any-Depth-Small
 Depth Strength: 2.0
 Depth Resolution: 336
 Anti-aliasing: 2

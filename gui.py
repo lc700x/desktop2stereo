@@ -398,7 +398,15 @@ DEFAULTS = {
 # ─────────────────────────────────────────────
 # Global Font Size
 # ─────────────────────────────────────────────
-FONT_SIZE = 14
+SCALE = 0.9  # Global UI scale factor (fonts, spacing, widget + window sizes)
+
+
+def S(v):
+    """Scale a dimension literal by the global UI SCALE factor."""
+    return round(v * SCALE)
+
+
+FONT_SIZE = S(14)
 LABEL_ALIGN_WIDTH = 0  # Set by _auto_align_labels after UI is built
 # ─────────────────────────────────────────────
 # Device & Window Helpers (from gui.py)
@@ -416,8 +424,9 @@ def get_devices():
         import torch_directml
         if torch_directml.is_available():
             for i in range(torch_directml.device_count()):
+                dev_name = torch_directml.device_name(i).strip().rstrip('\x00')
                 devices[count] = {
-                    "name": f"DirectML{i}: {torch_directml.device_name(i)}",
+                    "name": f"DirectML{i}: {dev_name}",
                     "Computing Device": torch_directml.device(i),
                 }
                 count += 1
@@ -630,9 +639,9 @@ def save_yaml(path, cfg):
 class CompactTextField(ft.Container):
     """Compact text input — 32px height, visually consistent with CompactDropdown."""
 
-    def __init__(self, value="", width=100, read_only=False, on_change=None, tooltip=None, filter=None, max_length=None):
+    def __init__(self, value="", width=S(100), read_only=False, on_change=None, tooltip=None, filter=None, max_length=None):
         super().__init__()
-        self.height = 32
+        self.height = S(32)
         self.width = width if width else None
         self.padding = 0
         self.bgcolor = None
@@ -650,7 +659,7 @@ class CompactTextField(ft.Container):
 
     def _build_display(self):
         self.content = ft.Container(
-            height=32, padding=ft.Padding(8, 0, 8, 0),
+            height=S(32), padding=ft.Padding(S(8), 0, S(8), 0),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
             border_radius=4,
             tooltip=self._tooltip,
@@ -663,13 +672,13 @@ class CompactTextField(ft.Container):
         tf = ft.TextField(
             value=self._value, text_size=FONT_SIZE, dense=True,
             filled=False, border=ft.InputBorder.NONE,
-            content_padding=ft.Padding(0, 0, 0, 0), height=28,
+            content_padding=ft.Padding(0, 0, 0, 0), height=S(28),
             autofocus=True, on_submit=self._on_submit, on_blur=self._on_submit,
             max_length=self._max_length,
             input_filter=ft.InputFilter(regex_string=self._filter, allow=True) if self._filter else None,
         )
         self.content = ft.Container(
-            height=32, padding=ft.Padding(4, 0, 4, 0),
+            height=S(32), padding=ft.Padding(S(4), 0, S(4), 0),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
             border_radius=4, content=tf,
         )
@@ -722,7 +731,7 @@ class CompactDropdown(ft.Container):
         self._min = min_width or 0
         self._max = max_width or 0
         self._tooltip = tooltip
-        self.height = 32
+        self.height = S(32)
         self.padding = 0
         self.bgcolor = None
         self.border = None
@@ -743,9 +752,9 @@ class CompactDropdown(ft.Container):
     def _calc_auto_width(self):
         txt = self._label.value or ""
         if not txt:
-            return 100
+            return S(100)
         w = sum(FONT_SIZE * (1.2 if ord(c) > 127 else 0.6) for c in txt)
-        return int(w) + 34
+        return int(w) + S(34)
 
     def _apply_width(self):
         if self._dyna:
@@ -777,7 +786,7 @@ class CompactDropdown(ft.Container):
                 self._on_select_cb(ev)
 
         items = [
-            ft.PopupMenuItem(content=ft.Container(ft.Text(o, size=FONT_SIZE), padding=ft.Padding(8,0,8,0)), data=o, height=32, padding=0, on_click=on_item_click)
+            ft.PopupMenuItem(content=ft.Container(ft.Text(o, size=FONT_SIZE), padding=ft.Padding(8,0,8,0)), data=o, height=S(32), padding=0, on_click=on_item_click)
             for o in self._options
         ]
 
@@ -791,8 +800,8 @@ class CompactDropdown(ft.Container):
             padding=0, menu_padding=0,
             tooltip=self._tooltip or "",
             content=ft.Container(
-                height=32,
-                padding=ft.Padding(8, 0, 8, 0),
+                height=S(32),
+                padding=ft.Padding(S(8), 0, S(8), 0),
                 tooltip=self._tooltip or "",
                 border=ft.Border(
                     ft.BorderSide(1, ft.Colors.OUTLINE),
@@ -803,7 +812,7 @@ class CompactDropdown(ft.Container):
                 border_radius=4,
                 content=ft.Row([
                     self._label,
-                    ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=16),
+                    ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=S(16)),
                 ], spacing=2, alignment=align,
                    vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ),
@@ -884,7 +893,7 @@ class Desktop2StereoGUI:
 
         self.page.title = f"Desktop2Stereo v{VERSION}"
         self.page.window.icon = os.path.join(os.path.dirname(__file__), "icon.ico")
-        self.page.padding = 24
+        self.page.padding = S(24)
         self.page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
         if OS_NAME == "Windows":
             font = "Microsoft YaHei"
@@ -895,8 +904,8 @@ class Desktop2StereoGUI:
         self.page.theme = ft.Theme(color_scheme_seed="blue", font_family=font)
         self.page.spacing = 0
         self.page.theme_mode = ft.ThemeMode.SYSTEM
-        self.page.window.min_width = 696
-        self.page.window.min_height = 300
+        self.page.window.min_width = S(696)
+        self.page.window.min_height = S(300)
 
         # Build UI
         self.build_ui()
@@ -980,12 +989,12 @@ class Desktop2StereoGUI:
 
     def _fit_window_to_content(self, update=True):
         """Keep width fixed; auto-adjust height based on visible content."""
-        self.page.window.width = 696
-        self.page.window.max_width = 696
+        self.page.window.width = S(696)
+        self.page.window.max_width = S(696)
         if getattr(self, 'stream_container', None) and self.stream_container.visible:
-            self.page.window.height = 1000
+            self.page.window.height = S(1008)
         else:
-            self.page.window.height = 760
+            self.page.window.height = S(768)
         if update:
             self.page.update()
 
@@ -1012,11 +1021,11 @@ class Desktop2StereoGUI:
         ]
 
         def _est(t):
-            return sum(13 if ord(c) > 127 else 7 for c in t)
+            return sum(S(13) if ord(c) > 127 else S(7) for c in t)
 
         all_labels = left_labels + right_labels
         max_w = max(_est(lbl.value) for lbl in all_labels)
-        final_w = int(max_w * 1.15) + 10
+        final_w = int(max_w * 1.15) + S(10)
 
         for lbl in all_labels:
             lbl.width = final_w
@@ -1027,7 +1036,7 @@ class Desktop2StereoGUI:
         for inst in getattr(self, '_dropdowns', []):
             inst.reapply_width()
         if hasattr(self, '_row8_spacer'):
-            self._row8_spacer.width = max(0, final_w - 129)
+            self._row8_spacer.width = max(0, final_w - S(128) - 1)
             try:
                 self._row8_spacer.update()
             except RuntimeError:
@@ -1047,88 +1056,88 @@ class Desktop2StereoGUI:
         CompactDropdown._instances = self._dropdowns
 
         # Row 1: Depth model
-        self.r0_label = ft.Text("Depth Model:", size=FONT_SIZE, width=130)
+        self.r0_label = ft.Text("Depth Model:", size=FONT_SIZE, width=S(130))
         default_family, default_size = parse_model_name(DEFAULT_MODEL_LIST[0]) if DEFAULT_MODEL_LIST else ("", "")
         self.depth_model_dd = CompactDropdown(
             options=[f for f in DEFAULT_FAMILIES],
             value=default_family,
             on_select=self.on_model_family_change,
-            min_width=200, max_width=300)
+            min_width=S(200), max_width=S(300))
         self.model_size_dd = CompactDropdown(
             options=FAMILY_TO_SIZES.get(default_family, []),
             value=default_size,
             on_select=self.on_model_size_change,
-            width=110)
-        self.fp16_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="FP16")
+            width=S(110))
+        self.fp16_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="FP16")
         row0 = ft.Row([
             self.r0_label,
             self.depth_model_dd,
-            ft.Container(width=8),
+            ft.Container(width=S(8)),
             self.model_size_dd,
         ], spacing=1)
 
         # Row 2: Depth resolution + Convergence
-        self.r1a_label = ft.Text("Depth Resolution:", size=FONT_SIZE, width=130)
-        self.depth_res_dd = CompactDropdown(options=[], width=130)
-        self.r1b_label = ft.Text("Convergence:", size=FONT_SIZE, width=130)
+        self.r1a_label = ft.Text("Depth Resolution:", size=FONT_SIZE, width=S(130))
+        self.depth_res_dd = CompactDropdown(options=[], width=S(130))
+        self.r1b_label = ft.Text("Convergence:", size=FONT_SIZE, width=S(130))
         conv_options = [str(i / 4) for i in range(-2, 5)]
-        self.convergence_dd = CompactDropdown(width=130,
+        self.convergence_dd = CompactDropdown(width=S(130),
             options=[v for v in conv_options],
             value="0.0")
         row1 = ft.Row([
             self.r1a_label,
             self.depth_res_dd,
-            ft.Container(width=40),
+            ft.Container(width=S(40)),
             self.r1b_label,
             self.convergence_dd
         ], spacing=1)
 
         # Row 3: Depth strength + Foreground scale
-        self.r2a_label = ft.Text("Depth Strength:", size=FONT_SIZE, width=130)
+        self.r2a_label = ft.Text("Depth Strength:", size=FONT_SIZE, width=S(130))
         ds_options = [f"{i / 2:.1f}" for i in range(21)]
-        self.depth_strength_dd = CompactDropdown(width=130,
+        self.depth_strength_dd = CompactDropdown(width=S(130),
             options=[v for v in ds_options],
             value="2.0")
-        self.r2b_label = ft.Text("Foreground Scale:", size=FONT_SIZE, width=130)
+        self.r2b_label = ft.Text("Foreground Scale:", size=FONT_SIZE, width=S(130))
         fg_options = [f"{i / 2:.1f}" for i in range(-10, 11)]
-        self.foreground_scale_dd = CompactDropdown(width=130,
+        self.foreground_scale_dd = CompactDropdown(width=S(130),
             options=[v for v in fg_options],
             value="0.5")
         row2 = ft.Row([
             self.r2a_label,
             self.depth_strength_dd,
-            ft.Container(width=40),
+            ft.Container(width=S(40)),
             self.r2b_label,
             self.foreground_scale_dd
         ], spacing=1)
 
         # Row 4: Anti-aliasing + IPD
-        self.r3a_label = ft.Text("Anti-aliasing:", size=FONT_SIZE, width=130)
+        self.r3a_label = ft.Text("Anti-aliasing:", size=FONT_SIZE, width=S(130))
         aa_options = [str(i) for i in range(11)]
-        self.antialiasing_dd = CompactDropdown(width=130, 
+        self.antialiasing_dd = CompactDropdown(width=S(130), 
             options=[v for v in aa_options],
             value="2")
-        self.r3b_label = ft.Text("IPD (mm):", size=FONT_SIZE, width=130)
-        self.ipd_dd = CompactDropdown(options=[str(i) for i in range(58, 71)], value="64", width=130)
+        self.r3b_label = ft.Text("IPD (mm):", size=FONT_SIZE, width=S(130))
+        self.ipd_dd = CompactDropdown(options=[str(i) for i in range(58, 71)], value="64", width=S(130))
         row3 = ft.Row([
             self.r3a_label,
             self.antialiasing_dd,
-            ft.Container(width=40),
+            ft.Container(width=S(40)),
             self.r3b_label,
             self.ipd_dd
         ], spacing=1)
 
         # Row 5: Acceleration group (two rows, 4 columns each)
-        self.r4_label = ft.Text("Acceleration:", size=FONT_SIZE, width=130)
-        self.torch_compile_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="torch.compile")
-        self.tensorrt_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="TensorRT", on_change=self._on_trt_toggle)
-        self.coreml_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="CoreML", on_change=self._on_coreml_toggle)
-        self.openvino_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="OpenVINO", on_change=self._on_openvino_toggle)
-        self.recompile_trt_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="Recompile TensorRT")
-        self.recompile_coreml_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="Recompile CoreML")
-        self.recompile_openvino_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="Recompile OpenVINO")
-        accel_row1 = ft.Row([self.fp16_cb, self.torch_compile_cb, self.coreml_cb, self.recompile_coreml_cb], spacing=20)
-        accel_row2 = ft.Row([self.tensorrt_cb, self.recompile_trt_cb, self.openvino_cb, self.recompile_openvino_cb], spacing=20)
+        self.r4_label = ft.Text("Acceleration:", size=FONT_SIZE, width=S(130))
+        self.torch_compile_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="torch.compile")
+        self.tensorrt_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="TensorRT", on_change=self._on_trt_toggle)
+        self.coreml_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="CoreML", on_change=self._on_coreml_toggle)
+        self.openvino_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="OpenVINO", on_change=self._on_openvino_toggle)
+        self.recompile_trt_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile TensorRT")
+        self.recompile_coreml_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile CoreML")
+        self.recompile_openvino_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile OpenVINO")
+        accel_row1 = ft.Row([self.fp16_cb, self.torch_compile_cb, self.coreml_cb, self.recompile_coreml_cb], spacing=S(20))
+        accel_row2 = ft.Row([self.tensorrt_cb, self.recompile_trt_cb, self.openvino_cb, self.recompile_openvino_cb], spacing=S(20))
         self._accel_spacer = ft.Container(width=0)
         self.row4a = ft.Row([
             self.r4_label,
@@ -1140,35 +1149,35 @@ class Desktop2StereoGUI:
         ], spacing=1)
 
         # Row 6: Computing device
-        self.r5_label = ft.Text("Computing Device:", size=FONT_SIZE, width=130)
+        self.r5_label = ft.Text("Computing Device:", size=FONT_SIZE, width=S(130))
         device_names = [v["name"] for v in DEVICES.values()]
         self.device_dd = CompactDropdown(
             options=[n for n in device_names],
             on_select=self.on_device_change,
-            min_width=180)
-        self.showfps_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="Show FPS")
+            min_width=S(180))
+        self.showfps_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Show FPS")
         row5 = ft.Row([
             self.r5_label,
             self.device_dd
         ], spacing=1)
 
         # Row 7: Capture tool
-        self.r6_label = ft.Text("Capture Tool:", size=FONT_SIZE, width=130)
+        self.r6_label = ft.Text("Capture Tool:", size=FONT_SIZE, width=S(130))
         ct_options = _get_capture_tool_options(DEVICES.get(0, {}).get("name", ""))
         self.capture_tool_dd = CompactDropdown(
             options=[o for o in ct_options],
             on_select=self.on_capture_tool_change,
-            min_width=160)
-        row6 = ft.Row([self.r6_label, self.capture_tool_dd, ft.Container(width=15), self.showfps_cb], spacing=1)
+            min_width=S(160))
+        row6 = ft.Row([self.r6_label, self.capture_tool_dd, ft.Container(width=S(15)), self.showfps_cb], spacing=1)
 
         # Row 8: Run mode + Display mode / Controller
-        self.r7a_label = ft.Text("Run Mode:", size=FONT_SIZE, width=130)
-        self.run_mode_dd = CompactDropdown(on_select=self.on_run_mode_change, width=130)
-        self.r7b_label = ft.Text("Display Mode:", size=FONT_SIZE, width=130)
+        self.r7a_label = ft.Text("Run Mode:", size=FONT_SIZE, width=S(130))
+        self.run_mode_dd = CompactDropdown(on_select=self.on_run_mode_change, width=S(130))
+        self.r7b_label = ft.Text("Display Mode:", size=FONT_SIZE, width=S(130))
         self.display_mode_dd = CompactDropdown(
             options=[m for m in ["Half-SBS", "Full-SBS", "TAB", "Depth Map"]],
-            value="Half-SBS", width=130)
-        self.r10_label = ft.Text("Controller:", size=FONT_SIZE, width=130)
+            value="Half-SBS", width=S(130))
+        self.r10_label = ft.Text("Controller:", size=FONT_SIZE, width=S(130))
         try:
             ctrl_base = os.path.join(os.path.dirname(__file__), "controllers")
             ctrl_dirs = [d for d in os.listdir(ctrl_base) if os.path.isdir(os.path.join(ctrl_base, d))]
@@ -1178,11 +1187,11 @@ class Desktop2StereoGUI:
             ctrl_dirs = ["PICO"]
         self.ctrl_model_dd = CompactDropdown(
             options=[c for c in ctrl_dirs],
-            value="PICO", width=130)
+            value="PICO", width=S(130))
         self.row7a = ft.Row([
             self.r7a_label,
             self.run_mode_dd,
-            ft.Container(width=40),
+            ft.Container(width=S(40)),
             self.r7b_label,
             self.display_mode_dd
         ], spacing=1)
@@ -1196,53 +1205,53 @@ class Desktop2StereoGUI:
             options=["Monitor",
                      "Window"],
             value="Monitor", on_select=self.on_capture_mode_change,
-            width=128)
-        self.monitor_dd = CompactDropdown(on_select=self._on_monitor_change, max_width=300)
-        self.window_dd = CompactDropdown(on_select=self.on_window_selected, max_width=300)
-        self.refresh_btn = ft.Button(content=ft.Text("Refresh", size=FONT_SIZE), width=130, on_click=self.refresh_monitor_and_window)
-        self._row8_spacer = ft.Container(width=60)
+            width=S(128))
+        self.monitor_dd = CompactDropdown(on_select=self._on_monitor_change, max_width=S(300))
+        self.window_dd = CompactDropdown(on_select=self.on_window_selected, max_width=S(300))
+        self.refresh_btn = ft.Button(content=ft.Text("Refresh", size=FONT_SIZE), width=S(130), on_click=self.refresh_monitor_and_window)
+        self._row8_spacer = ft.Container(width=S(60))
         row8 = ft.Row([
             self.capture_mode_dd,
             self._row8_spacer,
             self.monitor_dd,
             self.window_dd,
-            ft.Container(width=8),
+            ft.Container(width=S(8)),
             ft.Container(expand=True),
             self.refresh_btn
         ], spacing=1)
 
         # Row 10: Stereo output + checkboxes
-        self.r9_label = ft.Text("Stereo Output:", size=FONT_SIZE, width=130)
+        self.r9_label = ft.Text("Stereo Output:", size=FONT_SIZE, width=S(130))
         self.stereo_monitor_dd = CompactDropdown(options=[], on_select=lambda e: self._fit_window_to_content())
-        self.fill_16_9_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="Fill 16:9")
-        self.fix_aspect_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="Fix Viewer Aspect")
-        self.lossless_cb = ft.Checkbox(visual_density=ft.VisualDensity.COMPACT, label="LSFG")
-        self._stereo_spacer = ft.Container(width=10)
+        self.fill_16_9_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Fill 16:9")
+        self.fix_aspect_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Fix Viewer Aspect")
+        self.lossless_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="LSFG")
+        self._stereo_spacer = ft.Container(width=S(10))
         row9 = ft.Row([
             self.r9_label,
             self.stereo_monitor_dd,
             self._stereo_spacer,
-            ft.Row([self.fill_16_9_cb, self.fix_aspect_cb, self.lossless_cb], spacing=20),
+            ft.Row([self.fill_16_9_cb, self.fix_aspect_cb, self.lossless_cb], spacing=S(20)),
         ], spacing=1)
 
         # Bottom: Language + Theme + Buttons
-        self.lang_label = ft.Text("Set Language:", size=FONT_SIZE, width=130)
+        self.lang_label = ft.Text("Set Language:", size=FONT_SIZE, width=S(130))
         self.lang_dd = CompactDropdown(
             options=["English", "简体中文"],
             value="English", on_select=self.on_language_change,
-            width=130)
-        self.theme_label = ft.Text("Theme:", size=FONT_SIZE, width=130)
+            width=S(130))
+        self.theme_label = ft.Text("Theme:", size=FONT_SIZE, width=S(130))
         self.theme_dd = CompactDropdown(
             options=["system", "blue", "green", "red", "purple", "orange", "teal", "pink", "grey"],
             value="system", on_select=self.on_theme_change,
-            width=130)
-        self.reset_btn = ft.Button(content=ft.Text("Reset", size=FONT_SIZE), width=130, on_click=self.reset_defaults)
-        self.stop_btn = ft.Button(content=ft.Text("Stop", size=FONT_SIZE), width=130, on_click=self.stop_process)
-        self.run_btn = ft.Button(content=ft.Text("Run", size=FONT_SIZE), width=150, on_click=self.save_and_run)
+            width=S(130))
+        self.reset_btn = ft.Button(content=ft.Text("Reset", size=FONT_SIZE), width=S(130), on_click=self.reset_defaults)
+        self.stop_btn = ft.Button(content=ft.Text("Stop", size=FONT_SIZE), width=S(130), on_click=self.stop_process)
+        self.run_btn = ft.Button(content=ft.Text("Run", size=FONT_SIZE), width=S(150), on_click=self.save_and_run)
         lang_row = ft.Row([
             self.lang_label,
             self.lang_dd,
-            ft.Container(width=40),
+            ft.Container(width=S(40)),
             self.theme_label,
             self.theme_dd,
         ], spacing=1)
@@ -1251,22 +1260,22 @@ class Desktop2StereoGUI:
 
         # ========== Assembly ==========
         depth_group = ft.Container(
-            ft.Column([row0, row1, row2, row3, self.row4a, self.row4b], spacing=8),
-            margin=ft.Margin(0,0,0,8),
+            ft.Column([row0, row1, row2, row3, self.row4a, self.row4b], spacing=S(8)),
+            margin=ft.Margin(0, 0, 0, S(8)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
-            border_radius=6, padding=ft.Padding(16, 10, 16, 10),
+            border_radius=6, padding=ft.Padding(S(16), S(10), S(16), S(10)),
         )
         device_group = ft.Container(
-            ft.Column([row5, row6, self.row7a, self.row7b, row8, row9], spacing=8),
-            margin=ft.Margin(0,0,0,8),
+            ft.Column([row5, row6, self.row7a, self.row7b, row8, row9], spacing=S(8)),
+            margin=ft.Margin(0, 0, 0, S(8)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
-            border_radius=6, padding=ft.Padding(16, 10, 16, 10),
+            border_radius=6, padding=ft.Padding(S(16), S(10), S(16), S(10)),
         )
         lang_group = ft.Container(
-            ft.Column([lang_row], spacing=8),
-            margin=ft.Margin(0,0,0,8),
+            ft.Column([lang_row], spacing=S(8)),
+            margin=ft.Margin(0, 0, 0, S(8)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
-            border_radius=6, padding=ft.Padding(16, 10, 16, 10),
+            border_radius=6, padding=ft.Padding(S(16), S(10), S(16), S(10)),
         )
         self.lang_group = lang_group
         self.depth_group = depth_group
@@ -1278,12 +1287,12 @@ class Desktop2StereoGUI:
             self.depth_group,
             self.device_group,
             self.stream_container,
-        ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=8)
+        ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=S(8))
 
         btn_row = ft.Row([
             self.reset_btn,
             ft.Container(expand=True),
-            ft.Row([self.stop_btn, self.run_btn], spacing=20),
+            ft.Row([self.stop_btn, self.run_btn], spacing=S(20)),
         ])
 
         self._btn_bar = ft.Container(content=btn_row)
@@ -1291,14 +1300,14 @@ class Desktop2StereoGUI:
             ft.Container(
                 content=self.status_text,
                 bgcolor=ft.Colors.SURFACE_CONTAINER,
-                border_radius=0, padding=ft.Padding(8, 4, 8, 4),
+                border_radius=0, padding=ft.Padding(S(8), S(4), S(8), S(4)),
                 expand=True,
             )
         ])
 
         footer = ft.Container(
-            ft.Column([self._btn_bar, self._status_bar], spacing=16),
-            padding=ft.Padding(0, 18, 0, 0),
+            ft.Column([self._btn_bar, self._status_bar], spacing=S(16)),
+            padding=ft.Padding(0, S(18), 0, 0),
         )
 
         self._scroll_area = scroll_area
@@ -1309,43 +1318,43 @@ class Desktop2StereoGUI:
 
     # All event/logic methods below preserve original behavior
     def _build_streamer_rows(self):
-        self.stream_url_label = ft.Text("Stream URL:", size=FONT_SIZE, width=150)
+        self.stream_url_label = ft.Text("Stream URL:", size=FONT_SIZE, width=S(150))
         self.stream_url_tf = ft.Container(
             content=ft.Row([ft.Text("", size=FONT_SIZE)], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            height=32, padding=ft.Padding(8, 0, 8, 0), expand=True,
+            height=S(32), padding=ft.Padding(S(8), 0, S(8), 0), expand=True,
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
             border_radius=4, on_click=self.copy_url_to_clipboard,
         )
-        self.open_browser_btn = ft.Button(content=ft.Text("Open Browser", size=FONT_SIZE), width=144, on_click=self.open_url_in_browser)
+        self.open_browser_btn = ft.Button(content=ft.Text("Open Browser", size=FONT_SIZE), width=S(144), on_click=self.open_url_in_browser)
         self.stream_url_row = ft.Row(
-            [self.stream_url_label, self.stream_url_tf, ft.Container(width=10), self.open_browser_btn],
+            [self.stream_url_label, self.stream_url_tf, ft.Container(width=S(10)), self.open_browser_btn],
             spacing=2,
         )
-        self.stream_port_label = ft.Text("Streamer Port:", size=FONT_SIZE, width=150)
-        self.stream_port_tf = CompactTextField(value=str(DEFAULT_PORT), width=130, on_change=self.update_stream_url, filter=r"[0-9]", max_length=5)
+        self.stream_port_label = ft.Text("Streamer Port:", size=FONT_SIZE, width=S(150))
+        self.stream_port_tf = CompactTextField(value=str(DEFAULT_PORT), width=S(130), on_change=self.update_stream_url, filter=r"[0-9]", max_length=5)
         self.stream_quality_label = ft.Text("Stream Quality:", size=FONT_SIZE)
         qual_vals = [str(i) for i in range(100, 49, -5)]
-        self.stream_quality_dd = CompactDropdown(width=130,
+        self.stream_quality_dd = CompactDropdown(width=S(130),
             options=[q for q in qual_vals], value="100")
         self.stream_port_quality_row = ft.Row(
-            [self.stream_port_label, self.stream_port_tf, ft.Container(width=40), self.stream_quality_label, self.stream_quality_dd],
+            [self.stream_port_label, self.stream_port_tf, ft.Container(width=S(40)), self.stream_quality_label, self.stream_quality_dd],
             spacing=1,
         )
-        self.stream_proto_label = ft.Text("Stream Protocol:", size=FONT_SIZE, width=150)
-        self.stream_proto_dd = CompactDropdown(width=130,
+        self.stream_proto_label = ft.Text("Stream Protocol:", size=FONT_SIZE, width=S(150))
+        self.stream_proto_dd = CompactDropdown(width=S(130),
             options=[p for p in ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]],
             value="HLS", on_select=self._on_stream_protocol_change)
-        self.stream_key_label = ft.Text("Stream Key:", size=FONT_SIZE, width=130)
-        self.stream_key_tf = CompactTextField(value="live", width=130, on_change=self._on_stream_key_change)
-        self.stream_proto_row = ft.Row([self.stream_proto_label, self.stream_proto_dd, ft.Container(width=40), self.stream_key_label, self.stream_key_tf], spacing=1)
-        self.audio_label = ft.Text("Stereo Mix:", size=FONT_SIZE, width=150)
-        self.audio_dd = CompactDropdown(options=[], min_width=130)
+        self.stream_key_label = ft.Text("Stream Key:", size=FONT_SIZE, width=S(130))
+        self.stream_key_tf = CompactTextField(value="live", width=S(130), on_change=self._on_stream_key_change)
+        self.stream_proto_row = ft.Row([self.stream_proto_label, self.stream_proto_dd, ft.Container(width=S(40)), self.stream_key_label, self.stream_key_tf], spacing=1)
+        self.audio_label = ft.Text("Stereo Mix:", size=FONT_SIZE, width=S(150))
+        self.audio_dd = CompactDropdown(options=[], min_width=S(130))
         self.audio_row = ft.Row([self.audio_label, self.audio_dd], spacing=1)
-        self.crf_label = ft.Text("CRF:", size=FONT_SIZE, width=150)
-        self.crf_tf = CompactTextField(value="20", width=130, filter=r"[0-9]", max_length=2)
-        self.audio_delay_label = ft.Text("Audio Delay (s):", size=FONT_SIZE, width=130)
-        self.audio_delay_tf = CompactTextField(value="-0.15", width=130, filter=r"[0-9\-\.]", max_length=6)
-        self.crf_row = ft.Row([self.crf_label, self.crf_tf, ft.Container(width=40), self.audio_delay_label, self.audio_delay_tf], spacing=1)
+        self.crf_label = ft.Text("CRF:", size=FONT_SIZE, width=S(150))
+        self.crf_tf = CompactTextField(value="20", width=S(130), filter=r"[0-9]", max_length=2)
+        self.audio_delay_label = ft.Text("Audio Delay (s):", size=FONT_SIZE, width=S(130))
+        self.audio_delay_tf = CompactTextField(value="-0.15", width=S(130), filter=r"[0-9\-\.]", max_length=6)
+        self.crf_row = ft.Row([self.crf_label, self.crf_tf, ft.Container(width=S(40)), self.audio_delay_label, self.audio_delay_tf], spacing=1)
         self._streamer_rows = [
             self.stream_url_row,
             self.stream_port_quality_row,
@@ -1354,8 +1363,8 @@ class Desktop2StereoGUI:
             self.audio_row,
         ]
         self.stream_container = ft.Container(
-            ft.Column([], spacing=8),
-            visible=False, padding=ft.Padding(16,10,16,10),
+            ft.Column([], spacing=S(8)),
+            visible=False, padding=ft.Padding(S(16), S(10), S(16), S(10)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
             border_radius=6,
         )
@@ -1650,6 +1659,7 @@ class Desktop2StereoGUI:
         self.openvino_cb.disabled = False
         self.recompile_openvino_cb.visible = self.openvino_cb.value if self.openvino_cb.visible else False
         self.fp16_cb.visible = not dml
+        self.r4_label.visible = not (dml or other)
         if dml or other:
             self.torch_compile_cb.visible = False
             self.tensorrt_cb.visible = False
@@ -1843,8 +1853,7 @@ class Desktop2StereoGUI:
             self.display_mode_dd.options = [m for m in ["Half-SBS", "Full-SBS", "TAB", "Depth Map"]]
         mon_count = self._get_monitor_count()
         stereo_full = mode in ["Local Viewer", "3D Monitor", "RTMP Streamer"] and mon_count > 1
-        stereo_label_only = mode in ["MJPEG Streamer", "Legacy Streamer"] and mon_count > 1
-        self.r9_label.visible = mode == "Local Viewer" or stereo_full or stereo_label_only
+        self.r9_label.visible = not is_openxr
         self.stereo_monitor_dd.visible = stereo_full
         if hasattr(self, '_stereo_spacer'):
             self._stereo_spacer.visible = stereo_full

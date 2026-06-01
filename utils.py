@@ -33,6 +33,7 @@ DISABLE_TRT_KEYWORDS = [
     "dpt-hybrid-midas",
     "depthpro",
     "da3-giant",
+    "da3nested-giant",
     "video-depth-anything",
 ]
 
@@ -41,11 +42,10 @@ TRT_FIX_KEYWORDS = [
     "depth-anything/DA3-SMALL",
     "depth-anything/DA3-BASE",
     "depth-anything/DA3-LARGE",
-    "depth-anything/DA3-GIANT",
+    # "depth-anything/DA3-GIANT",
     "depth-anything/DA3-LARGE-1.1",
-    "depth-anything/DA3-GIANT-1.1",
     "depth-anything/DA3METRIC-LARGE",
-    "depth-anything/DA3NESTED-GIANT-LARGE",
+    # "depth-anything/DA3NESTED-GIANT-LARGE",
     "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
     "depth-anything/DA3MONO-LARGE",
     # Video-Depth-Anything
