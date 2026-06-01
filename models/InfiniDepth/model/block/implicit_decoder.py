@@ -13,6 +13,108 @@ def default(val, d):
     return val if exists(val) else d
 
 
+def _grid_sample_bilinear(input, grid, align_corners=False, padding_mode="zeros"):
+    """DirectML-friendly bilinear grid_sample that stays on the GPU.
+
+    torch-directml has no aten::grid_sampler_2d kernel and silently falls back
+    to CPU (slow). This reimplements the same math with gather + arithmetic,
+    all of which run on the DML device.
+
+    Matches F.grid_sample(input, grid, mode='bilinear', align_corners=...,
+    padding_mode='zeros'|'border'). grid last dim is (x, y) in [-1, 1].
+
+    Args:
+        input: [B, C, H, W]
+        grid:  [B, Hg, Wg, 2]
+    Returns:
+        [B, C, Hg, Wg]
+    """
+    B, C, H, W = input.shape
+    _, Hg, Wg, _ = grid.shape
+
+    x = grid[..., 0]
+    y = grid[..., 1]
+
+    # Normalized [-1, 1] -> pixel coordinates.
+    if align_corners:
+        ix = (x + 1) * 0.5 * (W - 1)
+        iy = (y + 1) * 0.5 * (H - 1)
+    else:
+        ix = ((x + 1) * W - 1) * 0.5
+        iy = ((y + 1) * H - 1) * 0.5
+
+    x0 = torch.floor(ix)
+    y0 = torch.floor(iy)
+    x1 = x0 + 1
+    y1 = y0 + 1
+
+    # Bilinear weights.
+    wx1 = ix - x0
+    wx0 = 1.0 - wx1
+    wy1 = iy - y0
+    wy0 = 1.0 - wy1
+    w00 = wx0 * wy0
+    w01 = wx1 * wy0
+    w10 = wx0 * wy1
+    w11 = wx1 * wy1
+
+    if padding_mode == "zeros":
+        # Out-of-bounds corners contribute nothing.
+        def _mask(xc, yc):
+            return ((xc >= 0) & (xc <= W - 1) & (yc >= 0) & (yc <= H - 1)).to(input.dtype)
+        w00 = w00 * _mask(x0, y0)
+        w01 = w01 * _mask(x1, y0)
+        w10 = w10 * _mask(x0, y1)
+        w11 = w11 * _mask(x1, y1)
+
+    # Clamp indices so gather is always in range (border behaviour for the read;
+    # the zeros mask above zeroes the weight where it mattered).
+    x0c = x0.clamp(0, W - 1).long()
+    x1c = x1.clamp(0, W - 1).long()
+    y0c = y0.clamp(0, H - 1).long()
+    y1c = y1.clamp(0, H - 1).long()
+
+    inp_flat = input.reshape(B, C, H * W)
+
+    def _gather(xc, yc):
+        idx = (yc * W + xc).reshape(B, 1, Hg * Wg).expand(B, C, Hg * Wg)
+        return torch.gather(inp_flat, 2, idx).reshape(B, C, Hg, Wg)
+
+    v00 = _gather(x0c, y0c)
+    v01 = _gather(x1c, y0c)
+    v10 = _gather(x0c, y1c)
+    v11 = _gather(x1c, y1c)
+
+    return (v00 * w00.unsqueeze(1) + v01 * w01.unsqueeze(1)
+            + v10 * w10.unsqueeze(1) + v11 * w11.unsqueeze(1))
+
+
+def _grid_sample(input, grid):
+    """Bilinear sample with align_corners=False, zeros padding.
+
+    Uses the GPU gather fallback on DirectML; native F.grid_sample elsewhere."""
+    if input.device.type == "privateuseone":
+        return _grid_sample_bilinear(input, grid, align_corners=False, padding_mode="zeros")
+    return F.grid_sample(input, grid, mode="bilinear", align_corners=False, padding_mode="zeros")
+
+
+class ELU(nn.Module):
+    """ELU activation that stays on the GPU on DirectML.
+
+    torch-directml has no aten::elu kernel and falls back to CPU. The
+    where/exp form is identical (clamp(max=0) keeps exp from overflowing on the
+    unused positive branch) and runs on-device. Other backends use native F.elu.
+    """
+    def __init__(self, alpha: float = 1.0):
+        super().__init__()
+        self.alpha = alpha
+
+    def forward(self, x):
+        if x.device.type == "privateuseone":
+            return torch.where(x > 0, x, self.alpha * (torch.exp(torch.clamp(x, max=0.0)) - 1.0))
+        return F.elu(x, self.alpha)
+
+
 class MLP(nn.Module):
     def __init__(self, in_dim, out_dim, hidden_list, output_act='elu'):
         super().__init__()
@@ -27,7 +129,7 @@ class MLP(nn.Module):
             act = {
                 "sigmoid": nn.Sigmoid(),
                 "relu": nn.ReLU(),
-                "elu": nn.ELU(),
+                "elu": ELU(),
             }.get(output_act, nn.Identity())
             layers.append(act)
 
@@ -107,17 +209,21 @@ class ImplicitHead(nn.Module):
         """
         coord_ = coord.clamp(-1 + 1e-6, 1 - 1e-6)
 
+        # Reverse the (y, x) last dim to grid_sample's (x, y) order. Use fancy
+        # indexing instead of .flip(-1): aten::flip has no DirectML kernel and
+        # segfaults (0xC0000005); [..., [1, 0]] is identical for a size-2 dim
+        # and works on every backend.
+        grid = coord_[..., [1, 0]].unsqueeze(1)
+
         # Sample DINOv3 features at query coordinates
-        q_feat_dino = F.grid_sample(
-            feat, coord_.flip(-1).unsqueeze(1),
-            mode='bilinear', align_corners=False
+        q_feat_dino = _grid_sample(
+            feat, grid
         )[:, :, 0, :].permute(0, 2, 1)  # [B, N, hidden_dim]
 
         # Sample BasicEncoder features at query coordinates (if available)
         if basic_feat is not None:
-            q_feat_basic = F.grid_sample(
-                basic_feat, coord_.flip(-1).unsqueeze(1),
-                mode='bilinear', align_corners=False
+            q_feat_basic = _grid_sample(
+                basic_feat, grid
             )[:, :, 0, :].permute(0, 2, 1)  # [B, N, basic_dim]
 
             # Fuse features based on fusion type

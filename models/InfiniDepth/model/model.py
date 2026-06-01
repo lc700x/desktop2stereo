@@ -92,7 +92,7 @@ class InfiniDepth(nn.Module):
 
         if model_path is not None:
             if os.path.exists(model_path):
-                checkpoint = torch.load(model_path, map_location="cpu")
+                checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
                 if "state_dict" in checkpoint:
                     # Lightning checkpoint — strip wrapper prefix dynamically
                     state = checkpoint["state_dict"]

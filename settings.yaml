@@ -30,7 +30,7 @@ Model List:
     - 392
     - 448
     - 518
-  InfinityDepth-Small:
+  InfiniDepth-Small:
     resolutions:
     - 192
     - 240
@@ -39,7 +39,7 @@ Model List:
     - 384
     - 448
     - 512
-  InfinityDepth-SmallPlus:
+  InfiniDepth-SmallPlus:
     resolutions:
     - 192
     - 240
@@ -48,7 +48,7 @@ Model List:
     - 384
     - 448
     - 512
-  InfinityDepth-Base:
+  InfiniDepth-Base:
     resolutions:
     - 192
     - 240
@@ -57,7 +57,7 @@ Model List:
     - 384
     - 448
     - 512
-  InfinityDepth-Large:
+  InfiniDepth-Large:
     resolutions:
     - 192
     - 240
