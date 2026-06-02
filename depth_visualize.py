@@ -37,15 +37,10 @@ import cv2
 from PIL import Image
 img  = Image.open("assets/cats.jpg").convert("RGB")
 image_rgb = np.array(img).astype(np.float32)
-DEBUG = True
-AA_STRENGTH = 0
-FP16 = True
-FILL_16_9 = True
-DEPTH_RESOLUTION = 504
-FOREGROUND_SCALE = 0
+
 # MODEL_ID ="depth-anything/DA3-LARGE-1.1"
 # MODEL_ID ="depth-anything/DA3-SMALL"
-MODEL_ID ="depth-anything/DA3NESTED-GIANT-LARGE"
+# MODEL_ID ="depth-anything/DA3NESTED-GIANT-LARGE"
 # MODEL_ID = "depth-anything/DA3METRIC-LARGE"
 # MODEL_ID = "LiheYoung/depth-anything-small-hf"
 # MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
@@ -62,12 +57,18 @@ MODEL_ID ="depth-anything/DA3NESTED-GIANT-LARGE"
 # MODEL_ID = "lc700x/dpt-large-redesign-hf"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 # MODEL_ID = "Intel/dpt-beit-base-384"
+MODEL_ID = "lc700x/InfiniDepth-Small"
 
-MODEL_ID = "lc700x/InfiniDepth-SmallPlus"
+DEBUG = True
+AA_STRENGTH = 0
+FP16 = False
+FILL_16_9 = True
+DEPTH_RESOLUTION = 512
+FOREGROUND_SCALE = 0
 
 USE_TORCH_COMPILE = False
 
-USE_TENSORRT = True
+USE_TENSORRT = False
 RECOMPILE_TRT = True
 
 USE_COREML = False

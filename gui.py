@@ -2393,14 +2393,17 @@ class Desktop2StereoGUI:
         self.recompile_openvino_cb.value = False
 
     async def _countdown_and_run(self, seconds):
+        self._diag("_countdown_and_run scheduled")
         try:
             if self.process and self.process.returncode is None:
                 self.set_status(UI_TEXTS[self.language]["A thread already running!"])
+                self._diag("already running, return")
                 return
             if seconds > 0:
                 await asyncio.sleep(seconds)
             if self._cancel_starting:
                 self._cancel_starting = False
+                self._diag("cancelled, return")
                 return
             print(f"[Main] Initializing Desktop2Stereo {self.run_mode_key}…")
             shutdown_event.clear()
@@ -2414,11 +2417,17 @@ class Desktop2StereoGUI:
                     sys.executable, os.path.join(BASE_DIR, "main.py"),
                     start_new_session=True,
                 )
+            self._diag(f"process started, pid={self.process.pid}")
             self.set_status(UI_TEXTS[self.language]["Running"], key="Running")
             self.page.update()
             asyncio.create_task(self._monitor_process_task())
+            self._diag("monitor_task created")
             # Reset recompile flags after 8s
-            await asyncio.sleep(8)
+            for _ in range(8):
+                await asyncio.sleep(1)
+                if self.process and self.process.returncode is not None:
+                    self._diag(f"process exited during wait, code={self.process.returncode}")
+                    break
             self._config["Recompile TensorRT"] = False
             self._config["Recompile CoreML"] = False
             self._config["Recompile OpenVINO"] = False
@@ -2429,16 +2438,28 @@ class Desktop2StereoGUI:
         finally:
             self._starting = False
 
+    def _diag(self, msg):
+        """Write diagnostic log to file."""
+        import datetime
+        os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
+        line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}"
+        with open(os.path.join(BASE_DIR, "logs", "diag.log"), "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
     async def _monitor_process_task(self):
         """Wait for process to exit, then update status."""
         proc = self.process
         if not proc:
+            self._diag("monitor_task: proc is None, return")
             return
+        self._diag(f"monitor_task started, pid={proc.pid}")
         try:
             await proc.wait()
-        except Exception:
-            pass
+            self._diag(f"proc.wait returned, rc={proc.returncode}")
+        except Exception as e:
+            self._diag(f"proc.wait() exception: {e}")
         finally:
+            self._diag(f"finally: process is proc={self.process is proc}, returncode={proc.returncode}")
             if self.process is proc:
                 self.process = None
             self._starting = False
@@ -2448,6 +2469,7 @@ class Desktop2StereoGUI:
             else:
                 self.set_status(UI_TEXTS[self.language]["Stopped"], key="Stopped")
             self._set_running_ui(False)
+            self._diag("monitor_task done, status updated")
 
     def stop_process(self, e=None):
         """Stop subprocess (called from UI button)."""
