@@ -49,6 +49,41 @@ from utils import (
     get_local_ip, shutdown_event, read_yaml
 )
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DIAG_LOG = os.path.join(BASE_DIR, "logs", "diag.log")
+
+
+def _setup_console_logging():
+    """Redirect stdout/stderr to also write to the diag log file."""
+    import datetime
+    os.makedirs(os.path.dirname(DIAG_LOG), exist_ok=True)
+
+    class _TeeStream:
+        def __init__(self, original, label):
+            self.original = original
+            self.label = label
+            self._buffer = ""
+
+        def write(self, data):
+            self.original.write(data)
+            if data and data.strip():
+                try:
+                    ts = datetime.datetime.now().strftime("%H:%M:%S")
+                    with open(DIAG_LOG, "a", encoding="utf-8") as f:
+                        for line in data.splitlines():
+                            stripped = line.strip()
+                            if stripped:
+                                f.write(f"[{ts}] [{self.label}] {stripped}\n")
+                except Exception:
+                    pass
+
+        def flush(self):
+            self.original.flush()
+
+        def isatty(self):
+            return self.original.isatty()
+
+    sys.stdout = _TeeStream(sys.stdout, "out")
+    sys.stderr = _TeeStream(sys.stderr, "err")
 
 # Known model size suffixes, longest-first for matching priority
 _MODEL_SIZES = ["Small", "SmallPlus", "Base", "Large", "Giant"]
@@ -165,7 +200,7 @@ UI_TEXTS = {
         "OpenXR Link": "OpenXR Link",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
-        "Open Browser": "Open Browser",
+       "Preview":"Preview",
         "Stream Quality:": "Stream Quality:",
         "Host": "Host:",
         "Invalid port number (1-65535)": "Invalid port number (must be between 1-65535)",
@@ -221,7 +256,7 @@ UI_TEXTS = {
         "exited_with_code": "Exited with code {}",
         "failed_save_yaml": "Failed to save YAML: {}",
         "invalid_url_scheme": "Invalid URL scheme: {}",
-        "err_open_browser": "Failed to open browser: {}",
+        "error_preview": "Failed to preview: {}",
         "url_copied": "URL copied to clipboard",
     },
     "CN": {
@@ -286,7 +321,7 @@ UI_TEXTS = {
         "OpenXR Link": "OpenXR串流",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
-        "Open Browser": "打开浏览器",
+        "Preview": "预览",
         "Stream Quality:": "推流质量:",
         "Host": "主机:",
         "Invalid port number (1-65535)": "端口号无效 (必须介于1-65535之间)",
@@ -342,7 +377,7 @@ UI_TEXTS = {
         "exited_with_code": "退出码 {}",
         "failed_save_yaml": "保存 YAML 失败: {}",
         "invalid_url_scheme": "无效 URL 协议: {}",
-        "err_open_browser": "打开浏览器失败: {}",
+        "error_preview": "打开浏览器失败: {}",
         "url_copied": "已复制网址到剪贴板",
     }
 }
@@ -887,6 +922,7 @@ class Desktop2StereoGUI:
 
     # ── setup ──
     async def setup(self):
+        _setup_console_logging()
         # Get the correct event loop in async context
         self._loop = asyncio.get_running_loop()
         self._proc_lock = asyncio.Lock()
@@ -1175,7 +1211,7 @@ class Desktop2StereoGUI:
         self.run_mode_dd = CompactDropdown(on_select=self.on_run_mode_change, width=S(130))
         self.r7b_label = ft.Text("Display Mode:", size=FONT_SIZE, width=S(130))
         self.display_mode_dd = CompactDropdown(
-            options=[m for m in ["Half-SBS", "Full-SBS", "TAB", "Depth Map"]],
+            options=[m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Mono", "Leia"]],
             value="Half-SBS", width=S(130))
         self.r10_label = ft.Text("Controller:", size=FONT_SIZE, width=S(130))
         try:
@@ -1325,9 +1361,9 @@ class Desktop2StereoGUI:
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
             border_radius=4, on_click=self.copy_url_to_clipboard,
         )
-        self.open_browser_btn = ft.Button(content=ft.Text("Open Browser", size=FONT_SIZE), width=S(144), on_click=self.open_url_in_browser)
+        self.preview_btn = ft.Button(content=ft.Text("Preview", size=FONT_SIZE), width=S(130), on_click=self.preview_in_browser)
         self.stream_url_row = ft.Row(
-            [self.stream_url_label, self.stream_url_tf, ft.Container(width=S(10)), self.open_browser_btn],
+            [self.stream_url_label, self.stream_url_tf, ft.Container(width=S(10)), self.preview_btn],
             spacing=2,
         )
         self.stream_port_label = ft.Text("Streamer Port:", size=FONT_SIZE, width=S(150))
@@ -1848,9 +1884,9 @@ class Desktop2StereoGUI:
             self.fill_16_9_cb.visible = True
             self.fix_aspect_cb.visible = mode in ["Local Viewer", "3D Monitor"]
         if mode in ["Legacy Streamer", "3D Monitor"]:
-            self.display_mode_dd.options = [m for m in ["Half-SBS", "Full-SBS", "TAB"]]
+            self.display_mode_dd.options = [m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB"]]
         else:
-            self.display_mode_dd.options = [m for m in ["Half-SBS", "Full-SBS", "TAB", "Depth Map"]]
+            self.display_mode_dd.options = [m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Mono", "Leia"]]
         mon_count = self._get_monitor_count()
         stereo_full = mode in ["Local Viewer", "3D Monitor", "RTMP Streamer"] and mon_count > 1
         self.r9_label.visible = not is_openxr
@@ -1995,7 +2031,7 @@ class Desktop2StereoGUI:
         self.audio_label.value = t["Stereo Mix"]
         self.crf_label.value = t["CRF"]
         self.audio_delay_label.value = t["Audio Delay"]
-        self.open_browser_btn.content.value = t["Open Browser"]
+        self.preview_btn.content.value = t["Preview"]
         self.refresh_btn.content.value = t["Refresh"]
         self.reset_btn.content.value = t["Reset"]
         self.stop_btn.content.value = t["Stop"]
@@ -2060,8 +2096,8 @@ class Desktop2StereoGUI:
             }
             self.stream_url_tf.content.controls[0].value = templates.get(protocol, f"http://{local_ip}:{port}/{stream_key}/")
         self._safe_update(self.stream_url_tf)
-        self.open_browser_btn.visible = protocol not in ["RTMP", "RTSP"]
-        self._safe_update(self.open_browser_btn)
+        self.preview_btn.visible = protocol not in ["RTMP", "RTSP"]
+        self._safe_update(self.preview_btn)
 
     def _on_stream_protocol_change(self, e):
         self.stream_protocol_key = e.control.value
@@ -2201,7 +2237,7 @@ class Desktop2StereoGUI:
     # ══════════════════════════════════════════
     # URL actions
     # ══════════════════════════════════════════
-    def open_url_in_browser(self, e):
+    def preview_in_browser(self, e):
         try:
             import webbrowser
             url = self.stream_url_tf.content.controls[0].value
@@ -2211,7 +2247,7 @@ class Desktop2StereoGUI:
             webbrowser.open(url)
             self.set_status(f"{UI_TEXTS[self.language]['Opening URL in browser']}: {url}")
         except Exception as ex:
-            self.set_status(UI_TEXTS[self.language]["err_open_browser"].format(ex))
+            self.set_status(UI_TEXTS[self.language]["error_preview"].format(ex))
 
     def copy_url_to_clipboard(self, e):
         url = self.stream_url_tf.content.controls[0].value
@@ -2441,9 +2477,9 @@ class Desktop2StereoGUI:
     def _diag(self, msg):
         """Write diagnostic log to file."""
         import datetime
-        os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
-        line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}"
-        with open(os.path.join(BASE_DIR, "logs", "diag.log"), "a", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(DIAG_LOG), exist_ok=True)
+        line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] [diag] {msg}"
+        with open(DIAG_LOG, "a", encoding="utf-8") as f:
             f.write(line + "\n")
 
     async def _monitor_process_task(self):

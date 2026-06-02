@@ -1472,11 +1472,11 @@ def make_sbs_core(rgb: torch.Tensor,
     if fill_16_9:
         left = pad_to_aspect_tensor(left)
         right = pad_to_aspect_tensor(right)
-    if display_mode == "TAB":
+    if display_mode in ["Half-TAB", "Full-TAB"]:
         out = torch.cat([left, right], dim=1)
     else:
         out = torch.cat([left, right], dim=2)
-    if display_mode != "Full-SBS":
+    if display_mode not in ["Full-SBS", "Full-TAB"]:
         out = F.interpolate(out.unsqueeze(0), size=left.shape[1:], mode="area")[0]
     return out.clamp(0, 255)
 

@@ -571,6 +571,439 @@ DEPTH_FRAGMENT = """
     }
 """
 
+# Anaglyph red-cyan composite shader – samples both eyes and blends
+ANAGLYPH_FRAGMENT = """
+    #version 330
+    in vec2 uv;
+    out vec4 frag_color;
+    uniform sampler2D tex_color;
+    uniform sampler2D tex_depth;
+    uniform vec2 u_resolution;
+    uniform float u_eye_offset;
+    uniform float u_depth_strength;
+    uniform float u_convergence;
+    uniform float u_roll;
+    uniform float u_search_radius = 12.0;
+    uniform float u_depth_tolerance = 0.012;
+    uniform float u_blur_radius = 2.5;
+    uniform int u_feather_enabled;
+    uniform float u_feather_width;
+    uniform vec4 u_viewport;
+    uniform float u_corner_radius = 0.0;
+
+    vec2 pixel_size = 1.0 / u_resolution;
+
+    bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth, float eye_dir) {
+        if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
+            shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
+            return true;
+        vec2 grad_dir = vec2(cos(u_roll), sin(u_roll)) * eye_dir;
+        float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
+        float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
+        if (abs(d_left - d_right) > 0.08)
+            return true;
+        return false;
+    }
+
+    vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv, float eye_dir) {
+        vec4 best_color = vec4(0.0);
+        float best_weight = 0.0;
+        int search_range = int(u_search_radius);
+        int search_dir = eye_dir > 0.0 ? -1 : 1;
+
+        for (int i = 1; i <= search_range; i++) {
+            float c = cos(u_roll);
+            float s = sin(u_roll);
+            vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+            if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+            float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+            if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                vec4 sample_color = texture(tex_color, sample_uv);
+                float dist_weight = exp(-float(i) * 0.15);
+                float depth_weight = 1.0 + (sample_depth_inv - center_depth_inv) * 10.0;
+                float w = dist_weight * depth_weight;
+                best_color += sample_color * w;
+                best_weight += w;
+                if (best_weight > 5.0) break;
+            }
+        }
+
+        if (best_weight < 2.0) {
+            int opposite_range = search_range / 2;
+            for (int i = 1; i <= opposite_range; i++) {
+                float c = cos(u_roll);
+                float s = sin(u_roll);
+                vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+                if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+                float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+                if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                    vec4 sample_color = texture(tex_color, sample_uv);
+                    float w = exp(-float(i) * 0.2);
+                    best_color += sample_color * w;
+                    best_weight += w;
+                }
+            }
+        }
+
+        if (best_weight > 0.01) {
+            vec4 blurred = best_color / best_weight;
+            vec4 vert_accum = blurred * 0.5;
+            float vert_weight = 0.5;
+            for (int dy = -1; dy <= 1; dy += 2) {
+                vec2 vert_uv = uv_coord + vec2(0.0, dy * pixel_size.y * u_blur_radius);
+                if (vert_uv.y >= 0.0 && vert_uv.y <= 1.0) {
+                    float vert_depth_inv = 1.0 - texture(tex_depth, vert_uv).r;
+                    if (vert_depth_inv > center_depth_inv + u_depth_tolerance * 0.5) {
+                        float w = 0.25;
+                        vert_accum += texture(tex_color, vert_uv) * w;
+                        vert_weight += w;
+                    }
+                }
+            }
+            return vert_accum / vert_weight;
+        }
+        return texture(tex_color, uv_coord);
+    }
+
+    void main() {
+        vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
+        float depth = texture(tex_depth, flipped_uv).r;
+        float depth_inv = -depth;
+        float shift_amount = (depth_inv + u_convergence) * u_depth_strength;
+        float c = cos(u_roll);
+        float s = sin(u_roll);
+
+        vec2 left_uv  = flipped_uv + vec2(u_eye_offset * shift_amount * c, u_eye_offset * shift_amount * s);
+        vec2 right_uv = flipped_uv - vec2(u_eye_offset * shift_amount * c, u_eye_offset * shift_amount * s);
+
+        vec4 left_color, right_color;
+        if (is_disoccluded(flipped_uv, left_uv, depth, -1.0))
+            left_color = push_pull_inpaint(flipped_uv, depth_inv, -1.0);
+        else
+            left_color = texture(tex_color, left_uv);
+
+        if (is_disoccluded(flipped_uv, right_uv, depth, 1.0))
+            right_color = push_pull_inpaint(flipped_uv, depth_inv, 1.0);
+        else
+            right_color = texture(tex_color, right_uv);
+
+        frag_color = vec4(left_color.r, right_color.g, right_color.b, 1.0);
+
+        vec2 border = smoothstep(0.0, 0.015, left_uv) * smoothstep(1.0, 0.985, left_uv);
+        vec2 border_r = smoothstep(0.0, 0.015, right_uv) * smoothstep(1.0, 0.985, right_uv);
+        frag_color.a = min(min(border.x, border.y), min(border_r.x, border_r.y));
+
+        vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
+
+        if (u_feather_enabled == 1) {
+            float left   = fuv.x;
+            float right  = 1.0 - fuv.x;
+            float top    = fuv.y;
+            float bottom = 1.0 - fuv.y;
+            float feather = u_feather_width;
+            float fadeL = smoothstep(0.0, feather, left);
+            float fadeR = smoothstep(0.0, feather, right);
+            float fadeT = smoothstep(0.0, feather, top);
+            float fadeB = smoothstep(0.0, feather, bottom);
+            float falloff = fadeL * fadeR * fadeT * fadeB;
+            falloff = pow(falloff, 0.7);
+            frag_color.rgb *= falloff;
+        }
+
+        float corner_r = u_corner_radius;
+        vec2 d = abs(fuv - 0.5) - 0.5 + corner_r;
+        float corner_sdf = length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - corner_r;
+        float corner_alpha = 1.0 - smoothstep(0.0, 0.01, corner_sdf);
+        frag_color.a = min(frag_color.a, corner_alpha);
+    }
+"""
+
+# Row-interleaved stereo shader – eye determined by row parity
+INTERLEAVED_FRAGMENT = """
+    #version 330
+    in vec2 uv;
+    out vec4 frag_color;
+    uniform sampler2D tex_color;
+    uniform sampler2D tex_depth;
+    uniform vec2 u_resolution;
+    uniform float u_eye_offset;
+    uniform float u_depth_strength;
+    uniform float u_convergence;
+    uniform float u_roll;
+    uniform float u_search_radius = 12.0;
+    uniform float u_depth_tolerance = 0.012;
+    uniform float u_blur_radius = 2.5;
+    uniform int u_feather_enabled;
+    uniform float u_feather_width;
+    uniform vec4 u_viewport;
+    uniform float u_corner_radius = 0.0;
+
+    vec2 pixel_size = 1.0 / u_resolution;
+    float eye_dir;
+
+    bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
+        if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
+            shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
+            return true;
+        vec2 grad_dir = vec2(cos(u_roll), sin(u_roll)) * eye_dir;
+        float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
+        float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
+        if (abs(d_left - d_right) > 0.08)
+            return true;
+        return false;
+    }
+
+    vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
+        vec4 best_color = vec4(0.0);
+        float best_weight = 0.0;
+        int search_range = int(u_search_radius);
+        int search_dir = eye_dir > 0.0 ? -1 : 1;
+
+        for (int i = 1; i <= search_range; i++) {
+            float c = cos(u_roll);
+            float s = sin(u_roll);
+            vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+            if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+            float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+            if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                vec4 sample_color = texture(tex_color, sample_uv);
+                float dist_weight = exp(-float(i) * 0.15);
+                float depth_weight = 1.0 + (sample_depth_inv - center_depth_inv) * 10.0;
+                float w = dist_weight * depth_weight;
+                best_color += sample_color * w;
+                best_weight += w;
+                if (best_weight > 5.0) break;
+            }
+        }
+
+        if (best_weight < 2.0) {
+            int opposite_range = search_range / 2;
+            for (int i = 1; i <= opposite_range; i++) {
+                float c = cos(u_roll);
+                float s = sin(u_roll);
+                vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+                if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+                float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+                if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                    vec4 sample_color = texture(tex_color, sample_uv);
+                    float w = exp(-float(i) * 0.2);
+                    best_color += sample_color * w;
+                    best_weight += w;
+                }
+            }
+        }
+
+        if (best_weight > 0.01) {
+            vec4 blurred = best_color / best_weight;
+            vec4 vert_accum = blurred * 0.5;
+            float vert_weight = 0.5;
+            for (int dy = -1; dy <= 1; dy += 2) {
+                vec2 vert_uv = uv_coord + vec2(0.0, dy * pixel_size.y * u_blur_radius);
+                if (vert_uv.y >= 0.0 && vert_uv.y <= 1.0) {
+                    float vert_depth_inv = 1.0 - texture(tex_depth, vert_uv).r;
+                    if (vert_depth_inv > center_depth_inv + u_depth_tolerance * 0.5) {
+                        float w = 0.25;
+                        vert_accum += texture(tex_color, vert_uv) * w;
+                        vert_weight += w;
+                    }
+                }
+            }
+            return vert_accum / vert_weight;
+        }
+        return texture(tex_color, uv_coord);
+    }
+
+    void main() {
+        eye_dir = (int(mod(gl_FragCoord.y, 2.0)) == 0) ? -1.0 : 1.0;
+        float my_offset = eye_dir * u_eye_offset;
+
+        vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
+        float depth = texture(tex_depth, flipped_uv).r;
+        float depth_inv = -depth;
+        float shift_amount = (depth_inv + u_convergence);
+        float c = cos(u_roll);
+        float s = sin(u_roll);
+        vec2 shifted_uv = flipped_uv - vec2(my_offset * shift_amount * u_depth_strength * c,
+                                              my_offset * shift_amount * u_depth_strength * s);
+
+        vec4 color;
+        if (is_disoccluded(flipped_uv, shifted_uv, depth))
+            color = push_pull_inpaint(flipped_uv, depth_inv);
+        else
+            color = texture(tex_color, shifted_uv);
+
+        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * smoothstep(1.0, 0.985, shifted_uv);
+        color.a = min(border.x, border.y);
+        frag_color = color;
+
+        vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
+
+        if (u_feather_enabled == 1) {
+            float left   = fuv.x;
+            float right  = 1.0 - fuv.x;
+            float top    = fuv.y;
+            float bottom = 1.0 - fuv.y;
+            float feather = u_feather_width;
+            float fadeL = smoothstep(0.0, feather, left);
+            float fadeR = smoothstep(0.0, feather, right);
+            float fadeT = smoothstep(0.0, feather, top);
+            float fadeB = smoothstep(0.0, feather, bottom);
+            float falloff = fadeL * fadeR * fadeT * fadeB;
+            falloff = pow(falloff, 0.7);
+            frag_color.rgb *= falloff;
+        }
+
+        float corner_r = u_corner_radius;
+        vec2 d = abs(fuv - 0.5) - 0.5 + corner_r;
+        float corner_sdf = length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - corner_r;
+        float corner_alpha = 1.0 - smoothstep(0.0, 0.01, corner_sdf);
+        frag_color.a = min(frag_color.a, corner_alpha);
+    }
+"""
+
+# Leia SR Weaving – column-interleaved for Leia lenticular displays
+LEIA_FRAGMENT = """
+    #version 330
+    in vec2 uv;
+    out vec4 frag_color;
+    uniform sampler2D tex_color;
+    uniform sampler2D tex_depth;
+    uniform vec2 u_resolution;
+    uniform float u_eye_offset;
+    uniform float u_depth_strength;
+    uniform float u_convergence;
+    uniform float u_roll;
+    uniform float u_search_radius = 12.0;
+    uniform float u_depth_tolerance = 0.012;
+    uniform float u_blur_radius = 2.5;
+    uniform int u_feather_enabled;
+    uniform float u_feather_width;
+    uniform vec4 u_viewport;
+    uniform float u_corner_radius = 0.0;
+
+    vec2 pixel_size = 1.0 / u_resolution;
+    float eye_dir;
+
+    bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
+        if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
+            shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
+            return true;
+        vec2 grad_dir = vec2(cos(u_roll), sin(u_roll)) * eye_dir;
+        float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
+        float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
+        if (abs(d_left - d_right) > 0.08)
+            return true;
+        return false;
+    }
+
+    vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
+        vec4 best_color = vec4(0.0);
+        float best_weight = 0.0;
+        int search_range = int(u_search_radius);
+        int search_dir = eye_dir > 0.0 ? -1 : 1;
+
+        for (int i = 1; i <= search_range; i++) {
+            float c = cos(u_roll);
+            float s = sin(u_roll);
+            vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+            if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+            float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+            if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                vec4 sample_color = texture(tex_color, sample_uv);
+                float dist_weight = exp(-float(i) * 0.15);
+                float depth_weight = 1.0 + (sample_depth_inv - center_depth_inv) * 10.0;
+                float w = dist_weight * depth_weight;
+                best_color += sample_color * w;
+                best_weight += w;
+                if (best_weight > 5.0) break;
+            }
+        }
+
+        if (best_weight < 2.0) {
+            int opposite_range = search_range / 2;
+            for (int i = 1; i <= opposite_range; i++) {
+                float c = cos(u_roll);
+                float s = sin(u_roll);
+                vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+                if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+                float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+                if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                    vec4 sample_color = texture(tex_color, sample_uv);
+                    float w = exp(-float(i) * 0.2);
+                    best_color += sample_color * w;
+                    best_weight += w;
+                }
+            }
+        }
+
+        if (best_weight > 0.01) {
+            vec4 blurred = best_color / best_weight;
+            vec4 vert_accum = blurred * 0.5;
+            float vert_weight = 0.5;
+            for (int dy = -1; dy <= 1; dy += 2) {
+                vec2 vert_uv = uv_coord + vec2(0.0, dy * pixel_size.y * u_blur_radius);
+                if (vert_uv.y >= 0.0 && vert_uv.y <= 1.0) {
+                    float vert_depth_inv = 1.0 - texture(tex_depth, vert_uv).r;
+                    if (vert_depth_inv > center_depth_inv + u_depth_tolerance * 0.5) {
+                        float w = 0.25;
+                        vert_accum += texture(tex_color, vert_uv) * w;
+                        vert_weight += w;
+                    }
+                }
+            }
+            return vert_accum / vert_weight;
+        }
+        return texture(tex_color, uv_coord);
+    }
+
+    void main() {
+        eye_dir = (int(mod(gl_FragCoord.x, 2.0)) == 0) ? -1.0 : 1.0;
+        float my_offset = eye_dir * u_eye_offset;
+
+        vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
+        float depth = texture(tex_depth, flipped_uv).r;
+        float depth_inv = -depth;
+        float shift_amount = (depth_inv + u_convergence);
+        float c = cos(u_roll);
+        float s = sin(u_roll);
+        vec2 shifted_uv = flipped_uv - vec2(my_offset * shift_amount * u_depth_strength * c,
+                                              my_offset * shift_amount * u_depth_strength * s);
+
+        vec4 color;
+        if (is_disoccluded(flipped_uv, shifted_uv, depth))
+            color = push_pull_inpaint(flipped_uv, depth_inv);
+        else
+            color = texture(tex_color, shifted_uv);
+
+        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * smoothstep(1.0, 0.985, shifted_uv);
+        color.a = min(border.x, border.y);
+        frag_color = color;
+
+        vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
+
+        if (u_feather_enabled == 1) {
+            float left   = fuv.x;
+            float right  = 1.0 - fuv.x;
+            float top    = fuv.y;
+            float bottom = 1.0 - fuv.y;
+            float feather = u_feather_width;
+            float fadeL = smoothstep(0.0, feather, left);
+            float fadeR = smoothstep(0.0, feather, right);
+            float fadeT = smoothstep(0.0, feather, top);
+            float fadeB = smoothstep(0.0, feather, bottom);
+            float falloff = fadeL * fadeR * fadeT * fadeB;
+            falloff = pow(falloff, 0.7);
+            frag_color.rgb *= falloff;
+        }
+
+        float corner_r = u_corner_radius;
+        vec2 d = abs(fuv - 0.5) - 0.5 + corner_r;
+        float corner_sdf = length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - corner_r;
+        float corner_alpha = 1.0 - smoothstep(0.0, 0.01, corner_sdf);
+        frag_color.a = min(frag_color.a, corner_alpha);
+    }
+"""
+
 def add_logo(window):
     """Optimized logo loading with lazy imports"""
     from PIL import Image
@@ -596,7 +1029,7 @@ class StereoWindow:
         self._fullscreen = False
         self.depth_ratio = depth_ratio
         self.depth_ratio_original = depth_ratio
-        self._modes = ["Full-SBS", "Half-SBS", "TAB", "Depth Map"]
+        self._modes = ["Full-SBS", "Half-SBS", "Half-TAB", "Depth Map", "Full-TAB", "Anaglyph", "Interleaved", "Mono", "Leia"]
         # Edge feathering toggle
         self.feather_enabled = feather_enabled
         self.feather_width = 0.02       # 2% of view width
@@ -736,7 +1169,37 @@ class StereoWindow:
         self.depth_vao = self.ctx.vertex_array(
             self.depth_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
         )
-        
+
+        # Anaglyph shader program
+        self.anaglyph_prog = self.ctx.program(
+            vertex_shader=VERTEX_SHADER,
+            fragment_shader=ANAGLYPH_FRAGMENT
+        )
+        self.anaglyph_prog['u_convergence'].value = self.convergence
+        self.anaglyph_vao = self.ctx.vertex_array(
+            self.anaglyph_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        # Interleaved (row-interleaved) shader program
+        self.interleaved_prog = self.ctx.program(
+            vertex_shader=VERTEX_SHADER,
+            fragment_shader=INTERLEAVED_FRAGMENT
+        )
+        self.interleaved_prog['u_convergence'].value = self.convergence
+        self.interleaved_vao = self.ctx.vertex_array(
+            self.interleaved_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        # Leia SR Weaving (column-interleaved) shader program
+        self.leia_prog = self.ctx.program(
+            vertex_shader=VERTEX_SHADER,
+            fragment_shader=LEIA_FRAGMENT
+        )
+        self.leia_prog['u_convergence'].value = self.convergence
+        self.leia_vao = self.ctx.vertex_array(
+            self.leia_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
+        )
+
         # Initialize textures as None
         self.color_tex = None
         self.depth_tex = None
@@ -1566,11 +2029,86 @@ class StereoWindow:
             if self.stream_mode is None:
                 glfw.poll_events()
             return
-        
+
+        # Composite display modes (Mono, Anaglyph, Interleaved, Leia)
+        if self.display_mode in ["Mono", "Anaglyph", "Interleaved", "Leia"]:
+            if self.fix_aspect:
+                glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
+            else:
+                glfw.set_window_aspect_ratio(self.window, glfw.DONT_CARE, glfw.DONT_CARE)
+
+            self.ctx.clear(0.0, 0.0, 0.0)
+
+            if self.fill_16_9:
+                render_w, render_h = self._compute_render_size(win_w, win_h, tex_w, tex_h)
+                center_x, center_y = win_w / 2.0, win_h / 2.0
+                viewport = (int(center_x - render_w / 2), int(center_y - render_h / 2), render_w, render_h)
+            else:
+                target_aspect = tex_h / tex_w
+                try:
+                    window_aspect = win_h / win_w
+                except ZeroDivisionError:
+                    window_aspect = 9.0 / 16.0
+                if window_aspect <= target_aspect:
+                    view_h = win_h
+                    view_w = int(view_h / target_aspect)
+                else:
+                    view_w = win_w
+                    view_h = int(view_w * target_aspect)
+                offset_x = (win_w - view_w) // 2
+                offset_y = (win_h - view_h) // 2
+                viewport = (offset_x, offset_y, view_w, view_h)
+
+            self.ctx.viewport = viewport
+            half_ipd = self.ipd_uv / 2.0
+
+            if self.display_mode == "Mono":
+                self.color_tex.use(location=0)
+                self.depth_tex.use(location=1)
+                self.prog['u_eye_offset'].value = 0.0
+                self.prog['u_depth_strength'].value = 0.0
+                self.prog['u_feather_enabled'].value = self.feather_enabled
+                self.prog['u_feather_width'].value = self.feather_width
+                self.prog['u_viewport'].value = viewport
+                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+            elif self.display_mode == "Anaglyph":
+                self.color_tex.use(location=0)
+                self.depth_tex.use(location=1)
+                self.anaglyph_prog['u_eye_offset'].value = half_ipd
+                self.anaglyph_prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+                self.anaglyph_prog['u_feather_enabled'].value = self.feather_enabled
+                self.anaglyph_prog['u_feather_width'].value = self.feather_width
+                self.anaglyph_prog['u_viewport'].value = viewport
+                self.anaglyph_vao.render(moderngl.TRIANGLE_STRIP)
+            elif self.display_mode == "Interleaved":
+                self.color_tex.use(location=0)
+                self.depth_tex.use(location=1)
+                self.interleaved_prog['u_eye_offset'].value = half_ipd
+                self.interleaved_prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+                self.interleaved_prog['u_feather_enabled'].value = self.feather_enabled
+                self.interleaved_prog['u_feather_width'].value = self.feather_width
+                self.interleaved_prog['u_viewport'].value = viewport
+                self.interleaved_vao.render(moderngl.TRIANGLE_STRIP)
+            elif self.display_mode == "Leia":
+                self.color_tex.use(location=0)
+                self.depth_tex.use(location=1)
+                self.leia_prog['u_eye_offset'].value = half_ipd
+                self.leia_prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+                self.leia_prog['u_feather_enabled'].value = self.feather_enabled
+                self.leia_prog['u_feather_width'].value = self.feather_width
+                self.leia_prog['u_viewport'].value = viewport
+                self.leia_vao.render(moderngl.TRIANGLE_STRIP)
+
+            if self.stream_mode is None:
+                glfw.poll_events()
+            return
+
         # Rest of the rendering for other modes...
         if self.fix_aspect:
             if self.display_mode == "Full-SBS":
                 glfw.set_window_aspect_ratio(self.window, 2*tex_w, tex_h)
+            elif self.display_mode == "Full-TAB":
+                glfw.set_window_aspect_ratio(self.window, tex_w, 2*tex_h)
             else:
                 glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
         else:
@@ -1581,7 +2119,7 @@ class StereoWindow:
         
         # Handle other display modes (non-depth map)
         if self.fill_16_9:
-            if self.display_mode in ["Full-SBS", "Half-SBS", "TAB"]:
+            if self.display_mode in ["Full-SBS", "Half-SBS", "Half-TAB", "Full-TAB"]:
                 self.color_tex.use(location=0)
                 self.depth_tex.use(location=1)
                 self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
@@ -1651,7 +2189,7 @@ class StereoWindow:
                     self._last_eye_offset_set = self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-                elif self.display_mode == "TAB":
+                elif self.display_mode in ["Half-TAB"]:
                     src_w, src_h = tex_w, tex_h / 2.0
                     max_w, max_h = win_w, win_h / 2.0
                     render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
@@ -1681,15 +2219,48 @@ class StereoWindow:
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = bottom_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-        
+
+                elif self.display_mode == "Full-TAB":
+                    src_w, src_h = tex_w, tex_h
+                    max_w, max_h = win_w, win_h / 2.0
+                    render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+
+                    # Top view (left eye)
+                    top_vp = (
+                        int(win_w / 2.0 - render_w / 2),
+                        int(win_h / 4.0 - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.ctx.viewport = top_vp
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = top_vp
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                    # Bottom view (right eye)
+                    bottom_vp = (
+                        int(win_w / 2.0 - render_w / 2),
+                        int(3 * win_h / 4.0 - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.ctx.viewport = bottom_vp
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = bottom_vp
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
         else:
             # Determine effective stereo frame size by display mode
             if self.display_mode == "Full-SBS":
                 disp_w, disp_h = 2 * tex_w, tex_h
             elif self.display_mode == "Half-SBS":
                 disp_w, disp_h = tex_w, tex_h
-            elif self.display_mode == "TAB":
+            elif self.display_mode in ["Half-TAB"]:
                 disp_w, disp_h = tex_w, tex_h
+            elif self.display_mode == "Full-TAB":
+                disp_w, disp_h = tex_w, 2 * tex_h
             elif self.display_mode == "Depth Map":
                 disp_w, disp_h = tex_w, tex_h
             else:
@@ -1714,7 +2285,7 @@ class StereoWindow:
             offset_x = (win_w - view_w) // 2
             offset_y = (win_h - view_h) // 2
 
-            if self.display_mode in ["Full-SBS", "Half-SBS", "TAB"]:
+            if self.display_mode in ["Full-SBS", "Half-SBS", "Half-TAB", "Full-TAB"]:
                 self.color_tex.use(0)
                 self.depth_tex.use(1)
                 self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
@@ -1757,7 +2328,26 @@ class StereoWindow:
                     self.prog['u_viewport'].value = right_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-                elif self.display_mode == "TAB":
+                elif self.display_mode == "Half-TAB":
+                    # Top eye (left)
+                    top_vp = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
+                    self.ctx.viewport = top_vp
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = top_vp
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                    # Bottom eye (right)
+                    bottom_vp = (offset_x, offset_y, view_w, view_h // 2)
+                    self.ctx.viewport = bottom_vp
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = bottom_vp
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                elif self.display_mode == "Full-TAB":
                     # Top eye (left)
                     top_vp = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
                     self.ctx.viewport = top_vp
