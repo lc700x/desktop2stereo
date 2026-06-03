@@ -115,12 +115,13 @@ class InfiniDepth(nn.Module):
         self,
         x: torch.Tensor,
         coords: torch.Tensor,
+        force_fp32: bool = False,
     ) -> torch.Tensor:
         h, w = x.shape[-2:]
         x_dino = (x - self._mean) / self._std
 
         act = _autocast_device_type(x.device)
-        use_ac = act is not None and not torch.onnx.is_in_onnx_export()
+        use_ac = act is not None and not torch.onnx.is_in_onnx_export() and not force_fp32
         dtype = _acc_dtype(x.device)
 
         # Only the last layer is consumed by ImplicitHead._encode_feat (features[-1][0]).

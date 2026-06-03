@@ -43,11 +43,13 @@ class InfiniDepthModel(nn.Module):
     # Keyed by (B, H, W, device_str) — same key → reuse coord tensor.
     _coord_cache: dict = {}
 
-    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+    def forward(self, pixel_values: torch.Tensor, fp32: bool = False) -> torch.Tensor:
         """Dense depth prediction.
 
         Args:
             pixel_values: (B, 3, H, W) float tensor, RGB in [0, 1].
+            fp32: If True, force fp32 inference even on MPS/XPU (skips
+                   internal autocast that would otherwise override to fp16).
 
         Returns:
             depth: (B, H, W) relative depth (1 / disparity).
@@ -75,7 +77,7 @@ class InfiniDepthModel(nn.Module):
             # grid_sample + MLP pass.  The while-loop in batch_forward /
             # inference cannot be traced by ONNX / TensorRT.  For 512x512
             # input (262k points) this fits comfortably in GPU memory.
-            pred = self.model.forward(x=x, coords=query)
+            pred = self.model.forward(x=x, coords=query, force_fp32=fp32)
             # depth = 1.0 / torch.clamp(pred, min=5e-3)
 
         depth = pred.reshape(B, 1, H, W).squeeze(1)
@@ -97,6 +99,6 @@ class InfiniDepthModel(nn.Module):
         with torch.no_grad():
             if pixel_values.device.type != "privateuseone":
                 with torch.autocast(device_type=pixel_values.device.type, enabled=not fp32):
-                    return self.forward(pixel_values)
+                    return self.forward(pixel_values, fp32=fp32)
             else:
-                return self.forward(pixel_values)
+                return self.forward(pixel_values, fp32=fp32)

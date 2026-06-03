@@ -1205,6 +1205,9 @@ class Desktop2StereoGUI:
             on_select=self.on_capture_tool_change,
             min_width=S(160))
         row6 = ft.Row([self.r6_label, self.capture_tool_dd, ft.Container(width=S(15)), self.showfps_cb], spacing=1)
+        if OS_NAME != "Windows":
+            self.r6_label.visible = False
+            self.capture_tool_dd.visible = False
 
         # Row 8: Run mode + Display mode / Controller
         self.r7a_label = ft.Text("Run Mode:", size=FONT_SIZE, width=S(130))
@@ -1694,8 +1697,11 @@ class Desktop2StereoGUI:
         self.openvino_cb.visible = xpu
         self.openvino_cb.disabled = False
         self.recompile_openvino_cb.visible = self.openvino_cb.value if self.openvino_cb.visible else False
-        self.fp16_cb.visible = not dml
+        self.fp16_cb.visible = not (dml or mps)
         self.r4_label.visible = not (dml or other)
+        is_windows = OS_NAME == "Windows"
+        self.r6_label.visible = is_windows
+        self.capture_tool_dd.visible = is_windows
         if dml or other:
             self.torch_compile_cb.visible = False
             self.tensorrt_cb.visible = False

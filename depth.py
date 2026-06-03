@@ -2,7 +2,6 @@
 import os, warnings
 import torch
 import contextlib
-
 # Support for old AMD GPU with ZLUDA support (hide)
 # try:
 #     import zluda 
@@ -11,7 +10,7 @@ import contextlib
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, FORCE_FP32_KEYWORDS
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, FORCE_FP32_KEYWORDS
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -26,6 +25,7 @@ USE_TORCH_COMPILE = False if not IS_CUDA else USE_TORCH_COMPILE
 USE_TENSORRT = False if not IS_NVIDIA else USE_TENSORRT
 USE_COREML = False if not IS_MPS else USE_COREML
 USE_OPENVINO = False if not IS_XPU else USE_OPENVINO
+
 
 import torch.nn.functional as F
 from transformers import AutoModelForDepthEstimation
@@ -121,8 +121,12 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or ((USE_TENSORRT or USE_COREML or USE_OPENVINO) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS) or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or (MODEL_ID in FORCE_FP32_KEYWORDS):
-    FP16 = False 
+if IS_DIRECTML or IS_MPS or ((USE_TENSORRT or USE_COREML or USE_OPENVINO) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS) or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or (MODEL_ID in FORCE_FP32_KEYWORDS):
+    FP16 = False
+
+# Disable CoreML for models whose architecture can't be traced (implicit heads, etc.)
+if any(x in MODEL_ID.lower() for x in DISABLE_COREML_KEYWORDS):
+    USE_COREML = False
 
 # Optimization for CUDA
 if IS_CUDA:
@@ -350,11 +354,13 @@ font_dict = {
 
 # Model casting helper
 def maybe_autocast(device, enabled=True):
-    return (
-        torch.autocast(device_type=device.type, enabled=enabled)
-        if device.type != "privateuseone"  # privateuseone is DirectMLDirectML
-        else contextlib.nullcontext()
-    )
+    stack = contextlib.ExitStack()
+    if device.type == "privateuseone":
+        stack.enter_context(torch.no_grad())
+    else:
+        stack.enter_context(torch.inference_mode())
+        stack.enter_context(torch.autocast(device_type=device.type, enabled=enabled))
+    return stack
 
 # check if it is metric model
 def is_metric():
@@ -735,12 +741,11 @@ class ModelForCoreML(torch.nn.Module):
         # If we reach here, we don't know how to handle output
         raise RuntimeError("Unsupported model output type for CoreML export")
 
-def export_to_coreml(model, output_path, input_size):
+def export_to_coreml(model, output_path, height, width):
     """
     Export model to CoreML via TorchScript (CPU-only, FP32).
     Uses ModelForCoreML wrapper to ensure traced graph returns a tensor (no dicts),
-    and uses coreml_safe_interpolate() (already in your file) to replace bicubic->bilinear
-    during tracing.
+    and uses coreml_safe_interpolate() to replace bicubic->bilinear during tracing.
     """
     if ct is None:
         raise ImportError("coremltools must be installed on macOS to convert to CoreML")
@@ -748,8 +753,9 @@ def export_to_coreml(model, output_path, input_size):
     # Wrap to ensure a single-tensor return (no dict constructs)
     wrapped = ModelForCoreML(model).float().eval()
 
-    # Dummy input for tracing (CPU, FP32)
-    dummy = torch.randn(1, 3, input_size, input_size, device=DEVICE, dtype=torch.float32)
+    # Dummy input for tracing (CPU, FP32). Height/width may differ when the
+    # model uses aspect-preserving resize (InfiniDepth) instead of square.
+    dummy = torch.randn(1, 3, height, width, device=DEVICE, dtype=torch.float32)
 
     try:
         with torch.no_grad():
@@ -1053,7 +1059,7 @@ class DepthModelWrapper:
             elif self._pending_backend == "CoreML":
                 global COREML_PATH
                 COREML_PATH = coreml_path
-                self.model = self._load_coreml_model()
+                self.model = self._load_coreml_model(engine_h, engine_w)
                 self.backend = "CoreML"
         except Exception as e:
             print(f"[Error] {self._pending_backend} initialization failed: {str(e)}, falling back to PyTorch")
@@ -1105,14 +1111,15 @@ class DepthModelWrapper:
         
         return model.eval()
     
-    def _load_coreml_model(self):
+    def _load_coreml_model(self, engine_h, engine_w):
         pytorch_model = self._load_pytorch_model()
 
         if not os.path.exists(COREML_PATH) or RECOMPILE_COREML:
             export_to_coreml(
                 pytorch_model,
                 COREML_PATH,
-                DEPTH_RESOLUTION
+                engine_h,
+                engine_w,
             )
 
         return CoreMLEngine(COREML_PATH)
@@ -1157,18 +1164,17 @@ class DepthModelWrapper:
             return self.model(tensor)
 
         """Run inference using the active backend."""
-        with torch.no_grad():
-            with maybe_autocast(self.device, enabled=FP16):
-                if self.backend == "PyTorch":
-                    if "video-depth-anything" in MODEL_ID.lower():
-                        return self.model(pixel_values=tensor, fp32=not FP16)
-                    elif "da3" in MODEL_ID.lower() or "infinidepth" in MODEL_ID.lower():
-                        return self.model.predict_depth(tensor, fp32=not FP16)
-                    else:
-                        return self.model(pixel_values=tensor).predicted_depth
+        with maybe_autocast(self.device, enabled=FP16):
+            if self.backend == "PyTorch":
+                if "video-depth-anything" in MODEL_ID.lower():
+                    return self.model(pixel_values=tensor, fp32=not FP16)
+                elif "da3" in MODEL_ID.lower() or "infinidepth" in MODEL_ID.lower():
+                    return self.model.predict_depth(tensor, fp32=not FP16)
                 else:
-                    # TensorRT, CoreML
-                    return self.model(tensor)
+                    return self.model(pixel_values=tensor).predicted_depth
+            else:
+                # TensorRT, CoreML
+                return self.model(tensor)
 
 # Initialize model wrapper
 model_wraper = DepthModelWrapper(

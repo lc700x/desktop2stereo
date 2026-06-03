@@ -85,11 +85,12 @@ COMPILE_FIX_KEYWORDS = [
 # Models with Disabled CoreML 
 DISABLE_COREML_KEYWORDS = [
     "video-depth-anything",
-    "da3-", 
+    "da3-",
     "da3nested",
     "dpt-beit",
     "zoedepth",
-    "depthpro"
+    "depthpro",
+    "infinidepth",
 ]
 
 # Models with Disabled OpenVINO 
