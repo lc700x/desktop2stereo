@@ -619,7 +619,31 @@ RECOMPILE_COREML = settings["Recompile CoreML"] # recompile CoreML mlpackage
 USE_OPENVINO = settings["OpenVINO"]  # use OpenVINO for Intel
 RECOMPILE_OPENVINO = settings["Recompile OpenVINO"] # recompile OpenVINO IR
 
-CAPTURE_TOOL = settings["Capture Tool"] # DXCamera or WindowsCapture
+def _resolve_capture_tool(raw_value):
+    """If Capture Tool is 'none', pick the OS- and device-specific default."""
+    if raw_value and raw_value != "none":
+        return raw_value
+    if OS_NAME == "Windows":
+        try:
+            import torch
+            if torch.cuda.is_available():
+                if getattr(torch.version, "hip", None) is not None:
+                    return "WindowsCaptureROCm"
+                return "WindowsCaptureCUDA"
+        except Exception:
+            pass
+        try:
+            import torch_directml
+            if torch_directml.is_available() and torch_directml.device_count() > 0:
+                return "DXCamera"
+        except Exception:
+            pass
+        return "DXCamera"
+    if OS_NAME == "Darwin":
+        return "ScreenCaptureKit"
+    return "DXCamera"
+
+CAPTURE_TOOL = _resolve_capture_tool(settings["Capture Tool"])
 FILL_16_9 = settings["Fill 16:9"]
 FIX_VIEWER_ASPECT = True if RUN_MODE == "RTMP Streamer" else settings["Fix Viewer Aspect"] # Keep Viewer Aspect for RTMP with LOSSLESS_SCALING_SUPPORT
 STEREOMIX_DEVICE = settings["Stereo Mix"] # RTMP StereoMix Device

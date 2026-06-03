@@ -423,7 +423,7 @@ DEFAULTS = {
     "Audio Delay": -0.15,
     "Controller Model": "PICO",
     "Lossless Scaling Support": False,
-    "Capture Tool": "WindowsCaptureCUDA",
+    "Capture Tool": "none",
     "Fill 16:9": True,
     "Fix Viewer Aspect": False,
     "Stereo Output": None,
@@ -643,6 +643,8 @@ def get_monitor_index_for_point(x, y):
         pass
     return get_primary_monitor_index()
 def _get_capture_tool_options(device_label):
+    if OS_NAME == "Darwin":
+        return ["ScreenCaptureKit", "Quartz"]
     if OS_NAME != "Windows":
         return ["DXCamera"]
     is_nvidia = "CUDA" in device_label.upper() and not IS_ROCM
@@ -1205,7 +1207,7 @@ class Desktop2StereoGUI:
             on_select=self.on_capture_tool_change,
             min_width=S(160))
         row6 = ft.Row([self.r6_label, self.capture_tool_dd, ft.Container(width=S(15)), self.showfps_cb], spacing=1)
-        if OS_NAME != "Windows":
+        if OS_NAME == "Linux":
             self.r6_label.visible = False
             self.capture_tool_dd.visible = False
 
@@ -1672,7 +1674,7 @@ class Desktop2StereoGUI:
     def on_device_change(self, e):
         device_label = e.control.value if e else self.device_dd.value
         self._config["Computing Device"] = self.device_label_to_index.get(device_label, 0)
-        if OS_NAME == "Windows":
+        if OS_NAME in ("Windows", "Darwin"):
             new_opts = _get_capture_tool_options(device_label)
             self.capture_tool_dd.options = [o for o in new_opts]
             if self.capture_tool_dd.value not in new_opts:
@@ -1699,9 +1701,9 @@ class Desktop2StereoGUI:
         self.recompile_openvino_cb.visible = self.openvino_cb.value if self.openvino_cb.visible else False
         self.fp16_cb.visible = not (dml or mps)
         self.r4_label.visible = not (dml or other)
-        is_windows = OS_NAME == "Windows"
-        self.r6_label.visible = is_windows
-        self.capture_tool_dd.visible = is_windows
+        is_windows_or_mac = OS_NAME in ("Windows", "Darwin")
+        self.r6_label.visible = is_windows_or_mac
+        self.capture_tool_dd.visible = is_windows_or_mac
         if dml or other:
             self.torch_compile_cb.visible = False
             self.tensorrt_cb.visible = False
@@ -2516,7 +2518,7 @@ class Desktop2StereoGUI:
     def stop_process(self, e=None):
         """Stop subprocess (called from UI button)."""
         future = asyncio.run_coroutine_threadsafe(self._async_stop(), self._loop)
-        future.add_done_callback(lambda f: print(f.exception() if f.exception() else "[Main] Stopped"))
+        future.add_done_callback(lambda f: f.exception() if f.exception() else None)
 
     async def _on_page_close(self, e=None):
         """Stop subprocess when user closes the window. Settings are only saved on Run."""
