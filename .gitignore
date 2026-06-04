@@ -28,3 +28,8 @@ CLAUDE.md
 .sline
 scripts/CHANGELOG.md
 .mcp.json
+*.ckpt
+*.pt
+output
+*.log
+*.jpg
