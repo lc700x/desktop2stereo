@@ -6,6 +6,7 @@ import time
 import signal
 import sys
 import subprocess
+from collections import deque
 
 from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, CONTROLLER_MODEL
 from depth import process, predict_depth
@@ -981,15 +982,19 @@ def main(mode="Viewer"):
     streamer, window = None, None
     
     # FPS statistics tracking
-    fps_values = []  # Store recent FPS values for 1% percentile calculation
+    fps_values = deque(maxlen=300)  # Recent FPS values (O(1) bounded; for 1% low)
     max_fps_history = 300  # Keep last 300 FPS values (5 seconds at 60 FPS)
     avg_fps = 0.0
     low_fps_1_percent_avg = float('inf')  # Average of FPS below 1% percentile
     fps_update_interval = 5.0  # Update statistics every 5 seconds
-    
-    # Latency statistics tracking
-    latency_history = []  # Store recent latency values for average calculation
+
+    # Latency statistics tracking.
+    # Use a deque + running sum so per-frame collection is O(1) (the old list
+    # used .append()+.pop(0), and .pop(0) is O(n) on every single frame), and the
+    # sliding-window average is O(1) instead of summing the whole history.
     max_latency_history = 300  # Keep same amount as FPS
+    latency_history = deque()   # bounded manually to keep the running sum in sync
+    latency_sum = 0.0           # running sum of latency_history for O(1) average
     avg_total_latency = 0.0
     
     try:
@@ -1070,24 +1075,25 @@ def main(mode="Viewer"):
                     # Calculate total latency for this frame
                     current_time = time.perf_counter()
                     total_latency = current_time - capture_start_time
-                    
-                    # Update latencies for statistics (still collected)
+
+                    # Update latencies for statistics (O(1) sliding window via
+                    # running sum; popleft() is O(1), unlike list.pop(0)).
                     latency_history.append(total_latency)
+                    latency_sum += total_latency
                     if len(latency_history) > max_latency_history:
-                        latency_history.pop(0)
-                    
+                        latency_sum -= latency_history.popleft()
+
                     # Update FPS every second
                     frame_count += 1
+                    total_frames += 1
                     elapsed = current_time - last_time
                     if elapsed >= 1.0:
                         current_fps = frame_count / elapsed
                         frame_count = 0
                         last_time = current_time
                         
-                        # Store FPS value for statistics
+                        # Store FPS value for statistics (deque auto-evicts oldest)
                         fps_values.append(current_fps)
-                        if len(fps_values) > max_fps_history:
-                            fps_values.pop(0)
                         
                         # Update FPS and latency statistics every 5 seconds
                         if current_time - last_fps_update_time >= fps_update_interval:
@@ -1106,9 +1112,9 @@ def main(mode="Viewer"):
                                 else:
                                     low_fps_1_percent_avg = sorted_fps[0] if sorted_fps else 0.0
                             
-                            # Calculate average latency
+                            # Calculate average latency (O(1) from running sum)
                             if latency_history:
-                                avg_total_latency = sum(latency_history) / len(latency_history)
+                                avg_total_latency = latency_sum / len(latency_history)
                             
                             last_fps_update_time = current_time
                         
@@ -1204,7 +1210,7 @@ def main(mode="Viewer"):
             print(f"[Main] Legacy Streamer Started")
             
             # FPS and latency tracking for legacy mode
-            fps_values = []
+            fps_values = deque(maxlen=300)  # O(1) bounded history
             max_fps_history = 300
             avg_fps = 0.0
             low_fps_1_percent_avg = float('inf')
@@ -1219,14 +1225,13 @@ def main(mode="Viewer"):
                     
                     # Calculate FPS
                     frame_count += 1
+                    total_frames += 1
                     current_time = time.perf_counter()
                     if current_time - last_time >= 1.0:
                         current_fps = frame_count / (current_time - last_time)
                         
-                        # Store FPS value for statistics
+                        # Store FPS value for statistics (deque auto-evicts oldest)
                         fps_values.append(current_fps)
-                        if len(fps_values) > max_fps_history:
-                            fps_values.pop(0)
                         
                         # Update FPS statistics every 5 seconds
                         if current_time - last_fps_update_time >= fps_update_interval:

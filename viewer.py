@@ -19,6 +19,15 @@ if "NVIDIA" in DEVICE_INFO:
     BACKEND = "CUDA"
     class CUDART_GL:
         """CUDA-OpenGL interop helper (based on local_viewer.py)."""
+
+        # cudaGraphicsRegisterFlags
+        CUDA_GRAPHICS_REGISTER_FLAGS_NONE = 0
+        CUDA_GRAPHICS_REGISTER_FLAGS_READ_ONLY = 1
+        CUDA_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD = 2
+        # cudaMemcpyKind
+        CUDA_MEMCPY_HOST_TO_DEVICE = 1
+        CUDA_MEMCPY_DEVICE_TO_DEVICE = 3
+
         def __init__(self, device_id=0):
             # Locate cudart library
             torch_dir = os.path.dirname(torch.__file__)
@@ -54,27 +63,44 @@ if "NVIDIA" in DEVICE_INFO:
 
             # Set argument types
             self.lib.cudaSetDevice.argtypes = [ctypes.c_int]
+            self.lib.cudaSetDevice.restype = ctypes.c_int
             self.lib.cudaGraphicsGLRegisterBuffer.argtypes = [
                 ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.c_uint
             ]
+            self.lib.cudaGraphicsGLRegisterBuffer.restype = ctypes.c_int
             self.lib.cudaGraphicsUnregisterResource.argtypes = [ctypes.c_void_p]
+            self.lib.cudaGraphicsUnregisterResource.restype = ctypes.c_int
             self.lib.cudaGraphicsMapResources.argtypes = [
                 ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
             ]
+            self.lib.cudaGraphicsMapResources.restype = ctypes.c_int
             self.lib.cudaGraphicsUnmapResources.argtypes = [
                 ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
             ]
+            self.lib.cudaGraphicsUnmapResources.restype = ctypes.c_int
             self.lib.cudaGraphicsResourceGetMappedPointer.argtypes = [
                 ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p
             ]
+            self.lib.cudaGraphicsResourceGetMappedPointer.restype = ctypes.c_int
             self.lib.cudaMemcpy.argtypes = [
                 ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int
             ]
+            self.lib.cudaMemcpy.restype = ctypes.c_int
+            # Async variant (used with the PyTorch stream to avoid a full device sync)
+            self.lib.cudaMemcpyAsync.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_void_p
+            ]
+            self.lib.cudaMemcpyAsync.restype = ctypes.c_int
             self.lib.cudaSetDevice(device_id)
 
         def register_buffer(self, pbo_id):
             resource = ctypes.c_void_p()
-            res = self.lib.cudaGraphicsGLRegisterBuffer(ctypes.byref(resource), pbo_id, 1)  # 1 = cudaGraphicsRegisterFlagsNone
+            # WriteDiscard: we overwrite the whole buffer every frame -> fastest, and
+            # semantically correct (we write to the mapped pointer, not read from it).
+            res = self.lib.cudaGraphicsGLRegisterBuffer(
+                ctypes.byref(resource), pbo_id,
+                self.CUDA_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD
+            )
             if res != 0:
                 raise RuntimeError(f"cudaGraphicsGLRegisterBuffer failed: {res}")
             return resource
@@ -82,26 +108,35 @@ if "NVIDIA" in DEVICE_INFO:
         def unregister_resource(self, resource):
             self.lib.cudaGraphicsUnregisterResource(resource)
 
-        def map_resource(self, resource):
-            res = self.lib.cudaGraphicsMapResources(1, ctypes.byref(resource), None)
+        def map_resource(self, resource, stream=None):
+            stream_ptr = ctypes.c_void_p(stream) if stream else None
+            res = self.lib.cudaGraphicsMapResources(1, ctypes.byref(resource), stream_ptr)
             if res != 0:
                 raise RuntimeError(f"cudaGraphicsMapResources failed: {res}")
             ptr = ctypes.c_void_p()
             size = ctypes.c_size_t()
             res = self.lib.cudaGraphicsResourceGetMappedPointer(ctypes.byref(ptr), ctypes.byref(size), resource)
             if res != 0:
-                self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), None)
+                self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), stream_ptr)
                 raise RuntimeError(f"cudaGraphicsResourceGetMappedPointer failed: {res}")
             return ptr.value
 
-        def unmap_resource(self, resource):
-            self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), None)
+        def unmap_resource(self, resource, stream=None):
+            stream_ptr = ctypes.c_void_p(stream) if stream else None
+            self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), stream_ptr)
 
         def memcpy_d2d(self, dst_ptr, src_ptr, size):
-            # cudaMemcpyDeviceToDevice = 3
-            res = self.lib.cudaMemcpy(dst_ptr, src_ptr, size, 3)
+            # cudaMemcpyDeviceToDevice = 3 (synchronous w.r.t. host)
+            res = self.lib.cudaMemcpy(dst_ptr, src_ptr, size, self.CUDA_MEMCPY_DEVICE_TO_DEVICE)
             if res != 0:
                 raise RuntimeError(f"cudaMemcpy failed: {res}")
+
+        def memcpy_h2d(self, dst_ptr, src_ptr, size):
+            # Host(pinned)->Device upload straight into the mapped PBO (synchronous).
+            res = self.lib.cudaMemcpy(dst_ptr, src_ptr, size, self.CUDA_MEMCPY_HOST_TO_DEVICE)
+            if res != 0:
+                raise RuntimeError(f"cudaMemcpy (H2D) failed: {res}")
+
 
 elif "AMD" in DEVICE_INFO:
     BACKEND = "HIP"
@@ -112,8 +147,10 @@ elif "AMD" in DEVICE_INFO:
         """
 
         HIP_SUCCESS = 0
-        # IMPORTANT: use the same flag as CUDA's cudaGraphicsRegisterFlagsWriteDiscard
-        HIP_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD = 1
+        # hipGraphicsRegisterFlagsWriteDiscard == 2 (we overwrite the whole buffer
+        # every frame, so WriteDiscard is both correct and the fastest mode).
+        HIP_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD = 2
+        HIP_MEMCPY_HOST_TO_DEVICE = 1            # hipMemcpyHostToDevice
         HIP_MEMCPY_DEVICE_TO_DEVICE = 3          # hipMemcpyDeviceToDevice
 
         def __init__(self, device_id=0):
@@ -292,6 +329,17 @@ elif "AMD" in DEVICE_INFO:
             if res != self.HIP_SUCCESS:
                 raise RuntimeError(f"hipMemcpy failed: {res}")
 
+        def memcpy_h2d(self, dst_ptr, src_ptr, size):
+            """Host(pinned)->Device upload straight into the mapped PBO (synchronous)."""
+            res = self.lib.hipMemcpy(
+                dst_ptr,
+                src_ptr,
+                size,
+                self.HIP_MEMCPY_HOST_TO_DEVICE,
+            )
+            if res != self.HIP_SUCCESS:
+                raise RuntimeError(f"hipMemcpy (H2D) failed: {res}")
+
 # Shaders as constants (unchanged)
 VERTEX_SHADER = """
     #version 330
@@ -333,35 +381,38 @@ FRAGMENT_SHADER = """
 
     vec2 pixel_size = 1.0 / u_resolution;
 
-    // FAST DISOCCLUSION DETECTION
-    bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
-        // Bounds check for shifted UVs (simple and fast)
+    // Precomputed parallax direction (set once in main, reused by helpers)
+    vec2  g_par_dir;     // normalized roll direction (cos,sin) * sign(eye_offset)
+    float g_sweep_sign;  // +1 / -1: side the background is revealed from
+
+    // SOFT DISOCCLUSION CONFIDENCE (0 = none, 1 = full)
+    // Returns a smooth value instead of a hard bool -> blends inpaint in to hide seams.
+    float disocclusion_confidence(vec2 base_uv, vec2 shifted_uv) {
+        // Out-of-bounds shifted UV -> fully disoccluded
         if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
             shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
-            return true;
-        // Fast depth discontinuity check (3-tap only)
-        vec2 grad_dir = vec2(cos(u_roll), sin(u_roll)) * sign(u_eye_offset);
-        float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
-        float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
-        
-        // Depth jump threshold (tuned for sharp edges)
-        if (abs(d_left - d_right) > 0.08)
-            return true;
+            return 1.0;
 
-        return false;
+        // Fast depth discontinuity check (2-tap) along parallax direction
+        vec2 step2 = g_par_dir * pixel_size * 2.0;
+        float d_left  = texture(tex_depth, base_uv - step2).r;
+        float d_right = texture(tex_depth, base_uv + step2).r;
+        float jump = abs(d_left - d_right);
+
+        // Smooth ramp instead of hard threshold (soft edges -> fewer seams)
+        return smoothstep(0.04, 0.10, jump);
     }
 
     vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
         vec4 best_color = vec4(0.0);
         float best_weight = 0.0;
         int search_range = int(u_search_radius);
-        int search_dir = u_eye_offset > 0.0 ? -1 : 1;
+        // Sweep toward the side the background is revealed from (trig precomputed)
+        vec2 sweep = g_par_dir * pixel_size.x * g_sweep_sign;
         
         // Phase 1: Directional sweep (most samples here)
         for (int i = 1; i <= search_range; i++) {
-            float c = cos(u_roll);
-            float s = sin(u_roll);
-            vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+            vec2 sample_uv = uv_coord + sweep * float(i);
             if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
             float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
             
@@ -382,12 +433,11 @@ FRAGMENT_SHADER = """
             }
         }
 
+        // Phase 2: opposite sweep fallback if not enough background found
         if (best_weight < 2.0) {
-            int opposite_range = search_range / 2;
+            int opposite_range = search_range;
             for (int i = 1; i <= opposite_range; i++) {
-                float c = cos(u_roll);
-                float s = sin(u_roll);
-                vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+                vec2 sample_uv = uv_coord - sweep * float(i);
                 if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
                 float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
                 if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
@@ -453,27 +503,45 @@ FRAGMENT_SHADER = """
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
 
-        // Sample depth
-        float depth = texture(tex_depth, flipped_uv).r;
-        float depth_inv = -depth;
-
-        // Calculate parallax shift
-        float shift = (depth_inv + u_convergence);
+        // Precompute parallax direction once (perf win: was recomputed per-loop)
         float c = cos(u_roll);
         float s = sin(u_roll);
-        vec2 shifted_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength * c,
-                                            u_eye_offset * shift * u_depth_strength * s);
+        g_par_dir = vec2(c, s) * sign(u_eye_offset);
+        g_sweep_sign = (u_eye_offset > 0.0) ? -1.0 : 1.0;
 
-        vec4 color;
-        
-        // Check if this pixel needs inpainting
-        if (is_disoccluded(flipped_uv, shifted_uv, depth)) {
-            // Disoccluded region → use optimized inpainting
-            color = push_pull_inpaint(flipped_uv, depth_inv);
-            // Alternative: color = separable_inpaint(flipped_uv, depth_inv);
-        } else {
-            // Normal sampling
-            color = texture(tex_color, shifted_uv);
+        // DIBR asymmetric depth smoothing: 3-tap Gaussian along parallax dir.
+        // Per Fehn 2004, smooths sharp depth edges to narrow disocclusion width.
+        vec2 ds_dir = g_par_dir * pixel_size * 1.5;
+        float d0 = texture(tex_depth, flipped_uv).r;
+        float dm = texture(tex_depth, flipped_uv - ds_dir).r;
+        float dp = texture(tex_depth, flipped_uv + ds_dir).r;
+        float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
+        float depth_inv = -depth;
+
+        // Enhanced 3D: mild non-linear depth curve boosts perceived pop
+        // for nearer objects without pushing parallax into artifact-heavy ranges.
+        float depth_shaped = depth_inv * (1.0 + 0.25 * (1.0 - depth));
+
+        // Calculate parallax shift with edge-aware border constraint.
+        // Smoothly reduces parallax near left/right edges to prevent sampling
+        // beyond image boundaries (standard DIBR border handling).
+        float shift = (depth_shaped + u_convergence);
+        float edge_margin = 0.05;
+        float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
+                           * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
+        float px = u_eye_offset * shift * u_depth_strength * edge_falloff;
+        vec2 shifted_uv = flipped_uv - vec2(px * c, px * s);
+
+        // Soft disocclusion: blend inpaint in by confidence to hide hard seams
+        float conf = disocclusion_confidence(flipped_uv, shifted_uv);
+
+        // Normal sampling
+        vec4 color = texture(tex_color, shifted_uv);
+        if (conf > 0.001) {
+            // Disoccluded region → optimized inpainting, blended by confidence
+            vec4 filled = push_pull_inpaint(flipped_uv, depth_inv);
+            // Alternative: vec4 filled = separable_inpaint(flipped_uv, depth_inv);
+            color = mix(color, filled, conf);
         }
 
         // Subtle edge fade to hide artifacts
@@ -629,7 +697,7 @@ ANAGLYPH_FRAGMENT = """
         }
 
         if (best_weight < 2.0) {
-            int opposite_range = search_range / 2;
+            int opposite_range = search_range;
             for (int i = 1; i <= opposite_range; i++) {
                 float c = cos(u_roll);
                 float s = sin(u_roll);
@@ -667,11 +735,21 @@ ANAGLYPH_FRAGMENT = """
 
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
-        float depth = texture(tex_depth, flipped_uv).r;
-        float depth_inv = -depth;
-        float shift_amount = (depth_inv + u_convergence) * u_depth_strength;
         float c = cos(u_roll);
         float s = sin(u_roll);
+        // DIBR asymmetric depth smoothing along parallax direction
+        vec2 ds_dir = vec2(c, s) * pixel_size * 1.5;
+        float d0 = texture(tex_depth, flipped_uv).r;
+        float dm = texture(tex_depth, flipped_uv - ds_dir).r;
+        float dp = texture(tex_depth, flipped_uv + ds_dir).r;
+        float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
+        float depth_inv = -depth;
+        float shift_amount = (depth_inv + u_convergence) * u_depth_strength;
+        // Edge-aware border constraint: both eyes rendered in one pass
+        float edge_margin = 0.05;
+        float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
+                           * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
+        shift_amount *= edge_falloff;
 
         vec2 left_uv  = flipped_uv + vec2(u_eye_offset * shift_amount * c, u_eye_offset * shift_amount * s);
         vec2 right_uv = flipped_uv - vec2(u_eye_offset * shift_amount * c, u_eye_offset * shift_amount * s);
@@ -777,7 +855,7 @@ INTERLEAVED_FRAGMENT = """
         }
 
         if (best_weight < 2.0) {
-            int opposite_range = search_range / 2;
+            int opposite_range = search_range;
             for (int i = 1; i <= opposite_range; i++) {
                 float c = cos(u_roll);
                 float s = sin(u_roll);
@@ -818,13 +896,22 @@ INTERLEAVED_FRAGMENT = """
         float my_offset = eye_dir * u_eye_offset;
 
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
-        float depth = texture(tex_depth, flipped_uv).r;
-        float depth_inv = -depth;
-        float shift_amount = (depth_inv + u_convergence);
         float c = cos(u_roll);
         float s = sin(u_roll);
-        vec2 shifted_uv = flipped_uv - vec2(my_offset * shift_amount * u_depth_strength * c,
-                                              my_offset * shift_amount * u_depth_strength * s);
+        // DIBR asymmetric depth smoothing along parallax direction
+        vec2 ds_dir = vec2(c, s) * pixel_size * 1.5;
+        float d0 = texture(tex_depth, flipped_uv).r;
+        float dm = texture(tex_depth, flipped_uv - ds_dir).r;
+        float dp = texture(tex_depth, flipped_uv + ds_dir).r;
+        float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
+        float depth_inv = -depth;
+        float shift_amount = (depth_inv + u_convergence);
+        // Edge-aware border constraint for interleaved (pixels alternate eyes)
+        float edge_margin = 0.05;
+        float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
+                           * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
+        vec2 shifted_uv = flipped_uv - vec2(my_offset * shift_amount * u_depth_strength * c * edge_falloff,
+                                              my_offset * shift_amount * u_depth_strength * s * edge_falloff);
 
         vec4 color;
         if (is_disoccluded(flipped_uv, shifted_uv, depth))
@@ -920,7 +1007,7 @@ LEIA_FRAGMENT = """
         }
 
         if (best_weight < 2.0) {
-            int opposite_range = search_range / 2;
+            int opposite_range = search_range;
             for (int i = 1; i <= opposite_range; i++) {
                 float c = cos(u_roll);
                 float s = sin(u_roll);
@@ -1093,9 +1180,16 @@ class StereoWindow:
         self.overlay_update_interval = 0.5  # seconds, throttle overlay regeneration
         self._overlay_cache = {
             'image': None,         # numpy RGBA image
+            'overlay_rgb_f': None, # cached float32 RGB of overlay (avoids per-frame convert)
+            'alpha_f': None,       # cached float32 alpha (0..1) of overlay
             'fps_text': None,
+            'latency_text': None,
             'depth_text': None,
+            'mouse_text': None,
             'last_update': 0.0,
+            'values_update': 0.0,  # last time the displayed FPS/latency numbers refreshed
+            'disp_fps': None,      # throttled FPS value actually shown
+            'disp_latency': None,  # throttled latency value actually shown
             'pos': (self.text_padding, self.text_padding)
         }
         
@@ -1224,6 +1318,14 @@ class StereoWindow:
         self._pbo_depth = None        # PBO ID for depth texture
         self._cuda_resource_color = None
         self._cuda_resource_depth = None
+        # Persistent page-locked (pinned) staging buffer for the colour upload.
+        # Reused every frame to avoid per-frame device allocations and to make the
+        # host->PBO copy fast (pinned memory has much higher H2D bandwidth).
+        self._pinned_rgb = None
+        self._pinned_rgb_ptr = None
+        # Whether the active GPU is integrated (APU / unified memory). Selects the
+        # fastest colour-upload strategy (see _upload_color). Set in _init_cuda_pbos.
+        self._cuda_integrated = False
 
     def __del__(self):
         self.cleanup_cuda()
@@ -1235,26 +1337,95 @@ class StereoWindow:
         try:
             self._cudart = CUDART_GL(self.cuda_device_id)
 
-            # Colour PBO (RGB8, 3 bytes/pixel)
-            self._pbo_color = glGenBuffers(1)
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
-            glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 3, None, GL_STREAM_DRAW)
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
-            self._cuda_resource_color = self._cudart.register_buffer(self._pbo_color)
+            # Detect integrated GPUs (APUs with unified memory). On those there is
+            # no PCIe bus, so a pinned Host->Device staging copy for the colour
+            # frame is pure overhead (benchmarked slower than a direct texture
+            # write). We therefore only use the pinned PBO path on discrete GPUs.
+            self._cuda_integrated = False
+            try:
+                props = torch.cuda.get_device_properties(self.cuda_device_id)
+                self._cuda_integrated = bool(getattr(props, "is_integrated", 0))
+            except Exception:
+                self._cuda_integrated = False
 
-            # Depth PBO (float32, 4 bytes/pixel)
+            # Colour PBO (RGB8, 3 bytes/pixel) — only needed for the discrete-GPU
+            # pinned upload path. Integrated GPUs upload colour via texture.write.
+            if not self._cuda_integrated:
+                self._pbo_color = glGenBuffers(1)
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
+                glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 3, None, GL_STREAM_DRAW)
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+                self._cuda_resource_color = self._cudart.register_buffer(self._pbo_color)
+
+            # Depth PBO (float32, 4 bytes/pixel). Depth always lives on the GPU,
+            # so a device-to-device copy is optimal on every backend/GPU type.
             self._pbo_depth = glGenBuffers(1)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_depth)
             glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 4, None, GL_STREAM_DRAW)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
             self._cuda_resource_depth = self._cudart.register_buffer(self._pbo_depth)
 
-            print(f"[Main] Enabled {BACKEND}-GL interop acceleration ({BACKEND}: {self.cuda_device_id})")
+            # Persistent pinned staging buffer for the (overlay-composited) colour
+            # frame — only on discrete GPUs, where pinned H2D bandwidth pays off.
+            if not self._cuda_integrated:
+                try:
+                    self._pinned_rgb = torch.empty(
+                        (height, width, 3), dtype=torch.uint8, pin_memory=True
+                    )
+                    self._pinned_rgb_ptr = self._pinned_rgb.data_ptr()
+                except Exception:
+                    # Pinned allocation can fail on some setups; fall back to no staging
+                    self._pinned_rgb = None
+                    self._pinned_rgb_ptr = None
+
+            gpu_kind = "integrated" if self._cuda_integrated else "discrete"
+            print(f"[Main] Enabled {BACKEND}-GL interop acceleration "
+                  f"({BACKEND}: {self.cuda_device_id}, {gpu_kind} GPU)")
         except Exception as e:
             print(f"[Main] {BACKEND}-GL interop initialization failed: {e}")
             print(f"[Main] Falling back to CPU-GL interop.")
             self.use_cuda = False
             self.cleanup_cuda()   # clean up any partial allocations
+
+    def _upload_color(self, rgb_host):
+        """Adaptive colour upload for the overlay-composited host frame.
+
+        - Discrete GPU: stage into a persistent pinned buffer and do a single fast
+          Host->Device copy into the registered PBO (PCIe-optimal, no per-frame
+          device allocation).
+        - Integrated GPU (APU): there is no PCIe bus, so the pinned/PBO dance is
+          pure overhead — a direct ModernGL texture write is as fast or faster.
+        """
+        # Integrated GPU (or no pinned staging / colour PBO): direct texture write.
+        if self._cuda_integrated or self._pinned_rgb is None or self._cuda_resource_color is None:
+            self.color_tex.write(np.ascontiguousarray(rgb_host).tobytes())
+            return
+
+        h, w, _ = rgb_host.shape
+        nbytes = h * w * 3
+        if self._pinned_rgb.shape[:2] == (h, w):
+            # In-place CPU copy numpy -> pinned torch buffer
+            self._pinned_rgb.copy_(torch.from_numpy(np.ascontiguousarray(rgb_host)))
+            src_ptr = self._pinned_rgb_ptr
+        else:
+            # Size mismatch fallback: copy directly from the (pageable) numpy buffer
+            rgb_c = np.ascontiguousarray(rgb_host)
+            src_ptr = rgb_c.ctypes.data
+            nbytes = rgb_c.nbytes
+
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
+        ptr = self._cudart.map_resource(self._cuda_resource_color)
+        try:
+            self._cudart.memcpy_h2d(ptr, src_ptr, nbytes)
+        finally:
+            self._cudart.unmap_resource(self._cuda_resource_color)
+
+        # Update ModernGL texture from the PBO
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                        GL_RGB, GL_UNSIGNED_BYTE, None)
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
 
     def _upload_color_cuda(self, rgb_gpu):
         """Upload a GPU tensor (H,W,3) uint8 to colour texture using PBO."""
@@ -1301,6 +1472,9 @@ class StereoWindow:
                 glDeleteBuffers(1, [self._pbo_color])
             if self._pbo_depth and bool(glDeleteBuffers):
                 glDeleteBuffers(1, [self._pbo_depth])
+            # Release the persistent pinned staging buffer
+            self._pinned_rgb = None
+            self._pinned_rgb_ptr = None
             self._cudart = None
     
     def _calculate_depth_map_viewport(self, win_w, win_h, tex_w, tex_h):
@@ -1550,23 +1724,35 @@ class StereoWindow:
         else:
             self.show_mouse_state = False
 
-        # Compose the strings to display
-        fps_text = f"FPS: {self.actual_fps:.1f}" if self.show_fps else ""
-        latency_text = f"Latency: {self.total_latency:.1f} ms" if self.show_fps else ""
+        cache = self._overlay_cache
+
+        # Throttle the *displayed* FPS/latency numbers. These change every frame
+        # (e.g. "FPS: 59.8" -> "FPS: 60.1"), and the live values were previously
+        # forcing a full PIL text re-rasterization on every single frame, which is
+        # the main overlay-induced FPS drop. We only refresh the shown numbers a
+        # couple of times per second; the frame's real FPS is unaffected.
+        if (cache.get('disp_fps') is None or
+                (current_time - cache.get('values_update', 0.0)) >= self.overlay_update_interval):
+            cache['disp_fps'] = self.actual_fps
+            cache['disp_latency'] = self.total_latency
+            cache['values_update'] = current_time
+
+        # Compose the strings to display (from the throttled snapshot values)
+        fps_text = f"FPS: {cache['disp_fps']:.1f}" if self.show_fps else ""
+        latency_text = f"Latency: {cache['disp_latency']:.1f} ms" if self.show_fps else ""
         depth_text = f"Depth: {self.depth_ratio:.1f}" if self.show_depth_ratio else ""
         mouse_text = f"Mouse: {'Pass' if self.mouse_pass_through else 'Normal'}" if self.show_mouse_state else ""
 
-        # Decide whether to regenerate overlay
-        cache = self._overlay_cache
+        # Decide whether to regenerate the rasterized overlay. Because the numbers
+        # above are throttled, the text strings only change a few times per second,
+        # so regeneration (the expensive part) is naturally rate-limited.
         needs_regen = False
         if cache['image'] is None:
             needs_regen = True
-        elif latency_text != cache.get('latency_text'):
-            needs_regen = True
-        elif fps_text != cache.get('fps_text') or depth_text != cache.get('depth_text') or mouse_text != cache.get('mouse_text'):
-            needs_regen = True
-        elif (current_time - cache.get('last_update', 0.0)) >= self.overlay_update_interval:
-            # periodic regen in case font metrics or size changed
+        elif (fps_text != cache.get('fps_text') or
+              latency_text != cache.get('latency_text') or
+              depth_text != cache.get('depth_text') or
+              mouse_text != cache.get('mouse_text')):
             needs_regen = True
 
         if needs_regen:
@@ -1577,6 +1763,14 @@ class StereoWindow:
             cache['depth_text'] = depth_text
             cache['mouse_text'] = mouse_text
             cache['last_update'] = current_time
+            # Pre-convert the overlay to float32 once so the per-frame blend below
+            # doesn't repeat the RGBA->float conversion every frame.
+            if overlay_arr is not None:
+                cache['alpha_f'] = overlay_arr[..., 3:4].astype(np.float32) / 255.0
+                cache['overlay_rgb_f'] = overlay_arr[..., :3].astype(np.float32)
+            else:
+                cache['alpha_f'] = None
+                cache['overlay_rgb_f'] = None
 
         overlay_arr = cache['image']
         if overlay_arr is None:
@@ -1595,16 +1789,13 @@ class StereoWindow:
         if ov_w_clipped <= 0 or ov_h_clipped <= 0:
             return rgb_frame
 
-        # Slice overlay and frame
-        overlay_slice = overlay_arr[0:ov_h_clipped, 0:ov_w_clipped]
+        # Use the cached float32 overlay (already converted at regen time)
+        alpha = cache['alpha_f'][0:ov_h_clipped, 0:ov_w_clipped]
+        overlay_rgb = cache['overlay_rgb_f'][0:ov_h_clipped, 0:ov_w_clipped]
         frame_region = rgb_frame[pos_y:end_y, pos_x:end_x]
 
         # Alpha blending: result = overlay.rgb * alpha + frame * (1 - alpha)
-        alpha = overlay_slice[..., 3:4].astype(np.float32) / 255.0  # H x W x 1
-        overlay_rgb = overlay_slice[..., :3].astype(np.float32)
-        frame_rgb = frame_region.astype(np.float32)
-
-        blended = (overlay_rgb * alpha) + (frame_rgb * (1.0 - alpha))
+        blended = overlay_rgb * alpha + frame_region.astype(np.float32) * (1.0 - alpha)
         # write back blended region into original frame (as uint8)
         rgb_frame[pos_y:end_y, pos_x:end_x] = np.clip(blended, 0, 255).astype(np.uint8)
 
@@ -1861,17 +2052,23 @@ class StereoWindow:
         cuda_success = False
         if self.use_cuda and self._cudart is not None:
             try:
-                # Check that tensors are on GPU and compatible
-                if not (hasattr(rgb, 'is_cuda') and rgb.is_cuda and
-                        hasattr(depth, 'is_cuda') and depth.is_cuda):
-                    raise RuntimeError("Tensors not on GPU")
+                # Depth must be a GPU tensor for the device-to-device copy.
+                if not (hasattr(depth, 'is_cuda') and depth.is_cuda):
+                    raise RuntimeError("Depth tensor not on GPU")
 
-                # Convert overlay (CPU) to GPU tensor (uint8)
-                rgb_gpu = torch.from_numpy(rgb_with_overlay).cuda(self.cuda_device_id).contiguous()
+                # Depth stays on the GPU -> device-to-device copy (true zero-copy).
                 depth_gpu = depth.contiguous().float()
 
-                # Upload using PBOs
-                self._upload_color_cuda(rgb_gpu)
+                # Make sure the producer kernels (and the .contiguous()/.float()
+                # conversion just enqueued) have finished before the interop copies
+                # read the memory. Syncing only the current stream avoids a full
+                # device-wide stall while staying correct on non-default streams.
+                torch.cuda.current_stream(self.cuda_device_id).synchronize()
+
+                # Colour: composited on the CPU. Discrete GPUs use a pinned PBO
+                # Host->Device upload; integrated GPUs use a direct texture write
+                # (no PCIe bus, so the PBO dance would only add overhead).
+                self._upload_color(rgb_with_overlay)
                 self._upload_depth_cuda(depth_gpu)
                 cuda_success = True
             except Exception as e:
