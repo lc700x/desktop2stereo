@@ -33,3 +33,4 @@ CLAUDE.md
 output
 *.*pt
 *.log
+.diff_output.txt

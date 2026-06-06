@@ -402,7 +402,7 @@ DEFAULTS = {
     "Anti-aliasing": 2,
     "Foreground Scale": 0.5,
     "IPD": 0.064,
-    "Convergence": 0.5,
+    "Convergence": 0.0,
     "Display Mode": "Half-SBS",
     "FP16": True,
     "torch.compile": False,
@@ -669,9 +669,7 @@ def save_yaml(path, cfg):
         return True, ""
     except Exception as e:
         return False, str(e)
-# ═════════════════════════════════════════════
 # CompactDropdown — compact custom dropdown control
-# ═════════════════════════════════════════════
 
 class CompactTextField(ft.Container):
     """Compact text input — 32px height, visually consistent with CompactDropdown."""
@@ -891,9 +889,7 @@ class CompactDropdown(ft.Container):
             pass
 
 
-# ═════════════════════════════════════════════
 # Main GUI Class
-# ═════════════════════════════════════════════
 class Desktop2StereoGUI:
     """Flet GUI for Desktop2Stereo — full equivalent of tk ConfigGUI."""
     def __init__(self, page: ft.Page):
@@ -961,6 +957,7 @@ class Desktop2StereoGUI:
                 cfg = read_yaml(os.path.join(BASE_DIR, "settings.yaml"))
                 if cfg:
                     self._config.update(cfg)
+                    self._yaml_loaded = True
                     self.language = self._config.get("Language", "EN")
                     self.apply_config(self._config)
                     self.set_status(UI_TEXTS[self.language]["Loaded settings.yaml at startup"], key="Loaded settings.yaml at startup")
@@ -1036,9 +1033,7 @@ class Desktop2StereoGUI:
         if update:
             self.page.update()
 
-    # ══════════════════════════════════════════
     # Build UI — grid-aligned, matching original GUI
-    # ══════════════════════════════════════════
 
     def _auto_align_labels(self):
         """Auto-detect longest label text and unify label widths for grid alignment."""
@@ -1738,7 +1733,6 @@ class Desktop2StereoGUI:
         self.tensorrt_cb.value = False
         self.coreml_cb.value = False
         self.openvino_cb.value = False
-        self.torch_compile_cb.value = False
         if "CUDA" in device_label and not IS_ROCM:
             should = not any(kw in model_lower for kw in DISABLE_TRT_KEYWORDS)
             self.tensorrt_cb.value = should
@@ -2242,9 +2236,9 @@ class Desktop2StereoGUI:
         except Exception as e:
             self.set_status(UI_TEXTS[self.language]["err_refresh_window"].format(e))
 
-    # ══════════════════════════════════════════
+
     # URL actions
-    # ══════════════════════════════════════════
+
     def preview_in_browser(self, e):
         try:
             import webbrowser
@@ -2288,9 +2282,9 @@ class Desktop2StereoGUI:
         self.stop_btn.disabled = not running
         self._safe_update(self.run_btn, self.stop_btn)
 
-    # ══════════════════════════════════════════
+
     # Save, Run, Stop, Reset
-    # ══════════════════════════════════════════
+
     def _validate_config_before_run(self):
         """Validate config before run. Returns (ok: bool, error_msg: str)."""
         try:
@@ -2589,7 +2583,6 @@ class Desktop2StereoGUI:
         current_device_label = self.device_dd.value
         current_device_idx = self.device_label_to_index.get(current_device_label, DEFAULTS["Computing Device"])
         current_primary = get_primary_monitor_index()
-
         dynamic_defaults = DEFAULTS.copy()
         dynamic_defaults["Monitor Index"] = current_primary
         self.apply_config(dynamic_defaults, keep_optional=False)
@@ -2607,9 +2600,9 @@ class Desktop2StereoGUI:
         self.auto_enable_optimizers_based_on_device()
         self.page.update()
 
-	    # ══════════════════════════════════════════
+	
     # ESC long-press monitoring
-    # ══════════════════════════════════════════
+
     VK_ESC = 0x1B
 
     async def _esc_poll_task(self):
@@ -2681,9 +2674,7 @@ class Desktop2StereoGUI:
             pass
 
 
-# ═════════════════════════════════════════════
 # Entry point
-# ═════════════════════════════════════════════
 def main():
     ft.run(_async_main)
 

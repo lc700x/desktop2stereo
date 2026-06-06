@@ -300,7 +300,7 @@ Depth Resolution: 336
 Anti-aliasing: 2
 Foreground Scale: 0.5
 IPD: 0.064
-Convergence: 0.5
+Convergence: 0.0
 Display Mode: Half-SBS
 FP16: true
 torch.compile: false
