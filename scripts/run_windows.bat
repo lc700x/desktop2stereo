@@ -1,5 +1,5 @@
 @echo off
-chcp 936 >nul
+chcp 65001>nul
 cls
 title Desktop2Stereo
 set APP_DIR=.\Desktop2Stereo

@@ -80,16 +80,29 @@ _TYPE_NC = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4,
 
 
 def _get_accessor(gltf, bin_data, acc_idx):
-    """Extract numpy array from a glTF accessor."""
+    """Extract numpy array from a glTF accessor.
+    Handles both contiguous and interleaved (byteStride) vertex attributes.
+    """
     acc = gltf['accessors'][acc_idx]
     bv = gltf['bufferViews'][acc['bufferView']]
-    off = bv.get('byteOffset', 0) + acc.get('byteOffset', 0)
+    byte_offset = bv.get('byteOffset', 0) + acc.get('byteOffset', 0)
+    byte_stride = bv.get('byteStride', 0)
     nc = _TYPE_NC[acc['type']]
     dt = np.dtype(_DTYPE_MAP[acc['componentType']]).newbyteorder('<')
-    arr = np.frombuffer(bin_data[off:off + acc['count'] * nc * dt.itemsize], dtype=dt)
+    elem_size = nc * dt.itemsize
+
+    if byte_stride == 0 or byte_stride == elem_size:
+        # Contiguous (no stride or stride equals element size)
+        arr = np.frombuffer(bin_data, dtype=dt, count=acc['count'] * nc,
+                           offset=byte_offset).copy()
+    else:
+        # Interleaved vertex attributes — read each row with stride
+        arr = np.ndarray(shape=(acc['count'], nc), dtype=dt,
+                         buffer=bin_data,
+                         offset=byte_offset,
+                         strides=(byte_stride, dt.itemsize)).copy()
     if nc > 1:
         arr = arr.reshape(acc['count'], nc)
-    # Normalize data types for consistency
     if acc['componentType'] in (5121, 5123, 5125):
         arr = arr.astype(np.uint32)
     elif acc['componentType'] == 5126:
@@ -182,6 +195,8 @@ def load_glb_model(path):
             tex_id (int, index into textures)
         textures: list of numpy RGBA uint8 arrays
     """
+    _mat_log = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'material_debug.txt'), 'w', encoding='utf-8')
+    _mat_log.write(f"=== Material debug for: {path} ===\n")
     with open(path, 'rb') as f:
         data = f.read()
     gltf, bin_data = _read_glb_chunks(data)
@@ -236,15 +251,35 @@ def load_glb_model(path):
             else:
                 norm = np.zeros((pos.shape[0], 3), dtype=np.float32)
 
-            # Apply node world matrix: position with full 4x4, normals with rotation part only
+            # Extract tangent (vec4: xyz + bitangent_sign), or zeros if absent
+            if 'TANGENT' in attrs:
+                tangent = _get_accessor(gltf, bin_data, attrs['TANGENT'])
+                if tangent.shape[1] < 4:
+                    t4 = np.ones((tangent.shape[0], 4), dtype=np.float32)
+                    t4[:, :tangent.shape[1]] = tangent
+                    tangent = t4
+            else:
+                tangent = np.zeros((pos.shape[0], 4), dtype=np.float32)
+                tangent[:, 3] = 1.0  # bitangent sign defaults to 1
+
+            # Apply node world matrix: position with full 4x4, normals with inverse-transpose
             if not np.allclose(world_mat, np.eye(4)):
                 pos = _apply_transform(pos, world_mat)
-                rot3 = world_mat[:3, :3].astype(np.float32)
-                norm = (rot3 @ norm.T).T.astype(np.float32)
+                rot3 = world_mat[:3, :3].astype(np.float64)
+                normal_mat = np.linalg.inv(rot3.T)  # inverse-transpose handles non-uniform scaling
+                norm = (normal_mat @ norm.T).T.astype(np.float32)
+                # Transform tangent xyz with rotation, keep w (bitangent sign)
+                if tangent is not None:
+                    t_xyz = (rot3[:3, :3].astype(np.float64) @ tangent[:, :3].T).T.astype(np.float32)
+                    tangent = np.hstack([t_xyz, tangent[:, 3:4]]).astype(np.float32)
 
             # Extract UV coordinates
             if 'TEXCOORD_0' in attrs:
                 uv = _get_accessor(gltf, bin_data, attrs['TEXCOORD_0'])
+                if uv.shape[1] > 2:
+                    uv = uv[:, :2]
+            elif 'TEXCOORD_1' in attrs:
+                uv = _get_accessor(gltf, bin_data, attrs['TEXCOORD_1'])
                 if uv.shape[1] > 2:
                     uv = uv[:, :2]
             else:
@@ -259,21 +294,198 @@ def load_glb_model(path):
             else:
                 indices = np.arange(pos.shape[0], dtype=np.uint32)
 
-            # Texture ID from material
+            # Texture ID, base color, and roughness from material
             tex_id = -1
+            base_color = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+            roughness_factor = 1.0
+            metallic_factor = 1.0
+            normal_tex_id = -1
+            normal_scale = 1.0
+            occlusion_tex_id = -1
+            occlusion_strength = 1.0
+            unlit = False
+            double_sided = False
+            alpha_mode = 'OPAQUE'
+            alpha_cutoff = 0.5
+            mr_tex_id = -1
+            emissive_tex_id = -1
+            emissive_factor = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            tex_offset = np.array([0.0, 0.0], dtype=np.float32)
+            tex_scale = np.array([1.0, 1.0], dtype=np.float32)
             mat_idx = prim.get('material')
             if mat_idx is not None and 'materials' in gltf:
                 mat = gltf['materials'][mat_idx]
-                bt = mat.get('pbrMetallicRoughness', {}).get('baseColorTexture')
-                if bt and 'index' in bt:
-                    tid = tex_img_map.get(bt['index'], -1)
-                    if tid >= 0 and all_textures[tid] is not None:
+                mat_name = mat.get('name', f'material_{mat_idx}')
+                pbr = mat.get('pbrMetallicRoughness', {})
+                ext = mat.get('extensions', {})
+                sg = ext.get('KHR_materials_pbrSpecularGlossiness')
+
+                # --- Texture extraction ---
+                # 1) Standard pbrMetallicRoughness.baseColorTexture
+                bt = pbr.get('baseColorTexture')
+                tex_index = bt.get('index') if bt else None
+                # 2) KHR_materials_pbrSpecularGlossiness.diffuseTexture
+                if tex_index is None and sg:
+                    dt = sg.get('diffuseTexture')
+                    tex_index = dt.get('index') if dt else None
+
+                if tex_index is not None:
+                    tid = tex_img_map.get(tex_index, -1)
+                    if tid >= 0 and tid < len(all_textures) and all_textures[tid] is not None:
                         tex_id = tid
 
-            primitives.append({'vertices': vertices, 'indices': indices,
-                            'tex_id': tex_id})
+                # KHR_texture_transform on baseColorTexture
+                tex_offset = np.array([0.0, 0.0], dtype=np.float32)
+                tex_scale = np.array([1.0, 1.0], dtype=np.float32)
+                if isinstance(bt, dict):
+                    tx_ext = bt.get('extensions', {}).get('KHR_texture_transform')
+                    if tx_ext:
+                        if 'offset' in tx_ext:
+                            tex_offset = np.array(tx_ext['offset'][:2], dtype=np.float32)
+                        if 'scale' in tx_ext:
+                            tex_scale = np.array(tx_ext['scale'][:2], dtype=np.float32)
 
-    return primitives, all_textures
+                bcf = pbr.get('baseColorFactor')
+                if bcf is not None:
+                    base_color = np.array(bcf[:3], dtype=np.float32)
+                rf = pbr.get('roughnessFactor')
+                if rf is not None:
+                    roughness_factor = float(rf)
+                mf = pbr.get('metallicFactor')
+                metallic_factor = float(mf) if mf is not None else 1.0
+
+                # metallicRoughnessTexture (glTF spec: B=metallic, G=roughness)
+                mr_tex_id = -1
+                mrt = pbr.get('metallicRoughnessTexture')
+                if mrt and 'index' in mrt:
+                    mr_tid = tex_img_map.get(mrt['index'], -1)
+                    if mr_tid >= 0 and mr_tid < len(all_textures) and all_textures[mr_tid] is not None:
+                        mr_tex_id = mr_tid
+
+                # SpecGloss diffuseFactor (color, applies regardless of texture)
+                if sg and 'diffuseFactor' in sg:
+                    if bcf is None:
+                        base_color = np.array(sg['diffuseFactor'][:3], dtype=np.float32)
+
+                # Normal texture
+                normal_tex_id = -1
+                normal_scale = 1.0
+                nt = mat.get('normalTexture')
+                if nt and 'index' in nt:
+                    n_tid = tex_img_map.get(nt['index'], -1)
+                    if n_tid >= 0 and n_tid < len(all_textures) and all_textures[n_tid] is not None:
+                        normal_tex_id = n_tid
+                    ns = nt.get('scale')
+                    if ns is not None:
+                        normal_scale = float(ns)
+
+                # Occlusion texture
+                occlusion_tex_id = -1
+                occlusion_strength = 1.0
+                ot = mat.get('occlusionTexture')
+                if ot and 'index' in ot:
+                    o_tid = tex_img_map.get(ot['index'], -1)
+                    if o_tid >= 0 and o_tid < len(all_textures) and all_textures[o_tid] is not None:
+                        occlusion_tex_id = o_tid
+                    os_ = ot.get('strength')
+                    if os_ is not None:
+                        occlusion_strength = float(os_)
+
+                # KHR_materials_unlit
+                unlit = bool(ext.get('KHR_materials_unlit'))
+
+                # doubleSided
+                double_sided = bool(mat.get('doubleSided', False))
+
+                # alphaMode + alphaCutoff (glTF spec)
+                alpha_mode = mat.get('alphaMode', 'OPAQUE')
+                alpha_cutoff = float(mat.get('alphaCutoff', 0.5))
+
+                # Emissive: emissiveFactor * emissiveStrength.
+                # If all 3 channels are identical -> Unity export default -> suppress.
+                emissive_factor = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+                emissive_tex_id = -1
+                ef = mat.get('emissiveFactor')
+                if ef is not None:
+                    raw_ef = np.array(ef[:3], dtype=np.float32)
+                    # Only keep emissive when channels DIFFER (intentional colored glow)
+                    if not (abs(raw_ef[0] - raw_ef[1]) < 0.001 and abs(raw_ef[0] - raw_ef[2]) < 0.001):
+                        emissive_factor = raw_ef
+                        es_ext = ext.get('KHR_materials_emissive_strength')
+                        if es_ext and 'emissiveStrength' in es_ext:
+                            emissive_factor = emissive_factor * float(es_ext['emissiveStrength'])
+                # emissiveTexture
+                et = mat.get('emissiveTexture')
+                if et and 'index' in et:
+                    e_tid = tex_img_map.get(et['index'], -1)
+                    if e_tid >= 0 and e_tid < len(all_textures) and all_textures[e_tid] is not None:
+                        emissive_tex_id = e_tid
+                # Also read emissive from specGloss if no standard emissive factor
+                if sg and emissive_factor.any() == False:
+                    df = sg.get('diffuseFactor')
+                    if df:
+                        raw_sg = np.array(df[:3], dtype=np.float32)
+                        if not (abs(raw_sg[0] - raw_sg[1]) < 0.001 and abs(raw_sg[0] - raw_sg[2]) < 0.001):
+                            emissive_factor = raw_sg
+
+                # Debug log
+                emissive_info = f' emissive={emissive_factor.tolist()}' if emissive_factor.any() else ''
+                if mat_idx < 300:
+                    _mat_log.write(f"[MAT] {mat_idx}: {mat_name}  "
+                          f"bcf={bcf}  rough={rf}  "
+                          f"tex_index={tex_index}  tex_id={tex_id}"
+                          f"{emissive_info}  "
+                          f"ext={list(ext.keys())}\n")
+
+            primitives.append({'vertices': vertices, 'indices': indices,
+                            'tex_id': tex_id, 'base_color': base_color,
+                            'roughness_factor': roughness_factor,
+                            'metallic_factor': metallic_factor,
+                            'emissive_factor': emissive_factor,
+                            'normal_tex_id': normal_tex_id,
+                            'normal_scale': normal_scale,
+                            'occlusion_tex_id': occlusion_tex_id,
+                            'occlusion_strength': occlusion_strength,
+                            'unlit': unlit,
+                            'alpha_mode': alpha_mode,
+                            'alpha_cutoff': alpha_cutoff,
+                            'mr_tex_id': mr_tex_id,
+                            'emissive_tex_id': emissive_tex_id,
+                            'double_sided': double_sided,
+                            'tex_offset': tex_offset,
+                            'tex_scale': tex_scale,
+                            'tangent': tangent})
+
+    # Extract KHR_lights_punctual
+    lights = []
+    try:
+        gltf_lights = gltf.get('extensions', {}).get('KHR_lights_punctual', {})
+        if isinstance(gltf_lights, dict):
+            gltf_lights = gltf_lights.get('lights', [])
+        else:
+            gltf_lights = []
+        for ni, node in enumerate(gltf.get('nodes', [])):
+            lext = node.get('extensions', {}).get('KHR_lights_punctual')
+            if lext and 'light' in lext:
+                li = lext['light']
+                if li < len(gltf_lights):
+                    ldef = gltf_lights[li]
+                    world_mat = world_mats.get(ni, np.eye(4, dtype=np.float64))
+                    direction = -world_mat[:3, 2].astype(np.float32)
+                    direction = direction / (np.linalg.norm(direction) + 1e-8)
+                    lights.append({
+                        'type': ldef.get('type', 'directional'),
+                        'color': np.array(ldef.get('color', [1, 1, 1])[:3], dtype=np.float32),
+                        'intensity': float(ldef.get('intensity', 1.0)),
+                        'direction': direction,
+                    })
+                    _mat_log.write(f"[LIGHT] {ldef.get('name', '?')}: type={ldef.get('type')} color={ldef.get('color')} intensity={ldef.get('intensity')}\n")
+    except Exception as e:
+        _mat_log.write(f"[LIGHT] extraction failed: {e}\n")
+
+    _mat_log.write("=== End ===\n")
+    _mat_log.close()
+    return primitives, all_textures, lights
 
 # D3D11 ctypes helpers (Windows only)
 # DXGI / D3D11 format constants used for swapchain negotiation
@@ -855,6 +1067,222 @@ void main() {
 }
 """
 
+_ENV_VERT = """
+#version 330
+in vec3 in_position;
+in vec3 in_normal;
+in vec2 in_uv;
+in vec4 in_tangent;  // xyz + bitangent_sign (glTF §3.7.4)
+out vec2 v_uv;
+out vec3 v_normal;
+out vec3 v_position;
+out vec3 v_tangent;
+out float v_bitangent_sign;
+uniform mat4 u_mvp;
+uniform mat4 u_model;
+void main() {
+    v_uv = in_uv;
+    v_normal = mat3(transpose(inverse(u_model))) * in_normal;
+    v_tangent = normalize(mat3(transpose(inverse(u_model))) * in_tangent.xyz);
+    v_bitangent_sign = in_tangent.w;
+    vec4 world_pos = u_model * vec4(in_position, 1.0);
+    v_position = world_pos.xyz;
+    gl_Position = u_mvp * world_pos;
+}
+"""
+
+_ENV_FRAG = """
+#version 330
+in vec2 v_uv;
+in vec3 v_normal;
+in vec3 v_position;
+in vec3 v_tangent;
+in float v_bitangent_sign;
+out vec4 fragColor;
+
+uniform sampler2D u_tex;
+uniform sampler2D u_normal_tex;    // normal map (texture unit 4)
+uniform sampler2D u_occlusion_tex; // occlusion map (texture unit 5)
+uniform sampler2D u_mr_tex;        // metallicRoughness (texture unit 6: B=metal, G=rough)
+uniform sampler2D u_emissive_tex;  // emissive map (texture unit 7)
+uniform vec3 u_light_color;
+uniform vec3 u_ambient_color;
+uniform vec3 u_base_color_factor;
+uniform int u_use_texture;
+uniform int u_use_normal_tex;
+uniform float u_normal_scale;
+uniform int u_use_occlusion_tex;
+uniform float u_occlusion_strength;
+uniform vec3 u_camera_pos;
+uniform float u_roughness;
+uniform float u_metallic;
+uniform vec3 u_emissive_factor;
+uniform int u_unlit;             // KHR_materials_unlit: skip lighting
+uniform float u_alpha_cutoff;    // alphaMode=MASK discard threshold
+uniform int u_alpha_mode;        // 0=OPAQUE, 1=MASK, 2=BLEND
+uniform int u_use_mr_tex;        // 0: use uniform factors, 1: sample mr texture
+uniform int u_use_emissive_tex;  // 0: use factor only, 1: sample emissive texture
+uniform vec2 u_tex_offset;       // KHR_texture_transform offset
+uniform vec2 u_tex_scale;        // KHR_texture_transform scale
+uniform vec3 u_light_dir;        // KHR_lights_punctual directional light
+uniform vec3 u_light_intensity;  // light_color * intensity for directional light
+
+const float PI = 3.14159265359;
+
+// Fresnel-Schlick
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// GGX / Trowbridge-Reitz normal distribution
+float DistributionGGX(float NdotH, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (PI * denom * denom);
+}
+
+// Smith GGX geometry (Schlick)
+float GeometrySchlickGGX(float NdotV, float roughness) {
+    float r = roughness + 1.0;
+    float k = (r * r) / 8.0;
+    return NdotV / (NdotV * (1.0 - k) + k);
+}
+
+float GeometrySmith(float NdotV, float NdotL, float roughness) {
+    return GeometrySchlickGGX(NdotV, roughness) * GeometrySchlickGGX(NdotL, roughness);
+}
+
+void main() {
+    // KHR_texture_transform: compute transformed UV (glTF spec)
+    vec2 t_uv = v_uv * u_tex_scale + u_tex_offset;
+
+    // alphaMode MASK: early discard (glTF spec §3.9.4)
+    if (u_alpha_mode == 1 && u_use_texture == 1) {
+        if (texture(u_tex, t_uv).a < u_alpha_cutoff) discard;
+    }
+
+    vec3 N = normalize(v_normal);
+    if (!gl_FrontFacing) N = -N;
+
+    // Normal map perturbation (glTF MikkTSpace tangent)
+    if (u_use_normal_tex == 1) {
+        vec3 nm = texture(u_normal_tex, t_uv).rgb * 2.0 - 1.0;
+        nm.xy *= u_normal_scale;
+        nm = normalize(nm);
+        // Use TANGENT attribute if available, else Gram-Schmidt fallback
+        vec3 T = length(v_tangent) > 0.001 ? normalize(v_tangent) : normalize(cross(vec3(0.0, 1.0, 0.0), N));
+        vec3 B = normalize(cross(N, T)) * v_bitangent_sign;
+        N = normalize(T * nm.x + B * nm.y + N * nm.z);
+    }
+
+    vec3 baseColor;
+    if (u_use_texture == 1) {
+        baseColor = texture(u_tex, t_uv).rgb * u_base_color_factor;
+    } else {
+        baseColor = u_base_color_factor;
+    }
+
+    float metallic = clamp(u_metallic, 0.0, 1.0);
+    float roughness = clamp(u_roughness, 0.04, 1.0);
+    // metallicRoughnessTexture: B=metallic, G=roughness (glTF spec §3.9.4)
+    if (u_use_mr_tex == 1) {
+        vec3 mr = texture(u_mr_tex, t_uv).rgb;
+        roughness = clamp(roughness * mr.g, 0.04, 1.0);
+        metallic = clamp(metallic * mr.b, 0.0, 1.0);
+    }
+
+    vec3 light_pos = u_camera_pos + vec3(0.0, 0.05, 0.0);
+    vec3 L = normalize(light_pos - v_position);
+    vec3 V = normalize(u_camera_pos - v_position);
+    vec3 H = normalize(L + V);
+
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotH = max(dot(N, H), 0.0);
+    float VdotH = max(dot(V, H), 0.0);
+
+    // PBR: dielectric F0 = 0.04, metals use baseColor as F0
+    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+
+    // Cook-Torrance specular BRDF
+    float D = DistributionGGX(NdotH, roughness);
+    float G = GeometrySmith(NdotV, NdotL, roughness);
+    vec3 F = fresnelSchlick(VdotH, F0);
+    vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
+
+    // Diffuse: dielectrics scatter, metals have zero diffuse
+    vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
+    vec3 diffuse = kD * baseColor / PI;
+
+    // KHR_materials_unlit: skip all lighting, output baseColor directly
+    if (u_unlit == 1) {
+        float alpha = (u_alpha_mode == 2) ? texture(u_tex, t_uv).a : 1.0;
+        fragColor = vec4(baseColor, alpha);
+        return;
+    }
+
+    // Head-lamp point light
+    vec3 Lo = (diffuse + specular) * u_light_color * NdotL;
+
+    // Directional light (KHR_lights_punctual)
+    if (length(u_light_intensity) > 0.001) {
+        float NdotL_d = max(dot(N, -u_light_dir), 0.0);
+        vec3 H_d = normalize(-u_light_dir + V);
+        float D_d = DistributionGGX(max(dot(N, H_d), 0.0), roughness);
+        float G_d = GeometrySmith(NdotV, NdotL_d, roughness);
+        vec3 F_d = fresnelSchlick(max(dot(V, H_d), 0.0), F0);
+        vec3 s_d = (D_d * G_d * F_d) / max(4.0 * NdotV * NdotL_d, 0.001);
+        vec3 kD_d = (vec3(1.0) - F_d) * (1.0 - metallic);
+        vec3 d_d = kD_d * baseColor / PI;
+        Lo += (d_d + s_d) * u_light_intensity * NdotL_d;
+    }
+
+    // Ambient
+    float ao = 1.0;
+    if (u_use_occlusion_tex == 1) {
+        ao = mix(1.0, texture(u_occlusion_tex, t_uv).r, u_occlusion_strength);
+    }
+    vec3 ambient = u_ambient_color * baseColor * ao;
+
+    vec3 emissive = u_emissive_factor;
+    if (u_use_emissive_tex == 1) {
+        emissive *= texture(u_emissive_tex, t_uv).rgb;
+    }
+
+    vec3 color = Lo + ambient + emissive;
+    // HDR → LDR: Reinhard-like soft tonemap
+    color = color / (color + vec3(1.0));
+    // Gamma correction
+    color = pow(color, vec3(1.0 / 2.2));
+
+    float alpha = (u_alpha_mode == 2 && u_use_texture == 1) ? texture(u_tex, t_uv).a : 1.0;
+    fragColor = vec4(color, alpha);
+}
+"""
+
+# Glow fragment shader: renders a soft glow outside a centered rectangle
+_GLOW_FRAG = """
+#version 330
+in vec2 uv;
+out vec4 frag_color;
+uniform vec2 u_screen_half;   // screen half-size in UV space
+uniform vec3 u_glow_color;
+uniform float u_glow_width;   // glow decay distance in UV space
+uniform float u_glow_intensity;
+void main() {
+    vec2 d = abs(uv - 0.5) - u_screen_half;
+    float dist = length(max(d, vec2(0.0)));
+    if (dist > 0.001) {
+        float glow = exp(-dist / max(u_glow_width, 0.001));
+        glow *= u_glow_intensity;
+        frag_color = vec4(u_glow_color * glow, glow);
+    } else {
+        discard;
+    }
+}
+"""
+
 
 
 # Windows input helpers (no-op on non-Windows)
@@ -1209,7 +1637,6 @@ class OpenXRViewer:
         self.depth_strength = 0.1 # multiplied by depth_ratio; effective = depth_strength * depth_ratio
         self.depth_ratio = depth_ratio
         self.convergence = convergence
-        self.sharpen_strength = 0.6  # CAS sharpening: 0 = off, 1 = strong
         self.frame_size = frame_size
         self.fps = fps
         self.depth_q = depth_q
@@ -1265,6 +1692,7 @@ class OpenXRViewer:
         # Virtual screen transform (world space, metres / radians)
         self.screen_distance = 2.0
         self.screen_width    = 2.4
+        self._screen_ref_size = 2.4   # long-dimension reference for resize
         self.screen_height   = None   # derived from frame aspect ratio on first frame
 
         # screen presets: (name, width_m, distance_m) — height is derived from width and frame aspect ratio
@@ -1282,6 +1710,27 @@ class OpenXRViewer:
         self.screen_pan_y    = 0.0
         self.screen_yaw      = 0.0    # rotation around Y axis
         self.screen_pitch    = 0.0    # rotation around X axis
+        self.screen_roll     = 0.0    # rotation around Z axis (screen normal)
+        self._corner_radius = 0.03    # normalized [0, 0.5]
+
+        # Environment model (glTF 3D scene) — loaded from environment/environment.glb
+        self._env_model_prims = []        # list of {'vao', 'vbo', 'ibo', 'tex_key', 'tri_count'}
+        self._scene_lights = []            # KHR_lights_punctual lights
+        self._env_model_tex_cache = {}    # cache_key -> moderngl Texture
+        self._env_model_visible = False   # hidden by default, toggle with N key
+        self._env_model_pos = [0.0, -1.0, -3.0]   # world-space position (x, y, z)
+        self._env_model_rot = [0.0, 0.0, 0.0]     # Euler rotation (yaw, pitch, roll) in radians
+        self._env_model_scale = [1.0, 1.0, 1.0]   # scale factor (x, y, z)
+        self._env_model_init_done = False  # lazy init: tried loading gltf once
+
+        # Screen glow effect (cinema light)
+        self._glow_color = (0.3, 0.6, 1.0)        # light blue, dynamically updated
+        self._glow_width_m = 0.60                  # glow decay distance (larger volume)
+        self._glow_intensity = 0.9                 # stronger glow
+        self._glow_ref_screen = 2.4               # reference screen long edge (meters)
+        self._glow_target_color = (0.3, 0.6, 1.0)  # latest sampled frame average
+        self._glow_color_counter = 0              # throttle: sample every N frames
+
         self._yaw_offset     = 0.0    # manual yaw offset (relative to face-head baseline)
         self._pitch_offset   = 0.0    # manual pitch offset
 
@@ -1298,13 +1747,13 @@ class OpenXRViewer:
         self._xr_instance = None
         self._xr_system_id = None
         self._xr_session = None
-        self._fb_layer_settings_enabled = False  # set True if runtime supports XR_FB_composition_layer_settings
         self._xr_space = None
         self._xr_swapchains = {}        # {eye_index: xr.Swapchain}
         self._swapchain_images = {}     # {eye_index: [XrSwapchainImageOpenGLKHR, ...]}
         self._swapchain_sizes = {}      # {eye_index: (w, h)}
         self._fbo_cache = {}            # {(eye_index, image_index): (raw_id, mgl_fbo)}
         self._depth_rb_cache = {}       # {(eye_index, image_index): depth_rb}
+        self._preview_active = False
         self._session_running = False
 
         # Pre-built XR call argument structs — stateless inputs reused every
@@ -1631,8 +2080,8 @@ class OpenXRViewer:
         self._smooth_ray_quat_r = None     # right hand smoothed direction (quaternion xyzw)
         self._smooth_ray_fwd_l  = None     # cached forward vector (pre-computed per frame)
         self._smooth_ray_fwd_r  = None
-        self._pos_smooth = 0.04   # position smoothing (base damping)
-        self._rot_smooth = 0.05   # rotation smoothing (base damping)
+        self._pos_smooth = 0.02   # position smoothing (base damping)
+        self._rot_smooth = 0.10   # rotation smoothing (base damping)
         self._ray_deadzone_rad = 0.0052  # angle dead zone (~0.3 degrees)
         self._ray_deadzone_pos = 0.002   # position dead zone (2mm)
         self._ray_edge_deadzone_rad = 0.1745  # edge snap release angle (~10 degrees)
@@ -1647,11 +2096,11 @@ class OpenXRViewer:
         # _apply_ray_smoothing.  Smooths the source data so laser beam,
         # cursor, and grip-to-move all benefit from the same stabilized input.
         # Tuned for VR controller tracking (meter-scale, ~90 fps):
-        #   min_cutoff=3 Hz → α≈0.17 at rest  (smooth but responsive)
-        #   beta=15        → α≈0.42 at 0.5 m/s (tight tracking at speed)
-        self._ray_filter_min_cutoff       = 3.0   # Hz
-        self._ray_filter_beta             = 15.0  # speed sensitivity
-        self._ray_filter_derivative_cutoff = 3.0  # Hz (faster speed adaptation)
+        #   min_cutoff=8 Hz → less lag, more responsive tracking
+        #   beta=8         → more stable at speed
+        self._ray_filter_min_cutoff       = 8.0   # Hz (higher = less lag)
+        self._ray_filter_beta             = 8.0   # speed sensitivity
+        self._ray_filter_derivative_cutoff = 8.0  # Hz
         self._ray_filter_l = OneEuroFilter3D(
             self._ray_filter_min_cutoff,
             self._ray_filter_beta,
@@ -1672,6 +2121,7 @@ class OpenXRViewer:
         self._anim_target_distance = None   # target screen_distance
         self._anim_target_yaw      = None   # target screen_yaw
         self._anim_target_pitch    = None   # target screen_pitch
+        self._anim_target_roll     = None   # target screen_roll
 
         # D3D11 backend state (populated by _init_d3d11_device when D3D11 path is active)
         self._use_d3d11             = False   # True = D3D11 OpenXR session + readback path
@@ -1734,9 +2184,9 @@ class OpenXRViewer:
             elif key == glfw.KEY_LEFT:  viewer.screen_pan_x -= p
             elif key == glfw.KEY_RIGHT: viewer.screen_pan_x += p
             elif key in (glfw.KEY_EQUAL, glfw.KEY_KP_ADD):
-                viewer.screen_width += s; viewer.screen_height = None
+                viewer._screen_ref_size += s; viewer.screen_height = None
             elif key in (glfw.KEY_MINUS, glfw.KEY_KP_SUBTRACT):
-                viewer.screen_width = max(0.3, viewer.screen_width - s)
+                viewer._screen_ref_size = max(0.8, viewer._screen_ref_size - s)
                 viewer.screen_height = None
             elif key == glfw.KEY_Q: viewer.screen_yaw += r
             elif key == glfw.KEY_E: viewer.screen_yaw -= r
@@ -1753,12 +2203,15 @@ class OpenXRViewer:
                 viewer._reset_orientation_offsets()
                 viewer.screen_distance = 2.0; viewer.screen_pan_x = 0.0
                 viewer.screen_pan_y = 0.0;    viewer.screen_yaw = 0.0
-                viewer.screen_pitch = 0.0;    viewer.screen_width = 2.4
-                viewer.screen_height = None
+                viewer.screen_pitch = 0.0;    viewer.screen_roll = 0.0; viewer.screen_width = 2.4
+                viewer._screen_ref_size = 2.4; viewer.screen_height = None
+            elif key == glfw.KEY_N:
+                viewer._env_model_visible = not viewer._env_model_visible
         return _cb
 
     def _init_moderngl(self):
         self.ctx = moderngl.create_context()
+        self.ctx.enable(moderngl.DEPTH_TEST)
 
         # World-space stereo rendering program (HMD eyes)
         self.prog = self.ctx.program(
@@ -1788,6 +2241,16 @@ class OpenXRViewer:
         vbo_border = self.ctx.buffer(vertices.tobytes())
         self._border_vao = self.ctx.vertex_array(
             self._border_prog, [(vbo_border, '2f 8x', 'in_position')]
+        )
+
+        # Glow quad (soft glow rendered behind the screen beyond the border)
+        self._glow_prog = self.ctx.program(
+            vertex_shader=_WORLD_VERT,
+            fragment_shader=_GLOW_FRAG,
+        )
+        vbo_glow = self.ctx.buffer(vertices.tobytes())
+        self._glow_vao = self.ctx.vertex_array(
+            self._glow_prog, [(vbo_glow, '2f 2f', 'in_position', 'in_uv')]
         )
 
         # Laser beam: a very thin elongated quad (width=0.003 m, length=5 m)
@@ -1939,10 +2402,176 @@ class OpenXRViewer:
         self._controller_prog['u_light_color'].value = (0.60, 0.60, 0.65)
         self._controller_prog['u_ambient_color'].value = (0.22, 0.22, 0.24)
 
+        # Environment model shader (no gl_FrontFacing discard, double-sided lighting)
+        self._env_prog = self.ctx.program(
+            vertex_shader=_ENV_VERT,
+            fragment_shader=_ENV_FRAG,
+        )
+        self._env_prog['u_tex'].value = 3
+        self._env_prog['u_use_texture'].value = 1
+        self._env_prog['u_base_color_factor'].value = (1.0, 1.0, 1.0)
+        self._env_prog['u_light_color'].value = (0.45, 0.45, 0.48)
+        self._env_prog['u_ambient_color'].value = (0.08, 0.08, 0.09)
+        self._env_prog['u_roughness'].value = 1.0
+        self._env_prog['u_metallic'].value = 0.0
+        self._env_prog['u_emissive_factor'].value = (0.0, 0.0, 0.0)
+        self._env_prog['u_unlit'].value = 0
+        self._env_prog['u_alpha_cutoff'].value = 0.5
+        self._env_prog['u_alpha_mode'].value = 0
+        self._env_prog['u_mr_tex'].value = 6
+        self._env_prog['u_use_mr_tex'].value = 0
+        self._env_prog['u_emissive_tex'].value = 7
+        self._env_prog['u_use_emissive_tex'].value = 0
+        self._env_prog['u_tex_offset'].value = (0.0, 0.0)
+        self._env_prog['u_tex_scale'].value = (1.0, 1.0)
+        self._env_prog['u_light_dir'].value = (0.0, -1.0, 0.0)
+        self._env_prog['u_light_intensity'].value = (0.0, 0.0, 0.0)
+        self._env_prog['u_normal_tex'].value = 4
+        self._env_prog['u_use_normal_tex'].value = 0
+        self._env_prog['u_normal_scale'].value = 1.0
+        self._env_prog['u_occlusion_tex'].value = 5
+        self._env_prog['u_use_occlusion_tex'].value = 0
+        self._env_prog['u_occlusion_strength'].value = 1.0
+
         self._ctrl_tex_cache = {}
         self._ctrl_prims_l = []
         self._ctrl_prims_r = []
         self._init_all_controller_models()
+        # Environment model loaded lazily after OpenXR session starts
+
+    def _load_env_model(self, path):
+        """Load a glTF environment model from *path*.
+
+        Populates ``self._env_model_prims`` and ``self._env_model_tex_cache``.
+        Textures use LINEAR_MIPMAP_LINEAR + mipmaps + 16x anisotropy.
+        If the file is corrupt or resources cannot be allocated, this method
+        fails silently (prints a warning) and leaves the primitive list empty.
+        """
+        prims_data = []
+        textures = []
+        try:
+            prims_data, textures, env_lights = load_glb_model(path)
+            if env_lights:
+                self._scene_lights = env_lights
+        except Exception as exc:
+            print(f"[OpenXRViewer] Failed to load environment model {path}: {exc}")
+            return
+
+        _prefix = "env"
+        try:
+            # Upload textures
+            for tid, tex_arr in enumerate(textures):
+                if tex_arr is not None:
+                    cache_key = f"{_prefix}:{tid}"
+                    h, w = tex_arr.shape[:2]
+                    mtex = self.ctx.texture((w, h), 4, tex_arr.tobytes())
+                    mtex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+                    mtex.build_mipmaps()
+                    mtex.anisotropy = 16.0
+                    self._env_model_tex_cache[cache_key] = mtex
+
+            # Create VAOs (bound to _env_prog, no gl_FrontFacing discard)
+            for pd in prims_data:
+                vbo = self.ctx.buffer(pd['vertices'].tobytes())
+                tan_vbo = self.ctx.buffer(pd['tangent'].tobytes())
+                ibo = self.ctx.buffer(pd['indices'].tobytes())
+                vao = self.ctx.vertex_array(
+                    self._env_prog,
+                    [(vbo, '3f 3f 2f', 'in_position', 'in_normal', 'in_uv'),
+                     (tan_vbo, '4f', 'in_tangent')],
+                    ibo,
+                )
+                self._env_model_prims.append({
+                    'vao': vao, 'vbo': vbo, 'ibo': ibo,
+                    'tex_key': f"{_prefix}:{pd['tex_id']}" if pd['tex_id'] >= 0 else None,
+                    'tri_count': len(pd['indices']) // 3,
+                    'base_color': pd.get('base_color', np.array([1.0, 1.0, 1.0], dtype=np.float32)),
+                    'roughness_factor': pd.get('roughness_factor', 1.0),
+                    'metallic_factor': pd.get('metallic_factor', 1.0),
+                    'emissive_factor': pd.get('emissive_factor', np.array([0.0, 0.0, 0.0], dtype=np.float32)),
+                    'normal_tex_id': pd.get('normal_tex_id', -1),
+                    'normal_scale': pd.get('normal_scale', 1.0),
+                    'occlusion_tex_id': pd.get('occlusion_tex_id', -1),
+                    'occlusion_strength': pd.get('occlusion_strength', 1.0),
+                    'unlit': pd.get('unlit', False),
+                    'alpha_mode': pd.get('alpha_mode', 'OPAQUE'),
+                    'alpha_cutoff': pd.get('alpha_cutoff', 0.5),
+                    'mr_tex_id': pd.get('mr_tex_id', -1),
+                    'emissive_tex_id': pd.get('emissive_tex_id', -1),
+                    'double_sided': pd.get('double_sided', False),
+                    'tex_offset': pd.get('tex_offset', np.array([0.0, 0.0], dtype=np.float32)),
+                    'tex_scale': pd.get('tex_scale', np.array([1.0, 1.0], dtype=np.float32)),
+                })
+        except Exception as exc:
+            print(f"[OpenXRViewer] Failed to create environment model resources: {exc}")
+            # Clean up partial resources
+            for v in self._env_model_tex_cache.values():
+                v.release()
+            self._env_model_tex_cache = {}
+            self._env_model_prims = []
+
+
+    def _generate_default_room(self):
+        """Generate a simple room (floor, 4 walls, ceiling) procedurally."""
+        W, H, D = 4.0, 3.0, 4.0
+        import numpy as np
+        faces = []
+        faces.append((np.array([[-W,0,-D, 0,1,0, 0,0], [W,0,-D, 0,1,0, 1,0], [W,0,D, 0,1,0, 1,1], [-W,0,D, 0,1,0, 0,1]], dtype='f4'),
+                      np.array([0,1,2, 0,2,3], dtype='u4'), (0.20, 0.20, 0.22)))
+        faces.append((np.array([[-W,0,-D, 0,0,1, 0,0], [W,0,-D, 0,0,1, 1,0], [W,H,-D, 0,0,1, 1,1], [-W,H,-D, 0,0,1, 0,1]], dtype='f4'),
+                      np.array([0,1,2, 0,2,3], dtype='u4'), (0.30, 0.30, 0.35)))
+        faces.append((np.array([[-W,0,-D, 1,0,0, 0,0], [-W,0,D, 1,0,0, 1,0], [-W,H,D, 1,0,0, 1,1], [-W,H,-D, 1,0,0, 0,1]], dtype='f4'),
+                      np.array([0,1,2, 0,2,3], dtype='u4'), (0.25, 0.25, 0.30)))
+        faces.append((np.array([[W,0,-D, -1,0,0, 0,0], [W,H,-D, -1,0,0, 1,0], [W,H,D, -1,0,0, 1,1], [W,0,D, -1,0,0, 0,1]], dtype='f4'),
+                      np.array([0,1,2, 0,2,3], dtype='u4'), (0.28, 0.28, 0.33)))
+        faces.append((np.array([[-W,H,-D, 0,-1,0, 0,0], [-W,H,D, 0,-1,0, 1,0], [W,H,D, 0,-1,0, 1,1], [W,H,-D, 0,-1,0, 0,1]], dtype='f4'),
+                      np.array([0,1,2, 0,2,3], dtype='u4'), (0.35, 0.35, 0.40)))
+        for verts, idx, color in faces:
+            vbo = self.ctx.buffer(verts.tobytes())
+            # Dummy tangent: (1,0,0,1) — room faces have no normal map anyway
+            dummy_tan = np.tile(np.array([1.0, 0.0, 0.0, 1.0], dtype='f4'), (verts.shape[0], 1))
+            tan_vbo = self.ctx.buffer(dummy_tan.tobytes())
+            ibo = self.ctx.buffer(idx.tobytes())
+            vao = self.ctx.vertex_array(
+                self._env_prog,
+                [(vbo, '3f 3f 2f', 'in_position', 'in_normal', 'in_uv'),
+                 (tan_vbo, '4f', 'in_tangent')],
+                ibo,
+            )
+            self._env_model_prims.append({
+                'vao': vao, 'vbo': vbo, 'ibo': ibo,
+                'tex_key': None, 'tri_count': 2, 'color': color,
+                'base_color': np.array(color, dtype=np.float32),
+                'roughness_factor': 1.0,
+                'metallic_factor': 0.0,
+                'emissive_factor': np.array([0.0, 0.0, 0.0], dtype=np.float32),
+                'normal_tex_id': -1,
+                'normal_scale': 1.0,
+                'occlusion_tex_id': -1,
+                'occlusion_strength': 1.0,
+                'unlit': False,
+                'alpha_mode': 'OPAQUE',
+                'alpha_cutoff': 0.5,
+                'mr_tex_id': -1,
+                'emissive_tex_id': -1,
+                'double_sided': False,
+                'tex_offset': np.array([0.0, 0.0], dtype=np.float32),
+                'tex_scale': np.array([1.0, 1.0], dtype=np.float32),
+            })
+        self._env_model_visible = True
+        print(f'[OpenXRViewer] Default room generated ({len(faces)} faces)')
+
+    def _init_env_model(self):
+        """Try loading environment.glb, fall back to built-in room."""
+        env_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'environment')
+        path = os.path.join(env_dir, 'environment.glb')
+        if os.path.exists(path):
+            self._load_env_model(path)
+            if self._env_model_prims:
+                self._env_model_visible = True
+                print(f"[OpenXRViewer] Environment model loaded ({len(self._env_model_prims)} primitives)")
+                return
+        self._generate_default_room()
 
     def _load_brand_models(self, brand_name):
         """Load models and configuration for a specific brand, returning {prims_l, prims_r, tex_cache, offset, rot_deg}."""
@@ -1969,7 +2598,7 @@ class OpenXRViewer:
         _dir_key = brand_name
 
         def _create_prims(glb_path, target_list):
-            prims_data, textures = load_glb_model(glb_path)
+            prims_data, textures, _lights = load_glb_model(glb_path)
             _file_stem = os.path.splitext(os.path.basename(glb_path))[0]
             _prefix = f"{_dir_key}/{_file_stem}"
             for tid, tex_arr in enumerate(textures):
@@ -2102,16 +2731,6 @@ class OpenXRViewer:
         self._d3d11_device  = None
         self._d3d11_context = None
 
-    @staticmethod
-    def _supported_xr_extensions():
-        """Return the set of extension name strings the current runtime supports."""
-        try:
-            props = xr.enumerate_instance_extension_properties()
-            return {p.extension_name.decode() if isinstance(p.extension_name, (bytes, bytearray))
-                    else str(p.extension_name) for p in props}
-        except Exception:
-            return set()
-
     def _init_openxr_d3d11(self):
         """Create an OpenXR instance + session backed by a D3D11 device.
 
@@ -2128,19 +2747,12 @@ class OpenXRViewer:
             engine_version=1,
             api_version=xr.XR_CURRENT_API_VERSION,
         )
-        _supported = self._supported_xr_extensions()
-        _fb_layer_settings = xr.FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME
-        _want_exts = [xr.KHR_D3D11_ENABLE_EXTENSION_NAME]
-        self._fb_layer_settings_enabled = _fb_layer_settings in _supported
-        if self._fb_layer_settings_enabled:
-            _want_exts.append(_fb_layer_settings)
         create_info = xr.InstanceCreateInfo(
             application_info=app_info,
-            enabled_extension_names=_want_exts,
+            enabled_extension_names=[xr.KHR_D3D11_ENABLE_EXTENSION_NAME],
         )
         self._xr_instance = xr.create_instance(create_info)
-        print(f"[OpenXRViewer] XrInstance created (D3D11)"
-              f"{' + FB layer sharpening' if self._fb_layer_settings_enabled else ''}")
+        print("[OpenXRViewer] XrInstance created (D3D11)")
 
         # 2. System
         self._xr_system_id = xr.get_system(
@@ -2278,15 +2890,18 @@ class OpenXRViewer:
         Order: NV_DX_interop2 for NVIDIA GPUs, EXT_memory_object for all others.
         Falls back to the PBO path (already configured) if neither is available.
 
-        BGRA swapchains (common on WMR) are now supported via the
-        EXT_memory_object path with a swizzle blit; we no longer fall back
-        to PBO readback just because of channel order. NV_DX_interop2 still
-        requires RGBA so we skip it for BGRA.
+        Interop is skipped for BGRA swapchains (common on WMR) because GL
+        renders RGBA natively and the R→B mismatch would swap colours.
+        The PBO path handles BGRA via GL_BGRA readback format.
         """
         if not sys.platform == "win32":
             return
 
-        is_nv = self._is_nvidia_gpu() and not self._swapchain_is_bgra
+        if self._swapchain_is_bgra:
+            print("[OpenXRViewer] BGRA swapchain — GPU interop disabled (using PBO with GL_BGRA readback)")
+            return
+
+        is_nv = self._is_nvidia_gpu()
 
         if is_nv and _load_nv_dx_interop():
             try:
@@ -2327,7 +2942,7 @@ class OpenXRViewer:
         """
         key = (eye_index, img_index)
         if key in self._nv_dx_objects:
-            gl_tex, raw_fbo, dx_obj, depth_rb = self._nv_dx_objects[key]
+            gl_tex, raw_fbo, dx_obj = self._nv_dx_objects[key]
             return self.ctx.detect_framebuffer(raw_fbo), raw_fbo
 
         gl_tex = glGenTextures(1)
@@ -2349,16 +2964,10 @@ class OpenXRViewer:
         # Lock, attach, unlock
         _wglDXLockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_tex, 0)
-        # Depth renderbuffer for occlusion
-        depth_rb = glGenRenderbuffers(1)
-        glBindRenderbuffer(GL_RENDERBUFFER, depth_rb)
-        sc_w, sc_h = self._swapchain_sizes[eye_index]
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, sc_w, sc_h)
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_rb)
         _wglDXUnlockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-        self._nv_dx_objects[key] = (gl_tex, raw_fbo, dx_obj, depth_rb)
+        self._nv_dx_objects[key] = (gl_tex, raw_fbo, dx_obj)
         return self.ctx.detect_framebuffer(raw_fbo), raw_fbo
 
     def _init_interop_ext_mem(self):
@@ -2400,75 +3009,27 @@ class OpenXRViewer:
             mgl_fbo = self.ctx.detect_framebuffer(raw_fbo)
             self._ext_shared_tex[eye_index] = (d3d11_tex, mem_obj, gl_tex, mgl_fbo, raw_fbo)
 
-    def _make_gl_fence(self):
-        """Insert a GL fence and flush so the driver actually submits it.
-        Returns the fence sync object (caller is responsible for waiting + deleting).
-        """
-        fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
-        glFlush()
-        return fence
-
-    def _d3d11_copy_resource(self, dst, src):
-        """ID3D11DeviceContext::CopyResource via vtable index 47."""
+    def _blit_ext_to_swapchain(self, eye_index, d3d11_swapchain_tex):
+        """GPU-side CopyResource from our shared texture to the swapchain image."""
+        d3d11_shared_tex = self._ext_shared_tex[eye_index][0]
+        # ID3D11DeviceContext::CopyResource at vtable index 47
         ctx = self._d3d11_context
         vtbl = ctypes.cast(ctx, ctypes.POINTER(ctypes.c_void_p)).contents.value
         copy_fn = ctypes.CFUNCTYPE(
-            None,
-            ctypes.c_void_p,  # this
+            ctypes.c_void_p,
+            ctypes.c_void_p,  # ID3D11DeviceContext*
             ctypes.c_void_p,  # pDstResource
             ctypes.c_void_p,  # pSrcResource
         )(ctypes.cast(vtbl + 47 * ctypes.sizeof(ctypes.c_void_p),
                     ctypes.POINTER(ctypes.c_void_p)).contents.value)
-        copy_fn(ctx, dst, src)
-
-    def _swizzle_blit_to_shared(self, eye_index, src_mgl_tex):
-        """Copy `src_mgl_tex` (an offscreen RGBA8 eye-render) into the EXT-shared
-        GL texture for this eye, swapping R↔B if the swapchain is BGRA.
-
-        The shared GL texture is imported as GL_RGBA8 over a D3D11 surface that
-        D3D11 interprets in its native format. Writing `.bgra` bytes from the
-        shader means the byte order on disk matches what D3D11 expects, so the
-        subsequent CopyResource to the swapchain image is a no-op format match.
-        """
-        _, _, _, mgl_fbo, _ = self._ext_shared_tex[eye_index]
-        sc_w, sc_h = self._swapchain_sizes[eye_index]
-        mgl_fbo.use()
-        self.ctx.viewport = (0, 0, sc_w, sc_h)
-        self.ctx.disable(moderngl.DEPTH_TEST)
-        self.ctx.disable(moderngl.BLEND)
-        src_mgl_tex.use(location=4)
-        self._blit_prog['u_swap_rb'].value = 1 if self._swapchain_is_bgra else 0
-        self._blit_vao.render(moderngl.TRIANGLE_STRIP)
-
-    def _wait_and_blit_ext(self, eye_index, d3d11_swapchain_tex, fence):
-        """Wait on the per-eye GL fence (instead of a global glFinish stall),
-        then issue the GPU-side CopyResource into the swapchain texture.
-
-        Using a fence instead of glFinish lets the GL driver keep submitting
-        commands for the other eye while this eye's sync resolves — that's the
-        whole reason the EXT path got slow before.
-        """
-        if fence is not None:
-            # 16 ms timeout: one full frame at 90 Hz. With two-phase rendering
-            # the wait is normally near-instant because eye 1's GPU work has
-            # already overlapped with eye 0's pending submissions.
-            glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 16_000_000)
-            glDeleteSync(fence)
-        self._d3d11_copy_resource(d3d11_swapchain_tex,
-                                  self._ext_shared_tex[eye_index][0])
-
-    def _blit_ext_to_swapchain(self, eye_index, d3d11_swapchain_tex):
-        """Legacy single-phase blit. Kept for callers that haven't been
-        restructured to the two-phase pattern; uses a fence under the hood
-        instead of glFinish so it still avoids the full pipeline stall.
-        """
-        self._wait_and_blit_ext(eye_index, d3d11_swapchain_tex,
-                                self._make_gl_fence())
+        # Sync: ensure GL is done before D3D11 reads the shared texture
+        glFinish()
+        copy_fn(ctx, d3d11_swapchain_tex, d3d11_shared_tex)
 
     def _cleanup_interop(self):
         """Release all GPU interop resources."""
         if self._interop_mode == 'nv_dx' and self._nv_dx_device:
-            for (gl_tex, raw_fbo, dx_obj, depth_rb) in self._nv_dx_objects.values():
+            for (gl_tex, raw_fbo, dx_obj) in self._nv_dx_objects.values():
                 try:
                     _wglDXUnregisterObjectNV(self._nv_dx_device, dx_obj)
                 except Exception:
@@ -2479,10 +3040,6 @@ class OpenXRViewer:
                     pass
                 try:
                     glDeleteTextures(1, [gl_tex])
-                except Exception:
-                    pass
-                try:
-                    glDeleteRenderbuffers(1, [depth_rb])
                 except Exception:
                     pass
             self._nv_dx_objects.clear()
@@ -2530,19 +3087,12 @@ class OpenXRViewer:
             engine_version=1,
             api_version=xr.XR_CURRENT_API_VERSION,
         )
-        _supported = self._supported_xr_extensions()
-        _fb_layer_settings = xr.FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME
-        _want_exts = [xr.KHR_OPENGL_ENABLE_EXTENSION_NAME]
-        self._fb_layer_settings_enabled = _fb_layer_settings in _supported
-        if self._fb_layer_settings_enabled:
-            _want_exts.append(_fb_layer_settings)
         create_info = xr.InstanceCreateInfo(
             application_info=app_info,
-            enabled_extension_names=_want_exts,
+            enabled_extension_names=[xr.KHR_OPENGL_ENABLE_EXTENSION_NAME],
         )
         self._xr_instance = xr.create_instance(create_info)
-        print(f"[OpenXRViewer] XrInstance created (OpenGL)"
-              f"{' + FB layer sharpening' if self._fb_layer_settings_enabled else ''}")
+        print("[OpenXRViewer] XrInstance created (OpenGL)")
 
         # 2. System
         self._xr_system_id = xr.get_system(
@@ -3103,6 +3653,7 @@ class OpenXRViewer:
         mvp = vp_kb @ scale_kb
 
         mgl_fbo.use()
+        self.ctx.depth_mask = False
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
 
@@ -3156,12 +3707,18 @@ class OpenXRViewer:
             elif key.vk in oneshot_vks:
                 _hl_quad(key.rect_local, (1.0, 0.7, 0.15, 0.45))
 
-        # Cyan highlight on keys hovered by either laser (suppressed while gripping)
+        # Highlight keys held by triggers (pressed) — bright, strong
+        for held_idx in set(x for x in [self._kb_held_key_l, self._kb_held_key_r] if x is not None):
+            _hl_quad(self._keyboard_keys[held_idx].rect_local, (0.5, 0.85, 1.0, 0.70))
+
+        # Darker highlight on keys hovered by either laser (suppressed while gripping)
         if not (self._grip_l_now or self._grip_r_now):
             for hover_idx in set(x for x in [self._kb_hover_l, self._kb_hover_r] if x is not None):
-                _hl_quad(self._keyboard_keys[hover_idx].rect_local, (0.2, 0.7, 1.0, 0.35))
+                if hover_idx not in set(x for x in [self._kb_held_key_l, self._kb_held_key_r] if x is not None):
+                    _hl_quad(self._keyboard_keys[hover_idx].rect_local, (0.15, 0.50, 0.80, 0.25))
 
         self.ctx.disable(moderngl.BLEND)
+        self.ctx.depth_mask = True
 
     def _init_cuda_pbos(self, w, h):
         """Create or recreate PBOs and register them with CUDA/HIP."""
@@ -3272,6 +3829,21 @@ class OpenXRViewer:
             # No glGenerateMipmap for depth: keep DIBR sampling at full-res
             # to match viewer.py FullSBS numerics.
 
+        # Sample average frame color for dynamic glow color (throttled)
+        self._glow_color_counter += 1
+        if self._glow_color_counter >= 15:
+            self._glow_color_counter = 0
+            try:
+                if is_tensor:
+                    avg = rgb.mean(dim=(1, 2))  # CHW -> [3] in [0, 255]
+                    self._glow_target_color = tuple(v.item() / 255.0 for v in avg)
+                else:
+                    rgb_np = np.asarray(rgb, dtype=np.uint8)
+                    avg = rgb_np.mean(axis=(0, 1)).astype(np.float32)
+                    self._glow_target_color = (avg[0] / 255.0, avg[1] / 255.0, avg[2] / 255.0)
+            except Exception:
+                pass  # skip on error, keep previous color
+
     def _build_model_mat4(self):
         """
         Build the model matrix for the screen in world space.
@@ -3279,7 +3851,12 @@ class OpenXRViewer:
         """
         if self.screen_height is None:
             fw, fh = self.frame_size
-            self.screen_height = self.screen_width * (fh / fw if fw > 0 else 9 / 16)
+            if fh > fw:  # portrait: ref -> long dim, derive short from 16:9
+                self.screen_height = self._screen_ref_size
+                self.screen_width = self.screen_height * 9.0 / 16.0
+            else:
+                self.screen_width = self._screen_ref_size
+                self.screen_height = self.screen_width * 9.0 / 16.0
 
         sx  = self.screen_width  / 2.0
         sy  = self.screen_height / 2.0
@@ -3302,8 +3879,17 @@ class OpenXRViewer:
             [0,  0,   0,  1],
         ], dtype=np.float32)
 
+        cr = math.cos(self.screen_roll)
+        sr = math.sin(self.screen_roll)
+        rot_z = np.array([
+            [cr, -sr, 0, 0],
+            [sr,  cr, 0, 0],
+            [ 0,   0, 1, 0],
+            [ 0,   0, 0, 1],
+        ], dtype=np.float32)
+
         S = np.diag([sx, sy, 1.0, 1.0]).astype(np.float32)
-        R = rot_y @ rot_x
+        R = rot_y @ rot_x @ rot_z
         T = np.eye(4, dtype=np.float32)
         T[0, 3] = self.screen_pan_x
         T[1, 3] = self.screen_pan_y
@@ -3327,7 +3913,12 @@ class OpenXRViewer:
         """
         if self.screen_height is None:
             fw, fh = self.frame_size
-            self.screen_height = self.screen_width * (fh / fw if fw > 0 else 9 / 16)
+            if fh > fw:  # portrait: ref -> long dim, derive short from 16:9
+                self.screen_height = self._screen_ref_size
+                self.screen_width = self.screen_height * 9.0 / 16.0
+            else:
+                self.screen_width = self._screen_ref_size
+                self.screen_height = self.screen_width * 9.0 / 16.0
 
         R        = self.screen_distance + dist_offset  # cylinder radius
         half_w   = (width_override  if width_override  is not None else self.screen_width)  / 2.0
@@ -3368,6 +3959,12 @@ class OpenXRViewer:
                 wy =  ly * cp - rz * sp
                 wz =  ly * sp + rz * cp
                 wx = rx
+
+                # Roll around Z (screen normal)
+                cr, sr = math.cos(self.screen_roll), math.sin(self.screen_roll)
+                wx_roll = wx * cr - wy * sr
+                wy_roll = wx * sr + wy * cr
+                wx, wy = wx_roll, wy_roll
 
                 # Translate to world position
                 wx += cx
@@ -4212,7 +4809,7 @@ class OpenXRViewer:
         frame-rate-independent smoothing.  k controls speed: higher = snappier.
         Clears targets once the screen is close enough to avoid infinite ticking.
         """
-        if self._anim_target_pan_x is None:
+        if self._anim_target_pan_x is None and self._anim_target_roll is None:
             return
 
         K     = 6.0   # decay constant: ~63% of the gap closed per 1/K seconds
@@ -4229,6 +4826,7 @@ class OpenXRViewer:
         self.screen_distance = _lerp(self.screen_distance, self._anim_target_distance)
         self.screen_yaw      = _lerp_angle(self.screen_yaw,   self._anim_target_yaw)
         self.screen_pitch    = _lerp_angle(self.screen_pitch, self._anim_target_pitch)
+        self.screen_roll     = _lerp_angle(self.screen_roll,  self._anim_target_roll)
 
         # Stop animating once close enough (< 1 mm / 0.01°)
         close = (
@@ -4236,7 +4834,8 @@ class OpenXRViewer:
             abs(self.screen_pan_y    - self._anim_target_pan_y)    < 0.001 and
             abs(self.screen_distance - self._anim_target_distance) < 0.001 and
             abs((self.screen_yaw   - self._anim_target_yaw   + math.pi) % (2*math.pi) - math.pi) < 0.0002 and
-            abs((self.screen_pitch - self._anim_target_pitch + math.pi) % (2*math.pi) - math.pi) < 0.0002
+            abs((self.screen_pitch - self._anim_target_pitch + math.pi) % (2*math.pi) - math.pi) < 0.0002 and
+            abs((self.screen_roll  - self._anim_target_roll  + math.pi) % (2*math.pi) - math.pi) < 0.0002
         )
         if close:
             self.screen_pan_x    = self._anim_target_pan_x
@@ -4244,6 +4843,7 @@ class OpenXRViewer:
             self.screen_distance = self._anim_target_distance
             self.screen_yaw      = self._anim_target_yaw
             self.screen_pitch    = self._anim_target_pitch
+            self.screen_roll     = self._anim_target_roll
             self._anim_target_pan_x = None   # clear — animation complete
 
     def _reset_screen_direction(self):
@@ -4284,8 +4884,10 @@ class OpenXRViewer:
         name, width, dist = self._screen_presets[index]
         self._reset_orientation_offsets()
         self.screen_width    = width
+        self._screen_ref_size = width
         self.screen_height   = None
         self.screen_pitch    = 0.0
+        self.screen_roll     = 0.0
         self._screen_curved  = False
         self._preset_index            = index
         self.screen_pan_y    = float(self._initial_head_y)
@@ -4769,7 +5371,7 @@ class OpenXRViewer:
             else:
                 # The greater the angular velocity, the larger the smoothing factor, resulting in tighter tracking. When hand motion stops, the factor decreases, leading to a smooth, gradual deceleration.
                 _adaptive = self._rot_smooth * (1.0 + min(_ang * 30.0, 2.0))
-                _adaptive = min(_adaptive, 0.20)
+                _adaptive = min(_adaptive, 0.30)
                 sm_quat = self._slerp_quat(prev_quat, raw_quat, _adaptive)
         else:
             sm_quat = raw_quat
@@ -5350,6 +5952,183 @@ class OpenXRViewer:
         self._help_vao.render(moderngl.TRIANGLE_STRIP)
         self.ctx.disable(moderngl.BLEND)
 
+    def _render_env_model(self, mgl_fbo, vp_mat, view_mat):
+        """Render the glTF environment model in world space.
+
+        Must be called from ``_render_eye`` **before** any other geometry so the
+        environment acts as the background layer.  Uses a dedicated env shader
+        (no ``gl_FrontFacing discard``, double-sided lighting) so all faces of
+        glTF models are rendered correctly without winding tricks.
+        """
+        if not self._env_model_visible or not self._env_model_prims:
+            return
+
+        model_mat = np.eye(4, dtype='f4')
+
+        view_inv = np.linalg.inv(view_mat)
+        cam_pos = view_inv[:3, 3].astype('f4')
+
+        # Write per-frame uniforms to the dedicated env shader
+        vpf4 = vp_mat.astype('f4')
+        self._env_prog['u_mvp'].write(vpf4.T.tobytes())
+        self._env_prog['u_model'].write(model_mat.T.tobytes())
+        self._env_prog['u_camera_pos'].write((cam_pos).tobytes())
+        self._env_prog['u_light_color'].value = (0.45, 0.45, 0.48)
+        self._env_prog['u_ambient_color'].value = (0.08, 0.08, 0.09)
+        # Directional light (KHR_lights_punctual)
+        if self._scene_lights:
+            dl = self._scene_lights[0]
+            self._env_prog['u_light_dir'].value = (float(dl['direction'][0]), float(dl['direction'][1]), float(dl['direction'][2]))
+            ci = dl['color'] * dl['intensity']
+            self._env_prog['u_light_intensity'].value = (float(ci[0]), float(ci[1]), float(ci[2]))
+        else:
+            self._env_prog['u_light_intensity'].value = (0.0, 0.0, 0.0)
+
+        # Disable back-face culling so both sides of walls/objects are visible.
+        # The env shader flips the normal for back-faces (double-sided lighting).
+        # Explicitly set GL_CCW winding so glTF models use standard convention.
+        self.ctx.disable(moderngl.CULL_FACE)
+        glFrontFace(GL_CCW)
+
+        for pi, prim in enumerate(self._env_model_prims):
+            bc = prim.get('base_color', np.array([1.0, 1.0, 1.0], dtype=np.float32))
+            rf = prim.get('roughness_factor', 1.0)
+            mf = prim.get('metallic_factor', 0.0)
+            ef = prim.get('emissive_factor', np.array([0.0, 0.0, 0.0], dtype=np.float32))
+            self._env_prog['u_base_color_factor'].value = (float(bc[0]), float(bc[1]), float(bc[2]))
+            self._env_prog['u_roughness'].value = float(rf)
+            self._env_prog['u_metallic'].value = float(mf)
+            self._env_prog['u_emissive_factor'].value = (float(ef[0]), float(ef[1]), float(ef[2]))
+            unlit = prim.get('unlit', False)
+            am = prim.get('alpha_mode', 'OPAQUE')
+            self._env_prog['u_unlit'].value = 1 if unlit else 0
+            self._env_prog['u_alpha_mode'].value = 0 if am == 'OPAQUE' else (1 if am == 'MASK' else 2)
+            self._env_prog['u_alpha_cutoff'].value = float(prim.get('alpha_cutoff', 0.5))
+            to = prim.get('tex_offset', np.array([0.0, 0.0], dtype=np.float32))
+            ts = prim.get('tex_scale', np.array([1.0, 1.0], dtype=np.float32))
+            self._env_prog['u_tex_offset'].value = (float(to[0]), float(to[1]))
+            self._env_prog['u_tex_scale'].value = (float(ts[0]), float(ts[1]))
+            if prim['tex_key'] and prim['tex_key'] in self._env_model_tex_cache:
+                self._env_model_tex_cache[prim['tex_key']].use(location=3)
+                self._env_prog['u_use_texture'].value = 1
+            else:
+                self._env_prog['u_use_texture'].value = 0
+            # Normal map
+            nid = prim.get('normal_tex_id', -1)
+            n_key = f"env:{nid}" if nid >= 0 else None
+            if n_key and n_key in self._env_model_tex_cache:
+                self._env_model_tex_cache[n_key].use(location=4)
+                self._env_prog['u_use_normal_tex'].value = 1
+                self._env_prog['u_normal_scale'].value = float(prim.get('normal_scale', 1.0))
+            else:
+                self._env_prog['u_use_normal_tex'].value = 0
+            # Occlusion map
+            oid = prim.get('occlusion_tex_id', -1)
+            o_key = f"env:{oid}" if oid >= 0 else None
+            if o_key and o_key in self._env_model_tex_cache:
+                self._env_model_tex_cache[o_key].use(location=5)
+                self._env_prog['u_use_occlusion_tex'].value = 1
+                self._env_prog['u_occlusion_strength'].value = float(prim.get('occlusion_strength', 1.0))
+            else:
+                self._env_prog['u_use_occlusion_tex'].value = 0
+            # metallicRoughnessTexture
+            mid = prim.get('mr_tex_id', -1)
+            m_key = f"env:{mid}" if mid >= 0 else None
+            if m_key and m_key in self._env_model_tex_cache:
+                self._env_model_tex_cache[m_key].use(location=6)
+                self._env_prog['u_use_mr_tex'].value = 1
+            else:
+                self._env_prog['u_use_mr_tex'].value = 0
+            # emissiveTexture
+            eid = prim.get('emissive_tex_id', -1)
+            e_key = f"env:{eid}" if eid >= 0 else None
+            if e_key and e_key in self._env_model_tex_cache:
+                self._env_model_tex_cache[e_key].use(location=7)
+                self._env_prog['u_use_emissive_tex'].value = 1
+            else:
+                self._env_prog['u_use_emissive_tex'].value = 0
+            prim['vao'].render(moderngl.TRIANGLES)
+            # One-time log: first 500 prims
+            if not getattr(self, '_env_logged', False) and pi < 500:
+                nid = prim.get('normal_tex_id', -2)
+                _lp = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prim_debug.txt')
+                with open(_lp, 'a', encoding='utf-8') as _f:
+                    _f.write(f"[PRIM] {pi}: bc={bc.tolist()} rough={rf} tex={prim.get('tex_key')} nid={nid}\n")
+        if not getattr(self, '_env_logged', False):
+            self._env_logged = True
+            _lp = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prim_debug.txt')
+            with open(_lp, 'a', encoding='utf-8') as _f:
+                _f.write(f"[TOTAL] env_model_prims count = {len(self._env_model_prims)}\n")
+
+        # Reset state for subsequent rendering
+        self._env_prog['u_use_texture'].value = 1
+        self._env_prog['u_base_color_factor'].value = (1.0, 1.0, 1.0)
+
+    def _render_glow(self, mgl_fbo, vp_mat):
+        """Render a soft glow outside the screen edges using a larger quad."""
+        if self._glow_intensity <= 0.0 or self.screen_height is None:
+            return
+
+        # Glow scales with screen size, referenced to a default 2.4m screen
+        screen_long = max(self.screen_width, self.screen_height)
+        glow_scale = screen_long / self._glow_ref_screen
+        glow_width = self._glow_width_m * glow_scale
+
+        glow_margin = glow_width * 6.0       # margin lets exp(-6) ~ 0.0025 at quad edge
+        glow_w = self.screen_width  + 2 * glow_margin
+        glow_h = self.screen_height + 2 * glow_margin
+        # Convert physical glow width (meters) to UV space
+        uv_glow_width = glow_width / max(glow_w, glow_h)
+
+        self.ctx.depth_mask = False
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+
+        # Smoothly interpolate glow color towards sampled frame average
+        c = self._glow_color
+        t = self._glow_target_color
+        lerp = 0.03  # per-frame lerp factor (~3s to converge at 90fps)
+        self._glow_color = (
+            c[0] + lerp * (t[0] - c[0]),
+            c[1] + lerp * (t[1] - c[1]),
+            c[2] + lerp * (t[2] - c[2]),
+        )
+
+        # Curved glow: not yet implemented
+        if self._screen_curved:
+            pass
+        else:
+            # Flat glow quad
+            sx = glow_w / 2.0
+            sy = glow_h / 2.0
+            cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+            cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+            cr  = math.cos(self.screen_roll);  sr  = math.sin(self.screen_roll)
+            rot_y = np.array([[ cy, 0, sy_, 0], [0, 1, 0, 0], [-sy_, 0, cy, 0], [0, 0, 0, 1]], dtype='f4')
+            rot_x = np.array([[1, 0, 0, 0], [0, cp, -sp, 0], [0, sp, cp, 0], [0, 0, 0, 1]], dtype='f4')
+            rot_z = np.array([[cr, -sr, 0, 0], [sr,  cr, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], dtype='f4')
+            R = rot_y @ rot_x @ rot_z
+            S = np.diag([sx, sy, 1.0, 1.0]).astype('f4')
+            T = np.eye(4, dtype='f4')
+            T[0, 3] = self.screen_pan_x
+            T[1, 3] = self.screen_pan_y
+            T[2, 3] = -self.screen_distance - 0.002
+            glow_model = T @ R @ S
+            mvp = vp_mat @ glow_model
+            self._glow_prog['u_mvp'].write(mvp.T.astype('f4').tobytes())
+            inner_w = self.screen_width  / glow_w * 0.95
+            inner_h = self.screen_height / glow_h * 0.95
+            self._glow_prog['u_screen_half'].value = (inner_w / 2, inner_h / 2)
+            self._glow_prog['u_glow_color'].value  = self._glow_color
+            self._glow_prog['u_glow_width'].value  = uv_glow_width
+            self._glow_prog['u_glow_intensity'].value = self._glow_intensity
+            self._glow_vao.render(moderngl.TRIANGLE_STRIP)
+
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.depth_mask = True
+        self.ctx.enable(moderngl.DEPTH_TEST)
+
     def _render_border(self, mgl_fbo, vp_mat):
         """Render a thin solid-color border slightly larger than the screen.
 
@@ -5398,8 +6177,10 @@ class OpenXRViewer:
             cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
             rot_y = np.array([[ cy, 0, sy_, 0], [0, 1, 0, 0], [-sy_, 0, cy, 0], [0, 0, 0, 1]], dtype='f4')
             rot_x = np.array([[1, 0, 0, 0], [0, cp, -sp, 0], [0, sp, cp, 0], [0, 0, 0, 1]], dtype='f4')
+            cr = math.cos(self.screen_roll); sr = math.sin(self.screen_roll)
+            rot_z = np.array([[cr, -sr, 0, 0], [sr, cr, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], dtype='f4')
             S = np.diag([sx, sy, 1.0, 1.0]).astype('f4')
-            R = rot_y @ rot_x
+            R = rot_y @ rot_x @ rot_z
             T = np.eye(4, dtype='f4')
             T[0, 3] = self.screen_pan_x
             T[1, 3] = self.screen_pan_y
@@ -5433,15 +6214,13 @@ class OpenXRViewer:
         glDisable(GL_FRAMEBUFFER_SRGB)
 
         mgl_fbo.use()
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.depth_mask = True
+        self.ctx.disable(moderngl.BLEND)
         self.ctx.viewport = (0, 0, sc_w, sc_h)
         bg_a = 1.0
         bg_r, bg_g, bg_b = _BG_COLORS[self._bg_color_idx]
         mgl_fbo.clear(bg_r, bg_g, bg_b, bg_a, depth=1.0)
-
-        # Depth test for proper spatial occlusion: nearer opaque objects cover farther ones
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.depth_func = '<'
-        self.ctx.depth_mask = True  # opaque objects write depth
 
         if not self._screen_visible:
             self.ctx.screen.use()
@@ -5455,11 +6234,17 @@ class OpenXRViewer:
         # matrix against this rather than recomputing proj @ view each time.
         vp_mat = proj_mat @ view_mat
 
-        # 1. Border (behind the screen, slightly larger)
-        self._render_border(mgl_fbo, vp_mat)
+        # -3. Environment model (glTF 3D scene, very back) — background layer only
+        if self._env_model_visible and self._env_model_prims:
+            self._render_env_model(mgl_fbo, vp_mat, view_mat)
+            mgl_fbo.use()
+            glClear(GL_DEPTH_BUFFER_BIT)
+
+        # 0. Glow (behind border and screen)
+        self._render_glow(mgl_fbo, vp_mat)
         self.ctx.viewport = (0, 0, sc_w, sc_h)
 
-        # 2. Main screen (flat quad or cylindrical curved arc)
+        # 1. Main screen (flat quad or cylindrical curved arc)
         mgl_fbo.use()
         self.color_tex.use(location=0)
         self.depth_tex.use(location=1)
@@ -5479,8 +6264,8 @@ class OpenXRViewer:
             prog['u_eye_offset'].value     = eye_sign * self.ipd_uv / 2.0
             prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
             prog['u_convergence'].value    = float(self.convergence)
-            prog['u_resolution'].value     = (float(sc_w), float(sc_h))
-            prog['u_sharpen'].value        = float(getattr(self, 'sharpen_strength', 0.6))
+            prog['u_roll'].value           = self.screen_roll
+            prog['u_corner_radius'].value  = self._corner_radius
             n_verts = (48 + 1) * 2
             self._curved_vao.render(moderngl.TRIANGLE_STRIP, vertices=n_verts)
         else:
@@ -5493,8 +6278,8 @@ class OpenXRViewer:
             # Keep convergence in sync — user-driven divergence input updates self.convergence
             # at runtime; pushing it here ensures any external change is reflected per-frame.
             self.prog['u_convergence'].value = float(self.convergence)
-            self.prog['u_resolution'].value  = (float(sc_w), float(sc_h))
-            self.prog['u_sharpen'].value     = float(getattr(self, 'sharpen_strength', 0.6))
+            self.prog['u_roll'].value      = self.screen_roll
+            self.prog['u_corner_radius'].value = self._corner_radius
             # Render screen WITHOUT alpha blending so the shader's edge alpha is written
             # directly into the swapchain framebuffer. The XR compositor composites those
             # near-zero-alpha edge pixels against the VR background — producing a clean soft
@@ -5502,52 +6287,51 @@ class OpenXRViewer:
             # opaque black clear, creating a persistent dark halo visible at all times.
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-        # 3. Keyboard (opaque, rendered after screen)
+        # 3. Keyboard
         if self._keyboard_visible and self._keyboard_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_keyboard(mgl_fbo, vp_mat)
 
-        # 4. Laser beam (opaque rainbow) — rendered behind controllers
-        self.ctx.viewport = (0, 0, sc_w, sc_h)
-        self._render_lasers(mgl_fbo, vp_mat, view_mat, blend=False)
-
-        # 5. VR Controller models — rendered on top of the opaque laser beam
-        if self._ctrl_prims_l or self._ctrl_prims_r:
-            self.ctx.viewport = (0, 0, sc_w, sc_h)
-            self._render_controllers(mgl_fbo, vp_mat, view_mat)
-
-        # Transparent overlays: depth test ON (occluded by opaque), depth write OFF
-        self.ctx.depth_mask = False
-
-        # 6. Transparent overlays (sorted back-to-front as a group)
-        # Depth OSD
+        # 5. Depth OSD (floating panel, always checked — method handles its own alpha)
         if self._depth_osd_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_depth_osd(eye_index, mgl_fbo, vp_mat)
 
-        # Screen-info OSD
+        # 5b. Screen-info OSD (size + distance, shown while right grip + stick adjusts)
         if self._screen_osd_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_screen_osd(eye_index, mgl_fbo, vp_mat)
 
-        # Preset OSD
+        # 5c. Preset OSD (name, shown briefly after cycling presets with Y button)
         if self._preset_osd_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_preset_osd(eye_index, mgl_fbo, vp_mat)
 
-        # Brand OSD
+        # 6b. Brand OSD (controller model indicator, attached to right controller)
         if self._brand_osd_tex is not None and self._grip_mat_r is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_brand_osd(eye_index, mgl_fbo, vp_mat)
 
-        # Laser hit circles (semi-transparent)
+        # 7. Laser beam (opaque rainbow) — rendered behind controllers so the
+        # controller ring and body correctly occlude the beam near its origin.
         self.ctx.viewport = (0, 0, sc_w, sc_h)
+        self._render_lasers(mgl_fbo, vp_mat, view_mat, blend=False)
+
+        # 8. VR Controller models — rendered on top of the opaque laser beam
+        if self._ctrl_prims_l or self._ctrl_prims_r:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_controllers(mgl_fbo, vp_mat, view_mat)
+
+        # 9. Laser hit circles (semi-transparent, rendered after controllers)
+        self.ctx.viewport = (0, 0, sc_w, sc_h)
+        self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         self._render_lasers(mgl_fbo, vp_mat, view_mat, blend=True)
         self.ctx.disable(moderngl.BLEND)
+        self.ctx.enable(moderngl.DEPTH_TEST)
 
-        # 10. FPS overlay — anchored bottom-left of screen, always visible when toggled
+        # 10. FPS overlay — attached to left controller, always visible when toggled
         if self._fps_overlay_visible and self._overlay_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_fps_overlay(eye_index, mgl_fbo, vp_mat)
@@ -5557,13 +6341,11 @@ class OpenXRViewer:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_calibration_panel(mgl_fbo, vp_mat)
 
-        # 12. Help/shortcut panel — anchored to left side of screen
+        # 12. Help/shortcut panel
         if self._fps_overlay_visible and self._help_panel_visible and self._help_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_help_panel(mgl_fbo, vp_mat)
 
-        self.ctx.disable(moderngl.DEPTH_TEST)
-        self.ctx.depth_mask = True
         self.ctx.screen.use()
     
     # OpenXR event loop
@@ -5964,33 +6746,20 @@ class OpenXRViewer:
                 self._cursor_smooth_uv = None
                 return
 
-        # If keyboard is visible and a controller's laser hits a key, suppress
-        # screen cursor for that specific controller (per-controller priority).
-        kb_claim_l = False
-        kb_claim_r = False
-        if self._keyboard_visible:
-            for is_left, _aim_mat, _grip_mat, _pos_attr, _quat_attr in [
-                (True,  self._aim_mat_l, self._grip_mat_l,
-                 "_smooth_ray_origin_l", "_smooth_ray_quat_l"),
-                (False, self._aim_mat_r, self._grip_mat_r,
-                 "_smooth_ray_origin_r", "_smooth_ray_quat_r"),
-            ]:
-                if _aim_mat is None:
-                    continue
-                _cp, _fw = _beam_origin_dir(_aim_mat, _grip_mat, _pos_attr, _quat_attr)
-                if self._keyboard_laser_hit(_cp, _fw)[0] is not None:
-                    if is_left:
-                        kb_claim_l = True
-                    else:
-                        kb_claim_r = True
-
         hit_l = hit_r = None
         ov_hit_l = ov_hit_r = False
         if self._aim_mat_l is not None:
             cp, fw = _beam_origin_dir(self._aim_mat_l, self._grip_mat_l,
                                     "_smooth_ray_origin_l", "_smooth_ray_quat_l")
-            if not kb_claim_l:
-                hit_l = self._laser_screen_hit_uv(cp, fw)
+            # Compute both keyboard and screen hit distances, only interact with closer one
+            _kb_idx_l, kb_t_l = self._keyboard_laser_hit(cp, fw)
+            hit_l = self._laser_screen_hit_uv(cp, fw)
+            kb_dist_l = kb_t_l if _kb_idx_l is not None else float('inf')
+            sc_dist_l = hit_l[2] if hit_l is not None else float('inf')
+            if kb_dist_l < sc_dist_l:
+                hit_l = None  # keyboard is closer, suppress screen cursor
+            else:
+                self._kb_hover_l = None  # screen is closer, suppress keyboard hover
             ov_cp_l, ov_fw_l = self._pre_snap_overlay_ray(True, self._aim_mat_l, self._grip_mat_l)
             ov_dist_l = self._overlay_panel_hit_dist(ov_cp_l, ov_fw_l)
             ov_hit_l = ov_dist_l < 5.0
@@ -5999,8 +6768,14 @@ class OpenXRViewer:
         if self._aim_mat_r is not None:
             cp, fw = _beam_origin_dir(self._aim_mat_r, self._grip_mat_r,
                                     "_smooth_ray_origin_r", "_smooth_ray_quat_r")
-            if not kb_claim_r:
-                hit_r = self._laser_screen_hit_uv(cp, fw)
+            _kb_idx_r, kb_t_r = self._keyboard_laser_hit(cp, fw)
+            hit_r = self._laser_screen_hit_uv(cp, fw)
+            kb_dist_r = kb_t_r if _kb_idx_r is not None else float('inf')
+            sc_dist_r = hit_r[2] if hit_r is not None else float('inf')
+            if kb_dist_r < sc_dist_r:
+                hit_r = None  # keyboard is closer, suppress screen cursor
+            else:
+                self._kb_hover_r = None  # screen is closer, suppress keyboard hover
             ov_cp_r, ov_fw_r = self._pre_snap_overlay_ray(False, self._aim_mat_r, self._grip_mat_r)
             ov_dist_r = self._overlay_panel_hit_dist(ov_cp_r, ov_fw_r)
             ov_hit_r = ov_dist_r < 5.0
@@ -6223,7 +6998,12 @@ class OpenXRViewer:
                 else:
                     cp = aim_mat[:3, 3].astype('f8')
                 cp = cp + fw * 0.11
-                idx, _ = self._keyboard_laser_hit(cp, fw)
+                idx, kb_t = self._keyboard_laser_hit(cp, fw)
+                # Only interact with keyboard if it's closer than the screen
+                if idx is not None:
+                    sc_t = self._laser_screen_hit_dist(cp, fw)
+                    if sc_t is not None and sc_t < kb_t:
+                        idx = None  # screen is closer, suppress keyboard interaction
             else:
                 idx = None
             setattr(self, hover_attr, idx)
@@ -6858,12 +7638,11 @@ class OpenXRViewer:
                                         self.depth_ratio + ly * DEPTH_RATIO_SPEED * dt))
                 if self.depth_ratio != old_val:
                     self._depth_osd_show_t = time.perf_counter()
-            # Don't send desktop scroll events while keyboard visible or the screen is being
-            # grabbed/manipulated — avoid accidental scrolls while adjusting UI.
-            if not (self._keyboard_visible or self._grabbed or grip_l or grip_r):
+            # Don't send desktop scroll events while screen grabbed/manipulated
+            if not (self._grabbed or grip_l or grip_r):
                 self._accum_scroll(lx, 0.0, dt)
         else:
-            if not (self._keyboard_visible or self._grabbed or grip_l or grip_r):
+            if not (self._grabbed or grip_l or grip_r):
                 self._accum_scroll(lx, ly, dt)
 
         # Right grip + right stick X: resize screen width ──────────────────────
@@ -6908,14 +7687,14 @@ class OpenXRViewer:
                         self._keyboard_distance = max(0.2,
                             self._keyboard_distance + ry * self._dist_speed_base * dt)
             else:
-                if laser_on_screen and abs(rx) > abs(ry) and abs(rx) > DEAD:
-                    self.screen_width = max(0.3,
-                                            self.screen_width + rx * RESIZE_SPEED * dt)
+                if abs(rx) > abs(ry) and abs(rx) > DEAD:
+                    self._screen_ref_size = max(0.8,
+                                            self._screen_ref_size + rx * RESIZE_SPEED * dt)
                     self.screen_height = None
                     self._resizing = True
                     self._screen_osd_show_t = time.perf_counter()
-                elif laser_on_screen and abs(ry) > abs(rx) and abs(ry) > DEAD:
-                    # Right-grip + right-stick Y → radial distance along head→screen ray
+                elif abs(ry) > abs(rx) and abs(ry) > DEAD:
+                    # Right-grip + right-stick Y -> radial distance along head->screen ray
                     _t = (abs(ry) - DEAD) / (1.0 - DEAD)
                     _speed = (self._dist_speed_base
                             + (self._dist_speed_max - self._dist_speed_base) * (_t ** self._dist_speed_exp))
@@ -6972,8 +7751,8 @@ class OpenXRViewer:
                         -self.screen_distance], dtype='f8')
                     setattr(self, grab_attr, screen_center - grip_pos)
         if not grip_r:
-            # Accelerated scroll: higher stick deflection → disproportionately faster scroll
-            if not (self._keyboard_visible or self._grabbed or grip_l):
+            # Accelerated scroll: higher stick deflection -> disproportionately faster scroll
+            if not (self._grabbed or grip_l):
                 self._accum_scroll(rx, ry, dt)
 
         # Rebuild keyboard geometry if width changed
@@ -7230,6 +8009,12 @@ class OpenXRViewer:
                 time.sleep(0.01)
                 continue
 
+            # Lazy init: load environment model after OpenXR session is running
+            if not self._env_model_init_done:
+                self._env_model_init_done = True
+                self._init_env_model()
+                print(f"[OpenXRViewer] Lazy env model: {len(self._env_model_prims)} prims")
+
             # — Wait for the runtime to signal frame timing —
             frame_state = xr.wait_frame(self._xr_session, self._xr_frame_wait_info)
             xr.begin_frame(self._xr_session, self._xr_frame_begin_info)
@@ -7364,7 +8149,7 @@ class OpenXRViewer:
                                 eye_index, img_index, sc_image.texture, sc_w, sc_h,
                             )
                             # Lock the registered D3D11 texture for GL access
-                            _, _, dx_obj, _ = self._nv_dx_objects[(eye_index, img_index)]
+                            _, _, dx_obj = self._nv_dx_objects[(eye_index, img_index)]
                             _wglDXLockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
                             try:
                                 self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
@@ -7385,15 +8170,7 @@ class OpenXRViewer:
                             ))
 
                     elif self._interop_mode == 'ext_mem':
-                        # EXT_memory_object two-phase loop:
-                        #   Phase 1 (per eye): render to RGBA offscreen FBO,
-                        #     blit (with R/B swizzle if BGRA) into the EXT-shared
-                        #     GL texture, insert a per-eye GL fence.
-                        #   Phase 2 (per eye): wait on the fence, CopyResource
-                        #     shared → swapchain image, release.
-                        # Rendering to the offscreen first lets every shader keep
-                        # its normal RGBA output; only the final blit swizzles.
-                        ext_pending = []  # (eye_index, fence, d3d11_tex, sc_w, sc_h, swapchain, view)
+                        # EXT_memory_object: render to shared GL FBO, GPU-side blit to swapchain
                         for eye_index in range(2):
                             swapchain = self._xr_swapchains[eye_index]
                             img_index = xr.acquire_swapchain_image(swapchain, self._xr_sc_acquire_info)
@@ -7404,18 +8181,10 @@ class OpenXRViewer:
                             view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
                             proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
 
-                            offs_mgl_fbo, _ = self._get_or_create_offscreen_fbo(eye_index, img_index, sc_w, sc_h)
-                            self._render_eye(eye_index, offs_mgl_fbo, view_mat, proj_mat, flip_y=True)
-                            # Look up the offscreen texture we just rendered into
-                            offs_tex = self._offscreen_fbo_cache[(eye_index, img_index)][2]
-                            self._swizzle_blit_to_shared(eye_index, offs_tex)
-                            fence = self._make_gl_fence()
-                            ext_pending.append((eye_index, fence, sc_image.texture,
-                                                sc_w, sc_h, swapchain, view))
+                            mgl_fbo = self._ext_shared_tex[eye_index][3]
+                            self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
+                            self._blit_ext_to_swapchain(eye_index, sc_image.texture)
 
-                        # Phase 2: wait fence → D3D11 CopyResource → release swapchain image.
-                        for eye_index, fence, d3d11_tex, sc_w, sc_h, swapchain, view in ext_pending:
-                            self._wait_and_blit_ext(eye_index, d3d11_tex, fence)
                             xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
                             eye_layer_views.append(xr.CompositionLayerProjectionView(
                                 pose=view.pose if view else xr.Posef(),
@@ -7482,8 +8251,19 @@ class OpenXRViewer:
                         view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
                         proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
 
-                        _, mgl_fbo, _ = self._get_or_create_fbo(eye_index, img_index, sc_image.image)
+                        raw_fbo, mgl_fbo = self._get_or_create_fbo(eye_index, img_index, sc_image.image, sc_w, sc_h)
                         self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat)
+
+                        # Desktop preview: blit left eye to GLFW window
+                        if self._preview_active and eye_index == 0:
+                            pw, ph = glfw.get_window_size(self.window)
+                            if pw > 0 and ph > 0:
+                                glBindFramebuffer(GL_READ_FRAMEBUFFER, raw_fbo)
+                                glReadBuffer(GL_COLOR_ATTACHMENT0)
+                                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0)
+                                glBlitFramebuffer(0, 0, sc_w, sc_h, 0, ph, pw, 0,
+                                                  GL_COLOR_BUFFER_BIT, GL_LINEAR)
+                                glfw.swap_buffers(self.window)
 
                         xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
 
@@ -7499,39 +8279,9 @@ class OpenXRViewer:
                             ),
                         ))
 
-                # UNPREMULTIPLIED_ALPHA_BIT: tell the compositor our alpha channel
-                # is straight (not premultiplied).  Our swapchain writes alpha=1 for
-                # opaque content and soft-fade values at screen edges, none of which
-                # are premultiplied, so this flag gives the compositor correct blending.
-                _proj_flags = xr.CompositionLayerFlags.UNPREMULTIPLIED_ALPHA_BIT
-
-                # FB runtime sharpening — only attach when extension was successfully
-                # enabled at instance creation.  Fallback: quality → normal → off.
-                _sharp_next = None
-                if getattr(self, '_fb_layer_settings_enabled', False):
-                    try:
-                        _Flags = xr.CompositionLayerSettingsFlagsFB
-                        if hasattr(_Flags, 'QUALITY_SHARPENING_BIT_FB'):
-                            _sharp_flag = _Flags.QUALITY_SHARPENING_BIT_FB
-                        elif hasattr(_Flags, 'NORMAL_SHARPENING_BIT_FB'):
-                            _sharp_flag = _Flags.NORMAL_SHARPENING_BIT_FB
-                        else:
-                            _sharp_flag = None
-                        if _sharp_flag is not None:
-                            _sharp_settings = xr.CompositionLayerSettingsFB(
-                                layer_flags=_sharp_flag,
-                            )
-                            _sharp_next = ctypes.cast(
-                                ctypes.pointer(_sharp_settings), ctypes.c_void_p
-                            )
-                    except Exception:
-                        pass
-
                 proj_layer = xr.CompositionLayerProjection(
-                    layer_flags=_proj_flags,
                     space=self._xr_space,
                     views=eye_layer_views,
-                    next=_sharp_next,
                 )
                 composition_layers.append(
                     ctypes.cast(ctypes.pointer(proj_layer),
@@ -7604,7 +8354,7 @@ class OpenXRViewer:
             except Exception:
                 pass
             try:
-                glDeleteRenderbuffers(1, [entry[3]])  # depth renderbuffer
+                glDeleteRenderbuffers(1, [entry[5]])  # depth_rb
             except Exception:
                 pass
         self._offscreen_fbo_cache.clear()

@@ -405,11 +405,12 @@ DEFAULTS = {
     "Convergence": 0.0,
     "Display Mode": "Half-SBS",
     "FP16": True,
-    "torch.compile": False,
-    "TensorRT": False,
+    "torch.compile": None,
+    "TensorRT": None,
     "Recompile TensorRT": False,
-    "CoreML": False,
+    "CoreML": None,
     "Recompile CoreML": False,
+    "OpenVINO": None,
     "Recompile OpenVINO": False,
     "Computing Device": 0,
     "Language": "EN",
@@ -957,7 +958,6 @@ class Desktop2StereoGUI:
                 cfg = read_yaml(os.path.join(BASE_DIR, "settings.yaml"))
                 if cfg:
                     self._config.update(cfg)
-                    self._yaml_loaded = True
                     self.language = self._config.get("Language", "EN")
                     self.apply_config(self._config)
                     self.set_status(UI_TEXTS[self.language]["Loaded settings.yaml at startup"], key="Loaded settings.yaml at startup")
@@ -1534,12 +1534,20 @@ class Desktop2StereoGUI:
         
         saved_ctrl = cfg.get("Controller Model", DEFAULTS.get("Controller Model", "PICO"))
         self.ctrl_model_dd.value = saved_ctrl if saved_ctrl in self.ctrl_model_dd.options else "PICO"
-        self.torch_compile_cb.value = cfg.get("torch.compile", False)
-        self.tensorrt_cb.value = cfg.get("TensorRT", False)
+        self.torch_compile_cb.value = cfg.get("torch.compile")
+        if self.torch_compile_cb.value is None:
+            self.torch_compile_cb.value = False
+        trt_val = cfg.get("TensorRT")
+        if trt_val is not None:
+            self.tensorrt_cb.value = trt_val
         self.recompile_trt_cb.value = cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"])
-        self.coreml_cb.value = cfg.get("CoreML", False)
+        cml_val = cfg.get("CoreML")
+        if cml_val is not None:
+            self.coreml_cb.value = cml_val
         self.recompile_coreml_cb.value = cfg.get("Recompile CoreML", DEFAULTS["Recompile CoreML"])
-        self.openvino_cb.value = cfg.get("OpenVINO", False)
+        ov_val = cfg.get("OpenVINO")
+        if ov_val is not None:
+            self.openvino_cb.value = ov_val
         self.recompile_openvino_cb.value = cfg.get("Recompile OpenVINO", DEFAULTS["Recompile OpenVINO"])
         self.recompile_trt_cb.visible = self.tensorrt_cb.value and self.tensorrt_cb.visible
         self.recompile_coreml_cb.visible = self.coreml_cb.value and self.coreml_cb.visible
@@ -1730,19 +1738,20 @@ class Desktop2StereoGUI:
     def auto_enable_optimizers_based_on_device(self):
         device_label = self.device_dd.value
         model_lower = (self.current_model_name or "").lower()
-        self.tensorrt_cb.value = False
-        self.coreml_cb.value = False
-        self.openvino_cb.value = False
         if "CUDA" in device_label and not IS_ROCM:
-            should = not any(kw in model_lower for kw in DISABLE_TRT_KEYWORDS)
-            self.tensorrt_cb.value = should
-            self.torch_compile_cb.value = True
+            if self._config.get("TensorRT") is None:
+                should = not any(kw in model_lower for kw in DISABLE_TRT_KEYWORDS)
+                self.tensorrt_cb.value = should
+            if self._config.get("torch.compile") is None:
+                self.torch_compile_cb.value = True
         elif "MPS" in device_label:
-            should = not any(kw in model_lower for kw in DISABLE_COREML_KEYWORDS)
-            self.coreml_cb.value = should
+            if self._config.get("CoreML") is None:
+                should = not any(kw in model_lower for kw in DISABLE_COREML_KEYWORDS)
+                self.coreml_cb.value = should
         elif "XPU" in device_label:
-            should = not any(kw in model_lower for kw in DISABLE_OPENVINO_KEYWORDS)
-            self.openvino_cb.value = should
+            if self._config.get("OpenVINO") is None:
+                should = not any(kw in model_lower for kw in DISABLE_OPENVINO_KEYWORDS)
+                self.openvino_cb.value = should
         self._on_trt_toggle(None)
         self._on_coreml_toggle(None)
         self._on_openvino_toggle(None)

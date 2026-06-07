@@ -303,10 +303,10 @@ IPD: 0.064
 Convergence: 0.0
 Display Mode: Half-SBS
 FP16: true
-torch.compile: false
-TensorRT: false
+torch.compile: null
+TensorRT: null
 Recompile TensorRT: false
-CoreML: false
+CoreML: null
 Recompile CoreML: false
 Recompile OpenVINO: false
 Computing Device: 0
@@ -325,4 +325,4 @@ Capture Tool: none
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stereo Output: none
-OpenVINO: false
+OpenVINO: null
