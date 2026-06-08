@@ -379,6 +379,35 @@ def read_yaml(path):
             print(f"Failed to load settings.yaml with GBK encoding: {e}")
             return {}
 
+
+def write_yaml(path, updates):
+    """Merge ``updates`` into the YAML at *path* and write it back.
+
+    Reads the existing file (or starts with an empty dict if missing/corrupt),
+    overlays the keys from ``updates``, and writes it back as UTF-8.  Unknown
+    keys already present in the file are preserved — only the keys explicitly
+    in ``updates`` are touched.  This is what runtime callers (xrviewer's
+    brand-switch / environment-switch hooks) use to persist user choices
+    without clobbering GUI-only fields.
+
+    Returns True on success, False on failure (errors are printed but never
+    raised so a save failure can never crash the VR session).
+    """
+    try:
+        cfg = {}
+        if os.path.exists(path):
+            try:
+                cfg = read_yaml(path)
+            except Exception:
+                cfg = {}
+        cfg.update(updates or {})
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+        return True
+    except Exception as e:
+        print(f"[utils] Failed to write {path}: {e}")
+        return False
+
 def get_local_ip():
     """Return the local IP address by creating a UDP socket to a public IP."""
     try:
@@ -803,6 +832,16 @@ else:
 STEREO_DISPLAY_INDEX = settings["Stereo Output"]
 STEREO_DISPLAY_SELECTION = False if not STEREO_DISPLAY_INDEX else True
 CONTROLLER_MODEL = settings["Controller Model"]
+# Active environment (GUI dropdown).  String values (Title Case in YAML,
+# but xrviewer normalises with .strip().lower() so legacy lowercase
+# entries from older settings.yaml files keep working):
+#   "Default"      -> opaque black backdrop, no env model (alias: legacy "Black")
+#   "Passthrough"  -> VDXR green backdrop, no env model
+#   "Dark Room"    -> built-in procedural room (walls/floor/ceiling) so the
+#                     cinema bias light has real surfaces to bounce off
+#   "<folder>"     -> name of a subfolder under environment/ containing
+#                     environment.glb (and optional profile.json)
+ACTIVE_ENVIRONMENT = settings.get("Active Environment", "Default")
 
 # Initialize Device
 import torch

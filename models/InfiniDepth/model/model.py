@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
-
+from safetensors.torch import load_file
 from .block.config import dinov3_model_configs
 from .block.implicit_decoder import ImplicitHead
 from .block.convolution import BasicEncoder
@@ -92,7 +92,10 @@ class InfiniDepth(nn.Module):
 
         if model_path is not None:
             if os.path.exists(model_path):
-                checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
+                if model_path.endswith(".safetensors"):
+                    checkpoint = load_file(model_path, device="cpu")
+                else:
+                    checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
                 if "state_dict" in checkpoint:
                     # Lightning checkpoint — strip wrapper prefix dynamically
                     state = checkpoint["state_dict"]

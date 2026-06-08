@@ -57,7 +57,7 @@ image_rgb = np.array(img).astype(np.float32)
 # MODEL_ID = "lc700x/dpt-large-redesign-hf"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 # MODEL_ID = "Intel/dpt-beit-base-384"
-# MODEL_ID = "lc700x/InfiniDepth-Small"
+MODEL_ID = "lc700x/InfiniDepth-Base"
 
 DEBUG = True
 AA_STRENGTH = 0
@@ -269,6 +269,38 @@ DTYPE = torch.float16 if FP16 else torch.float32
 
 # Engine input shape, set lazily by _ensure_engine_built() on the first frame.
 ENGINE_H, ENGINE_W = None, None
+
+# Get huggingface repo and filename for a given model_id, with some sanity checks
+def get_model_path(model_id, cache_dir):
+    from huggingface_hub import hf_hub_download
+    CKPT_NAMES = ["model.safetensors", "model.pt", "model.ckpt"]
+    # Try local cache first
+    for filename in CKPT_NAMES:
+        try:
+            return hf_hub_download(
+                repo_id=model_id,
+                filename=filename,
+                cache_dir=cache_dir,
+                local_files_only=True,
+            )
+        except Exception:
+            pass
+
+    # If not cached, download
+    for filename in CKPT_NAMES:
+        try:
+            return hf_hub_download(
+                repo_id=model_id,
+                filename=filename,
+                cache_dir=cache_dir,
+            )
+        except Exception:
+            pass
+
+    raise FileNotFoundError(
+        f"No supported model file found in {model_id}"
+    )
+
 
 # Resize-alignment factor: 14 for DINOv2-based, 16 for InfiniDepth, None => square.
 def get_patch_size():
@@ -604,13 +636,10 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 # Load InfiniDepth Model
 def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
     """ Load InfiniDepth model from HuggingFace hub. """
-    from huggingface_hub import hf_hub_download
+    
     # Load depth model without network warning when local cache exists
-    try:
-        model_path = hf_hub_download(repo_id=model_id, filename="model.pt", cache_dir=CACHE_PATH, local_files_only=True)
-    except:
-        model_path = hf_hub_download(repo_id=model_id, filename="model.pt", cache_dir=CACHE_PATH)
-
+    model_path = get_model_path(model_id, cache_dir=CACHE_PATH)
+    # model_path = r"D:\small.ckpt"
     # Preparation for video depth anything models
     encoder_dict = {'lc700x/InfiniDepth-SmallPlus': 'vits16plus',
                     'lc700x/InfiniDepth-Small': 'vits16',

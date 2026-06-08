@@ -320,9 +320,10 @@ Stereo Mix: null
 CRF: 20
 Audio Delay: -0.15
 Controller Model: PICO
+Active Environment: Default
 Lossless Scaling Support: false
 Capture Tool: none
 Fill 16:9: true
 Fix Viewer Aspect: false
-Stereo Output: none
+Stereo Output: null
 OpenVINO: null

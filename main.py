@@ -5,10 +5,24 @@ import glfw
 import time
 import signal
 import sys
+import os
 import subprocess
 from collections import deque
 
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, CONTROLLER_MODEL
+# Force UTF-8 stdout/stderr on Windows so messages containing
+# em-dashes, arrows, or other non-ASCII characters do not get
+# mangled by the legacy cp1252/cp936 code page when this script
+# runs as a child process under gui.py (which reads our pipe
+# using utf-8 decode in _pump_child_output).
+try:
+    if sys.stdout and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.stderr and sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, CONTROLLER_MODEL, ACTIVE_ENVIRONMENT
 from depth import process, predict_depth
 
 if "CUDA" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO:
@@ -281,17 +295,52 @@ def cleanup_all_resources():
     
     print("[Cleanup] All resources cleaned up")
 
+def _force_exit_watchdog(delay):
+    """Fallback: hard-exit if a graceful shutdown hangs.
+
+    OpenXR / GLFW / GPU-driver native threads sometimes refuse to join, which
+    would leave this process alive as an orphan still holding the GPU context +
+    model caches (e.g. ~/.miopen) — that makes the *next* launch of any mode
+    crash until a reboot.  If the main loop hasn't unwound and exited within
+    `delay` seconds of a shutdown signal, force the process to die.
+    """
+    time.sleep(delay)
+    try:
+        sys.stdout.flush(); sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(0)
+
+_shutdown_watchdog_started = False
+
 def signal_handler(signum, frame):
-    """Handle Ctrl+C and other termination signals"""
-    print(f"\n[Signal] Received signal {signum}, shutting down...")
+    """Handle Ctrl+C / CTRL_BREAK / termination signals.
+
+    We intentionally do NOT exit here.  Instead we set shutdown_event and let
+    the main render/stream loop unwind naturally so the viewer's own cleanup
+    runs — in OpenXR mode that means xr.end_session/destroy_session plus release
+    of the D3D11/GL GPU interop.  Skipping that (a hard kill mid-GPU-frame) can
+    wedge the GPU/compute driver until reboot and break the next launch of any
+    mode.  A watchdog thread force-exits if the graceful unwind ever hangs.
+    """
+    global _shutdown_watchdog_started
+    print(f"\n[Signal] Received signal {signum}, shutting down gracefully...")
     shutdown_event.set()
-    cleanup_all_resources()
-    sys.exit(0)
+    if not _shutdown_watchdog_started:
+        _shutdown_watchdog_started = True
+        threading.Thread(target=_force_exit_watchdog, args=(8.0,),
+                         name="ShutdownWatchdog", daemon=True).start()
 
 # Register signal handlers
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
-if OS_NAME != "Windows":
+if OS_NAME == "Windows":
+    # CTRL_BREAK_EVENT (sent by the GUI to this process group) arrives as
+    # SIGBREAK on Windows — route it through the same graceful handler so the
+    # OpenXR/GPU teardown runs before we exit.
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, signal_handler)
+else:
     signal.signal(signal.SIGQUIT, signal_handler)
 
 # get ffmpeg command
@@ -1195,6 +1244,7 @@ def main(mode="Viewer"):
                     controller_model=CONTROLLER_MODEL,
                     capture_mode=CAPTURE_MODE,
                     monitor_index=MONITOR_INDEX,
+                    environment_name=ACTIVE_ENVIRONMENT,
                 )
                 viewer.run(first_rgb=rgb, first_depth=depth)
             except Exception as e:
@@ -1286,3 +1336,18 @@ def main(mode="Viewer"):
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)
+    # main() has returned, so cleanup_all_resources() already ran in its finally
+    # block.  Force-terminate now instead of falling off the end of the script:
+    # OpenXR runtimes, GLFW and the GPU driver spin up native (C-level) threads
+    # that frequently fail to join, which would leave this process hung in the
+    # background as an orphan.  That orphan keeps the GPU context + model caches
+    # (e.g. ~/.miopen) locked, so the next run of *any* mode — which loads the
+    # depth model onto the GPU at import time — crashes within ~1s (rc=1) until a
+    # reboot clears it.  os._exit() skips the stuck-thread shutdown and guarantees
+    # a clean, immediate exit.  Init/import failures raise *before* reaching here,
+    # so they still propagate as a non-zero exit code (this never masks them).
+    try:
+        sys.stdout.flush(); sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(0)

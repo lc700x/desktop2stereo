@@ -41,6 +41,19 @@ import time
 import asyncio
 import ctypes
 import re
+
+# Force UTF-8 stdout/stderr on Windows so the console (and downstream
+# TeeStream that mirrors writes to it) does not mangle messages
+# containing em-dashes, arrows, or other non-ASCII characters.  Must
+# run BEFORE _setup_console_logging() captures the streams.
+try:
+    if sys.stdout and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.stderr and sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import flet as ft
 import yaml
 from utils import (
@@ -49,38 +62,96 @@ from utils import (
     get_local_ip, shutdown_event, read_yaml
 )
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DIAG_LOG = os.path.join(BASE_DIR, "logs", "diag.log")
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+LOG_FILE = os.path.join(LOG_DIR, "desktop2stereo.log")
+
+# Kept as an alias for backward compatibility with any external tooling
+# that referenced the old diag log path.
+DIAG_LOG = LOG_FILE
 
 
 def _setup_console_logging():
-    """Redirect stdout/stderr to also write to the diag log file."""
+    """Mirror stdout/stderr to the single rolling log file.
+
+    Design goals (per user request):
+      * Console output is preserved unchanged — every ``print()`` still
+        reaches the original terminal so the user can watch progress live.
+      * Exactly ONE log file lives in ``logs/``.  Any leftover files from
+        previous sessions (``child.log``, ``diag.log``, ``main_out.log`` …)
+        are swept on startup so the folder never accumulates clutter.
+      * Both GUI prints AND the child ``main.py`` process output land in the
+        same file, so a single tail is enough to diagnose any run.
+    """
     import datetime
-    os.makedirs(os.path.dirname(DIAG_LOG), exist_ok=True)
+    import threading
+
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    # --- Sweep stale log files so only the new single file remains. ---
+    try:
+        for _name in os.listdir(LOG_DIR):
+            _path = os.path.join(LOG_DIR, _name)
+            if os.path.isfile(_path) and os.path.abspath(_path) != os.path.abspath(LOG_FILE):
+                try:
+                    os.remove(_path)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # --- Truncate the single log file so each run starts fresh. ---
+    try:
+        with open(LOG_FILE, "w", encoding="utf-8") as _f:
+            _f.write(f"=== Desktop2Stereo log started {datetime.datetime.now().isoformat(timespec='seconds')} ===\n")
+    except Exception:
+        pass
+
+    _lock = threading.Lock()
 
     class _TeeStream:
         def __init__(self, original, label):
             self.original = original
             self.label = label
-            self._buffer = ""
 
         def write(self, data):
-            self.original.write(data)
-            if data and data.strip():
-                try:
-                    ts = datetime.datetime.now().strftime("%H:%M:%S")
-                    with open(DIAG_LOG, "a", encoding="utf-8") as f:
+            # 1) Always echo to the original terminal so the user sees prints live.
+            try:
+                self.original.write(data)
+            except Exception:
+                pass
+            # 2) Append every non-empty line to the single log file with a
+            #    timestamp + source label.  Lock to keep stdout/stderr
+            #    interleaving readable when both fire from different threads.
+            if not data:
+                return
+            try:
+                ts = datetime.datetime.now().strftime("%H:%M:%S")
+                with _lock:
+                    with open(LOG_FILE, "a", encoding="utf-8") as f:
                         for line in data.splitlines():
-                            stripped = line.strip()
+                            stripped = line.rstrip()
                             if stripped:
                                 f.write(f"[{ts}] [{self.label}] {stripped}\n")
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
         def flush(self):
-            self.original.flush()
+            try:
+                self.original.flush()
+            except Exception:
+                pass
 
         def isatty(self):
-            return self.original.isatty()
+            try:
+                return self.original.isatty()
+            except Exception:
+                return False
+
+        # Forward fileno when possible so libraries that probe the underlying
+        # OS handle (e.g. subprocess) still work; if the wrapped stream has
+        # no fileno (already wrapped), raise to fall back to PIPE handling.
+        def fileno(self):
+            return self.original.fileno()
 
     sys.stdout = _TeeStream(sys.stdout, "out")
     sys.stderr = _TeeStream(sys.stderr, "err")
@@ -213,6 +284,7 @@ UI_TEXTS = {
         "Failed to load settings.yaml:": "Failed to load settings.yaml:",
         "Opening URL in browser": "Opening URL in browser",
         "Controller:": "Controller:",
+        "Environment:": "Environment:",
         "Capture Tool:": "Capture Tool:",
         "Fill 16:9": "16:9",
         "Fix Viewer Aspect": "Fix Aspect",
@@ -236,6 +308,10 @@ UI_TEXTS = {
         "tooltip_run_mode": "Output mode",
         "tooltip_display_mode": "Stereo display format",
         "tooltip_ctrl_model": "Controller model",
+        "tooltip_env_model": "Background environment: Default (black), Passthrough (green see-through), Dark Room (procedural room), or a 3D scene from environment/",
+        "Default": "Default",
+        "Passthrough": "Passthrough",
+        "Dark Room": "Dark Room",
         "tooltip_capture_mode": "Source: monitor or window",
         "tooltip_monitor": "Input monitor",
         "tooltip_stereo_monitor": "Stereo output monitor",
@@ -334,6 +410,7 @@ UI_TEXTS = {
         "Failed to load settings.yaml:": "加载 settings.yaml 失败：",
         "Opening URL in browser": "正在浏览器中打开网址",
         "Controller:": "手柄模型：",
+        "Environment:": "环境：",
         "Capture Tool:": "捕获工具:",
         "Fill 16:9": "16:9",
         "Fix Viewer Aspect": "锁定比例",
@@ -357,6 +434,10 @@ UI_TEXTS = {
         "tooltip_run_mode": "输出模式",
         "tooltip_display_mode": "立体显示格式",
         "tooltip_ctrl_model": "手柄型号",
+        "tooltip_env_model": "背景环境：默认（黑色）、透视（绿幕）、暗室（程序化房间），或 environment/ 中的 3D 场景",
+        "Default": "默认",
+        "Passthrough": "透视",
+        "Dark Room": "暗室",
         "tooltip_capture_mode": "捕获源：屏幕或窗口",
         "tooltip_monitor": "输入显示器",
         "tooltip_stereo_monitor": "立体输出显示器",
@@ -423,6 +504,7 @@ DEFAULTS = {
     "CRF": 20,
     "Audio Delay": -0.15,
     "Controller Model": "PICO",
+    "Active Environment": "Default",
     "Lossless Scaling Support": False,
     "Capture Tool": "none",
     "Fill 16:9": True,
@@ -902,6 +984,10 @@ class Desktop2StereoGUI:
         self.run_mode_key = DEFAULTS.get("Run Mode", "Local Viewer")
         self.capture_mode_key = DEFAULTS.get("Capture Mode", "Monitor")
         self.stream_protocol_key = DEFAULTS.get("Stream Protocol", "RTMP")
+        # Canonical environment key (English) — kept separate from the
+        # dropdown's display value so Chinese labels in the UI don't leak
+        # into settings.yaml or xrviewer's _init_env_model matcher.
+        self.env_key = DEFAULTS.get("Active Environment", "Default")
         self.selected_window_name = ""
         self.selected_window_handle = None
         self.selected_window_rect = None
@@ -1224,6 +1310,43 @@ class Desktop2StereoGUI:
         self.ctrl_model_dd = CompactDropdown(
             options=[c for c in ctrl_dirs],
             value="PICO", width=S(130))
+
+        # Environment dropdown — sits to the right of the controller picker.
+        # Options are the three built-in backdrops ("Default", "Passthrough",
+        # "Dark Room") plus every subfolder under environment/ that contains
+        # an environment.glb, matching the runtime cycle in xrviewer's
+        # _cycle_background.
+        #   * Default    -> plain opaque-black backdrop (no env model)
+        #   * Passthrough-> VDXR green slot (see-through on supported runtimes)
+        #   * Dark Room  -> built-in procedural room (walls/floor/ceiling)
+        #                   so the cinema bias light has surfaces to bounce off
+        # Built-in names are localized for display (e.g. CN: 默认 / 透视 / 暗室)
+        # while the canonical English key is stored in self.env_key and used
+        # for settings.yaml + the xrviewer matcher. User folder names under
+        # environment/ may carry a localized label in their profile.json:
+        #   {"display_name": {"EN": "Bedroom", "CN": "卧室"}, ...}
+        # If absent or unreadable the folder name itself is shown.
+        self.r11_label = ft.Text(UI_TEXTS[self.language]["Environment:"], size=FONT_SIZE, width=S(130))
+        env_base = os.path.join(os.path.dirname(__file__), "environment")
+        try:
+            env_dirs = [d for d in os.listdir(env_base)
+                        if os.path.isdir(os.path.join(env_base, d))
+                        and os.path.isfile(os.path.join(env_base, d, "environment.glb"))]
+        except (FileNotFoundError, OSError):
+            env_dirs = []
+        self._env_base = env_base
+        self._env_builtin_keys = ["Default", "Passthrough", "Dark Room"]
+        self._env_folder_keys = sorted(env_dirs)
+        # Cache per-folder display_name dicts so we don't hit the disk on
+        # every language toggle. Populated lazily by _load_env_display_names.
+        self._env_folder_display_cache = {}
+        self._load_env_folder_display_names()
+        env_options = self._build_env_dd_options(self.language)
+        self.env_dd = CompactDropdown(
+            options=env_options,
+            value=self._env_display_label("Default", self.language),
+            on_select=self.on_env_change,
+            width=S(130))
         self.row7a = ft.Row([
             self.r7a_label,
             self.run_mode_dd,
@@ -1233,7 +1356,10 @@ class Desktop2StereoGUI:
         ], spacing=1)
         self.row7b = ft.Row([
             self.r10_label,
-            self.ctrl_model_dd
+            self.ctrl_model_dd,
+            ft.Container(width=S(40)),
+            self.r11_label,
+            self.env_dd
         ], spacing=1)
 
         # Row 9: Input monitor/window + Refresh
@@ -1534,6 +1660,22 @@ class Desktop2StereoGUI:
         
         saved_ctrl = cfg.get("Controller Model", DEFAULTS.get("Controller Model", "PICO"))
         self.ctrl_model_dd.value = saved_ctrl if saved_ctrl in self.ctrl_model_dd.options else "PICO"
+        saved_env = cfg.get("Active Environment", DEFAULTS.get("Active Environment", "Default"))
+        # Case-insensitive match against canonical English keys (built-ins
+        # plus user folder names). Hand-edited settings.yaml entries like
+        # "monitor" / "dark room" still bind to the exact key.
+        # Legacy "Black" -> new "Default" alias for backward compatibility.
+        if str(saved_env).strip().lower() == "black":
+            saved_env = "Default"
+        canonical_keys = list(self._env_builtin_keys) + list(self._env_folder_keys)
+        env_key_match = next(
+            (k for k in canonical_keys if str(k).lower() == str(saved_env).lower()),
+            None,
+        )
+        self.env_key = env_key_match if env_key_match is not None else "Default"
+        # Display value uses the localized label for both built-ins and
+        # folders (folders consult their profile.json display_name).
+        self.env_dd.value = self._env_display_label(self.env_key, self.language)
         self.torch_compile_cb.value = cfg.get("torch.compile")
         if self.torch_compile_cb.value is None:
             self.torch_compile_cb.value = False
@@ -1830,6 +1972,75 @@ class Desktop2StereoGUI:
         self.update_stereo_monitor_menu()
         self._fit_window_to_content()
 
+    def _load_env_folder_display_names(self):
+        """Walk environment/<folder>/profile.json for each folder and cache
+        its display_name dict, e.g. {"EN": "Bedroom", "CN": "卧室"}.
+
+        Folders with no profile, an empty profile, or no display_name field
+        are cached as an empty dict — _env_display_label falls back to the
+        raw folder name in that case. A bare string display_name is treated
+        as a universal label for all languages.
+        """
+        import json
+        self._env_folder_display_cache.clear()
+        for folder in self._env_folder_keys:
+            names = {}
+            try:
+                path = os.path.join(self._env_base, folder, "profile.json")
+                if os.path.isfile(path):
+                    with open(path, "r", encoding="utf-8") as f:
+                        raw = f.read().strip()
+                    if raw:  # tolerate empty file
+                        prof = json.loads(raw) or {}
+                        dn = prof.get("display_name")
+                        if isinstance(dn, dict):
+                            names = {str(k): str(v) for k, v in dn.items() if v}
+                        elif isinstance(dn, str) and dn:
+                            names = {"EN": dn, "CN": dn}
+            except (OSError, ValueError):
+                # Hand-edited JSON breakage must never crash the GUI.
+                pass
+            self._env_folder_display_cache[folder] = names
+
+    def _env_display_label(self, key, lang):
+        """Return the human-readable label for a canonical env key in the
+        given language. Built-ins resolve via UI_TEXTS; folder names resolve
+        via the per-folder display_name cache (EN fallback, then raw name).
+        """
+        if key in self._env_builtin_keys:
+            return UI_TEXTS.get(lang, {}).get(key, key)
+        if key in self._env_folder_keys:
+            names = self._env_folder_display_cache.get(key) or {}
+            return names.get(lang) or names.get("EN") or key
+        return key
+
+    def _build_env_dd_options(self, lang):
+        """Build the localized dropdown option list (built-ins first, then
+        folders) for the given language. Used by both the initial dropdown
+        construction and the runtime language toggle in update_ui_texts.
+        """
+        return ([self._env_display_label(k, lang) for k in self._env_builtin_keys]
+                + [self._env_display_label(k, lang) for k in self._env_folder_keys])
+
+    def on_env_change(self, e):
+        """Map the localized display label back to the canonical English env
+        key so settings.yaml and the xrviewer matcher stay language-agnostic.
+        Both built-in CN labels ("默认") and folder CN labels ("卧室")
+        round-trip to their English keys ("Default", "Bedroom").
+        """
+        label = e.control.value if e else self.env_dd.value
+        canonical = list(self._env_builtin_keys) + list(self._env_folder_keys)
+        reverse_map = {self._env_display_label(k, self.language): k for k in canonical}
+        if label in reverse_map:
+            self.env_key = reverse_map[label]
+        else:
+            # Last-chance fallback: case-insensitive match against canonical
+            # English keys (handles hand-edited values and English labels
+            # even when the GUI is currently displaying CN).
+            match = next((k for k in canonical if str(k).lower() == str(label).lower()), None)
+            self.env_key = match if match is not None else "Default"
+        self._config["Active Environment"] = self.env_key
+
     def on_window_selected(self, e):
         label = e.control.value if e else self.window_dd.value
         # Extract handle from label: "Title [h:123456]"
@@ -2009,6 +2220,14 @@ class Desktop2StereoGUI:
         self.fix_aspect_cb.label = t["Fix Viewer Aspect"]
         self.lossless_cb.label = t["Lossless Scaling Support"]
         self.r10_label.value = t["Controller:"]
+        self.r11_label.value = t["Environment:"]
+        # Environment: localize built-in option labels (Default / Passthrough /
+        # Dark Room) AND folder labels via each folder's profile.json
+        # "display_name" field, while keeping folder names verbatim as the
+        # canonical key. self.env_key is the canonical English key that
+        # survives save/load and reaches xrviewer.
+        self.env_dd.options = self._build_env_dd_options(self.language)
+        self.env_dd.value = self._env_display_label(self.env_key, self.language)
         self.lang_label.value = t["Set Language:"]
         run_mode_texts = {}
         if OS_NAME == "Darwin":
@@ -2063,6 +2282,7 @@ class Desktop2StereoGUI:
             (self.run_mode_dd, "tooltip_run_mode"),
             (self.display_mode_dd, "tooltip_display_mode"),
             (self.ctrl_model_dd, "tooltip_ctrl_model"),
+            (self.env_dd, "tooltip_env_model"),
             (self.capture_mode_dd, "tooltip_capture_mode"),
             (self.monitor_dd, "tooltip_monitor"),
             (self.stereo_monitor_dd, "tooltip_stereo_monitor"),
@@ -2434,6 +2654,11 @@ class Desktop2StereoGUI:
             "Audio Delay": self._parse_float(self.audio_delay_tf.value, DEFAULTS["Audio Delay"]),
             "Stereo Output": stereo_idx,
             "Controller Model": self.ctrl_model_dd.value,
+            # Persist the canonical English key (Default / Passthrough /
+            # Dark Room / <folder>) so xrviewer's _init_env_model matcher
+            # and a hand-edited settings.yaml stay language-agnostic, even
+            # when the GUI is currently displaying CN labels (默认/透视/暗室).
+            "Active Environment": self.env_key,
         })
         self.recompile_trt_cb.value = False
         self.recompile_coreml_cb.value = False
@@ -2452,19 +2677,45 @@ class Desktop2StereoGUI:
                 self._cancel_starting = False
                 self._diag("cancelled, return")
                 return
-            print(f"[Main] Initializing Desktop2Stereo {self.run_mode_key}…")
+            print(f"[Main] Initializing Desktop2Stereo {self.run_mode_key}...")
             shutdown_event.clear()
+            # Spawn the child with stdout+stderr captured to a PIPE so every
+            # line can be forwarded *live* to (a) the user's console and
+            # (b) the single rolling log file at LOG_FILE.  This restores
+            # real-time visibility of the child's prints while keeping
+            # exactly one log file on disk.
+            #     '-u'              : unbuffered stdio so lines appear instantly
+            #     '-X faulthandler' : native/GPU/driver crashes leave a Python trace
+            child_args = [sys.executable, "-u", "-X", "faulthandler",
+                          os.path.join(BASE_DIR, "main.py")]
+            # Force the child to write its stdout/stderr as UTF-8 so the
+            # parent's _pump_child_output (which decodes via .decode("utf-8"))
+            # never sees mojibake from em-dashes, arrows, or other non-ASCII
+            # characters used in log messages.  PYTHONIOENCODING takes effect
+            # immediately at interpreter start - before any user code runs.
+            child_env = os.environ.copy()
+            child_env["PYTHONIOENCODING"] = "utf-8"
             if OS_NAME == "Windows":
                 self.process = await asyncio.create_subprocess_exec(
-                    sys.executable, os.path.join(BASE_DIR, "main.py"),
+                    *child_args,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                    env=child_env,
                 )
             else:
                 self.process = await asyncio.create_subprocess_exec(
-                    sys.executable, os.path.join(BASE_DIR, "main.py"),
+                    *child_args,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
                     start_new_session=True,
+                    env=child_env,
                 )
-            self._diag(f"process started, pid={self.process.pid}")
+            self._diag(f"process started, pid={self.process.pid}, log={LOG_FILE}")
+            # Background task that drains the child pipe and forwards each
+            # line to print() — print() writes through the _TeeStream wrapper
+            # so it reaches both the real terminal and the single log file.
+            asyncio.create_task(self._pump_child_output(self.process))
             self.set_status(UI_TEXTS[self.language]["Running"], key="Running")
             self.page.update()
             asyncio.create_task(self._monitor_process_task())
@@ -2485,13 +2736,70 @@ class Desktop2StereoGUI:
         finally:
             self._starting = False
 
-    def _diag(self, msg):
-        """Write diagnostic log to file."""
-        import datetime
-        os.makedirs(os.path.dirname(DIAG_LOG), exist_ok=True)
-        line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] [diag] {msg}"
-        with open(DIAG_LOG, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+    async def _pump_child_output(self, proc):
+        """Forward every line of the child's stdout (merged with stderr) to
+        ``print()``.  Because ``sys.stdout`` is wrapped by ``_TeeStream``,
+        each call appears live on the real terminal *and* gets appended to
+        the single rolling log file.  Runs until the child closes its
+        stdout (i.e. on exit).
+        """
+        try:
+            stream = proc.stdout
+            if stream is None:
+                return
+            while True:
+                raw = await stream.readline()
+                if not raw:
+                    break
+                try:
+                    text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                except Exception:
+                    text = repr(raw)
+                if text:
+                    # Tag child lines so they're easy to spot in the log,
+                    # but keep them readable on the console.
+                    print(text)
+        except Exception as e:
+            try:
+                self._diag(f"_pump_child_output exception: {e}", error=True)
+            except Exception:
+                pass
+
+    def _diag(self, msg, error=False):
+        """Emit a diagnostic line.
+
+        Routine state-machine traces (process started, monitor task created,
+        countdown scheduled, ...) are noise for end users, so by default this
+        writes the line ONLY to the rolling log file at ``LOG_FILE`` and stays
+        silent on the console.  The console is reserved for actual user-facing
+        output coming from the child main process (e.g. depth.py messages,
+        FPS counters, errors that the child itself raises).
+
+        Pass ``error=True`` for genuine failure paths (uncaught exceptions in
+        background tasks, non-zero child exit codes) so the line ALSO appears
+        on the console - that way a "bug appears" is immediately visible
+        without forcing the user to open the log file.
+        """
+        # 1) Always append to the single rolling log file with a timestamp +
+        #    [diag] label so the full trace is available post-mortem.
+        try:
+            import datetime
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(f"[{ts}] [diag] {msg}\n")
+        except Exception:
+            pass
+        # 2) Only echo to console when this is an error path - keeps normal
+        #    runs clean (depth.py / FPS / capture messages stay readable).
+        if error:
+            try:
+                # Write directly to the original (unwrapped) stdout so the
+                # line does NOT get re-tagged + re-appended by _TeeStream.
+                _orig = getattr(sys.stdout, "original", sys.stdout)
+                _orig.write(f"[diag] {msg}\n")
+                _orig.flush()
+            except Exception:
+                pass
 
     async def _monitor_process_task(self):
         """Wait for process to exit, then update status."""
@@ -2504,7 +2812,7 @@ class Desktop2StereoGUI:
             await proc.wait()
             self._diag(f"proc.wait returned, rc={proc.returncode}")
         except Exception as e:
-            self._diag(f"proc.wait() exception: {e}")
+            self._diag(f"proc.wait() exception: {e}", error=True)
         finally:
             self._diag(f"finally: process is proc={self.process is proc}, returncode={proc.returncode}")
             if self.process is proc:
@@ -2512,6 +2820,10 @@ class Desktop2StereoGUI:
             self._starting = False
             code = proc.returncode if proc else None
             if code and code != 0:
+                # The child's full output already streamed live to the
+                # console and to LOG_FILE via _pump_child_output, so no
+                # tail-on-exit is needed - just point the user at the file.
+                self._diag(f"child exited rc={code}; see {LOG_FILE} for details", error=True)
                 self.set_status(UI_TEXTS[self.language]["exited_with_code"].format(code))
             else:
                 self.set_status(UI_TEXTS[self.language]["Stopped"], key="Stopped")
@@ -2546,26 +2858,48 @@ class Desktop2StereoGUI:
             shutdown_event.set()
             saved_pid = None
             proc = None
+            import signal as _sig
             async with self._proc_lock:
                 proc = self.process
                 if proc and proc.returncode is None:
                     saved_pid = proc.pid
-                    proc.terminate()
+                    # Graceful first: ask main.py to shut down cleanly instead of
+                    # hard-killing it.  A hard kill (TerminateProcess) skips the
+                    # child's signal handler, so xrviewer.cleanup() never runs and
+                    # the OpenXR session + D3D11/GL GPU interop are never released
+                    # — killing that heavy OpenXR↔GPU integration mid-frame can
+                    # wedge the GPU/compute driver until reboot, which then breaks
+                    # the next launch of *any* mode.  CREATE_NEW_PROCESS_GROUP lets
+                    # us deliver CTRL_BREAK so the child tears down the GPU first.
+                    try:
+                        if OS_NAME == "Windows":
+                            proc.send_signal(_sig.CTRL_BREAK_EVENT)
+                        else:
+                            os.killpg(os.getpgid(saved_pid), _sig.SIGINT)
+                    except Exception:
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
                 self.process = None
 
             if saved_pid and proc:
+                # Give the child time to run its own cleanup and exit on its own.
+                exited_cleanly = False
                 try:
-                    await asyncio.wait_for(proc.wait(), timeout=5)
+                    await asyncio.wait_for(proc.wait(), timeout=8)
+                    exited_cleanly = True
                 except asyncio.TimeoutError:
+                    exited_cleanly = False
+                except Exception:
+                    exited_cleanly = True  # already gone
+                if not exited_cleanly:
+                    # Graceful shutdown didn't finish in time — hard-kill the whole
+                    # process tree as a fallback so nothing is left orphaned.
                     try:
                         proc.kill()
-                        await proc.wait()
                     except Exception:
                         pass
-                except Exception:
-                    pass
-                # Cleanup RTMP process tree
-                if self.run_mode_key == "RTMP Streamer":
                     try:
                         if OS_NAME == "Windows":
                             p = await asyncio.create_subprocess_exec(
@@ -2573,9 +2907,8 @@ class Desktop2StereoGUI:
                                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
                             await p.wait()
                         else:
-                            import signal
                             try:
-                                os.killpg(os.getpgid(saved_pid), signal.SIGTERM)
+                                os.killpg(os.getpgid(saved_pid), _sig.SIGKILL)
                             except Exception:
                                 pass
                     except Exception:

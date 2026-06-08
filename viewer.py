@@ -544,8 +544,16 @@ FRAGMENT_SHADER = """
             color = mix(color, filled, conf);
         }
 
-        // Subtle edge fade to hide artifacts
-        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * smoothstep(1.0, 0.985, shifted_uv);
+        // Screen-edge alpha clip: keep the out-of-bounds safety net (alpha→0
+        // if parallax somehow over-shoots into negative UV) but use a
+        // sub-pixel fade band so the user does not see a visible soft border
+        // between the desktop image and the screen edge. Previously this
+        // was a 1.5% UV-space fade (~36 mm on a 2.4 m wide screen, the
+        // visible "border gap"); now it's ~0.2 mm of AA at the extreme edge.
+        // Note: edge_falloff above already pins shifted_uv to flipped_uv at
+        // the perimeter, so this smoothstep is purely an AA / clip safety
+        // net — it does not need to be wide.
+        vec2 border = smoothstep(-0.001, 0.001, shifted_uv) * smoothstep(1.001, 0.999, shifted_uv);
         color.a = min(border.x, border.y);
         frag_color = color;
 

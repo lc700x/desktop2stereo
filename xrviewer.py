@@ -54,6 +54,396 @@ from PIL import Image
 
 EDGE_STRENGTH = 0.6 # snapping strength of cursor around screen edge
 
+# Cursor ownership tuning (keyboard vs. virtual screen) — consumed by _handle_cursor().
+# Exposed here so they're easy to tweak without hunting through the method.
+# Hysteresis bias (metres): how much closer the screen must be than the keyboard
+# before the screen is allowed to steal the cursor. Larger = the keyboard keeps
+# the cursor more aggressively when it sits just below the screen edge.
+KB_CURSOR_PRIORITY_BIAS = 0.060
+# Post-release grace (seconds): after the keyboard stops owning the cursor (typing
+# ends / ray leaves the keys), keep the screen cursor suppressed this long so
+# ownership doesn't snap to the screen while the user lifts off toward it.
+KB_CURSOR_RELEASE_GRACE = 0.12
+
+# ── Windows multi-touch injection (Pointer Input API) ────────────────────────
+# Each VR controller becomes a Windows touch contact, so trigger clicks, drags
+# (incl. window title-bar drag), and two-controller multi-touch gestures
+# (pinch/zoom, two-finger pan, press-and-hold → right-click) all route through
+# native Windows touch — matching the gestures documented at
+# https://support.microsoft.com/en-us/windows/touch-gestures-for-windows-a9d28305-4818-a5df-4e2b-e5590f850741
+#
+# Inlined (previously windows_touch.py) so the viewer is self-contained.
+# Falls back gracefully on non-Windows or when InitializeTouchInjection is
+# unavailable: ``_TOUCH_AVAILABLE`` stays False and the call sites use the
+# legacy mouse-event path.
+
+# Tuning knobs — feedback / contact area / pressure.
+_TOUCH_MAX_CONTACTS       = 10        # InitializeTouchInjection capacity (≥ 2 hands).
+_TOUCH_DEFAULT_PRESSURE   = 32000     # Matches Microsoft's canonical sample.
+_TOUCH_CONTACT_RADIUS_PX  = 4         # rcContact half-size in pixels.
+_TOUCH_FEEDBACK_DEFAULT   = 0x1       # System-drawn touch circles.
+_TOUCH_FEEDBACK_INDIRECT  = 0x2       # No circles (cleaner inside VR).
+_TOUCH_FEEDBACK_NONE      = 0x3       # No feedback at all.
+
+# POINTER_FLAGS we use.
+_POINTER_FLAG_NONE        = 0x00000000
+_POINTER_FLAG_INRANGE     = 0x00000002
+_POINTER_FLAG_INCONTACT   = 0x00000004
+_POINTER_FLAG_PRIMARY     = 0x00002000  # Reserved — OS assigns automatically.
+_POINTER_FLAG_DOWN        = 0x00010000
+_POINTER_FLAG_UPDATE      = 0x00020000
+_POINTER_FLAG_UP          = 0x00040000
+
+_PT_TOUCH                 = 0x2
+
+_TOUCH_MASK_CONTACTAREA   = 0x1
+_TOUCH_MASK_ORIENTATION   = 0x2
+_TOUCH_MASK_PRESSURE      = 0x4
+
+
+class _TI_POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _TI_RECT(ctypes.Structure):
+    _fields_ = [("left",  ctypes.c_long), ("top",    ctypes.c_long),
+                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+
+class _POINTER_INFO(ctypes.Structure):
+    _fields_ = [
+        ("pointerType",          ctypes.c_uint32),
+        ("pointerId",            ctypes.c_uint32),
+        ("frameId",              ctypes.c_uint32),
+        ("pointerFlags",         ctypes.c_int32),
+        ("sourceDevice",         ctypes.c_void_p),
+        ("hwndTarget",           ctypes.c_void_p),
+        ("ptPixelLocation",      _TI_POINT),
+        ("ptHimetricLocation",   _TI_POINT),
+        ("ptPixelLocationRaw",   _TI_POINT),
+        ("ptHimetricLocationRaw", _TI_POINT),
+        ("dwTime",               ctypes.c_ulong),
+        ("historyCount",         ctypes.c_uint32),
+        ("InputData",            ctypes.c_int32),
+        ("dwKeyStates",          ctypes.c_ulong),
+        ("PerformanceCount",     ctypes.c_uint64),
+        ("ButtonChangeType",     ctypes.c_int32),
+    ]
+
+
+class _POINTER_TOUCH_INFO(ctypes.Structure):
+    _fields_ = [
+        ("pointerInfo",  _POINTER_INFO),
+        ("touchFlags",   ctypes.c_int32),
+        ("touchMask",    ctypes.c_int32),
+        ("rcContact",    _TI_RECT),
+        ("rcContactRaw", _TI_RECT),
+        ("orientation",  ctypes.c_uint32),
+        ("pressure",     ctypes.c_uint32),
+    ]
+
+
+class _TouchContact:
+    """Per-contact bookkeeping (mutable, persists across frames).
+
+    Two coordinate pairs are tracked:
+
+    * ``x, y``         — last position the OS has seen for this contact
+      (the most recently *successful* DOWN/UPDATE).
+    * ``x_set, y_set`` — the position the caller wants for the next flush.
+
+    The split matters because ``InjectTouchInput`` rejects an UP whose
+    coordinates differ from the prior DOWN/UPDATE with
+    ``ERROR_INVALID_PARAMETER`` (87) — the OS will not interpret a
+    simultaneous "move + lift" as a single transition. ``_TouchInjector``
+    emits an UPDATE at ``x_set, y_set`` *before* the UP whenever the caller
+    repositions a contact in the same frame they release it.
+    """
+
+    __slots__ = ("id", "active", "x", "y", "x_set", "y_set", "_wanted")
+
+    def __init__(self, contact_id):
+        self.id = contact_id
+        self.active = False
+        self.x = 0          # OS-known position.
+        self.y = 0
+        self.x_set = 0      # Caller-requested position for the next flush.
+        self.y_set = 0
+        self._wanted = False
+
+
+class _TouchInjector:
+    """Per-contact multi-touch injector built on InjectTouchInput.
+
+    Usage each frame::
+
+        injector.set(contact_id, x, y, want_down=True_or_False)  # one per hand
+        injector.flush()                                          # one Win32 call
+    """
+
+    def __init__(self,
+                 max_contacts:  int = _TOUCH_MAX_CONTACTS,
+                 feedback_mode: int = _TOUCH_FEEDBACK_INDIRECT):
+        self.available    = False
+        self.max_contacts = max_contacts
+        self.feedback_mode = feedback_mode
+        self._contacts    = [_TouchContact(i) for i in range(max_contacts)]
+        self._inject      = None
+        self._inject_err_logged = False
+
+        if sys.platform != "win32":
+            return
+
+        try:
+            user32 = ctypes.windll.user32
+            # Mark process DPI-aware so injected pixel coordinates aren't
+            # rescaled — keeps controller-laser → touch landing exact on
+            # high-DPI displays. Safe to call repeatedly.
+            try:
+                user32.SetProcessDPIAware()
+            except Exception:
+                pass
+
+            init = user32.InitializeTouchInjection
+            init.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+            init.restype  = ctypes.c_int
+            ok = init(max_contacts, feedback_mode)
+            if not ok:
+                err = ctypes.windll.kernel32.GetLastError()
+                print(f"[TouchInjector] InitializeTouchInjection failed "
+                      f"(err={err}); falling back to mouse path")
+                return
+
+            inj = user32.InjectTouchInput
+            inj.argtypes = [ctypes.c_uint32, ctypes.POINTER(_POINTER_TOUCH_INFO)]
+            inj.restype  = ctypes.c_int
+            self._inject = inj
+            self.available = True
+            print(f"[TouchInjector] ready "
+                  f"(max_contacts={max_contacts}, feedback=0x{feedback_mode:x})")
+        except Exception as exc:  # pragma: no cover - environment-dependent
+            print(f"[TouchInjector] init failed: {exc}")
+
+    # -- Public per-frame API --------------------------------------------
+
+    def set(self, contact_id: int, x: int, y: int, want_down: bool):
+        """Queue desired state of a contact for the next ``flush()``.
+
+        Transitions are inferred automatically:
+
+        * ``want_down=True``  after inactive → DOWN
+        * ``want_down=True``  after active   → UPDATE
+        * ``want_down=False`` after active   → UP (preceded by an UPDATE
+          when the position differs from the OS-known one)
+        * ``want_down=False`` after inactive → no-op
+        """
+        if not (0 <= contact_id < self.max_contacts):
+            return
+        c = self._contacts[contact_id]
+        c.x_set = int(x)
+        c.y_set = int(y)
+        c._wanted = bool(want_down)
+
+    def flush(self):
+        """Emit queued transitions in one or more ``InjectTouchInput`` calls.
+
+        Empirically (Win10/11), ``InjectTouchInput`` has two strict rules
+        for multi-contact injection:
+
+        1. **Every call must contain every currently-active contact.** Once
+           a contact has had a DOWN injected, subsequent calls must list it
+           (typically as UPDATE) until its UP — otherwise the call is
+           rejected with ``ERROR_INVALID_PARAMETER`` (87).
+        2. **A UP must be emitted at the same coordinates as the prior
+           DOWN/UPDATE.** A simultaneous "move + lift" is rejected. We
+           split a moving-UP into an UPDATE-to-new-pos in one call and a
+           UP-at-that-pos in the next.
+
+        ``POINTER_FLAG_PRIMARY`` is *never* set: the OS assigns primary
+        status automatically and rejects calls that try to override it.
+
+        DOWN transitions for additional contacts (beyond one per call) are
+        staggered across subsequent calls, matching Microsoft's canonical
+        sample.
+        """
+        if not self.available:
+            # Even when disabled, keep the contact array consistent so a
+            # later re-enable starts from a sane state.
+            for c in self._contacts:
+                if not c._wanted:
+                    c.active = False
+            return
+
+        # Classify each contact's transition for THIS frame.
+        down_new = []   # inactive → wanted     → DOWN
+        upd      = []   # active   → still wanted → UPDATE
+        up_stat  = []   # active   → up, no move → UP directly
+        up_moved = []   # active   → up, moved   → UPDATE then UP
+        for c in self._contacts:
+            if c._wanted and not c.active:
+                down_new.append(c)
+            elif c._wanted and c.active:
+                upd.append(c)
+            elif (not c._wanted) and c.active:
+                if c.x_set == c.x and c.y_set == c.y:
+                    up_stat.append(c)
+                else:
+                    up_moved.append(c)
+
+        if not (down_new or upd or up_stat or up_moved):
+            return
+
+        # Phase A: one Win32 call containing every active contact, plus
+        # at-most one new DOWN.
+        first_down = down_new.pop(0) if down_new else None
+        batch = []
+        for c in upd:
+            batch.append((c, c.x_set, c.y_set,
+                          _POINTER_FLAG_UPDATE
+                          | _POINTER_FLAG_INRANGE
+                          | _POINTER_FLAG_INCONTACT))
+            c.x, c.y = c.x_set, c.y_set
+        for c in up_moved:
+            # Inject the move now; UP happens in Phase B at the same pos.
+            batch.append((c, c.x_set, c.y_set,
+                          _POINTER_FLAG_UPDATE
+                          | _POINTER_FLAG_INRANGE
+                          | _POINTER_FLAG_INCONTACT))
+            c.x, c.y = c.x_set, c.y_set
+        for c in up_stat:
+            batch.append((c, c.x, c.y, _POINTER_FLAG_UP))
+        if first_down is not None:
+            first_down.x, first_down.y = first_down.x_set, first_down.y_set
+            batch.append((first_down, first_down.x, first_down.y,
+                          _POINTER_FLAG_DOWN
+                          | _POINTER_FLAG_INRANGE
+                          | _POINTER_FLAG_INCONTACT))
+            first_down.active = True
+        if batch:
+            self._emit(batch)
+
+        for c in up_stat:
+            c.active = False
+
+        # Phase B: UP for contacts that moved this frame. All still-active
+        # contacts must be present (as UPDATE) per rule 1.
+        if up_moved and self.available:
+            batch = [(c, c.x, c.y, _POINTER_FLAG_UP) for c in up_moved]
+            for c in upd:
+                if c.active:
+                    batch.append((c, c.x, c.y,
+                                  _POINTER_FLAG_UPDATE
+                                  | _POINTER_FLAG_INRANGE
+                                  | _POINTER_FLAG_INCONTACT))
+            if first_down is not None and first_down.active:
+                batch.append((first_down, first_down.x, first_down.y,
+                              _POINTER_FLAG_UPDATE
+                              | _POINTER_FLAG_INRANGE
+                              | _POINTER_FLAG_INCONTACT))
+            self._emit(batch)
+            for c in up_moved:
+                c.active = False
+
+        # Phase C: remaining DOWNs, one per call, each piggy-backing every
+        # currently-active contact as UPDATE for consistency.
+        while down_new and self.available:
+            nxt = down_new.pop(0)
+            batch = []
+            for c in self._contacts:
+                if c.active and c is not nxt:
+                    batch.append((c, c.x, c.y,
+                                  _POINTER_FLAG_UPDATE
+                                  | _POINTER_FLAG_INRANGE
+                                  | _POINTER_FLAG_INCONTACT))
+            nxt.x, nxt.y = nxt.x_set, nxt.y_set
+            batch.append((nxt, nxt.x, nxt.y,
+                          _POINTER_FLAG_DOWN
+                          | _POINTER_FLAG_INRANGE
+                          | _POINTER_FLAG_INCONTACT))
+            nxt.active = True
+            self._emit(batch)
+
+    def _emit(self, batch):
+        """Build a ``POINTER_TOUCH_INFO[]`` and call ``InjectTouchInput``.
+
+        ``batch`` is a list of ``(contact, x, y, flags)`` tuples — the
+        coordinates are explicit so callers can emit a contact at a
+        position different from its tracked one (used for the synthetic
+        UPDATE-before-UP fix).
+        """
+        if not self.available or not batch:
+            return
+        arr = (_POINTER_TOUCH_INFO * len(batch))()
+        r = _TOUCH_CONTACT_RADIUS_PX
+        for i, (c, x, y, flags) in enumerate(batch):
+            ti = arr[i]
+            # ZeroMemory equivalent — matches the MS sample exactly.
+            ctypes.memset(ctypes.byref(ti), 0, ctypes.sizeof(ti))
+            ti.pointerInfo.pointerType        = _PT_TOUCH
+            ti.pointerInfo.pointerId          = ctypes.c_uint32(c.id).value
+            ti.pointerInfo.ptPixelLocation.x  = x
+            ti.pointerInfo.ptPixelLocation.y  = y
+            ti.pointerInfo.pointerFlags       = flags
+            ti.touchFlags = 0
+            ti.touchMask  = (_TOUCH_MASK_CONTACTAREA
+                             | _TOUCH_MASK_ORIENTATION
+                             | _TOUCH_MASK_PRESSURE)
+            ti.rcContact.left   = x - r
+            ti.rcContact.top    = y - r
+            ti.rcContact.right  = x + r
+            ti.rcContact.bottom = y + r
+            ti.orientation = 90                       # matches MS sample
+            ti.pressure    = _TOUCH_DEFAULT_PRESSURE
+
+        ok = self._inject(len(batch), arr)
+        if not ok:
+            err = ctypes.windll.kernel32.GetLastError()
+            if not self._inject_err_logged:
+                # Common error codes:
+                #   5    = ERROR_ACCESS_DENIED   (UAC integrity mismatch)
+                #   87   = ERROR_INVALID_PARAMETER (bad flags / state)
+                #   5005 = ERROR_TIMEOUT         (stale contact rejected)
+                print(f"[TouchInjector] InjectTouchInput failed "
+                      f"(err={err}); disabling — falling back to mouse path")
+                self._inject_err_logged = True
+            # Persistent failure: surrender so callers revert to the mouse
+            # path without leaking phantom contacts.
+            for c in self._contacts:
+                c.active = False
+            self.available = False
+
+    def cancel_all(self):
+        """Force UP on every active contact (shutdown / focus loss)."""
+        if not self.available:
+            return
+        for c in self._contacts:
+            c._wanted = False
+        self.flush()
+
+
+# Process-wide singleton — `InitializeTouchInjection` may only be called once.
+try:
+    _touch_injector = _TouchInjector()
+    _TOUCH_AVAILABLE = bool(_touch_injector.available)
+    _TOUCH_FEEDBACK_MODE = _touch_injector.feedback_mode
+except Exception as _touch_exc:  # pragma: no cover - environment-dependent
+    _touch_injector = None
+    _TOUCH_AVAILABLE = False
+    _TOUCH_FEEDBACK_MODE = 0
+    print(f"[OpenXRViewer] touch injector unavailable: {_touch_exc}")
+
+# Touch-side cursor tuning (used by _handle_cursor / _handle_triggers).
+# The controller pose is already smoothed upstream by `_get_smoothed_ray`,
+# so the touch path sends the raw laser-mapped pixel position directly to
+# the injector — adding a second EMA stage here only added latency and was
+# the root cause of the drag-lag / "fast-drag = small move" / cursor-hang
+# bugs.  No tuning constants are needed at this layer; if jitter becomes a
+# problem, prefer adjusting the pose-smoothing upstream.
+# Per-hand contact IDs used with the touch injector.
+_TOUCH_CONTACT_ID_LEFT  = 0
+_TOUCH_CONTACT_ID_RIGHT = 1
+
+
 def _read_glb_chunks(data):
     magic = struct.unpack_from('<I', data, 0)[0]
     if magic != 0x46546C67:
@@ -1127,6 +1517,23 @@ uniform vec2 u_tex_scale;        // KHR_texture_transform scale
 uniform vec3 u_light_dir;        // KHR_lights_punctual directional light
 uniform vec3 u_light_intensity;  // light_color * intensity for directional light
 
+// --- Cinema "bias light" rectangular area light ----------------------------
+// The virtual screen acts as an emissive rectangular source (analogous to a
+// real TV's ambient bias light, e.g. Philips Hue Play behind a display).  We
+// follow the Meta Horizon lighting guidelines:
+//   * Emissive material + Area light (cf. Lighting Types table)
+//   * Lambertian diffuse response so transitions are GRADUAL (a key Meta
+//     guideline for VR comfort — no harsh brightness flicker)
+//   * Forward 180° hemisphere only (light cannot wrap behind the screen)
+//   * Single fragment-shader light, no extra texture samples — preserves the
+//     ≥ 90 FPS target Meta sets for VR.
+uniform int   u_screen_light_enabled;       // 0 = skip, 1 = evaluate
+uniform vec3  u_screen_light_pos;           // world-space rectangle centre
+uniform vec3  u_screen_light_normal;        // world-space forward (toward viewer)
+uniform vec2  u_screen_light_half_size;     // half-width / half-height (metres)
+uniform vec3  u_screen_light_color;         // sampled emissive colour (frame avg)
+uniform float u_screen_light_intensity;     // master multiplier (e.g. 1.5)
+
 const float PI = 3.14159265359;
 
 // Fresnel-Schlick
@@ -1238,6 +1645,70 @@ void main() {
         Lo += (d_d + s_d) * u_light_intensity * NdotL_d;
     }
 
+    // --- Cinema bias light (rectangular area light = the virtual screen) ---
+    // Closed-form-ish approximation: use the rectangle centre as a single
+    // representative point (Frostbite-style "most representative point" is
+    // overkill here — env surfaces are far enough that a point approximation
+    // already matches a true rect to within a few %, while being ~10× cheaper
+    // than the integral).  Meta's guideline is "use real-time lights sparingly"
+    // and "minimize calculations" — so we do exactly one area sample.
+    if (u_screen_light_enabled == 1) {
+        vec3  S_to_P  = v_position - u_screen_light_pos;       // from screen to frag
+        float d       = length(S_to_P);
+        vec3  L_s     = S_to_P / max(d, 0.001);                // direction screen to frag
+        // 1) FORWARD-HEMISPHERE TEST (screen front side only)
+        //    A real screen emits light only out of its front face, so we
+        //    require the fragment to lie in the screen's forward half-space
+        //    (dot(normal, screen->frag) > 0).  Use a smoothstep instead of
+        //    a hard step so the grazing-angle transition is gradual --
+        //    per Meta's lighting guideline, "avoid sudden changes in
+        //    brightness".  The lower bound is slightly negative so the
+        //    Dark Room's side walls (which wrap slightly behind the screen
+        //    plane) still pick up a faint contribution at grazing angles,
+        //    matching the user-perceived spread of a real bias light.
+        float front   = smoothstep(-0.1, 0.4, dot(u_screen_light_normal, L_s));
+        if (front > 0.0) {
+            // 2) LAMBERTIAN cosine on the receiving surface
+            float NdotL_s = max(dot(N, -L_s), 0.0);
+            if (NdotL_s > 0.0) {
+                // 3) DISTANCE FALL-OFF with smooth windowing.  Pure 1/d² is
+                //    physically correct but produces harsh hotspots near the
+                //    screen — undesirable per Meta's "avoid harsh transitions"
+                //    rule.  We use the standard "windowed inverse square"
+                //    f(d) = (1 / (d² + r²))   where r is the falloff knee.
+                //    A LARGER r pushes the knee outward, so the light keeps
+                //    its strength further into the room before rolling off
+                //    (attn = 0.5 at d = r, 0.2 at d ≈ 2r, 0.1 at d ≈ 3r).
+                //    Tuned to ~2× the half-diagonal so a 2.4 m screen still
+                //    contributes meaningfully out to ~5 m, matching the
+                //    user-perceived "bias light" spread of a real OLED.
+                float half_diag = length(u_screen_light_half_size);
+                float r0        = max(half_diag * 2.0, 0.50);
+                float attn      = (r0 * r0) / (d * d + r0 * r0);
+                // 4) AREA scale.  A rectangle of area A subtends an apparent
+                //    solid angle that grows with A — approximate this as
+                //    A / (PI * d²) for the diffuse term (small-angle limit) and
+                //    clamp the near-field to avoid singularities (Meta:
+                //    smooth/comfortable response).  The near-field clamp uses
+                //    half_diag² (not r0²) so the close-up brightness is not
+                //    suppressed by the wider falloff knee chosen above.
+                float area      = 4.0 * u_screen_light_half_size.x
+                                       * u_screen_light_half_size.y;
+                float r_near    = max(half_diag * 0.5, 0.10);
+                float area_term = area / (PI * max(d * d, r_near * r_near));
+                // 5) Final radiance contribution.  Diffuse-only on the receiver
+                //    (kD * baseColor / PI is the Lambertian BRDF already
+                //    computed above; we reuse it for spectral neutrality with
+                //    the head-lamp path), then modulated by the screen colour
+                //    and a user-tunable intensity gain.
+                vec3  E_s = u_screen_light_color
+                              * u_screen_light_intensity
+                              * front * NdotL_s * attn * area_term;
+                Lo += diffuse * E_s * PI;   // PI cancels the 1/PI in `diffuse`
+            }
+        }
+    }
+
     // Ambient
     float ao = 1.0;
     if (u_use_occlusion_tex == 1) {
@@ -1272,14 +1743,30 @@ uniform float u_glow_width;   // glow decay distance in UV space
 uniform float u_glow_intensity;
 void main() {
     vec2 d = abs(uv - 0.5) - u_screen_half;
+    // Exterior distance to the screen rectangle (0 inside).
     float dist = length(max(d, vec2(0.0)));
-    if (dist > 0.001) {
-        float glow = exp(-dist / max(u_glow_width, 0.001));
-        glow *= u_glow_intensity;
-        frag_color = vec4(u_glow_color * glow, glow);
-    } else {
+    if (dist <= 0.001) {
         discard;
     }
+    // Exponential falloff is mathematically C^infinity smooth, but the OLD
+    // shader combined it with SRC_ALPHA blending which effectively SQUARED
+    // the glow contribution (color * alpha * alpha + dst * (1-alpha)).  That
+    // mismatch between the sharp bright shoulder and the linear tail, plus
+    // 8-bit colour quantization in the SRGB swapchain, produced the visible
+    // concentric "rings".  Two fixes:
+    //   1) Output premultiplied alpha and pair with blend ONE,
+    //      ONE_MINUS_SRC_ALPHA in the host code -> blend is LINEAR in `glow`.
+    //   2) Add interleaved-gradient-noise dither (Jorge Jimenez, Activision)
+    //      of +/- 0.5/255 in alpha space.  Cheapest per-pixel dither that
+    //      actually breaks 8-bit banding without visible noise.
+    float w  = max(u_glow_width, 0.001);
+    float glow = exp(-dist / w) * u_glow_intensity;
+    float dither = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
+                                                vec2(0.06711056, 0.00583715))));
+    glow += (dither - 0.5) / 255.0;
+    glow  = clamp(glow, 0.0, 1.0);
+    // Premultiplied alpha output.
+    frag_color = vec4(u_glow_color * glow, glow);
 }
 """
 
@@ -1628,11 +2115,19 @@ class OpenXRViewer:
         controller_model='pico',
         capture_mode='Monitor',
         monitor_index=1,
+        environment_name=None,
         **kwargs,
     ):
         self._controller_model = controller_model
         self._capture_mode = capture_mode
         self._input_monitor_index = monitor_index
+        # Initial environment selection passed in from the launcher (settings.yaml
+        # "Active Environment" field).  May be:
+        #   None / "" / "black"  -> opaque black backdrop, no env model
+        #   "passthrough"        -> VDXR green backdrop, no env model
+        #   "<folder name>"      -> subfolder under environment/ containing
+        #                            environment.glb (and optional profile.json)
+        self._initial_environment = environment_name
         self.ipd_uv = ipd
         self.depth_strength = 0.1 # multiplied by depth_ratio; effective = depth_strength * depth_ratio
         self.depth_ratio = depth_ratio
@@ -1713,15 +2208,35 @@ class OpenXRViewer:
         self.screen_roll     = 0.0    # rotation around Z axis (screen normal)
         self._corner_radius = 0.03    # normalized [0, 0.5]
 
-        # Environment model (glTF 3D scene) — loaded from environment/environment.glb
-        self._env_model_prims = []        # list of {'vao', 'vbo', 'ibo', 'tex_key', 'tri_count'}
-        self._scene_lights = []            # KHR_lights_punctual lights
-        self._env_model_tex_cache = {}    # cache_key -> moderngl Texture
-        self._env_model_visible = False   # hidden by default, toggle with N key
+        # Environment model (glTF 3D scene) — loaded dynamically from
+        # environment/<Name>/environment.glb, just like controllers under
+        # controllers/<Brand>/.  Switching environments is a constant-time
+        # swap of cached GPU resources (no re-upload).
+        self._env_model_prims = []        # active list of {'vao', 'vbo', 'ibo', 'tex_key', 'tri_count'}
+        self._scene_lights = []           # KHR_lights_punctual lights from active env
+        self._env_model_tex_cache = {}    # cache_key -> moderngl Texture (active env)
+        self._env_model_visible = False   # hidden by default; left-stick short press cycles through colours then envs
         self._env_model_pos = [0.0, -1.0, -3.0]   # world-space position (x, y, z)
         self._env_model_rot = [0.0, 0.0, 0.0]     # Euler rotation (yaw, pitch, roll) in radians
         self._env_model_scale = [1.0, 1.0, 1.0]   # scale factor (x, y, z)
-        self._env_model_init_done = False  # lazy init: tried loading gltf once
+        self._env_model_init_done = False  # lazy init: scanned environment/ once
+
+        # Multi-environment registry — populated by _init_all_environments.
+        # Mirrors the controller-brand machinery in _init_all_controller_models.
+        self._environments_root   = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'environment')
+        self._available_environments = []   # sorted list of env folder names
+        self._environment_cache   = {}      # name -> {'prims': [...], 'tex_cache': {...}, 'scene_lights': [...]}
+        self._active_environment  = None    # current env folder name, or None when colour-only
+        self._env_switch_osd_t    = 0.0     # perf_counter stamp for env-switch OSD (future use)
+
+        # Built-in procedural "Dark Room" — always available, never in the
+        # cycle.  Auto-rendered behind the screen when no .glb env is loaded
+        # AND the backdrop is "Black" (idx 0).  Gives the cinema bias light
+        # real surfaces to bounce off, turning a flat black backdrop into an
+        # immersive theater per the user's "rectangular dark room with walls
+        # and ceilings" request.
+        self._dark_room_prims = []         # populated by _init_dark_room() at GL init time
 
         # Screen glow effect (cinema light)
         self._glow_color = (0.3, 0.6, 1.0)        # light blue, dynamically updated
@@ -1730,6 +2245,12 @@ class OpenXRViewer:
         self._glow_ref_screen = 2.4               # reference screen long edge (meters)
         self._glow_target_color = (0.3, 0.6, 1.0)  # latest sampled frame average
         self._glow_color_counter = 0              # throttle: sample every N frames
+        # Cinema bias-light intensity multiplier applied to the env shader's
+        # rectangular area-light contribution.  ~1.5 gives a visible but not
+        # overpowering wash on light walls; ~0.0 disables the effect entirely.
+        # Follows Meta Horizon "avoid overwhelming users with too many effects"
+        # guidance — kept subtle by default.
+        self._screen_light_intensity = 1.5
 
         self._yaw_offset     = 0.0    # manual yaw offset (relative to face-head baseline)
         self._pitch_offset   = 0.0    # manual pitch offset
@@ -1780,7 +2301,7 @@ class OpenXRViewer:
         self._act_y_btn           = None   # left  Y — reset screen position/size/rotation
         self._act_left_trigger       = None   # left trigger (float) — left mouse click
         self._act_right_trigger      = None   # right trigger (float) — right mouse click / hold
-        self._act_left_stick_click   = None   # left thumbstick click — cycle background color
+        self._act_left_stick_click   = None   # left thumbstick click — cycle background (colours + environment)
         self._act_right_stick_click  = None   # right thumbstick click — toggle curved screen
 
         # Menu button debounce + FPS overlay toggle + long-press reset
@@ -1834,7 +2355,49 @@ class OpenXRViewer:
         # doesn't jitter or skip pixels at long laser distances. Reset when the active
         # controller changes so we don't drag the cursor across the screen on swap.
         self._cursor_smooth_uv    = None
+        # Post-release grace: after the keyboard stops owning the cursor (typing
+        # ends / ray leaves the keys), briefly keep the screen cursor suppressed so
+        # ownership doesn't snap to the screen while the user lifts off toward it.
+        self._KB_RELEASE_GRACE    = KB_CURSOR_RELEASE_GRACE  # seconds of keyboard-ownership hold after release
+        self._kb_cursor_owned_t_l = 0.0    # perf_counter stamp: last frame KB owned cursor (left)
+        self._kb_cursor_owned_t_r = 0.0    # perf_counter stamp: last frame KB owned cursor (right)
         self._left_btn_down       = False # left mouse button held via left trigger
+
+        # Per-hand desktop pixel positions for the multi-touch injector — refreshed
+        # each frame by _handle_cursor and consumed by _handle_triggers. ``valid``
+        # is True only when the hand currently owns a usable screen target (laser
+        # on screen, not on keyboard, not on overlay).
+        self._touch_px_l       = (0, 0)
+        self._touch_px_r       = (0, 0)
+        self._touch_valid_l    = False
+        self._touch_valid_r    = False
+        # EMA-smoothed positions used while a touch contact is held — smooths out
+        # controller jitter without adding the latency of full position smoothing.
+        self._touch_smooth_l   = None
+        self._touch_smooth_r   = None
+        # Per-hand contact state ('idle' | 'down') for edge detection. The lower
+        # level _TouchInjector tracks DOWN/UPDATE/UP transitions; we only
+        # need to know when to flip the request.
+        self._touch_state_l    = 'idle'
+        self._touch_state_r    = 'idle'
+        # Prior-frame trigger values per hand — used to enforce a *true* rising
+        # edge (release-then-press) for the touch DOWN transition. Without this,
+        # holding the trigger while the laser slides off the virtual keyboard
+        # onto the screen — or while the keyboard is toggled off mid-press —
+        # would synthesise a phantom click at the laser landing point.
+        self._touch_trig_prev_l = 0.0
+        self._touch_trig_prev_r = 0.0
+        # Cursor ownership — "latest click / tap wins".  When BOTH lasers are on
+        # the virtual screen, _handle_cursor hands the cursor to whichever hand
+        # most recently pulled its trigger.  We stamp the perf_counter time of
+        # each on-screen trigger press per hand and compare the two stamps; the
+        # newer one owns the cursor.  `_cursor_trig_prev_*` holds the prior
+        # frame's trigger value so we can detect a true rising edge (a fresh
+        # click) rather than a held trigger.
+        self._cursor_click_ts_l  = 0.0
+        self._cursor_click_ts_r  = 0.0
+        self._cursor_trig_prev_l = 0.0
+        self._cursor_trig_prev_r = 0.0
 
         # Target monitor for cursor mapping (multi-monitor support)
         self._target_mon_rect = None  # cached (left, top, width, height) in virtual-desktop pixels
@@ -2031,7 +2594,9 @@ class OpenXRViewer:
         self._curved_verts_params = None        # curved screen VBO cache dirty flag
         self._curved_border_verts_params = None # border VBO cache dirty flag
 
-        # Background color cycling (left thumbstick click)
+        # Background color cycling (left thumbstick click). The cycle steps
+        # through every _BG_COLORS entry and then one extra slot that shows the
+        # 3D environment model (see _cycle_background).
         self._bg_color_idx    = 0       # index into _BG_COLORS
 
         # Cached XrPath handles — populated by _init_controller_actions to avoid
@@ -2432,6 +2997,15 @@ class OpenXRViewer:
         self._env_prog['u_occlusion_tex'].value = 5
         self._env_prog['u_use_occlusion_tex'].value = 0
         self._env_prog['u_occlusion_strength'].value = 1.0
+        # Cinema bias-light defaults: disabled until _render_env_model writes
+        # per-frame values.  Safe defaults keep the shader silent if the
+        # _render_env_model path forgets to update them on a given frame.
+        self._env_prog['u_screen_light_enabled'].value     = 0
+        self._env_prog['u_screen_light_pos'].value         = (0.0, 0.0, -2.0)
+        self._env_prog['u_screen_light_normal'].value      = (0.0, 0.0, 1.0)
+        self._env_prog['u_screen_light_half_size'].value   = (1.2, 0.675)
+        self._env_prog['u_screen_light_color'].value       = (0.3, 0.6, 1.0)
+        self._env_prog['u_screen_light_intensity'].value   = 2.0
 
         self._ctrl_tex_cache = {}
         self._ctrl_prims_l = []
@@ -2439,25 +3013,47 @@ class OpenXRViewer:
         self._init_all_controller_models()
         # Environment model loaded lazily after OpenXR session starts
 
-    def _load_env_model(self, path):
-        """Load a glTF environment model from *path*.
+    def _load_env_model(self, path, target=None):
+        """Load a glTF environment model from *path* into ``target`` dict.
 
-        Populates ``self._env_model_prims`` and ``self._env_model_tex_cache``.
-        Textures use LINEAR_MIPMAP_LINEAR + mipmaps + 16x anisotropy.
-        If the file is corrupt or resources cannot be allocated, this method
-        fails silently (prints a warning) and leaves the primitive list empty.
+        ``target`` schema: ``{'prims': list, 'tex_cache': dict, 'scene_lights': list}``.
+        If ``target`` is None, this falls back to populating the legacy active
+        slots (``self._env_model_prims`` / ``self._env_model_tex_cache``) for
+        callers that haven't been migrated to the cache API.
+
+        Textures use LINEAR_MIPMAP_LINEAR + mipmaps + 16x anisotropy.  Each
+        cache uses its own texture-key prefix so loading multiple environments
+        never collides.  If the file is corrupt or resources cannot be
+        allocated, this method fails silently (prints a warning) and leaves
+        the primitive list empty.
         """
+        # Backwards-compat: write into the legacy active slots when no target dict given.
+        legacy = target is None
+        if legacy:
+            target = {
+                'prims': self._env_model_prims,
+                'tex_cache': self._env_model_tex_cache,
+                'scene_lights': self._scene_lights,
+            }
         prims_data = []
         textures = []
+        env_lights = []
         try:
             prims_data, textures, env_lights = load_glb_model(path)
             if env_lights:
-                self._scene_lights = env_lights
+                target['scene_lights'] = list(env_lights)
+                if legacy:
+                    self._scene_lights = target['scene_lights']
         except Exception as exc:
             print(f"[OpenXRViewer] Failed to load environment model {path}: {exc}")
             return
 
-        _prefix = "env"
+        # Per-environment texture-key prefix derived from the parent folder
+        # name (e.g. "env:Monitor:0").  This keeps caches disjoint across
+        # environments so swapping in/out is just a dict reference swap with
+        # zero risk of one env reading the other's textures.
+        env_name = os.path.basename(os.path.dirname(os.path.abspath(path))) or 'env'
+        _prefix = f"env:{env_name}"
         try:
             # Upload textures
             for tid, tex_arr in enumerate(textures):
@@ -2468,7 +3064,7 @@ class OpenXRViewer:
                     mtex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
                     mtex.build_mipmaps()
                     mtex.anisotropy = 16.0
-                    self._env_model_tex_cache[cache_key] = mtex
+                    target['tex_cache'][cache_key] = mtex
 
             # Create VAOs (bound to _env_prog, no gl_FrontFacing discard)
             for pd in prims_data:
@@ -2481,7 +3077,7 @@ class OpenXRViewer:
                      (tan_vbo, '4f', 'in_tangent')],
                     ibo,
                 )
-                self._env_model_prims.append({
+                target['prims'].append({
                     'vao': vao, 'vbo': vbo, 'ibo': ibo,
                     'tex_key': f"{_prefix}:{pd['tex_id']}" if pd['tex_id'] >= 0 else None,
                     'tri_count': len(pd['indices']) // 3,
@@ -2501,18 +3097,30 @@ class OpenXRViewer:
                     'double_sided': pd.get('double_sided', False),
                     'tex_offset': pd.get('tex_offset', np.array([0.0, 0.0], dtype=np.float32)),
                     'tex_scale': pd.get('tex_scale', np.array([1.0, 1.0], dtype=np.float32)),
+                    '_tex_prefix': _prefix,   # used by the render loop to resolve normal/occlusion keys
                 })
         except Exception as exc:
             print(f"[OpenXRViewer] Failed to create environment model resources: {exc}")
             # Clean up partial resources
-            for v in self._env_model_tex_cache.values():
-                v.release()
-            self._env_model_tex_cache = {}
-            self._env_model_prims = []
+            for v in target['tex_cache'].values():
+                try:
+                    v.release()
+                except Exception:
+                    pass
+            target['tex_cache'].clear()
+            target['prims'].clear()
 
 
-    def _generate_default_room(self):
-        """Generate a simple room (floor, 4 walls, ceiling) procedurally."""
+    def _generate_default_room(self, target_list=None):
+        """Generate a simple room (floor, 4 walls, ceiling) procedurally.
+
+        ``target_list`` is the list that receives the new prim dicts.  When
+        omitted, defaults to the legacy ``self._env_model_prims`` slot so
+        old call sites keep working unchanged.  Pass ``self._dark_room_prims``
+        to build the always-on dark room (see ``_init_dark_room``).
+        """
+        if target_list is None:
+            target_list = self._env_model_prims
         W, H, D = 4.0, 3.0, 4.0
         import numpy as np
         faces = []
@@ -2538,7 +3146,7 @@ class OpenXRViewer:
                  (tan_vbo, '4f', 'in_tangent')],
                 ibo,
             )
-            self._env_model_prims.append({
+            target_list.append({
                 'vao': vao, 'vbo': vbo, 'ibo': ibo,
                 'tex_key': None, 'tri_count': 2, 'color': color,
                 'base_color': np.array(color, dtype=np.float32),
@@ -2558,20 +3166,388 @@ class OpenXRViewer:
                 'tex_offset': np.array([0.0, 0.0], dtype=np.float32),
                 'tex_scale': np.array([1.0, 1.0], dtype=np.float32),
             })
-        self._env_model_visible = True
-        print(f'[OpenXRViewer] Default room generated ({len(faces)} faces)')
+        # When generating into the legacy active slots, flag the env model
+        # visible so the fallback path (no env folders found) shows the room.
+        # When generating into a dedicated list (e.g. dark room), leave the
+        # visibility flag alone — the caller decides when to render.
+        if target_list is self._env_model_prims:
+            self._env_model_visible = True
+            print(f'[OpenXRViewer] Default room generated ({len(faces)} faces)')
+        else:
+            print(f'[OpenXRViewer] Dark-room geometry built ({len(faces)} faces)')
+
+    def _init_dark_room(self):
+        """Build the always-available procedural dark room.
+
+        Triggered once at GL init time.  The geometry sits in a dedicated
+        list (``self._dark_room_prims``) so it never collides with .glb
+        environments swapped via the cycle.  It is rendered automatically
+        by ``_render_dark_room`` whenever no .glb env is loaded AND the
+        backdrop is "Black" (idx 0) — giving the cinema bias light real
+        surfaces to bounce off and turning a flat backdrop into a small
+        theater per the user's "rectangular dark room with walls and
+        ceilings" request.
+        """
+        self._dark_room_prims = []
+        try:
+            self._generate_default_room(self._dark_room_prims)
+        except Exception as exc:
+            print(f"[OpenXRViewer] _init_dark_room failed: {exc}")
+            self._dark_room_prims = []
 
     def _init_env_model(self):
-        """Try loading environment.glb, fall back to built-in room."""
-        env_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'environment')
-        path = os.path.join(env_dir, 'environment.glb')
-        if os.path.exists(path):
-            self._load_env_model(path)
-            if self._env_model_prims:
-                self._env_model_visible = True
-                print(f"[OpenXRViewer] Environment model loaded ({len(self._env_model_prims)} primitives)")
+        """Scan environment/ subfolders, preload every env.glb into a cache,
+        and activate the initial selection from ``self._initial_environment``.
+
+        Mirrors ``_init_all_controller_models``: every environment is loaded
+        once at startup so switching at runtime is a constant-time pointer
+        swap (no glTF parse, no GPU re-upload).  Folders without a usable
+        ``environment.glb`` are skipped.  If nothing loads, we fall back to
+        the built-in procedural room so the user always has *some* env to
+        toggle to.
+
+        Initial selection rules:
+            None / "" / "default" / "black"  -> colour-only, env hidden
+            "passthrough"                    -> colour-only at VDXR-green slot
+            "dark room"                      -> built-in procedural dark room
+            "<folder>"                       -> activate that env (if loaded successfully)
+        """
+        # Discover candidate folders
+        candidates = []
+        if os.path.isdir(self._environments_root):
+            candidates = sorted(
+                d for d in os.listdir(self._environments_root)
+                if os.path.isdir(os.path.join(self._environments_root, d))
+                and os.path.isfile(os.path.join(self._environments_root, d, 'environment.glb'))
+            )
+
+        # Preload each environment into its own cache entry
+        for name in candidates:
+            entry = {'prims': [], 'tex_cache': {}, 'scene_lights': []}
+            glb_path = os.path.join(self._environments_root, name, 'environment.glb')
+            self._load_env_model(glb_path, target=entry)
+            if entry['prims']:
+                self._environment_cache[name] = entry
+                self._available_environments.append(name)
+                print(f"[OpenXRViewer] Environment '{name}' loaded ({len(entry['prims'])} primitives)")
+            else:
+                print(f"[OpenXRViewer] Environment '{name}' produced no primitives — skipped")
+
+        # Always register the built-in "Dark Room" so it is selectable from
+        # the GUI dropdown / controller cycle even when external env folders
+        # exist.  Backed by the always-built ``self._dark_room_prims`` (no
+        # geometry duplication — we share refs).  No textures, no lights.
+        if self._dark_room_prims and 'Dark Room' not in self._environment_cache:
+            self._environment_cache['Dark Room'] = {
+                'prims': list(self._dark_room_prims),
+                'tex_cache': {},
+                'scene_lights': [],
+            }
+            self._available_environments.append('Dark Room')
+            print(f"[OpenXRViewer] Built-in 'Dark Room' registered "
+                  f"({len(self._dark_room_prims)} primitives)")
+
+        # Apply the initial selection from the launcher / settings.yaml
+        sel = (self._initial_environment or 'default').strip().lower()
+        if sel == 'passthrough':
+            self._bg_color_idx = 5      # VDXR green
+            # apply_profile=True so the Passthrough slot's last pose is
+            # restored on startup (matches every other slot's behaviour).
+            self._switch_environment(None, save_outgoing=False, apply_profile=True)
+        elif sel in ('', 'default', 'black'):
+            # "Black" kept as a backward-compat alias for users with an
+            # older settings.yaml; new GUI labels this option "Default".
+            self._bg_color_idx = 0      # opaque black backdrop
+            # apply_profile=True so the Default slot's last pose is
+            # restored on startup, mirroring folder-env behaviour.
+            self._switch_environment(None, save_outgoing=False, apply_profile=True)
+        else:
+            # Case-insensitive match on env names so the GUI dropdown's
+            # display string ("Monitor" / "Dark Room") matches the cache
+            # entry regardless of case.
+            match = next((n for n in self._available_environments
+                          if n.lower() == sel), None)
+            if match is None:
+                print(f"[OpenXRViewer] Initial environment '{self._initial_environment}' "
+                      f"not found — defaulting to Default backdrop")
+                self._bg_color_idx = 0
+                self._switch_environment(None, save_outgoing=False, apply_profile=True)
+            else:
+                self._bg_color_idx = 0  # black backdrop behind env model
+                self._switch_environment(match, save_outgoing=False, apply_profile=True)
+
+    # ------------------------------------------------------------------
+    # Per-environment profile.json (screen 6-DOF + size persistence)
+    # ------------------------------------------------------------------
+    def _env_profile_path(self, name):
+        """Absolute path to the profile JSON for an environment.
+
+        Folder-backed envs (e.g. ``Bedroom``) use
+        ``environment/<name>/profile.json``.  The three built-in slots
+        (``Default``, ``Passthrough``, ``Dark Room``) have no folder, so
+        their per-slot pose lives in a sibling file
+        ``environment/.builtin_<slug>.json``.  The leading dot keeps these
+        files out of the folder-scan in ``_init_env_model`` (it only walks
+        directories), so they cannot accidentally appear as cycle entries.
+        """
+        builtin_slugs = {
+            'Default':     '.builtin_default.json',
+            'Passthrough': '.builtin_passthrough.json',
+            'Dark Room':   '.builtin_dark_room.json',
+        }
+        if name in builtin_slugs:
+            return os.path.join(self._environments_root, builtin_slugs[name])
+        return os.path.join(self._environments_root, name, 'profile.json')
+
+    def _apply_environment_profile(self, name):
+        """Restore screen 6-DOF + size from environment/<name>/profile.json.
+
+        Silently no-ops if the file is missing or malformed — the user just
+        gets the current screen layout, which is the safe default.  Only the
+        fields actually present are applied (partial profiles are OK).
+        """
+        path = self._env_profile_path(name)
+        if not os.path.isfile(path):
+            return
+        try:
+            import json as _json
+            with open(path, 'r', encoding='utf-8') as f:
+                prof = _json.load(f) or {}
+        except Exception as exc:
+            print(f"[OpenXRViewer] Failed to read {path}: {exc}")
+            return
+        screen = prof.get('screen') or {}
+        # Apply each field defensively — missing or wrong-typed values are
+        # tolerated so a hand-edited profile.json can never crash the loop.
+        def _f(key, attr, lo=None, hi=None):
+            v = screen.get(key)
+            if v is None:
                 return
-        self._generate_default_room()
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                return
+            if lo is not None: fv = max(lo, fv)
+            if hi is not None: fv = min(hi, fv)
+            setattr(self, attr, fv)
+        _f('width',    'screen_width',    lo=0.10)
+        _f('distance', 'screen_distance', lo=0.30)
+        _f('pan_x',    'screen_pan_x')
+        _f('pan_y',    'screen_pan_y')
+        _f('yaw',      'screen_yaw')
+        _f('pitch',    'screen_pitch')
+        _f('roll',     'screen_roll')
+        if 'ref_size' in screen:
+            try:
+                self._screen_ref_size = float(screen['ref_size'])
+            except (TypeError, ValueError):
+                pass
+        if 'curved' in screen:
+            self._screen_curved = bool(screen['curved'])
+        # Force height recompute from frame aspect on next frame.
+        self.screen_height = None
+
+    def _save_environment_profile(self, name):
+        """Snapshot the live screen 6-DOF + size into environment/<name>/profile.json.
+
+        Writes a fresh JSON file (creating the folder if needed) so the user's
+        layout is restored next time they switch back to this environment.
+        Unrelated keys already in the file are preserved.
+        """
+        if not name:
+            return
+        path = self._env_profile_path(name)
+        try:
+            import json as _json
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            prof = {}
+            if os.path.isfile(path):
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        prof = _json.load(f) or {}
+                except Exception:
+                    prof = {}
+            prof['screen'] = {
+                'width':    float(self.screen_width),
+                'distance': float(self.screen_distance),
+                'pan_x':    float(self.screen_pan_x),
+                'pan_y':    float(self.screen_pan_y),
+                'yaw':      float(self.screen_yaw),
+                'pitch':    float(self.screen_pitch),
+                'roll':     float(self.screen_roll),
+                'ref_size': float(getattr(self, '_screen_ref_size', self.screen_width)),
+                'curved':   bool(self._screen_curved),
+            }
+            with open(path, 'w', encoding='utf-8') as f:
+                _json.dump(prof, f, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            print(f"[OpenXRViewer] Failed to write {path}: {exc}")
+
+    def _current_profile_slot_name(self):
+        """Return the profile slot name for the LIVE backdrop selection.
+
+        Bridges the runtime state (``_active_environment`` for folder envs,
+        ``_bg_color_idx`` for built-in colour slots) to a single canonical
+        key that ``_env_profile_path`` understands.  Returns one of:
+
+            <folder name>   — when a glTF env is active
+            'Passthrough'   — when the VDXR green slot is active (idx 5)
+            'Default'       — for every other plain-colour slot (idx 0-4)
+
+        ``Dark Room`` is a folder-style env (registered in the cache), so it
+        is covered by the ``_active_environment`` branch automatically.
+        """
+        if self._env_model_visible and self._active_environment:
+            return self._active_environment
+        if self._bg_color_idx == 5:
+            return 'Passthrough'
+        return 'Default'
+
+    def _persist_current_pose(self):
+        """Snapshot the live screen 6-DOF into the active slot's profile.
+
+        Single source of truth used by both runtime env switches AND the
+        ``cleanup()`` path so the user's last layout survives a GUI Stop /
+        Restart cycle.  Silently no-ops if the slot has no name (should
+        never happen in practice, but keeps the method total).
+        """
+        slot = self._current_profile_slot_name()
+        if slot:
+            self._save_environment_profile(slot)
+
+    # ------------------------------------------------------------------
+    # Environment activation
+    # ------------------------------------------------------------------
+    def _switch_environment(self, name, *, save_outgoing=True, apply_profile=True):
+        """Swap the active environment to ``name`` (or None for colour-only).
+
+        ``save_outgoing``  — when True, snapshot the current screen 6-DOF
+        into the OUTGOING environment's profile.json before swapping.  This
+        is how each env "remembers" your last screen layout.
+        ``apply_profile`` — when True, load the incoming environment's
+        profile.json and apply its screen 6-DOF.
+
+        Both flags default True for runtime switches; the initial call from
+        ``_init_env_model`` sets them False because there is no outgoing
+        environment to save and the live screen state is the user's
+        intentional default.
+
+        Setting ``name = None`` makes the environment invisible (the user
+        cycles back into a colour-only slot).
+        """
+        # Auto-save the current env's screen layout before swapping out.
+        # Folder envs and the three built-in slots (Default / Passthrough /
+        # Dark Room) are all backed by JSON profiles, so the user's last
+        # pose round-trips across both env switches AND full stop/restart.
+        if save_outgoing:
+            self._persist_current_pose()
+
+        if name is None:
+            self._env_model_prims = []
+            self._env_model_tex_cache = {}
+            self._scene_lights = []
+            self._env_model_visible = False
+            self._active_environment = None
+            self._persist_active_environment()
+            # Restore the just-entered built-in slot's saved pose (if any).
+            # Mirrors the folder-env branch below — without this, a Default
+            # / Passthrough / Dark Room slot always reads back as the live
+            # screen state instead of the user's last layout for that slot.
+            if apply_profile:
+                slot = self._current_profile_slot_name()
+                if slot is not None:
+                    self._apply_environment_profile(slot)
+            return
+
+        entry = self._environment_cache.get(name)
+        if entry is None:
+            print(f"[OpenXRViewer] Unknown environment '{name}'")
+            return
+
+        # Constant-time swap — point the live slots at the cached entry.
+        # We keep references to the cache's lists/dicts (not copies) so the
+        # render loop sees zero extra allocations.
+        self._env_model_prims = entry['prims']
+        self._env_model_tex_cache = entry['tex_cache']
+        self._scene_lights = entry['scene_lights']
+        self._env_model_visible = True
+        self._active_environment = name
+        self._env_switch_osd_t = time.perf_counter()
+
+        if apply_profile:
+            self._apply_environment_profile(name)
+        self._persist_active_environment()
+        print(f"[OpenXRViewer] Active environment: {name}")
+
+    # ------------------------------------------------------------------
+    # settings.yaml persistence (live updates from OpenXR side)
+    # ------------------------------------------------------------------
+    def _persist_setting(self, key, value):
+        """Best-effort write of ``{key: value}`` into settings.yaml.
+
+        Never raises — a failed save just prints a warning so the VR session
+        can never crash from a disk-write error.  Used by the brand-switch
+        and environment-switch hooks so the GUI re-reads the user's choice
+        on next launch.
+        """
+        try:
+            from utils import write_yaml as _wy
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                'settings.yaml')
+            _wy(path, {key: value})
+        except Exception as exc:
+            print(f"[OpenXRViewer] _persist_setting({key!r}) failed: {exc}")
+
+    def _persist_active_environment(self):
+        """Save the current environment selection in a form that round-trips
+        through the GUI dropdown options (``Default`` / ``Passthrough`` /
+        ``Dark Room`` / ``<folder>``)."""
+        if self._active_environment:
+            val = self._active_environment
+        elif self._bg_color_idx == 5:
+            val = 'Passthrough'
+        else:
+            val = 'Default'
+        self._persist_setting('Active Environment', val)
+
+    def _cycle_background(self):
+        """Advance the background "circle" one slot (left-stick short press).
+
+        The circle steps through every colour in ``_BG_COLORS`` and then one
+        slot per loaded environment, in the order discovered by
+        ``_init_env_model``.  Folding the env into the same cycle removes
+        the old "N-key" requirement so everything is reachable from the
+        controller alone::
+
+            black -> grey -> charcoal -> navy -> beige -> green
+                  -> [env_0] -> [env_1] -> ... -> [env_N] -> (back to black)
+
+        Each environment slot also restores that env's saved screen 6-DOF
+        (via ``_apply_environment_profile``), and the previous env's layout
+        is auto-saved before the swap, so each environment effectively
+        "remembers" its preferred screen position.
+        """
+        n_colours = len(_BG_COLORS)
+        envs = self._available_environments
+        n_envs = len(envs)
+        total = n_colours + n_envs
+
+        # Compute the current virtual slot.  Env-active states map to
+        # n_colours + index; colour-only states map to _bg_color_idx.
+        if self._env_model_visible and self._active_environment in envs:
+            cur = n_colours + envs.index(self._active_environment)
+        else:
+            cur = self._bg_color_idx
+        nxt = (cur + 1) % total
+
+        if nxt < n_colours:
+            # Step into a colour slot — turn the environment off.
+            self._bg_color_idx = nxt
+            self._switch_environment(None)
+        else:
+            env_name = envs[nxt - n_colours]
+            self._bg_color_idx = 0      # black backdrop behind the model
+            self._switch_environment(env_name)
 
     def _load_brand_models(self, brand_name):
         """Load models and configuration for a specific brand, returning {prims_l, prims_r, tex_cache, offset, rot_deg}."""
@@ -2663,6 +3639,9 @@ class OpenXRViewer:
         self._ctrl_model_rot_deg = m['rot_deg']
         self._current_brand      = brand_name
         self._brand_switch_osd_t = time.perf_counter()
+        # Persist the new brand to settings.yaml so the next launch (GUI or
+        # standalone) picks the same one without further user input.
+        self._persist_setting('Controller Model', brand_name)
         print(f"[OpenXRViewer] Switched to: {brand_name} "
             f"offset={self._ctrl_model_offset} rot={self._ctrl_model_rot_deg}")
 
@@ -4751,6 +5730,27 @@ class OpenXRViewer:
         self._yaw_offset   = 0.0
         self._pitch_offset = 0.0
 
+    def _clear_screen_grab_anchors(self):
+        """Drop every stored grip-to-move anchor.
+
+        Called whenever the screen is teleported by a reset (Y button,
+        long-press Home, preset switch, etc.) so a grip that is held
+        across the reset re-anchors at the screen's NEW pose on the next
+        frame instead of dragging it back to the pre-reset position.
+
+        The grip handler in ``_handle_triggers`` records ``saved_local``
+        (the 2-D screen-local hit point at first grip press) and keeps
+        moving the screen so the laser continues to hit that exact local
+        point.  Without this clear, a reset's new position is overridden
+        within one frame by that stale anchor → the screen "snaps back".
+        """
+        self._screen_grab_local_l = None
+        self._screen_grab_local_r = None
+        self._screen_grab_grip_l  = None
+        self._screen_grab_grip_r  = None
+        self._kb_grab_local_l     = None
+        self._kb_grab_local_r     = None
+
     def _reset_screen_to_gaze(self, show_border=False):
         """Instantly snap the screen to 2 m in front of the current head gaze.
 
@@ -4759,6 +5759,7 @@ class OpenXRViewer:
         RESET_DIST = 2.0
         self._anim_target_pan_x = None  # cancel any stale animation
         self._reset_orientation_offsets()
+        self._clear_screen_grab_anchors()
         if self._head_pos_w is not None and self._head_fwd_w is not None:
             hx, hy, hz = self._head_pos_w
             fx, fy, fz = self._head_fwd_w
@@ -4790,12 +5791,14 @@ class OpenXRViewer:
             self.screen_distance = -z2
             self.screen_yaw      = yaw
             self.screen_pitch    = pitch
+            self.screen_roll     = 0.0
         else:
             self.screen_distance = RESET_DIST
             self.screen_pan_x    = 0.0
             self.screen_pan_y    = float(self._initial_head_y)
             self.screen_pitch    = 0.0
             self.screen_yaw      = 0.0
+            self.screen_roll     = 0.0
         if show_border:
             self._border_alpha  = 1.0
             self._border_idle_t = time.perf_counter()
@@ -4870,11 +5873,36 @@ class OpenXRViewer:
         tz = hz + fz * dist
         pitch = math.asin(max(-0.999, min(0.999, fy)))
 
+        # Wipe ALL cached orientation state BEFORE writing the new pose so
+        # the next grip-drag frame (which recomputes screen_yaw/pitch as
+        # `base_yaw + self._yaw_offset` and `base_pitch + self._pitch_offset`)
+        # re-latches at the fresh face-head baseline instead of snapping
+        # back to the user's pre-reset yaw/pitch tilt.  This is the same
+        # invariant the Y-button and preset-switch reset paths maintain
+        # via `_reset_orientation_offsets()`.
+        self._reset_orientation_offsets()
+        # Drop any stale grip anchors so a grip held across this reset
+        # re-latches at the screen's new pose on the next frame instead
+        # of dragging the screen back to its pre-reset position.
+        self._clear_screen_grab_anchors()
+        # Also cancel any in-flight glide animation that might be heading
+        # toward the old pre-reset target.
+        self._anim_target_pan_x    = None
+        self._anim_target_pan_y    = None
+        self._anim_target_distance = None
+        self._anim_target_yaw      = None
+        self._anim_target_pitch    = None
+        self._anim_target_roll     = None
+
         self.screen_pan_x = tx
         self.screen_pan_y = ty
         self.screen_distance = -tz
         self.screen_yaw = math.atan2(-fx, -fz)
         self.screen_pitch = pitch
+        # Home long-press / playspace recenter also flattens any user roll
+        # back to upright — matches the Meta-style "recenter view" contract
+        # where the screen returns to the canonical level orientation.
+        self.screen_roll = 0.0
 
         self._border_alpha = 1.0
         self._border_idle_t = time.perf_counter()
@@ -4883,6 +5911,7 @@ class OpenXRViewer:
         """Apply screen preset: size, distance, and reposition to face the user."""
         name, width, dist = self._screen_presets[index]
         self._reset_orientation_offsets()
+        self._clear_screen_grab_anchors()
         self.screen_width    = width
         self._screen_ref_size = width
         self.screen_height   = None
@@ -4923,9 +5952,11 @@ class OpenXRViewer:
         """
         RESET_DIST = 2.0
         self._reset_orientation_offsets()
+        self._clear_screen_grab_anchors()
         self.screen_width    = 2.4
         self.screen_height   = None
         self.screen_pitch    = 0.0   # always vertical — perpendicular to floor
+        self.screen_roll     = 0.0   # always level — no tilt
         self._screen_curved  = False
         if self._head_pos_w is not None and self._head_fwd_w is not None:
             hx, _, hz = self._head_pos_w
@@ -5421,8 +6452,19 @@ class OpenXRViewer:
             _k = right_w / (np.linalg.norm(right_w) + 1e-10)
             fwd_w = fwd_w * _ca + np.cross(_k, fwd_w) * _sa + _k * np.dot(_k, fwd_w) * (1 - _ca)
 
+            # Keyboard targeting takes precedence over screen edge-snapping.
+            # When the keyboard sits just below the screen, aiming at its top rows
+            # places the ray inside the screen's bottom-edge dead zone, so the
+            # edge-snap below would deflect the beam (and thus the hit circle)
+            # toward the screen edge — away from the real keyboard intersection
+            # the user is pointing at (and where the key press is registered).
+            # Detect a keyboard hit on the true tilted ray and, if present, skip
+            # edge-snapping so the visible cursor matches the keyboard hit exactly.
+            _kb_targeted = (self._keyboard_visible and
+                            self._keyboard_laser_hit_dist(raw_pos, fwd_w) < 30.0)
+
             # Screen edge constraint: if the smoothed ray goes off-screen, try the raw ray (with the same 12° tilt) before giving up and snapping to the edge.  This lets the laser stay more stable near edges while still allowing the user to intentionally point off-screen by moving steadily in that direction.
-            if self._laser_screen_hit_uv(raw_pos, fwd_w) is None:
+            if not _kb_targeted and self._laser_screen_hit_uv(raw_pos, fwd_w) is None:
                 # Smoothed ray misses screen → check raw ray (same tilt)
                 _raw_fwd = -aim_mat[:3, 2].astype('f8')
                 _raw_rw = aim_mat[:3, 0].astype('f8')
@@ -5525,16 +6567,17 @@ class OpenXRViewer:
             beam_len = 30.0
             hit_ray_cp  = ctrl_pos   # origin for hit_pos computation (may be overridden by overlay)
             hit_ray_fwd = fwd_w
+            # Match opaque-beam target priority so the hit ring doesn't jump from
+            # keyboard to screen near the keyboard's top edge when both are close.
             if self._keyboard_visible and kb_dist < 5.0:
                 beam_len = kb_dist
-            if sc_dist < beam_len:
-                beam_len = sc_dist
-            if ov_dist < beam_len:
-                beam_len = ov_dist
-                # Use pre-snap ray origin/direction for overlay hit position
-                if _sm_pos is not None:
-                    hit_ray_cp  = _ov_cp
-                    hit_ray_fwd = _ov_fw
+            else:
+                beam_len = min(sc_dist, kb_dist, ov_dist)
+                if ov_dist <= beam_len:
+                    # Use pre-snap ray origin/direction for overlay hit position
+                    if _sm_pos is not None:
+                        hit_ray_cp  = _ov_cp
+                        hit_ray_fwd = _ov_fw
 
             if beam_len >= 30.0:
                 continue
@@ -5681,7 +6724,7 @@ class OpenXRViewer:
                 'model_rotation_deg': self._calibration_temp_rot,
             }
             with open(_path, 'w') as f:
-                _json.dump(_prof, f, indent=2)
+                _json.dump(_prof, f, indent=2, ensure_ascii=False)
             # Update the runtime values immediately so the user can see the effect without needing to re-enter calibration mode, and also update the _all_models cache so that if they later calibrate another model of the same brand, it will use the newly saved values as the starting point.
             self._ctrl_model_offset = list(self._calibration_temp_offset)
             self._ctrl_model_rot_deg = self._calibration_temp_rot
@@ -5973,8 +7016,18 @@ class OpenXRViewer:
         self._env_prog['u_mvp'].write(vpf4.T.tobytes())
         self._env_prog['u_model'].write(model_mat.T.tobytes())
         self._env_prog['u_camera_pos'].write((cam_pos).tobytes())
-        self._env_prog['u_light_color'].value = (0.45, 0.45, 0.48)
-        self._env_prog['u_ambient_color'].value = (0.08, 0.08, 0.09)
+        # Dark Room is a special-case backdrop meant to feel like a pitch-
+        # black theatre lit only by the on-screen content.  Zero out the
+        # directional fill + ambient terms so the walls/ceiling/floor are
+        # ONLY illuminated by the cinema bias light (the screen acting as
+        # a rectangular area light, applied below).  Every other env keeps
+        # the regular daylight-ish fill so glTF materials read correctly.
+        if self._active_environment == 'Dark Room':
+            self._env_prog['u_light_color'].value = (0.010, 0.010, 0.010)
+            self._env_prog['u_ambient_color'].value = (0.008, 0.008, 0.009)
+        else:
+            self._env_prog['u_light_color'].value = (0.45, 0.45, 0.48)
+            self._env_prog['u_ambient_color'].value = (0.08, 0.08, 0.09)
         # Directional light (KHR_lights_punctual)
         if self._scene_lights:
             dl = self._scene_lights[0]
@@ -5983,6 +7036,17 @@ class OpenXRViewer:
             self._env_prog['u_light_intensity'].value = (float(ci[0]), float(ci[1]), float(ci[2]))
         else:
             self._env_prog['u_light_intensity'].value = (0.0, 0.0, 0.0)
+
+        # ----- Cinema bias light (screen as rectangular area light) ---------
+        # Builds a world-space orthonormal basis for the screen from
+        # screen_pan_xyz + screen_yaw/pitch/roll, then writes uniforms the env
+        # shader uses to add a Lambertian, forward-hemisphere area-light
+        # contribution.  Follows the Meta Horizon lighting design page:
+        #   * Emissive screen + Area light category
+        #   * Lambertian diffuse for soft, gradual response
+        #   * Sampled frame-average colour ties light hue to actual content
+        #   * Single light, no extra texture samples -> shader stays cheap
+        self._apply_cinema_light_uniforms()
 
         # Disable back-face culling so both sides of walls/objects are visible.
         # The env shader flips the normal for back-faces (double-sided lighting).
@@ -6013,9 +7077,14 @@ class OpenXRViewer:
                 self._env_prog['u_use_texture'].value = 1
             else:
                 self._env_prog['u_use_texture'].value = 0
+            # Per-environment texture key prefix (e.g. "env:Monitor") — set by
+            # _load_env_model when the prim was created.  Falls back to the
+            # legacy "env" prefix for prims that don't carry the field (the
+            # built-in default room, which has no texture maps anyway).
+            _tp = prim.get('_tex_prefix', 'env')
             # Normal map
             nid = prim.get('normal_tex_id', -1)
-            n_key = f"env:{nid}" if nid >= 0 else None
+            n_key = f"{_tp}:{nid}" if nid >= 0 else None
             if n_key and n_key in self._env_model_tex_cache:
                 self._env_model_tex_cache[n_key].use(location=4)
                 self._env_prog['u_use_normal_tex'].value = 1
@@ -6024,7 +7093,7 @@ class OpenXRViewer:
                 self._env_prog['u_use_normal_tex'].value = 0
             # Occlusion map
             oid = prim.get('occlusion_tex_id', -1)
-            o_key = f"env:{oid}" if oid >= 0 else None
+            o_key = f"{_tp}:{oid}" if oid >= 0 else None
             if o_key and o_key in self._env_model_tex_cache:
                 self._env_model_tex_cache[o_key].use(location=5)
                 self._env_prog['u_use_occlusion_tex'].value = 1
@@ -6033,7 +7102,7 @@ class OpenXRViewer:
                 self._env_prog['u_use_occlusion_tex'].value = 0
             # metallicRoughnessTexture
             mid = prim.get('mr_tex_id', -1)
-            m_key = f"env:{mid}" if mid >= 0 else None
+            m_key = f"{_tp}:{mid}" if mid >= 0 else None
             if m_key and m_key in self._env_model_tex_cache:
                 self._env_model_tex_cache[m_key].use(location=6)
                 self._env_prog['u_use_mr_tex'].value = 1
@@ -6041,7 +7110,7 @@ class OpenXRViewer:
                 self._env_prog['u_use_mr_tex'].value = 0
             # emissiveTexture
             eid = prim.get('emissive_tex_id', -1)
-            e_key = f"env:{eid}" if eid >= 0 else None
+            e_key = f"{_tp}:{eid}" if eid >= 0 else None
             if e_key and e_key in self._env_model_tex_cache:
                 self._env_model_tex_cache[e_key].use(location=7)
                 self._env_prog['u_use_emissive_tex'].value = 1
@@ -6064,6 +7133,75 @@ class OpenXRViewer:
         self._env_prog['u_use_texture'].value = 1
         self._env_prog['u_base_color_factor'].value = (1.0, 1.0, 1.0)
 
+    def _apply_cinema_light_uniforms(self):
+        """Push current cinema bias-light uniforms to ``self._env_prog``.
+
+        Shared by ``_render_env_model`` and ``_render_dark_room`` so both
+        paths get exactly the same physically-grounded screen→world light
+        contribution (Meta Horizon "Emissive + Area light", Lambertian
+        diffuse, forward 180-degree hemisphere only).  The env shader's
+        rectangular area-light block reads these uniforms each fragment.
+        """
+        if self.screen_height is None or self._screen_light_intensity <= 0.0:
+            self._env_prog['u_screen_light_enabled'].value = 0
+            return
+        sx_pos = float(self.screen_pan_x)
+        sy_pos = float(self.screen_pan_y)
+        sz_pos = float(-self.screen_distance)
+        cy = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+        cp = math.cos(self.screen_pitch); sp = math.sin(self.screen_pitch)
+        cr = math.cos(self.screen_roll);  sr = math.sin(self.screen_roll)
+        # Same R = Ry * Rx * Rz used by the screen quad / glow renderer.
+        # Columns of R are the world-space directions of +X / +Y / +Z in
+        # screen-local space, which gives the right/up/normal basis.
+        R = np.array([
+            [ cy * cr + sy_ * sp * sr,  -cy * sr + sy_ * sp * cr,   sy_ * cp],
+            [ cp * sr,                   cp * cr,                  -sp      ],
+            [-sy_ * cr + cy * sp * sr,   sy_ * sr + cy * sp * cr,   cy * cp],
+        ], dtype='f4')
+        normal_w = R[:, 2]    # screen forward axis (faces viewer at default yaw/pitch=0)
+        # right_w / up_w (R[:,0] / R[:,1]) are intentionally unused — the
+        # shader uses the cheaper point-at-centre area-light approximation
+        # (Meta's "minimize calculations" guideline).
+        half_w = float(self.screen_width)  * 0.5
+        half_h = float(self.screen_height) * 0.5
+        # Use the live (lerp-smoothed) glow colour so the bias light tracks
+        # the screen content with the SAME temporal smoothing as the planar
+        # glow — avoids two visual layers fighting each other.
+        sc = self._glow_color
+        # Dark Room runs with zero directional fill AND zero ambient (see
+        # _render_env_model), so the cinema bias light is the ONLY thing
+        # illuminating the walls/floor/ceiling.  Boost it ~3× there so the
+        # walls reach a perceptually similar brightness to other envs while
+        # keeping the pure-theatre look.  The Reinhard tonemap at the end
+        # of the env shader naturally rolls off any over-exposure, so the
+        # boost is safe even on bright frames.
+        intensity = float(self._screen_light_intensity)
+        if self._active_environment == 'Dark Room':
+            intensity *= 3.0
+        self._env_prog['u_screen_light_enabled'].value   = 1
+        self._env_prog['u_screen_light_pos'].value       = (sx_pos, sy_pos, sz_pos)
+        self._env_prog['u_screen_light_normal'].value    = (float(normal_w[0]), float(normal_w[1]), float(normal_w[2]))
+        self._env_prog['u_screen_light_half_size'].value = (half_w, half_h)
+        self._env_prog['u_screen_light_color'].value     = (float(sc[0]), float(sc[1]), float(sc[2]))
+        self._env_prog['u_screen_light_intensity'].value = intensity
+
+    def _advance_glow_color(self, lerp=0.03):
+        """Advance ``self._glow_color`` one step toward ``self._glow_target_color``.
+
+        Factored out of ``_render_glow`` so it can also be called by the
+        env-model path when the planar glow is gated off (so the env
+        shader's cinema bias light, which reads ``self._glow_color``,
+        keeps tracking the screen content).
+        """
+        c = self._glow_color
+        t = self._glow_target_color
+        self._glow_color = (
+            c[0] + lerp * (t[0] - c[0]),
+            c[1] + lerp * (t[1] - c[1]),
+            c[2] + lerp * (t[2] - c[2]),
+        )
+
     def _render_glow(self, mgl_fbo, vp_mat):
         """Render a soft glow outside the screen edges using a larger quad."""
         if self._glow_intensity <= 0.0 or self.screen_height is None:
@@ -6083,17 +7221,15 @@ class OpenXRViewer:
         self.ctx.depth_mask = False
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
-        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        # Premultiplied alpha: the shader outputs (color * glow, glow), and
+        # the blend is `out = src.rgb + dst.rgb * (1 - src.a)`.  This is LINEAR
+        # in `glow` and is the standard fix for the concentric-ring banding
+        # that SRC_ALPHA blending produces with an alpha-weighted colour.
+        self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA
 
         # Smoothly interpolate glow color towards sampled frame average
-        c = self._glow_color
-        t = self._glow_target_color
-        lerp = 0.03  # per-frame lerp factor (~3s to converge at 90fps)
-        self._glow_color = (
-            c[0] + lerp * (t[0] - c[0]),
-            c[1] + lerp * (t[1] - c[1]),
-            c[2] + lerp * (t[2] - c[2]),
-        )
+        # (~3 s to converge at 90 fps with lerp=0.03).
+        self._advance_glow_color()
 
         # Curved glow: not yet implemented
         if self._screen_curved:
@@ -6240,8 +7376,24 @@ class OpenXRViewer:
             mgl_fbo.use()
             glClear(GL_DEPTH_BUFFER_BIT)
 
-        # 0. Glow (behind border and screen)
-        self._render_glow(mgl_fbo, vp_mat)
+        # 0. Glow (behind border and screen).  Skipped when a 3D environment
+        # model is loaded — the env shader's cinema bias light already paints
+        # the same screen-content-tinted illumination onto the model surfaces
+        # (with proper Lambertian shading + distance falloff), so the flat
+        # additive glow quad would just sit in front of the model and look
+        # like a coloured fog.  For "Black" / "Passthrough" / plain-colour
+        # backdrops there's nothing else for the screen to spill light on,
+        # so the planar glow stays on to give the picture a sense of
+        # ambient bias light.
+        env_model_active = bool(self._env_model_visible and self._env_model_prims)
+        if not env_model_active:
+            self._render_glow(mgl_fbo, vp_mat)
+        else:
+            # Still advance the glow colour lerp each frame so the env
+            # shader's bias light tracks screen content (it reads
+            # ``self._glow_color`` which is normally lerped inside
+            # ``_render_glow``).
+            self._advance_glow_color()
         self.ctx.viewport = (0, 0, sc_w, sc_h)
 
         # 1. Main screen (flat quad or cylindrical curved arc)
@@ -6322,7 +7474,13 @@ class OpenXRViewer:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_controllers(mgl_fbo, vp_mat, view_mat)
 
-        # 9. Laser hit circles (semi-transparent, rendered after controllers)
+        # 9. FPS overlay — draw before hit circles so the cursor remains bright
+        # when hovering this panel (circle composited on top, not dimmed under panel).
+        if self._fps_overlay_visible and self._overlay_tex is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_fps_overlay(eye_index, mgl_fbo, vp_mat)
+
+        # 10. Laser hit circles (semi-transparent, rendered after controllers/panel)
         self.ctx.viewport = (0, 0, sc_w, sc_h)
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
@@ -6330,11 +7488,6 @@ class OpenXRViewer:
         self._render_lasers(mgl_fbo, vp_mat, view_mat, blend=True)
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
-
-        # 10. FPS overlay — attached to left controller, always visible when toggled
-        if self._fps_overlay_visible and self._overlay_tex is not None:
-            self.ctx.viewport = (0, 0, sc_w, sc_h)
-            self._render_fps_overlay(eye_index, mgl_fbo, vp_mat)
 
         # 11. Calibration panel (also topmost, shown when in calibration mode — occludes everything else)
         if self._calibration_mode:
@@ -6691,8 +7844,14 @@ class OpenXRViewer:
             ang = math.radians(12); ca, sa = math.cos(ang), math.sin(ang)
             k = right / (np.linalg.norm(right) + 1e-10)
             fw = fw * ca + np.cross(k, fw) * sa + k * np.dot(k, fw) * (1 - ca)
+            # Keyboard targeting takes precedence over screen edge-snapping —
+            # mirrors _laser_beam_setup so the screen cursor isn't deflected onto
+            # the screen edge (and thus stolen away from the keyboard) when the
+            # keyboard sits close below the screen.
+            _kb_targeted = (self._keyboard_visible and
+                            self._keyboard_laser_hit_dist(raw_pos, fw) < 30.0)
             # Screen edge constraint: if the smoothed ray misses the screen but the raw ray is close, clamp to the edge.
-            if self._laser_screen_hit_uv(raw_pos, fw) is None:
+            if not _kb_targeted and self._laser_screen_hit_uv(raw_pos, fw) is None:
                 _raw_fw = -aim_mat[:3, 2].astype('f8')
                 _raw_rw = aim_mat[:3, 0].astype('f8')
                 _raw_k = _raw_rw / (np.linalg.norm(_raw_rw) + 1e-10)
@@ -6725,6 +7884,10 @@ class OpenXRViewer:
             if (time.perf_counter() - self._phys_mouse_last_move) < PHYS_TIMEOUT:
                 self._cursor_ctrl = None
                 self._cursor_smooth_uv = None
+                # Invalidate touch positions so any held contact is released by
+                # _handle_triggers when physical mouse takes over.
+                self._touch_valid_l = False
+                self._touch_valid_r = False
                 return
             # Throttle GetCursorPos to every ~50ms (3-4 frames at 72Hz) —
             # per-frame polling is wasteful; physical mouse detection doesn't need sub-frame precision.
@@ -6744,20 +7907,61 @@ class OpenXRViewer:
             if (time.perf_counter() - self._phys_mouse_last_move) < PHYS_TIMEOUT:
                 self._cursor_ctrl = None
                 self._cursor_smooth_uv = None
+                self._touch_valid_l = False
+                self._touch_valid_r = False
                 return
 
         hit_l = hit_r = None
         ov_hit_l = ov_hit_r = False
+        # Read both triggers every frame.  The keyboard typing-lock below only
+        # needs them when the keyboard is visible, but the cursor-ownership rule
+        # ("latest click / tap wins") needs them every frame to know which hand
+        # most recently clicked — so we always poll.
+        ltrig_now = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
+        rtrig_now = self._read_float_action(self._act_right_trigger, "/user/hand/right")
+        # Beam origin/direction per hand — stashed for the touch-publish block
+        # below so it can clamp the off-screen drag position to the screen
+        # edge instead of letting `_touch_px_l/r` freeze at the last on-screen
+        # pixel.
+        cp_l = fw_l = cp_r = fw_r = None
         if self._aim_mat_l is not None:
             cp, fw = _beam_origin_dir(self._aim_mat_l, self._grip_mat_l,
                                     "_smooth_ray_origin_l", "_smooth_ray_quat_l")
+            cp_l, fw_l = cp, fw
             # Compute both keyboard and screen hit distances, only interact with closer one
-            _kb_idx_l, kb_t_l = self._keyboard_laser_hit(cp, fw)
+            _kb_idx_l, _kb_t_l = self._keyboard_laser_hit(cp, fw)
             hit_l = self._laser_screen_hit_uv(cp, fw)
-            kb_dist_l = kb_t_l if _kb_idx_l is not None else float('inf')
+            kb_dist_l = self._keyboard_laser_hit_dist(cp, fw)
             sc_dist_l = hit_l[2] if hit_l is not None else float('inf')
-            if kb_dist_l < sc_dist_l:
+            # `_keyboard_laser_hit_dist` returns the BEAM_MAX sentinel (30 m)
+            # when the laser misses the keyboard rectangle.  We must use this
+            # sentinel — not `< float('inf')` — to test "laser is on keyboard",
+            # otherwise typing_lock would falsely engage whenever the user
+            # pulls the trigger on the screen with the keyboard merely
+            # visible, blocking touch clicks on the screen entirely.
+            _KB_BEAM_MAX = 30.0
+            kb_actually_hit_l = kb_dist_l < _KB_BEAM_MAX
+            # Keep keyboard priority stable when it is very near the screen
+            # (e.g. top rows close to screen bottom) to avoid visual cursor dropouts.
+            KB_PRIORITY_BIAS = KB_CURSOR_PRIORITY_BIAS  # metres (module-level constant)
+            typing_lock_l = (
+                self._keyboard_visible
+                and kb_actually_hit_l
+                and (
+                    self._kb_held_key_l is not None
+                    or (ltrig_now >= 0.55)
+                )
+            )
+            if typing_lock_l or (kb_actually_hit_l and kb_dist_l <= (sc_dist_l + KB_PRIORITY_BIAS)):
+                # Refresh the hold timer while the keyboard owns the cursor so the
+                # post-release grace measures time since the LAST owned frame.
+                self._kb_cursor_owned_t_l = time.perf_counter()
                 hit_l = None  # keyboard is closer, suppress screen cursor
+            elif (self._keyboard_visible and
+                  (time.perf_counter() - self._kb_cursor_owned_t_l) < self._KB_RELEASE_GRACE):
+                # Post-release grace: keep the screen cursor suppressed briefly while
+                # the user lifts off the keyboard toward the screen (smooths the swap).
+                hit_l = None
             else:
                 self._kb_hover_l = None  # screen is closer, suppress keyboard hover
             ov_cp_l, ov_fw_l = self._pre_snap_overlay_ray(True, self._aim_mat_l, self._grip_mat_l)
@@ -6768,12 +7972,31 @@ class OpenXRViewer:
         if self._aim_mat_r is not None:
             cp, fw = _beam_origin_dir(self._aim_mat_r, self._grip_mat_r,
                                     "_smooth_ray_origin_r", "_smooth_ray_quat_r")
-            _kb_idx_r, kb_t_r = self._keyboard_laser_hit(cp, fw)
+            cp_r, fw_r = cp, fw
+            _kb_idx_r, _kb_t_r = self._keyboard_laser_hit(cp, fw)
             hit_r = self._laser_screen_hit_uv(cp, fw)
-            kb_dist_r = kb_t_r if _kb_idx_r is not None else float('inf')
+            kb_dist_r = self._keyboard_laser_hit_dist(cp, fw)
             sc_dist_r = hit_r[2] if hit_r is not None else float('inf')
-            if kb_dist_r < sc_dist_r:
+            _KB_BEAM_MAX = 30.0
+            kb_actually_hit_r = kb_dist_r < _KB_BEAM_MAX
+            typing_lock_r = (
+                self._keyboard_visible
+                and kb_actually_hit_r
+                and (
+                    self._kb_held_key_r is not None
+                    or (rtrig_now >= 0.55)
+                )
+            )
+            if typing_lock_r or (kb_actually_hit_r and kb_dist_r <= (sc_dist_r + KB_PRIORITY_BIAS)):
+                # Refresh the hold timer while the keyboard owns the cursor so the
+                # post-release grace measures time since the LAST owned frame.
+                self._kb_cursor_owned_t_r = time.perf_counter()
                 hit_r = None  # keyboard is closer, suppress screen cursor
+            elif (self._keyboard_visible and
+                  (time.perf_counter() - self._kb_cursor_owned_t_r) < self._KB_RELEASE_GRACE):
+                # Post-release grace: keep the screen cursor suppressed briefly while
+                # the user lifts off the keyboard toward the screen (smooths the swap).
+                hit_r = None
             else:
                 self._kb_hover_r = None  # screen is closer, suppress keyboard hover
             ov_cp_r, ov_fw_r = self._pre_snap_overlay_ray(False, self._aim_mat_r, self._grip_mat_r)
@@ -6789,34 +8012,137 @@ class OpenXRViewer:
         self._ray_prev_uv_l = self._cursor_uv_l
         self._ray_prev_uv_r = self._cursor_uv_r
 
-        # Pick active controller — right always wins when both lasers hit screen.
-        # Avoids ping-ponging: once a controller takes over, the other can't steal.
-        prev_ctrl = self._cursor_ctrl
-        if hit_r:
-            ctrl, u, v = 'right', hit_r[0], hit_r[1]
+        # Publish per-hand desktop pixel positions for the multi-touch injector.
+        # Each hand is tracked independently so two simultaneous triggers become
+        # two simultaneous touch contacts (Windows multi-touch → pinch/zoom,
+        # two-finger pan, press-and-hold → right-click, etc.).
+        #
+        # When the laser is OFF-SCREEN we project the ray onto the screen plane
+        # and clamp the UV to [0, 1] so a drag-in-progress can keep updating at
+        # the screen edge in the direction the laser is pointing.  Without this
+        # clamp, `_touch_px_l/r` froze at the last on-screen pixel — fast drags
+        # that briefly grazed off-screen left the touch contact stuck at the
+        # edge with the cursor visibly lagging behind the laser, then jumping
+        # when the laser returned.  Edge-clamping makes the drag continue at
+        # the edge so the OS sees uninterrupted motion data.  `valid` is still
+        # False off-screen so no NEW touch can fire there — only an active
+        # drag uses the clamped position.
+        try:
+            mon_left, mon_top, mon_w, mon_h = self._get_target_monitor_rect()
+        except Exception:
+            mon_left = mon_top = 0; mon_w = mon_h = 0
+        def _uv_to_px(uv):
+            if uv is None or mon_w <= 0 or mon_h <= 0:
+                return None
+            u, v = float(uv[0]), float(uv[1])
+            return (mon_left + int(u * mon_w),
+                    mon_top + int((1.0 - v) * mon_h))
+        def _edge_px(cp, fw):
+            """Project ray onto screen plane, clamp UV to [0,1], return pixels."""
+            if cp is None or fw is None or mon_w <= 0 or mon_h <= 0:
+                return None
+            uv = self._laser_plane_uv(cp, fw)
+            if uv is None:
+                return None
+            u = max(0.0, min(1.0, float(uv[0])))
+            v = max(0.0, min(1.0, float(uv[1])))
+            return (mon_left + int(u * mon_w),
+                    mon_top + int((1.0 - v) * mon_h))
+        _pl = _uv_to_px(hit_l)
+        _pr = _uv_to_px(hit_r)
+        if _pl is not None:
+            self._touch_px_l = _pl
+            self._touch_valid_l = True
+        else:
+            # Off-screen / keyboard-claimed / overlay-claimed: clamp to edge so
+            # an active drag stays alive; mark invalid so no new DOWN fires.
+            edge_l = _edge_px(cp_l, fw_l)
+            if edge_l is not None:
+                self._touch_px_l = edge_l
+            self._touch_valid_l = False
+        if _pr is not None:
+            self._touch_px_r = _pr
+            self._touch_valid_r = True
+        else:
+            edge_r = _edge_px(cp_r, fw_r)
+            if edge_r is not None:
+                self._touch_px_r = edge_r
+            self._touch_valid_r = False
+
+        # ——— Pick the active cursor controller: LATEST CLICK / TAP WINS ———
+        # When BOTH lasers are on the screen we give the cursor to whichever
+        # controller most recently pulled its trigger (a click / tap), so the
+        # user can hand control back and forth between hands just by clicking.
+        # The old rule was "right always wins", which made the off-hand unable
+        # to ever take over while the right laser merely grazed the screen.
+        #
+        # Rising-edge stamp: record the click time the instant the trigger
+        # crosses PRESS while THAT hand's laser is on the screen.  Gating on
+        # `hit_*` means a press on the keyboard / overlay (where `hit_*` is
+        # already None) never steals the screen cursor.  Pure hover never
+        # changes the stamps, so two resting lasers never ping-pong — the last
+        # hand to click keeps control until the other hand clicks.
+        now_pc = time.perf_counter()
+        _CURSOR_PRESS = 0.55
+        if hit_l and ltrig_now >= _CURSOR_PRESS and self._cursor_trig_prev_l < _CURSOR_PRESS:
+            self._cursor_click_ts_l = now_pc
+        if hit_r and rtrig_now >= _CURSOR_PRESS and self._cursor_trig_prev_r < _CURSOR_PRESS:
+            self._cursor_click_ts_r = now_pc
+        self._cursor_trig_prev_l = ltrig_now
+        self._cursor_trig_prev_r = rtrig_now
+
+        if hit_l and hit_r:
+            # Both lasers on screen → newer click owns the cursor.
+            if self._cursor_click_ts_r > self._cursor_click_ts_l:
+                ctrl = 'right'
+            elif self._cursor_click_ts_l > self._cursor_click_ts_r:
+                ctrl = 'left'
+            else:
+                # Neither has clicked yet (equal stamps, e.g. both 0.0) — keep
+                # the current owner so the cursor doesn't ping-pong; default to
+                # right on the very first frame.
+                ctrl = self._cursor_ctrl if self._cursor_ctrl in ('left', 'right') else 'right'
+        elif hit_r:
+            ctrl = 'right'
         elif hit_l:
-            ctrl, u, v = 'left', hit_l[0], hit_l[1]
+            ctrl = 'left'
         else:
             self._cursor_ctrl = None
             self._cursor_smooth_uv = None   # reset so next entry doesn't drag
             return
 
-        self._cursor_ctrl = ctrl
-        # Reset the smoother on controller swap so we don't slide diagonally to the
-        # new pointer location.
-        if prev_ctrl != ctrl or self._cursor_smooth_uv is None:
-            self._cursor_smooth_uv = (u, v)
-        else:
-            ALPHA = 0.35   # EMA cursor smoothing — low lag, filters jitter
-            su, sv = self._cursor_smooth_uv
-            su += ALPHA * (u - su)
-            sv += ALPHA * (v - sv)
-            self._cursor_smooth_uv = (su, sv)
+        # On an ownership swap, drop the stale smoothing anchor so the new hand's
+        # cursor starts exactly where ITS laser points instead of sliding across
+        # the screen from the previous owner's last position — that slide was the
+        # "lag" the user saw when control changed hands.
+        if ctrl != self._cursor_ctrl:
+            self._cursor_smooth_uv = None
 
-        su, sv = self._cursor_smooth_uv
+        self._cursor_ctrl = ctrl
+        u, v = (hit_r[0], hit_r[1]) if ctrl == 'right' else (hit_l[0], hit_l[1])
+
+        # IMPORTANT — no second smoothing stage here.
+        # The controller ray is already low-pass filtered upstream by the
+        # One-Euro filter in `_get_smoothed_ray`.  A second EMA at this layer
+        # (the old `ALPHA = 0.35` cursor smoother) stacked latency on top of
+        # that and was a root cause of the drag problems the user reported:
+        #   • fast drags moved the window only a short distance (the smoother
+        #     never caught up before release),
+        #   • the window/cursor visibly trailed behind the beam,
+        #   • the cursor kept gliding after the trigger was released (the EMA
+        #     was still converging to the final position), and
+        #   • drag felt "sticky".
+        # It also disagreed with the touch-contact position (published above
+        # from the RAW `hit_*` UV), so Windows — which pins the cursor to the
+        # active touch contact — fought this SetCursorPos call.
+        # Use the raw UV directly: what the beam points at is where the cursor
+        # (and the touch contact) goes, with zero added lag.  This is also a
+        # few ops cheaper per frame, so it's FPS-neutral-to-positive.
+        self._cursor_smooth_uv = (u, v)
+
         mon_left, mon_top, mon_w, mon_h = self._get_target_monitor_rect()
-        px = mon_left + int(su * mon_w)
-        py = mon_top + int((1.0 - sv) * mon_h)
+        px = mon_left + int(u * mon_w)
+        py = mon_top + int((1.0 - v) * mon_h)
         # Always track the VR cursor position so the physical-mouse detector
         # doesn't falsely fire when grip ends and the cursor resumes moving.
         self._vr_cursor_screen_pos = (px, py)
@@ -6825,22 +8151,57 @@ class OpenXRViewer:
             _set_cursor_pos(px, py)
 
     def _handle_triggers(self):
-        """Map controller triggers to mouse clicks and drag.
+        """Map controller triggers to Windows multi-touch contacts (preferred)
+        or mouse clicks (fallback).
 
-        Three-state machine per trigger: idle -> pressed -> dragging.
-        Rising edge: send LEFTDOWN+LEFTUP click pulse.
-        Held past HOLD_TIME: send LEFTDOWN for drag.
-        Released from dragging: send LEFTUP.
+        Per-hand contact lifecycle when ``_TOUCH_AVAILABLE``:
 
-        If a trigger fires while the laser hits the FPS overlay panel, toggle the
-        shortcuts/help panel instead of generating a mouse click.
+        * Trigger ≥ PRESS_THRESH on a valid screen target → touch DOWN.
+        * Trigger held → touch UPDATE every frame (drives drag, incl. window
+          title-bar drag — Windows treats it as one continuous interaction).
+        * Trigger < RELEASE_THRESH (or laser leaves a usable target) → touch UP.
+
+        Both controllers active simultaneously become two-contact multi-touch,
+        enabling the gestures documented at
+        https://support.microsoft.com/en-us/windows/touch-gestures-for-windows-a9d28305-4818-a5df-4e2b-e5590f850741
+        (tap = click, drag = drag, two-finger pan/zoom, press-and-hold =
+        right-click, edge swipes for notification center / widgets, etc.).
+
+        If a trigger fires while the laser hits the FPS/status panel, that
+        trigger toggles the shortcuts/help panel instead of generating a click.
         """
-        # Suppress mouse clicks while gripping — user is manipulating the screen
-        if self._grabbed:
-            return
         PRESS_THRESH   = 0.55   # rising edge
         RELEASE_THRESH = 0.30   # falling edge (hysteresis)
-        HOLD_TIME      = 0.22   # seconds trigger must stay held to enter drag mode
+        HOLD_TIME      = 0.22   # seconds trigger must stay held to enter drag mode (mouse fallback only)
+
+        # While gripping (user repositioning the screen/keyboard), release any
+        # active touch contacts cleanly so the next press starts fresh — and
+        # skip all further click processing for this frame.
+        if self._grabbed:
+            if _TOUCH_AVAILABLE and _touch_injector is not None:
+                if self._touch_state_l == 'down':
+                    _touch_injector.set(_TOUCH_CONTACT_ID_LEFT,
+                                        self._touch_px_l[0], self._touch_px_l[1],
+                                        want_down=False)
+                    self._touch_state_l = 'idle'
+                    self._touch_smooth_l = None
+                if self._touch_state_r == 'down':
+                    _touch_injector.set(_TOUCH_CONTACT_ID_RIGHT,
+                                        self._touch_px_r[0], self._touch_px_r[1],
+                                        want_down=False)
+                    self._touch_state_r = 'idle'
+                    self._touch_smooth_r = None
+                _touch_injector.flush()
+            # Seed the per-hand prior-trigger trackers to the current readings so
+            # that on the frame the user releases the grip, the rising-edge gate
+            # in the touch path still requires a true release-then-press before
+            # firing a new touch DOWN (avoids "drop the grip → instant phantom
+            # click" if the trigger happens to be high at grip-release time).
+            self._touch_trig_prev_l = self._read_float_action(
+                self._act_left_trigger,  "/user/hand/left")
+            self._touch_trig_prev_r = self._read_float_action(
+                self._act_right_trigger, "/user/hand/right")
+            return
 
         now = self._frame_now
         lt  = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
@@ -6875,7 +8236,108 @@ class OpenXRViewer:
 
         left_on_kb  = self._kb_hover_l is not None
         right_on_kb = self._kb_hover_r is not None
+        # Treat the keyboard as "claiming" the hand whenever a virtual key is
+        # currently being typed by that hand, even if the laser drifted off the
+        # key this frame.  Without this, releasing a key by sliding the laser
+        # off it (while the trigger is still held) could leak into a touch DOWN
+        # on the screen behind/below the keyboard.
+        left_kb_typing  = self._kb_held_key_l is not None
+        right_kb_typing = self._kb_held_key_r is not None
 
+        # —— Touch path (preferred): clean DOWN/UPDATE/UP per hand ——
+        # Reliable click: a single DOWN-UP pair is unambiguous to Windows,
+        # unlike the mouse-flag pulse that occasionally raced with cursor
+        # positioning and produced missed clicks.
+        if _TOUCH_AVAILABLE and _touch_injector is not None:
+            for (trig, valid, px_attr, smooth_attr, state_attr, trig_prev_attr,
+                 contact_id, ov_claim, on_kb, kb_typing) in (
+                (lt, self._touch_valid_l, '_touch_px_l', '_touch_smooth_l',
+                 '_touch_state_l', '_touch_trig_prev_l',
+                 _TOUCH_CONTACT_ID_LEFT, ov_claim_l, left_on_kb, left_kb_typing),
+                (rt, self._touch_valid_r, '_touch_px_r', '_touch_smooth_r',
+                 '_touch_state_r', '_touch_trig_prev_r',
+                 _TOUCH_CONTACT_ID_RIGHT, ov_claim_r, right_on_kb, right_kb_typing),
+            ):
+                state    = getattr(self, state_attr)
+                raw_px   = getattr(self, px_attr)
+                trig_prev = getattr(self, trig_prev_attr)
+                # Keyboard-claimed hand: no touch this frame, period.  Covers
+                # both "laser on a key" and "still holding a typed key" cases.
+                kb_claim = on_kb or kb_typing
+
+                # Determine the desired contact state this frame.
+                if state == 'down':
+                    # Stay down until trigger releases OR the hand loses its
+                    # screen target (laser left screen / moved to keyboard /
+                    # claimed by overlay).  We use the looser RELEASE_THRESH so
+                    # the contact survives small trigger dips during drag.
+                    want_down = (trig > RELEASE_THRESH
+                                 and not ov_claim
+                                 and not kb_claim)
+                else:
+                    # idle → only fire on a TRUE rising edge against a valid
+                    # screen target.  Requiring the prior frame's trigger to be
+                    # below PRESS_THRESH prevents a phantom click when the user:
+                    #   * slides the laser off the virtual keyboard onto the
+                    #     screen while still holding the trigger, or
+                    #   * toggles the keyboard off mid-press.
+                    # In both cases the trigger never released, so no new touch
+                    # should fire on the screen until the user lets go.
+                    want_down = (trig >= PRESS_THRESH
+                                 and trig_prev < PRESS_THRESH
+                                 and valid
+                                 and not ov_claim
+                                 and not kb_claim)
+
+                if want_down:
+                    # Send touch DOWN/UPDATE at the *current* laser-mapped
+                    # pixel position — no EMA, no snap-distance teleport.
+                    #
+                    # The controller pose is already smoothed upstream by
+                    # `_get_smoothed_ray`, so any extra EMA here is pure
+                    # latency: an α=0.45 second-stage EMA caused
+                    #   • a visible cursor jump after release (UP fired at
+                    #     the lagging smoothed position; the cursor then
+                    #     teleported to the actual laser position on the
+                    #     next frame), and
+                    #   • a "fast drag = tiny window move" symptom
+                    #     (smoother was catching up over ~10 frames so the
+                    #     OS only saw ~70% of the user's drag distance), and
+                    #   • a "cursor hang" symptom (Windows pins the cursor
+                    #     to the touch contact, which was crawling along the
+                    #     EMA tail far behind the laser).
+                    # Going direct-to-raw also drops ~14 ops/frame/hand, so
+                    # if anything this is FPS-positive.
+                    _touch_injector.set(contact_id, raw_px[0], raw_px[1],
+                                        want_down=True)
+                    setattr(self, smooth_attr, raw_px)  # last sent pos
+                    setattr(self, state_attr, 'down')
+                else:
+                    if state == 'down':
+                        # Release at the *current* laser position.  The
+                        # injector promotes a moving-UP into UPDATE-then-UP
+                        # internally so the OS still sees a clean transition.
+                        # Releasing at the laser position (rather than at
+                        # the last-sent position) also means there is no
+                        # post-release cursor snap: the touch UP and the
+                        # subsequent `_set_cursor_pos` call from
+                        # `_handle_cursor` agree on where the cursor ends up.
+                        _touch_injector.set(contact_id, raw_px[0], raw_px[1],
+                                            want_down=False)
+                    setattr(self, smooth_attr, None)
+                    setattr(self, state_attr, 'idle')
+
+                # Remember this frame's trigger value so the next frame can
+                # detect a true rising edge.
+                setattr(self, trig_prev_attr, trig)
+
+            _touch_injector.flush()
+            # If touch turned out to be unavailable (mid-session injection
+            # failure), fall through to the mouse path so clicks still work.
+            if _touch_injector.available:
+                return
+
+        # —— Mouse fallback: original click+drag state machine ——
         left_laser_usable  = (not left_on_kb and not ov_claim_l and
                             (self._cursor_uv_l is not None or
                             self._cursor_ctrl == 'left'))
@@ -7844,6 +9306,11 @@ class OpenXRViewer:
                         self._prev_bg_color_idx = self._bg_color_idx
                     self._bg_color_idx = 5    # VDXR green
                 self._x_long_fired = True
+                # Persist so the next launch lands on the right backdrop.
+                # When an environment is active the env name still wins (see
+                # _persist_active_environment), so the green toggle is purely
+                # cosmetic until the user explicitly switches env off.
+                self._persist_active_environment()
 
         if not x_now and self._x_last:                     # falling edge
             if not self._x_long_fired:                     # short press
@@ -7882,7 +9349,8 @@ class OpenXRViewer:
         if not both_clicked:
             now = self._frame_now
 
-            # Left thumbstick: long-press → toggle status/shortcut panel; short-press cycles background
+            # Left thumbstick: long-press → toggle status/shortcut panel;
+            #                  short-press → cycle background (colours + environment model)
             if lsc_now and not self._left_stick_click_prev:
                 self._lsc_press_t = now
                 self._lsc_long_fired = False
@@ -7900,7 +9368,7 @@ class OpenXRViewer:
                         else:
                             self.depth_strength = getattr(self, '_depth_strength_saved', 0.1)
                     else:
-                        self._bg_color_idx = (self._bg_color_idx + 1) % len(_BG_COLORS)
+                        self._cycle_background()
 
             # Right thumbstick: long-press → reset screen direction (keep distance + size);
             #          short-press → toggle curved/flat
@@ -8012,6 +9480,7 @@ class OpenXRViewer:
             # Lazy init: load environment model after OpenXR session is running
             if not self._env_model_init_done:
                 self._env_model_init_done = True
+                self._init_dark_room()
                 self._init_env_model()
                 print(f"[OpenXRViewer] Lazy env model: {len(self._env_model_prims)} prims")
 
@@ -8311,9 +9780,27 @@ class OpenXRViewer:
     # Cleanup
     def cleanup(self):
         """Release all OpenXR and OpenGL resources."""
+        # Snapshot the live screen 6-DOF into the active slot's profile.json
+        # FIRST so the GUI Stop / Restart cycle preserves the user's last
+        # layout.  Without this, the only way to persist a pose was to
+        # cycle the backdrop before stopping — confusing UX.  Wrapped in
+        # try so a failed write never blocks the rest of cleanup.
+        try:
+            self._persist_current_pose()
+        except Exception as exc:
+            print(f"[OpenXRViewer] _persist_current_pose on cleanup failed: {exc}")
+
         if sys.platform == "win32" and self._saved_dclick_time is not None:
             _U32.SystemParametersInfoW(0x0020, self._saved_dclick_time, None, 0)
             self._saved_dclick_time = None
+
+        # Release any held multi-touch contacts so apps don't see a stuck
+        # finger after we exit (e.g., a half-completed window drag).
+        if _TOUCH_AVAILABLE and _touch_injector is not None:
+            try:
+                _touch_injector.cancel_all()
+            except Exception:
+                pass
 
         self._cleanup_interop()
 
