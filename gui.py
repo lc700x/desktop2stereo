@@ -64,6 +64,7 @@ from utils import (
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "desktop2stereo.log")
+STOP_REQUEST_FILE = os.path.join(LOG_DIR, "stop.request")
 
 # Kept as an alias for backward compatibility with any external tooling
 # that referenced the old diag log path.
@@ -2679,6 +2680,11 @@ class Desktop2StereoGUI:
                 return
             print(f"[Main] Initializing Desktop2Stereo {self.run_mode_key}...")
             shutdown_event.clear()
+            try:
+                if os.path.exists(STOP_REQUEST_FILE):
+                    os.remove(STOP_REQUEST_FILE)
+            except Exception:
+                pass
             # Spawn the child with stdout+stderr captured to a PIPE so every
             # line can be forwarded *live* to (a) the user's console and
             # (b) the single rolling log file at LOG_FILE.  This restores
@@ -2828,7 +2834,47 @@ class Desktop2StereoGUI:
             else:
                 self.set_status(UI_TEXTS[self.language]["Stopped"], key="Stopped")
             self._set_running_ui(False)
+            self._reload_settings_from_disk()
             self._diag("monitor_task done, status updated")
+
+    def _reload_settings_from_disk(self):
+        """Re-read settings.yaml and sync env/controller dropdowns.
+
+        Called after the xrviewer process exits so that runtime changes
+        (environment cycling, controller brand switching) are reflected
+        back in the GUI without requiring a restart.
+        """
+        path = os.path.join(BASE_DIR, "settings.yaml")
+        if not os.path.exists(path):
+            return
+        try:
+            cfg = read_yaml(path)
+            if not cfg:
+                return
+        except Exception as exc:
+            self._diag(f"_reload_settings_from_disk: {exc}", error=True)
+            return
+
+        saved_ctrl = cfg.get("Controller Model")
+        if saved_ctrl and saved_ctrl in self.ctrl_model_dd.options:
+            self.ctrl_model_dd.value = saved_ctrl
+            self._config["Controller Model"] = saved_ctrl
+            self._safe_update(self.ctrl_model_dd)
+
+        saved_env = cfg.get("Active Environment")
+        if saved_env:
+            if str(saved_env).strip().lower() == "black":
+                saved_env = "Default"
+            canonical_keys = list(self._env_builtin_keys) + list(self._env_folder_keys)
+            env_key_match = next(
+                (k for k in canonical_keys if str(k).lower() == str(saved_env).lower()),
+                None,
+            )
+            if env_key_match is not None:
+                self.env_key = env_key_match
+                self._config["Active Environment"] = self.env_key
+                self.env_dd.value = self._env_display_label(self.env_key, self.language)
+                self._safe_update(self.env_dd)
 
     def stop_process(self, e=None):
         """Stop subprocess (called from UI button)."""
@@ -2873,7 +2919,12 @@ class Desktop2StereoGUI:
                     # us deliver CTRL_BREAK so the child tears down the GPU first.
                     try:
                         if OS_NAME == "Windows":
-                            proc.send_signal(_sig.CTRL_BREAK_EVENT)
+                            # Do not send CTRL_BREAK for normal Stop: Intel
+                            # Fortran-backed native libs abort with
+                            # "forrtl: error (200)" on that console event.
+                            os.makedirs(LOG_DIR, exist_ok=True)
+                            with open(STOP_REQUEST_FILE, "w", encoding="utf-8") as f:
+                                f.write(str(saved_pid))
                         else:
                             os.killpg(os.getpgid(saved_pid), _sig.SIGINT)
                     except Exception:

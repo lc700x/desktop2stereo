@@ -508,6 +508,28 @@ def normalize_tensor(depth: torch.tensor):
     
     return (depth - depth.min()) / (depth.max() - depth.min() + 1e-6) 
 
+def _percentile_bounds_no_lerp(values: torch.Tensor, percentile: float):
+    """Backend-friendly percentile bounds without torch.quantile's lerp kernel."""
+    vv = values.flatten()
+    n = vv.numel()
+    lo_q = max(0.0, min(1.0, float(percentile) / 100.0))
+    tail_count = min(n, max(1, int(round(lo_q * (n - 1))) + 1))
+    if tail_count == n:
+        return vv.min(), vv.max()
+    lo_tail = torch.topk(vv, tail_count, largest=False, sorted=False).values
+    hi_tail = torch.topk(vv, tail_count, largest=True, sorted=False).values
+    return lo_tail.max(), hi_tail.min()
+
+def _percentile_bounds_sort(values: torch.Tensor, percentile: float):
+    """Fallback percentile bounds that still avoids torch.quantile."""
+    vv = torch.sort(values.flatten()).values
+    n = vv.numel()
+    lo_q = max(0.0, min(1.0, float(percentile) / 100.0))
+    hi_q = 1.0 - lo_q
+    lo_idx = min(n - 1, max(0, int(round(lo_q * (n - 1)))))
+    hi_idx = min(n - 1, max(0, int(round(hi_q * (n - 1)))))
+    return vv[lo_idx], vv[hi_idx]
+
 def post_process_depth(depth):
     # normalize() mirrors the official DA3 visualize_depth: it does the 1/depth
     # inversion (gated on is_metric()) + 2nd/98th percentile clip + min-max, all
@@ -518,7 +540,7 @@ def post_process_depth(depth):
     depth = anti_alias(depth, strength=AA_STRENGTH)
     return depth
 
-def normalize(depth, percentile=2.0, subsample_cap=16_000_000):
+def normalize(depth, percentile=2.0, subsample_cap=1_048_576):
     """GPU-tensor version of the official DA3 visualize_depth normalization.
 
     Mirrors models/depth_anything_3/utils/visualize.py: invert (1/depth) on the
@@ -540,16 +562,14 @@ def normalize(depth, percentile=2.0, subsample_cap=16_000_000):
     else:
         vv = v
         if vv.numel() > subsample_cap:
-            idx = torch.linspace(0, vv.numel() - 1, subsample_cap, device=vv.device).long()
-            vv = vv[idx]
+            step = (vv.numel() + subsample_cap - 1) // subsample_cap
+            vv = vv[::step]
         try:
-            dmin = torch.quantile(vv, percentile / 100.0)
-            dmax = torch.quantile(vv, 1.0 - percentile / 100.0)
+            dmin, dmax = _percentile_bounds_no_lerp(vv, percentile)
         except (RuntimeError, ValueError):
-            dmin = vv.min(); dmax = vv.max()
-    if torch.isclose(dmin, dmax):
-        dmin = dmin - 1e-6; dmax = dmax + 1e-6
-    norm = ((inv - dmin) / (dmax - dmin)).clamp(0.0, 1.0)  # near~1, far~0
+            dmin, dmax = _percentile_bounds_sort(vv, percentile)
+    denom = (dmax - dmin).clamp_min(1e-6)
+    norm = ((inv - dmin) / denom).clamp(0.0, 1.0)  # near~1, far~0
     return norm
 
 # Load Video Depth Anything Model

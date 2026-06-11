@@ -35,6 +35,9 @@ global_processes = {
     'rtmp_server': None
 }
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STOP_REQUEST_FILE = os.path.join(BASE_DIR, "logs", "stop.request")
+
 # Track current stream size + restart lock
 current_stream_size = None
 ffmpeg_restart_lock = threading.Lock()
@@ -312,6 +315,22 @@ def _force_exit_watchdog(delay):
     os._exit(0)
 
 _shutdown_watchdog_started = False
+
+def _watch_stop_request_file():
+    """GUI-to-child graceful stop channel that avoids Windows CTRL_BREAK."""
+    while not shutdown_event.is_set():
+        try:
+            if os.path.exists(STOP_REQUEST_FILE):
+                print("[Signal] Stop requested by GUI, shutting down gracefully...")
+                shutdown_event.set()
+                try:
+                    os.remove(STOP_REQUEST_FILE)
+                except Exception:
+                    pass
+                break
+        except Exception:
+            pass
+        time.sleep(0.1)
 
 def signal_handler(signum, frame):
     """Handle Ctrl+C / CTRL_BREAK / termination signals.
@@ -1335,6 +1354,8 @@ def main(mode="Viewer"):
         print(f"[Main] Stopped")
 
 if __name__ == "__main__":
+    threading.Thread(target=_watch_stop_request_file,
+                     name="StopRequestWatcher", daemon=True).start()
     main(mode=RUN_MODE)
     # main() has returned, so cleanup_all_resources() already ran in its finally
     # block.  Force-terminate now instead of falling off the end of the script:

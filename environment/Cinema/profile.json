@@ -1,0 +1,45 @@
+{
+  "display_name": {
+    "EN": "Cinema",
+    "CN": "影院"
+  },
+  "environment": {
+    "yaw": -3.134025435667439,
+    "pitch": -0.0,
+    "roll": 0.0,
+    "pos": [
+      -69.81544494628905,
+      -0.24921810712814331,
+      -27.826978683471676
+    ],
+    "scale": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "lock_screen": true
+  },
+  "screen": {
+    "width": 5,
+    "distance": 5.892545357574054,
+    "pan_x": -0.17554091174501707,
+    "pan_y": 1.7007645964622498,
+    "yaw": 0.00756721792235448,
+    "pitch": 0.0,
+    "roll": 0.0,
+    "ref_size": 5,
+    "curved": false,
+    "allow_curve": true,
+    "screen_node_index": 1032,
+    "screen_node_indices": [
+      1032,
+      1033,
+      1034
+    ],
+    "offset": [
+      -0.02,
+      0.0,
+      0.0
+    ]
+  }
+}
