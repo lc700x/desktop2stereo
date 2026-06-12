@@ -610,10 +610,8 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 # Load InfiniDepth Model
 def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
     """ Load InfiniDepth model from HuggingFace hub. """
-    
     # Load depth model without network warning when local cache exists
     model_path = get_model_path(model_id, cache_dir=CACHE_PATH)
-    # model_path = r"D:\small.ckpt"
     # Preparation for video depth anything models
     encoder_dict = {'lc700x/InfiniDepth-SmallPlus': 'vits16plus',
                     'lc700x/InfiniDepth-Small': 'vits16',

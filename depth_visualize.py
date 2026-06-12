@@ -43,10 +43,11 @@ image_rgb = np.array(img).astype(np.float32)
 # MODEL_ID ="depth-anything/DA3NESTED-GIANT-LARGE"
 # MODEL_ID = "depth-anything/DA3METRIC-LARGE"
 # MODEL_ID = "LiheYoung/depth-anything-small-hf"
-# MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
+# MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf"
+MODEL_ID = "lc700x/depth-anything-indoor-large-hf"
 # MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
-# MODEL_ID = "depth-anything/DA3-LARGE"
+# MODEL_ID = "depth-anything/DA3-SMALL"
 # MODEL_ID = "depth-anything/DA3MONO-LARGE"
 # MODEL_ID = "depth-anything/DA3METRIC-LARGE"
 # MODEL_ID = "Intel/dpt-large"
@@ -57,7 +58,7 @@ image_rgb = np.array(img).astype(np.float32)
 # MODEL_ID = "lc700x/dpt-large-redesign-hf"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 # MODEL_ID = "Intel/dpt-beit-base-384"
-MODEL_ID = "lc700x/InfiniDepth-Base"
+# MODEL_ID = "lc700x/InfiniDepth-Base"
 
 DEBUG = True
 AA_STRENGTH = 0
@@ -68,7 +69,7 @@ FOREGROUND_SCALE = 0
 
 USE_TORCH_COMPILE = False
 
-USE_TENSORRT = False
+USE_TENSORRT = True
 RECOMPILE_TRT = True
 
 USE_COREML = False

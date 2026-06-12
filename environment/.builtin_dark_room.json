@@ -9,6 +9,9 @@
     "roll": 0.0,
     "ref_size": 2.4,
     "curved": false,
+    "allow_curve": false,
+    "screen_node_index": null,
+    "screen_node_indices": [],
     "offset": [
       0.0,
       0.0,

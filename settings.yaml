@@ -291,6 +291,24 @@ Model List:
     - 392
     - 448
     - 518
+  depth-anything-indoor-large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything-outdoor-large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
   DepthPro-Large:
     resolutions:
     - 1536

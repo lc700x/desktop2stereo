@@ -566,7 +566,9 @@ MODEL_MAPPING = {
     "depth-anything-small": "LiheYoung/depth-anything-small-hf",
     "depth-anything-base": "LiheYoung/depth-anything-base-hf",
     "depth-anything-large": "LiheYoung/depth-anything-large-hf",
-    
+    "depth-anything-indoor-large": "lc700x/depth-anything-indoor-large-hf",
+    "depth-anything-outdoor-large": "lc700x/depth-anything-outdoor-large-hf",
+
     # Distill-Any-Depth
     "Distill-Any-Depth-Small": "xingyang1/Distill-Any-Depth-Small-hf",
     "Distill-Any-Depth-Base": "lc700x/Distill-Any-Depth-Base-hf",

@@ -8586,7 +8586,6 @@ class OpenXRViewer:
             kb_actually_hit_l = kb_dist_l < _KB_BEAM_MAX
             # Keep keyboard priority stable when it is very near the screen
             # (e.g. top rows close to screen bottom) to avoid visual cursor dropouts.
-            KB_PRIORITY_BIAS = KB_CURSOR_PRIORITY_BIAS  # metres (module-level constant)
             typing_lock_l = (
                 self._keyboard_visible
                 and kb_actually_hit_l
@@ -8595,7 +8594,7 @@ class OpenXRViewer:
                     or (ltrig_now >= 0.55)
                 )
             )
-            if typing_lock_l or (kb_actually_hit_l and kb_dist_l <= (sc_dist_l + KB_PRIORITY_BIAS)):
+            if typing_lock_l or (kb_actually_hit_l and kb_dist_l <= (sc_dist_l + KB_CURSOR_PRIORITY_BIAS)):
                 # Refresh the hold timer while the keyboard owns the cursor so the
                 # post-release grace measures time since the LAST owned frame.
                 self._kb_cursor_owned_t_l = time.perf_counter()
@@ -8630,7 +8629,7 @@ class OpenXRViewer:
                     or (rtrig_now >= 0.55)
                 )
             )
-            if typing_lock_r or (kb_actually_hit_r and kb_dist_r <= (sc_dist_r + KB_PRIORITY_BIAS)):
+            if typing_lock_r or (kb_actually_hit_r and kb_dist_r <= (sc_dist_r + KB_CURSOR_PRIORITY_BIAS)):
                 # Refresh the hold timer while the keyboard owns the cursor so the
                 # post-release grace measures time since the LAST owned frame.
                 self._kb_cursor_owned_t_r = time.perf_counter()
