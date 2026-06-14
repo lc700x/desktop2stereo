@@ -547,12 +547,7 @@ FRAGMENT_SHADER = """
         // Screen-edge alpha clip: keep the out-of-bounds safety net (alpha→0
         // if parallax somehow over-shoots into negative UV) but use a
         // sub-pixel fade band so the user does not see a visible soft border
-        // between the desktop image and the screen edge. Previously this
-        // was a 1.5% UV-space fade (~36 mm on a 2.4 m wide screen, the
-        // visible "border gap"); now it's ~0.2 mm of AA at the extreme edge.
-        // Note: edge_falloff above already pins shifted_uv to flipped_uv at
-        // the perimeter, so this smoothstep is purely an AA / clip safety
-        // net — it does not need to be wide.
+        // between the desktop image and the screen edge. 
         vec2 border = smoothstep(-0.001, 0.001, shifted_uv) * smoothstep(1.001, 0.999, shifted_uv);
         color.a = min(border.x, border.y);
         frag_color = color;
@@ -1107,10 +1102,126 @@ def add_logo(window):
         glfw_img = crop_icon(glfw_img)
         glfw.set_window_icon(window, 1, [glfw_img])
 
+
+class OverlayTextureRenderer:
+    """Small RGBA overlay rendered as a separate GL texture."""
+
+    VERTEX_SHADER = """
+        #version 330
+        in vec2 in_position;
+        in vec2 in_uv;
+        out vec2 uv;
+        void main() {
+            uv = in_uv;
+            gl_Position = vec4(in_position, 0.0, 1.0);
+        }
+    """
+
+    FRAGMENT_SHADER = """
+        #version 330
+        in vec2 uv;
+        out vec4 frag_color;
+        uniform sampler2D u_overlay;
+        void main() {
+            frag_color = texture(u_overlay, uv);
+        }
+    """
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.prog = ctx.program(
+            vertex_shader=self.VERTEX_SHADER,
+            fragment_shader=self.FRAGMENT_SHADER,
+        )
+        self.prog["u_overlay"].value = 0
+        self.texture = None
+        self.size = None
+        self.vbo = None
+        self.vao = None
+        self._geometry_key = None
+
+    def update_texture(self, rgba):
+        if rgba is None:
+            return False
+        h, w = rgba.shape[:2]
+        if w <= 0 or h <= 0:
+            return False
+        if self.texture is None or self.size != (w, h):
+            if self.texture is not None:
+                self.texture.release()
+            self.texture = self.ctx.texture((w, h), 4, dtype="f1")
+            self.texture.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self.size = (w, h)
+        self.texture.write(np.ascontiguousarray(rgba).tobytes())
+        return True
+
+    def clear(self):
+        if self.texture is not None:
+            try:
+                self.texture.release()
+            except Exception:
+                pass
+        self.texture = None
+        self.size = None
+        self._geometry_key = None
+
+    def render(self, window_size, position):
+        if self.texture is None or self.size is None:
+            return
+        win_w, win_h = window_size
+        tex_w, tex_h = self.size
+        if win_w <= 0 or win_h <= 0:
+            return
+        x, y = position
+        left = (x / win_w) * 2.0 - 1.0
+        right = ((x + tex_w) / win_w) * 2.0 - 1.0
+        top = 1.0 - (y / win_h) * 2.0
+        bottom = 1.0 - ((y + tex_h) / win_h) * 2.0
+        geometry_key = (win_w, win_h, tex_w, tex_h, x, y)
+        if self.vao is None or self._geometry_key != geometry_key:
+            verts = np.array([
+                left, bottom, 0.0, 1.0,
+                right, bottom, 1.0, 1.0,
+                left, top, 0.0, 0.0,
+                right, top, 1.0, 0.0,
+            ], dtype="f4")
+            if self.vbo is None:
+                self.vbo = self.ctx.buffer(verts.tobytes())
+            else:
+                self.vbo.orphan(verts.nbytes)
+                self.vbo.write(verts.tobytes())
+            if self.vao is None:
+                self.vao = self.ctx.vertex_array(
+                    self.prog, [(self.vbo, "2f 2f", "in_position", "in_uv")]
+                )
+            self._geometry_key = geometry_key
+
+        previous_viewport = self.ctx.viewport
+        self.ctx.viewport = (0, 0, win_w, win_h)
+        self.texture.use(location=0)
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self.vao.render(moderngl.TRIANGLE_STRIP)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.viewport = previous_viewport
+
+    def release(self):
+        for obj in (self.vao, self.vbo, self.texture, self.prog):
+            if obj is not None:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+        self.vao = None
+        self.vbo = None
+        self.texture = None
+        self.prog = None
+        self.size = None
+
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
 
-    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, feather_enabled=False, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, **kwargs):
+    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, feather_enabled=False, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, local_vsync=True, **kwargs):
         # Initialize with default values
         self._has_real_frame = False
         self.use_3d = use_3d
@@ -1135,6 +1246,7 @@ class StereoWindow:
         self.aspect = self.frame_size[0] / self.frame_size[1]
         self.fix_aspect = fix_aspect
         self.show_fps = show_fps
+        self.local_vsync = local_vsync
         self.stream_mode = stream_mode
         self.window_size = self.frame_size
         self.convergence = convergence
@@ -1246,7 +1358,7 @@ class StereoWindow:
         # Set up OpenGL context
         glfw.make_context_current(self.window)
         self.ctx = moderngl.create_context()
-        glfw.swap_interval(1) # VSync on
+        glfw.swap_interval(1 if self.local_vsync else 0)
         
         # Precompile shaders and create VAO
         self.prog = self.ctx.program(
@@ -1301,6 +1413,7 @@ class StereoWindow:
         self.leia_vao = self.ctx.vertex_array(
             self.leia_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
         )
+        self.overlay_renderer = OverlayTextureRenderer(self.ctx)
 
         # Initialize textures as None
         self.color_tex = None
@@ -1336,6 +1449,8 @@ class StereoWindow:
         self._cuda_integrated = False
 
     def __del__(self):
+        if hasattr(self, "overlay_renderer") and self.overlay_renderer is not None:
+            self.overlay_renderer.release()
         self.cleanup_cuda()
 
     def _init_cuda_pbos(self, width, height):
@@ -1358,12 +1473,11 @@ class StereoWindow:
 
             # Colour PBO (RGB8, 3 bytes/pixel) — only needed for the discrete-GPU
             # pinned upload path. Integrated GPUs upload colour via texture.write.
-            if not self._cuda_integrated:
-                self._pbo_color = glGenBuffers(1)
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
-                glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 3, None, GL_STREAM_DRAW)
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
-                self._cuda_resource_color = self._cudart.register_buffer(self._pbo_color)
+            self._pbo_color = glGenBuffers(1)
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
+            glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 3, None, GL_STREAM_DRAW)
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+            self._cuda_resource_color = self._cudart.register_buffer(self._pbo_color)
 
             # Depth PBO (float32, 4 bytes/pixel). Depth always lives on the GPU,
             # so a device-to-device copy is optimal on every backend/GPU type.
@@ -1472,18 +1586,34 @@ class StereoWindow:
     def cleanup_cuda(self):
         """Release CUDA resources and delete PBOs."""
         if self._cudart:
-            if self._cuda_resource_color:
-                self._cudart.unregister_resource(self._cuda_resource_color)
-            if self._cuda_resource_depth:
-                self._cudart.unregister_resource(self._cuda_resource_depth)
-            if self._pbo_color and bool(glDeleteBuffers):
-                glDeleteBuffers(1, [self._pbo_color])
-            if self._pbo_depth and bool(glDeleteBuffers):
-                glDeleteBuffers(1, [self._pbo_depth])
+            try:
+                if self._cuda_resource_color:
+                    self._cudart.unregister_resource(self._cuda_resource_color)
+            except Exception:
+                pass
+            try:
+                if self._cuda_resource_depth:
+                    self._cudart.unregister_resource(self._cuda_resource_depth)
+            except Exception:
+                pass
+            try:
+                if self._pbo_color and bool(glDeleteBuffers):
+                    glDeleteBuffers(1, [self._pbo_color])
+            except Exception:
+                pass
+            try:
+                if self._pbo_depth and bool(glDeleteBuffers):
+                    glDeleteBuffers(1, [self._pbo_depth])
+            except Exception:
+                pass
             # Release the persistent pinned staging buffer
             self._pinned_rgb = None
             self._pinned_rgb_ptr = None
             self._cudart = None
+            self._pbo_color = None
+            self._pbo_depth = None
+            self._cuda_resource_color = None
+            self._cuda_resource_depth = None
     
     def _calculate_depth_map_viewport(self, win_w, win_h, tex_w, tex_h):
         """Cached viewport calculation for depth map mode"""
@@ -1609,6 +1739,8 @@ class StereoWindow:
         """Handle window resize events"""
         self.window_size = (width, height)
         self._update_font()
+        self._overlay_cache['image'] = None
+        self._overlay_cache['fps_text'] = None
 
     def _update_font(self):
         """Update font size based on window dimensions"""
@@ -1808,6 +1940,103 @@ class StereoWindow:
         rgb_frame[pos_y:end_y, pos_x:end_x] = np.clip(blended, 0, 255).astype(np.uint8)
 
         return rgb_frame
+
+    def _update_overlay_texture(self):
+        """Refresh the small text overlay texture without touching the RGB frame."""
+        if self.font is None:
+            if self.overlay_renderer is not None:
+                self.overlay_renderer.clear()
+            return
+        if not (self.show_fps or self.show_depth_ratio or self.show_mouse_state):
+            if self.overlay_renderer is not None:
+                self.overlay_renderer.clear()
+            return
+
+        current_time = time.perf_counter()
+        self.show_depth_ratio = current_time - self.last_depth_change_time < self.depth_display_duration
+        self.show_mouse_state = current_time - self.last_mouse_toggle_time < self.mouse_display_duration
+        if not (self.show_fps or self.show_depth_ratio or self.show_mouse_state):
+            if self.overlay_renderer is not None:
+                self.overlay_renderer.clear()
+            return
+
+        cache = self._overlay_cache
+        if (cache.get('disp_fps') is None or
+                (current_time - cache.get('values_update', 0.0)) >= self.overlay_update_interval):
+            cache['disp_fps'] = self.actual_fps
+            cache['disp_latency'] = self.total_latency
+            cache['values_update'] = current_time
+
+        fps_text = f"FPS: {cache['disp_fps']:.1f}" if self.show_fps else ""
+        latency_text = f"Latency: {cache['disp_latency']:.1f} ms" if self.show_fps else ""
+        depth_text = f"Depth: {self.depth_ratio:.1f}" if self.show_depth_ratio else ""
+        mouse_text = f"Mouse: {'Pass' if getattr(self, 'mouse_pass_through', False) else 'Normal'}" if self.show_mouse_state else ""
+
+        if (fps_text == cache.get('fps_text') and
+                latency_text == cache.get('latency_text') and
+                depth_text == cache.get('depth_text') and
+                mouse_text == cache.get('mouse_text') and
+                cache.get('image') is not None):
+            return
+
+        overlay_arr = self._generate_overlay_image(fps_text, latency_text, depth_text, mouse_text)
+        cache['image'] = overlay_arr
+        cache['fps_text'] = fps_text
+        cache['latency_text'] = latency_text
+        cache['depth_text'] = depth_text
+        cache['mouse_text'] = mouse_text
+        cache['last_update'] = current_time
+        if overlay_arr is not None and self.overlay_renderer is not None:
+            self.overlay_renderer.update_texture(overlay_arr)
+        elif self.overlay_renderer is not None:
+            self.overlay_renderer.clear()
+
+    def _render_overlay(self):
+        if self.stream_mode is not None or self.overlay_renderer is None:
+            return
+        window_size = glfw.get_framebuffer_size(self.window)
+        win_w, win_h = window_size
+        base_x, base_y = self._overlay_cache.get(
+            'pos', (self.text_padding, self.text_padding)
+        )
+        positions = [(base_x, base_y)]
+
+        if self.display_mode == "Full-SBS" and self._texture_size:
+            tex_w, tex_h = self._texture_size
+            src_w, src_h = tex_w, tex_h
+            max_w, max_h = win_w / 2.0, win_h
+            render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+            center_y = win_h / 2.0
+            left_vp = (
+                int(win_w / 4.0 - render_w / 2),
+                int(center_y - render_h / 2),
+                render_w,
+                render_h,
+            )
+            right_vp = (
+                int(3 * win_w / 4.0 - render_w / 2),
+                int(center_y - render_h / 2),
+                render_w,
+                render_h,
+            )
+            positions = [
+                (left_vp[0] + base_x, win_h - (left_vp[1] + left_vp[3]) + base_y),
+                (right_vp[0] + base_x, win_h - (right_vp[1] + right_vp[3]) + base_y),
+            ]
+        elif self.display_mode == "Half-SBS":
+            positions = [
+                (base_x, base_y),
+                (max(base_x, win_w // 2 + base_x), base_y),
+            ]
+        elif self.display_mode in ("Full-TAB", "Half-TAB"):
+            positions = [
+                (base_x, base_y),
+                (base_x, max(base_y, win_h // 2 + base_y)),
+            ]
+
+        for position in positions:
+            self.overlay_renderer.render(window_size, position)
+
     def position_on_monitor(self, monitor_index=0):
         """Optimized monitor positioning"""
         monitors = glfw.get_monitors()
@@ -2000,42 +2229,25 @@ class StereoWindow:
                 self.show_mouse_state = True
 
     def update_frame(self, rgb, depth, current_fps=None, current_latency=None):
-        """Optimized frame update – tries CUDA zero‑copy, falls back to CPU."""
-        # Convert tensors to numpy for overlay (always CPU)
-        if hasattr(depth, 'detach'):
-            depth_np = depth.detach().cpu().contiguous().float().numpy()
-        else:
-            depth_np = depth
-
-        if hasattr(rgb, 'detach'):
-            try:
-                rgb_np = rgb.permute(1, 2, 0).detach().contiguous().clamp(0, 255).to(torch.uint8).cpu().numpy()
-            except RuntimeError as e:
-                print(f"[update_frame] RuntimeError converting RGB tensor to numpy: {e}")
-                rgb_np = None
-            except Exception as e:
-                print(f"[update_frame] Error converting RGB tensor to numpy: {e}")
-                rgb_np = None
-        else:
-            rgb_np = rgb
-
-        # Add overlay (CPU only)
-        if self.display_mode != "Depth Map":
-            rgb_with_overlay = self._add_overlay(rgb_np)
-        else:
-            rgb_with_overlay = rgb_np
-
-        # Update FPS/Latency
+        """Update frame textures. CUDA tensors stay on GPU when GL interop works."""
         if current_fps is not None:
             self.actual_fps = current_fps
         if current_latency is not None:
             self.total_latency = current_latency * 1000
-        try:
-            h, w, _ = rgb_with_overlay.shape
-        except AttributeError:
-            return
 
-        # Recreate textures and PBOs if size changed
+        if hasattr(rgb, "detach"):
+            rgb_shape = tuple(rgb.shape)
+            if len(rgb_shape) == 3 and rgb_shape[0] in (3, 4):
+                h, w = int(rgb_shape[1]), int(rgb_shape[2])
+            else:
+                h, w = int(rgb_shape[0]), int(rgb_shape[1])
+        else:
+            rgb_np = np.asarray(rgb)
+            h, w = rgb_np.shape[:2]
+
+        if self.stream_mode is None:
+            self._update_overlay_texture()
+
         if self._texture_size != (w, h):
             if self.color_tex:
                 self.color_tex.release()
@@ -2058,41 +2270,62 @@ class StereoWindow:
 
         # Try CUDA zero‑copy path first
         cuda_success = False
-        if self.use_cuda and self._cudart is not None:
+        if self.stream_mode is None and self.use_cuda and self._cudart is not None:
             try:
-                # Depth must be a GPU tensor for the device-to-device copy.
+                if not (hasattr(rgb, 'is_cuda') and rgb.is_cuda):
+                    raise RuntimeError("RGB tensor not on GPU")
                 if not (hasattr(depth, 'is_cuda') and depth.is_cuda):
                     raise RuntimeError("Depth tensor not on GPU")
+                if self._cuda_resource_color is None or self._pbo_color is None:
+                    raise RuntimeError("Colour PBO not available")
 
-                # Depth stays on the GPU -> device-to-device copy (true zero-copy).
+                rgb_gpu = rgb.detach()
+                if rgb_gpu.ndim == 3 and rgb_gpu.shape[0] in (3, 4):
+                    rgb_gpu = rgb_gpu[:3].permute(1, 2, 0)
+                elif rgb_gpu.ndim == 3 and rgb_gpu.shape[-1] >= 3:
+                    rgb_gpu = rgb_gpu[..., :3]
+                else:
+                    raise RuntimeError(f"Unsupported RGB tensor shape: {tuple(rgb_gpu.shape)}")
+                rgb_gpu = rgb_gpu.contiguous().clamp(0, 255).to(torch.uint8)
                 depth_gpu = depth.contiguous().float()
 
-                # Make sure the producer kernels (and the .contiguous()/.float()
-                # conversion just enqueued) have finished before the interop copies
-                # read the memory. Syncing only the current stream avoids a full
-                # device-wide stall while staying correct on non-default streams.
                 torch.cuda.current_stream(self.cuda_device_id).synchronize()
-
-                # Colour: composited on the CPU. Discrete GPUs use a pinned PBO
-                # Host->Device upload; integrated GPUs use a direct texture write
-                # (no PCIe bus, so the PBO dance would only add overhead).
-                self._upload_color(rgb_with_overlay)
+                self._upload_color_cuda(rgb_gpu)
                 self._upload_depth_cuda(depth_gpu)
                 cuda_success = True
             except Exception as e:
-                self.use_cuda = False   # permanently disable CUDA for this instance
+                print(f"[update_frame] CUDA-GL upload disabled: {e}")
+                self.use_cuda = False
                 self.cleanup_cuda()
 
         # Fallback to CPU path if CUDA failed or not available
         if not cuda_success:
+            if hasattr(depth, 'detach'):
+                depth_np = depth.detach().cpu().contiguous().float().numpy()
+            else:
+                depth_np = np.asarray(depth, dtype=np.float32)
+
+            if hasattr(rgb, 'detach'):
+                try:
+                    rgb_np = rgb.permute(1, 2, 0).detach().contiguous().clamp(0, 255).to(torch.uint8).cpu().numpy()
+                except RuntimeError as e:
+                    print(f"[update_frame] RuntimeError converting RGB tensor to numpy: {e}")
+                    return
+                except Exception as e:
+                    print(f"[update_frame] Error converting RGB tensor to numpy: {e}")
+                    return
+            else:
+                rgb_np = np.asarray(rgb)
+
+            if self.stream_mode is not None and self.display_mode != "Depth Map":
+                rgb_np = self._add_overlay(rgb_np)
+
             if self.display_mode == "Depth Map" and not self.show_original_in_depth_mode:
                 self.depth_tex.write(depth_np.tobytes())
                 if self._last_display_mode != "Depth Map" or self._last_show_original != self.show_original_in_depth_mode:
-                    rgb_u8 = rgb_with_overlay.astype('uint8', copy=False)
-                    self.color_tex.write(rgb_u8.tobytes())
+                    self.color_tex.write(rgb_np.astype('uint8', copy=False).tobytes())
             else:
-                rgb_u8 = rgb_with_overlay.astype('uint8', copy=False)
-                self.color_tex.write(rgb_u8.tobytes())
+                self.color_tex.write(rgb_np.astype('uint8', copy=False).tobytes())
                 self.depth_tex.write(depth_np.tobytes())
 
         # Cache current state
@@ -2231,6 +2464,7 @@ class StereoWindow:
                 self.depth_vao.render(moderngl.TRIANGLE_STRIP)
             
             # Skip swap buffers if frame hasn't changed (for headless/streaming modes)
+            self._render_overlay()
             if self.stream_mode is None:
                 glfw.poll_events()
             return
@@ -2304,6 +2538,7 @@ class StereoWindow:
                 self.leia_prog['u_viewport'].value = viewport
                 self.leia_vao.render(moderngl.TRIANGLE_STRIP)
 
+            self._render_overlay()
             if self.stream_mode is None:
                 glfw.poll_events()
             return
@@ -2572,5 +2807,6 @@ class StereoWindow:
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
         # Skip swap buffers if window is not visible (for headless/streaming)
+        self._render_overlay()
         if self.stream_mode is None:
             glfw.poll_events()

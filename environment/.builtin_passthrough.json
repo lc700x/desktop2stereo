@@ -1,21 +1,57 @@
 {
+  "displayName": "Passthrough",
+  "model_position": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "model_rotation_deg": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "model_scale": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "head_light_color": [
+    0.45,
+    0.45,
+    0.48
+  ],
+  "ambient_color": [
+    0.08,
+    0.08,
+    0.09
+  ],
+  "env_exposure": 1.0,
+  "env_gamma": 2.2,
+  "env_emissive_strength": 1.0,
+  "env_khr_light_scale": 1.0,
+  "env_fill_lights": [],
   "screen": {
     "width": 2.4,
-    "distance": 1.5549194531000554,
-    "pan_x": 0.047792812743897635,
-    "pan_y": 1.1408567428588867,
-    "yaw": -0.033242397934823226,
-    "pitch": 0.0,
-    "roll": 0.0,
-    "ref_size": 2.4,
+    "position": [
+      -0.02501685510816351,
+      1.2981691056879543,
+      -2.245090089881363
+    ],
+    "rotation_deg": [
+      0.6495897501302724,
+      4.297937838731912,
+      0.0
+    ],
     "curved": false,
     "allow_curve": false,
-    "screen_node_index": null,
-    "screen_node_indices": [],
+    "ref_size": 2.4,
     "offset": [
       0.0,
       0.0,
       0.0
-    ]
-  }
+    ],
+    "screen_node_index": null,
+    "screen_node_indices": []
+  },
+  "screen_light_intensity": 3.5
 }

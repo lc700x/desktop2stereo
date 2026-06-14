@@ -629,6 +629,7 @@ FP16 = settings["FP16"]
 MONITOR_INDEX,  DISPLAY_MODE = settings["Monitor Index"], settings["Display Mode"]
 OUTPUT_RESOLUTION = 8640
 SHOW_FPS, DEPTH_STRENGTH = settings["Show FPS"], settings["Depth Strength"]
+XR_PREVIEW_WINDOW = settings.get("XR Preview Window", True)
 IPD = settings["IPD"]
 CONVERGENCE = settings["Convergence"]
 CAPTURE_MODE = settings["Capture Mode"]
@@ -704,10 +705,10 @@ if LANG == "CN":
         ("左 Y 键", "短按", "恢复默认居中显示", False),
         ("左 Y 键", "长按 1s", "循环屏幕预设", False),
         ("左 X 键", "短按", "显示/隐藏虚拟键盘", False),
-        ("左 X 键", "长按 1s", "循环背景颜色", False),
+        ("左 X 键", "长按 1s", "切换透视绿幕", False),
         ("右 A 键", "短按", "屏幕曲面/平面切换", False),
         ("右 A 键", "长按 1s", "循环面板模式: 面向头/固定/隐藏", False),
-        ("右 B 键", "短按", "切换VDXR绿屏/背景色", False),
+        ("右 B 键", "短按", "鼠标右键", False),
         ("右 B 键", "长按 1s", "重置屏幕方向", False),
         ("", "", "", False),
 
@@ -766,10 +767,10 @@ else:
         ("Left Y button", "Short press", "Reset to default centered display", False),
         ("Left Y button", "Long press 1s", "Cycle screen presets", False),
         ("Left X button", "Short press", "Show/hide virtual keyboard", False),
-        ("Left X button", "Long press 1s", "Cycle background color", False),
+        ("Left X button", "Long press 1s", "Toggle passthrough green", False),
         ("Right A button", "Short press", "Toggle curved/flat screen", False),
         ("Right A button", "Long press 1s", "Cycle panel: head-facing/fixed/hidden", False),
-        ("Right B button", "Short press", "Toggle VDXR green / background", False),
+        ("Right B button", "Short press", "Right mouse click", False),
         ("Right B button", "Long press 1s", "Reset screen direction", False),
         ("", "", "", False),
 
@@ -837,12 +838,13 @@ CONTROLLER_MODEL = settings["Controller Model"]
 # Active environment (GUI dropdown).  String values (Title Case in YAML,
 # but xrviewer normalises with .strip().lower() so legacy lowercase
 # entries from older settings.yaml files keep working):
-#   "Default"      -> opaque black backdrop, no env model (alias: legacy "Black")
-#   "Passthrough"  -> VDXR green backdrop, no env model
-#   "Dark Room"    -> built-in procedural room (walls/floor/ceiling) so the
-#                     cinema bias light has real surfaces to bounce off
-#   "<folder>"     -> name of a subfolder under environment/ containing
-#                     environment.glb (and optional profile.json)
+#   "Default"            -> opaque black backdrop, no env model (alias: legacy "Black")
+#   "Default with Glow"  -> black backdrop + 1.5x cinema glow
+#   "Dark Room"          -> built-in procedural room (walls/floor/ceiling) so the
+#                           cinema bias light has real surfaces to bounce off
+#   "<folder>"           -> name of a subfolder under environment/ containing
+#                           environment.glb (and optional profile.json)
+# Passthrough green is a runtime toggle (long-press X), not a dropdown option.
 ACTIVE_ENVIRONMENT = settings.get("Active Environment", "Default")
 
 # Initialize Device

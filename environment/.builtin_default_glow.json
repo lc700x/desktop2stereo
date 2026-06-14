@@ -1,5 +1,4 @@
 {
-  "displayName": "Default",
   "model_position": [
     0.0,
     0.0,
@@ -15,21 +14,6 @@
     1.0,
     1.0
   ],
-  "head_light_color": [
-    0.45,
-    0.45,
-    0.48
-  ],
-  "ambient_color": [
-    0.08,
-    0.08,
-    0.09
-  ],
-  "env_exposure": 1.0,
-  "env_gamma": 2.2,
-  "env_emissive_strength": 1.0,
-  "env_khr_light_scale": 1.0,
-  "env_fill_lights": [],
   "screen": {
     "width": 2.4,
     "position": [
@@ -53,5 +37,19 @@
     "screen_node_index": null,
     "screen_node_indices": []
   },
-  "screen_light_intensity": 3.5
+  "head_light_color": [
+    0.45,
+    0.45,
+    0.48
+  ],
+  "ambient_color": [
+    0.08,
+    0.08,
+    0.09
+  ],
+  "env_exposure": 1.0,
+  "env_gamma": 2.2,
+  "env_emissive_strength": 1.0,
+  "env_khr_light_scale": 1.0,
+  "env_fill_lights": []
 }

@@ -10,7 +10,7 @@ import contextlib
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, FORCE_FP32_KEYWORDS
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, FORCE_FP32_KEYWORDS, CAPTURE_MODE
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -256,14 +256,15 @@ def get_model_path(model_id, cache_dir):
         f"No supported model file found in {model_id}"
     )
 
-# Resize-alignment factor: 14 for DINOv2-based, 16 for InfiniDepth, None => square.
+# Resize-alignment factor for model families that need or benefit from
+# aspect-preserving patch-aligned input. Legacy HF/DPT-style models stay on the
+# fixed-square path used by depth0.py so their steady-state FPS does not regress.
 def get_patch_size():
-    mid = MODEL_ID.lower()
-    if "depthpro" in mid:
+    if CAPTURE_MODE == "Window":
         return None
-    if "infinidepth" in mid:
+    if "infinidepth" in MODEL_ID.lower():
         return 16
-    if "da3" in mid or "any" in mid or "dinov2" in mid:
+    if "da3" in MODEL_ID.lower() or "any" in MODEL_ID.lower() or "dinov2" in MODEL_ID.lower():
         return 14
     return None
 
@@ -385,13 +386,11 @@ font_dict = {
 
 # Model casting helper
 def maybe_autocast(device, enabled=True):
-    stack = contextlib.ExitStack()
-    if device.type == "privateuseone":
-        stack.enter_context(torch.no_grad())
-    else:
-        stack.enter_context(torch.inference_mode())
-        stack.enter_context(torch.autocast(device_type=device.type, enabled=enabled))
-    return stack
+    return (
+        torch.autocast(device_type=device.type, enabled=enabled)
+        if device.type != "privateuseone"
+        else contextlib.nullcontext()
+    )
 
 # check if it is metric model
 def is_metric():
@@ -534,13 +533,13 @@ def post_process_depth(depth):
     # normalize() mirrors the official DA3 visualize_depth: it does the 1/depth
     # inversion (gated on is_metric()) + 2nd/98th percentile clip + min-max, all
     # on GPU. So no separate reciprocal_() here — that would double-invert.
-    depth = normalize_tensor(depth).squeeze()
+    depth = normalize(depth).squeeze()
     depth = apply_gamma(depth)
     depth = apply_foreground_scale(depth, scale=FOREGROUND_SCALE)
     depth = anti_alias(depth, strength=AA_STRENGTH)
     return depth
 
-def normalize(depth, percentile=2.0, subsample_cap=1_048_576):
+def normalize(depth, percentile=2.0, subsample_cap=6_144):
     """GPU-tensor version of the official DA3 visualize_depth normalization.
 
     Mirrors models/depth_anything_3/utils/visualize.py: invert (1/depth) on the
@@ -552,10 +551,10 @@ def normalize(depth, percentile=2.0, subsample_cap=1_048_576):
     if is_metric():
         valid = d > 0
         inv = torch.where(valid, 1.0 / d.clamp(min=1e-12), d)
+        v = inv[valid]
     else:
-        valid = torch.isfinite(d)
         inv = d
-    v = inv[valid]
+        v = inv.flatten()
     if v.numel() <= 10:
         dmin = torch.zeros((), device=d.device)
         dmax = torch.zeros((), device=d.device)
@@ -1030,10 +1029,10 @@ class TensorRTEngine:
             outputs[name] = out
             self.context.set_tensor_address(name, out.data_ptr())
 
-        # Execute on the current CUDA stream and wait for completion
+        # Execute on the current CUDA stream. Downstream same-stream torch ops
+        # consume the output in order, so an explicit per-frame sync just costs FPS.
         stream = torch.cuda.current_stream(self.device)
         self.context.execute_async_v3(stream_handle=stream.cuda_stream)
-        stream.synchronize()
 
         return outputs['predicted_depth']
 
@@ -1210,17 +1209,18 @@ class DepthModelWrapper:
             return self.model(tensor)
 
         """Run inference using the active backend."""
-        with maybe_autocast(self.device, enabled=FP16):
-            if self.backend == "PyTorch":
-                if "video-depth-anything" in MODEL_ID.lower():
-                    return self.model(pixel_values=tensor, fp32=not FP16)
-                elif "da3" in MODEL_ID.lower() or "infinidepth" in MODEL_ID.lower():
-                    return self.model.predict_depth(tensor, fp32=not FP16)
+        with torch.no_grad():
+            with maybe_autocast(self.device, enabled=FP16):
+                if self.backend == "PyTorch":
+                    if "video-depth-anything" in MODEL_ID.lower():
+                        return self.model(pixel_values=tensor, fp32=not FP16)
+                    elif "da3" in MODEL_ID.lower() or "infinidepth" in MODEL_ID.lower():
+                        return self.model.predict_depth(tensor, fp32=not FP16)
+                    else:
+                        return self.model(pixel_values=tensor).predicted_depth
                 else:
-                    return self.model(pixel_values=tensor).predicted_depth
-            else:
-                # TensorRT, CoreML
-                return self.model(tensor)
+                    # TensorRT, CoreML
+                    return self.model(tensor)
 
 # Initialize model wrapper
 model_wraper = DepthModelWrapper(
@@ -1270,9 +1270,14 @@ def _ensure_engine_built(engine_h, engine_w):
         if _engine_ready:
             return
         ENGINE_H, ENGINE_W = engine_h, engine_w
-        ONNX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.onnx")
-        TRT_PATH    = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.trt")
-        COREML_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.mlpackage")
+        if engine_h == DEPTH_RESOLUTION and engine_w == DEPTH_RESOLUTION:
+            ONNX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.onnx")
+            TRT_PATH    = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
+            COREML_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.mlpackage")
+        else:
+            ONNX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.onnx")
+            TRT_PATH    = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.trt")
+            COREML_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.mlpackage")
         model_wraper.build_accelerated_backend(engine_h, engine_w, ONNX_PATH, TRT_PATH, COREML_PATH)
         warmup_model(model_wraper, engine_h, engine_w, steps=3)
         _engine_ready = True
@@ -1345,12 +1350,12 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
     tensor = tensor.contiguous()
 
     # Tensor now has the final model-input shape; build engine + warmup once.
-    _, _, eh, ew = tensor.shape
-    _ensure_engine_built(eh, ew)
+    if not _engine_ready:
+        _, _, eh, ew = tensor.shape
+        _ensure_engine_built(eh, ew)
 
     # Model inference with appropriate autocast context
-    with maybe_autocast(DEVICE, enabled=FP16):
-        depth = model_wraper(tensor)
+    depth = model_wraper(tensor)
             
     # POST-PROCESSING
     with torch.no_grad():

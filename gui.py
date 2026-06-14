@@ -270,9 +270,10 @@ UI_TEXTS = {
         "Lossless Scaling Support": "LSFG",
         "3D Monitor": "3D Monitor",
         "OpenXR Link": "OpenXR Link",
+        "XR Preview Window": "XR Preview Window",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
-       "Preview":"Preview",
+        "Preview":"Preview",
         "Stream Quality:": "Stream Quality:",
         "Host": "Host:",
         "Invalid port number (1-65535)": "Invalid port number (must be between 1-65535)",
@@ -309,9 +310,9 @@ UI_TEXTS = {
         "tooltip_run_mode": "Output mode",
         "tooltip_display_mode": "Stereo display format",
         "tooltip_ctrl_model": "Controller model",
-        "tooltip_env_model": "Background environment: Default (black), Passthrough (green see-through), Dark Room (procedural room), or a 3D scene from environment/",
+        "tooltip_env_model": "Background environment: Default (black), Default with Glow (black + 1.5x cinema glow), Dark Room (procedural room), or a 3D scene from environment/",
         "Default": "Default",
-        "Passthrough": "Passthrough",
+        "Default with Glow": "Default with Glow",
         "Dark Room": "Dark Room",
         "tooltip_capture_mode": "Source: monitor or window",
         "tooltip_monitor": "Input monitor",
@@ -396,6 +397,7 @@ UI_TEXTS = {
         "Lossless Scaling Support": "小黄鸭",
         "3D Monitor": "3D显示器",
         "OpenXR Link": "OpenXR串流",
+        "XR Preview Window": "XR预览窗口",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
         "Preview": "预览",
@@ -411,7 +413,7 @@ UI_TEXTS = {
         "Failed to load settings.yaml:": "加载 settings.yaml 失败：",
         "Opening URL in browser": "正在浏览器中打开网址",
         "Controller:": "手柄模型：",
-        "Environment:": "环境：",
+        "Environment:": "虚拟环境：",
         "Capture Tool:": "捕获工具:",
         "Fill 16:9": "16:9",
         "Fix Viewer Aspect": "锁定比例",
@@ -435,9 +437,9 @@ UI_TEXTS = {
         "tooltip_run_mode": "输出模式",
         "tooltip_display_mode": "立体显示格式",
         "tooltip_ctrl_model": "手柄型号",
-        "tooltip_env_model": "背景环境：默认（黑色）、透视（绿幕）、暗室（程序化房间），或 environment/ 中的 3D 场景",
+        "tooltip_env_model": "背景环境：默认（黑色）、默认+辉光（黑色 + 1.5倍影院辉光）、暗室（程序化房间），或 environment/ 中的 3D 场景",
         "Default": "默认",
-        "Passthrough": "透视",
+        "Default with Glow": "默认+辉光",
         "Dark Room": "暗室",
         "tooltip_capture_mode": "捕获源：屏幕或窗口",
         "tooltip_monitor": "输入显示器",
@@ -497,6 +499,7 @@ DEFAULTS = {
     "Computing Device": 0,
     "Language": "EN",
     "Run Mode": "OpenXR Link",
+    "XR Preview Window": False,
     "Stream Protocol": "HLS",
     "Streamer Port": DEFAULT_PORT,
     "Stream Quality": 100,
@@ -1300,6 +1303,10 @@ class Desktop2StereoGUI:
         self.display_mode_dd = CompactDropdown(
             options=[m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Mono", "Leia"]],
             value="Half-SBS", width=S(130))
+        self.xr_preview_cb = ft.Checkbox(
+            label="XR Preview Window",
+            value=DEFAULTS.get("XR Preview Window", True),
+        )
         self.r10_label = ft.Text("Controller:", size=FONT_SIZE, width=S(130))
         try:
             ctrl_base = os.path.join(os.path.dirname(__file__), "controllers")
@@ -1313,14 +1320,14 @@ class Desktop2StereoGUI:
             value="PICO", width=S(130))
 
         # Environment dropdown — sits to the right of the controller picker.
-        # Options are the three built-in backdrops ("Default", "Passthrough",
+        # Options are the built-in backdrops ("Default", "Default with Glow",
         # "Dark Room") plus every subfolder under environment/ that contains
         # an environment.glb, matching the runtime cycle in xrviewer's
-        # _cycle_background.
-        #   * Default    -> plain opaque-black backdrop (no env model)
-        #   * Passthrough-> VDXR green slot (see-through on supported runtimes)
-        #   * Dark Room  -> built-in procedural room (walls/floor/ceiling)
-        #                   so the cinema bias light has surfaces to bounce off
+        # _cycle_environment.
+        #   * Default           -> plain opaque-black backdrop (no env model)
+        #   * Default with Glow -> black backdrop + 1.5x cinema glow
+        #   * Dark Room         -> built-in procedural room (walls/floor/ceiling)
+        #                          so the cinema bias light has surfaces to bounce off
         # Built-in names are localized for display (e.g. CN: 默认 / 透视 / 暗室)
         # while the canonical English key is stored in self.env_key and used
         # for settings.yaml + the xrviewer matcher. User folder names under
@@ -1336,7 +1343,7 @@ class Desktop2StereoGUI:
         except (FileNotFoundError, OSError):
             env_dirs = []
         self._env_base = env_base
-        self._env_builtin_keys = ["Default", "Passthrough", "Dark Room"]
+        self._env_builtin_keys = ["Default", "Default with Glow", "Dark Room"]
         self._env_folder_keys = sorted(env_dirs)
         # Cache per-folder display_name dicts so we don't hit the disk on
         # every language toggle. Populated lazily by _load_env_display_names.
@@ -1348,10 +1355,13 @@ class Desktop2StereoGUI:
             value=self._env_display_label("Default", self.language),
             on_select=self.on_env_change,
             width=S(130))
+        self._xr_preview_spacer = ft.Container(width=S(40))
         self.row7a = ft.Row([
             self.r7a_label,
             self.run_mode_dd,
             ft.Container(width=S(40)),
+            self.xr_preview_cb,
+            self._xr_preview_spacer,
             self.r7b_label,
             self.display_mode_dd
         ], spacing=1)
@@ -1645,6 +1655,7 @@ class Desktop2StereoGUI:
         self.update_depth_resolution_options(self.current_model_name)
         self.depth_strength_dd.value = str(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
         self.display_mode_dd.value = cfg.get("Display Mode", DEFAULTS["Display Mode"])
+        self.xr_preview_cb.value = cfg.get("XR Preview Window", DEFAULTS["XR Preview Window"])
         self.antialiasing_dd.value = str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"]))
         self.foreground_scale_dd.value = str(cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"]))
         self.convergence_dd.value = str(cfg.get("Convergence", DEFAULTS["Convergence"]))
@@ -2095,6 +2106,8 @@ class Desktop2StereoGUI:
         }
         self.run_mode_dd.value = mode_reverse.get(mode, texts["Local Viewer"])
         is_openxr = mode == "OpenXR Link"
+        self.xr_preview_cb.visible = is_openxr
+        self._xr_preview_spacer.visible = is_openxr
         self.r7b_label.visible = not is_openxr
         self.display_mode_dd.visible = not is_openxr
         self.row7b.visible = is_openxr
@@ -2209,6 +2222,7 @@ class Desktop2StereoGUI:
         self.r6_label.value = t["Capture Tool:"]
         self.r7a_label.value = t["Run Mode:"]
         self.r7b_label.value = t["Display Mode:"]
+        self.xr_preview_cb.label = t.get("XR Preview Window", "XR Preview Window")
         self.r9_label.value = t["Stereo Output:"]
         self.theme_label.value = t["Theme:"]
         theme_display = ["System","Blue","Green","Red","Purple","Orange","Teal","Pink","Grey"]
@@ -2222,7 +2236,7 @@ class Desktop2StereoGUI:
         self.lossless_cb.label = t["Lossless Scaling Support"]
         self.r10_label.value = t["Controller:"]
         self.r11_label.value = t["Environment:"]
-        # Environment: localize built-in option labels (Default / Passthrough /
+        # Environment: localize built-in option labels (Default / Default with Glow /
         # Dark Room) AND folder labels via each folder's profile.json
         # "display_name" field, while keeping folder names verbatim as the
         # canonical key. self.env_key is the canonical English key that
@@ -2635,6 +2649,7 @@ class Desktop2StereoGUI:
             "Computing Device": self.device_label_to_index.get(self.device_dd.value, DEFAULTS["Computing Device"]),
             "Language": self.language,
             "Run Mode": self.run_mode_key,
+            "XR Preview Window": self.xr_preview_cb.value,
             "Stream Protocol": self.stream_proto_dd.value,
             "Streamer Port": self._parse_int(self.stream_port_tf.value, DEFAULTS["Streamer Port"]),
             "Stream Quality": self._parse_int(self.stream_quality_dd.value, DEFAULTS["Stream Quality"]),
@@ -2655,7 +2670,7 @@ class Desktop2StereoGUI:
             "Audio Delay": self._parse_float(self.audio_delay_tf.value, DEFAULTS["Audio Delay"]),
             "Stereo Output": stereo_idx,
             "Controller Model": self.ctrl_model_dd.value,
-            # Persist the canonical English key (Default / Passthrough /
+            # Persist the canonical English key (Default / Default with Glow /
             # Dark Room / <folder>) so xrviewer's _init_env_model matcher
             # and a hand-edited settings.yaml stay language-agnostic, even
             # when the GUI is currently displaying CN labels (默认/透视/暗室).

@@ -326,10 +326,12 @@ TensorRT: null
 Recompile TensorRT: false
 CoreML: null
 Recompile CoreML: false
+OpenVINO: null
 Recompile OpenVINO: false
 Computing Device: 0
 Language: EN
 Run Mode: OpenXR Link
+XR Preview Window: false
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
@@ -344,4 +346,3 @@ Capture Tool: none
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stereo Output: null
-OpenVINO: null

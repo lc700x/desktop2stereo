@@ -36,7 +36,8 @@ from OpenGL.GL import (
     glTexParameterf, GL_TEXTURE_LOD_BIAS,
     glMapBuffer, glUnmapBuffer, GL_READ_ONLY, GL_MAP_UNSYNCHRONIZED_BIT,
     glClear, glReadPixels, glFlush, glGenTextures, glDeleteTextures,
-    glFinish,
+    glFenceSync, glClientWaitSync, glDeleteSync,
+    GL_SYNC_GPU_COMMANDS_COMPLETE, GL_SYNC_FLUSH_COMMANDS_BIT,
 )
 
 try:
@@ -65,7 +66,7 @@ KB_CURSOR_PRIORITY_BIAS = 0.060
 # ownership doesn't snap to the screen while the user lifts off toward it.
 KB_CURSOR_RELEASE_GRACE = 0.12
 
-# 鈹€鈹€ Windows multi-touch injection (Pointer Input API) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+#  Windows multi-touch injection (Pointer Input API) 
 # Each VR controller becomes a Windows touch contact, so trigger clicks, drags
 # (incl. window title-bar drag), and two-controller multi-touch gestures
 # (pinch/zoom, two-finger pan, press-and-hold right-click) all route through
@@ -1117,7 +1118,7 @@ if sys.platform == "win32":
         except (ImportError, AttributeError):
             return False
 
-    # EXT_memory_object_win32 helpers (cross-vendor, GL 4.5+) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    # EXT_memory_object_win32 helpers (cross-vendor, GL 4.5+) 
     _ext_mem_available       = False
     _glImportMemoryWin32HandleEXT  = None
     _glTextureStorageMem2DEXT      = None
@@ -1343,6 +1344,21 @@ void main() {
 }
 """
 
+# Fullscreen swizzle blit: copies an RGBA texture into a target that the
+# compositor reads as BGRA. Used by the EXT_memory_object interop path when the
+# OpenXR runtime hands us a BGRA swapchain.
+_BLIT_FRAG = """
+#version 330
+uniform sampler2D u_src;
+uniform int u_swap_rb;
+in vec2 uv;
+out vec4 fragColor;
+void main() {
+    vec4 c = texture(u_src, uv);
+    fragColor = (u_swap_rb != 0) ? c.bgra : c;
+}
+"""
+
 # Solid-color vertex shader (no UV avoids GLSL optimizer stripping in_uv)
 _SOLID_VERT = """
 #version 330
@@ -1393,13 +1409,10 @@ void main() {
 }
 """
 
-# Background color presets: (r, g, b) in linear [0,1].  Index 0 = opaque black (default).
+# Background color presets: (r, g, b) in linear [0,1].
+# Index 0 = opaque black (default), Index 1 = green screen (VD passthrough).
 _BG_COLORS = [
     (0.000, 0.000, 0.000),   # default opaque black
-    (0.827, 0.827, 0.827),   # light grey
-    (0.196, 0.196, 0.216),   # charcoal
-    (0.047, 0.071, 0.149),   # dark navy
-    (0.937, 0.886, 0.820),   # warm beige
     (0.000, 0.600, 0.200),   # green screen (VD passthrough)
 ]
 
@@ -1542,6 +1555,22 @@ uniform vec2 u_tex_scale;        // KHR_texture_transform scale
 uniform vec3 u_light_dir;        // KHR_lights_punctual directional light
 uniform vec3 u_light_intensity;  // light_color * intensity for directional light
 
+// Fill lights (viewer-side point lights with range attenuation)
+uniform int   u_fill_light_enabled0; // 0=skip, 1=evaluate
+uniform vec3  u_fill_light_pos0;
+uniform vec3  u_fill_light_color0;
+uniform float u_fill_light_range0;
+uniform int   u_fill_light_enabled1;
+uniform vec3  u_fill_light_pos1;
+uniform vec3  u_fill_light_color1;
+uniform float u_fill_light_range1;
+
+// Post-processing controls
+uniform float u_env_exposure;
+uniform float u_env_gamma;
+uniform float u_emissive_strength;
+uniform float u_base_alpha;
+
 // --- Cinema "bias light" rectangular area light ----------------------------
 // The virtual screen acts as an emissive rectangular source (analogous to a
 // real TV's ambient bias light, e.g. Philips Hue Play behind a display).  We
@@ -1585,13 +1614,49 @@ float GeometrySmith(float NdotV, float NdotL, float roughness) {
     return GeometrySchlickGGX(NdotV, roughness) * GeometrySchlickGGX(NdotL, roughness);
 }
 
+// Reusable PBR evaluation for a single light source.
+// Extracts the inline Cook-Torrance GGX math so fill lights can share it
+// without duplicating the entire BRDF per light.
+vec3 pbrLight(vec3 N, vec3 V, vec3 baseColor, float metallic, float roughness,
+              vec3 L, vec3 lightColor, float attenuation) {
+    if (attenuation <= 0.0 || length(lightColor) <= 0.001) return vec3(0.0);
+    float NdotL = max(dot(N, L), 0.0);
+    if (NdotL <= 0.0) return vec3(0.0);
+
+    vec3 H = normalize(L + V);
+    float NdotV = max(dot(N, V), 0.001);
+    float NdotH = max(dot(N, H), 0.0);
+    float VdotH = max(dot(V, H), 0.0);
+    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+
+    float D = DistributionGGX(NdotH, roughness);
+    float G = GeometrySmith(NdotV, NdotL, roughness);
+    vec3 F = fresnelSchlick(VdotH, F0);
+    vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
+
+    vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
+    vec3 diffuse = kD * baseColor / PI;
+    return (diffuse + specular) * lightColor * NdotL * attenuation;
+}
+
+// Soft range attenuation: 1/(1 + 4*(d/r)^2) — cheap (2 muls, 1 add, 1 rcp).
+float softRangeAttenuation(float dist, float rangeMeters) {
+    float r = max(rangeMeters, 0.001);
+    float x = dist / r;
+    return 1.0 / (1.0 + x * x * 4.0);
+}
+
 void main() {
     // KHR_texture_transform: compute transformed UV (glTF spec)
     vec2 t_uv = v_uv * u_tex_scale + u_tex_offset;
 
-    // alphaMode MASK: early discard (glTF spec 搂3.9.4)
+    // Compute texture alpha early for MASK discard and BLEND output.
+    float texAlpha = (u_use_texture == 1) ? texture(u_tex, t_uv).a : 1.0;
+    float materialAlpha = clamp(texAlpha * u_base_alpha, 0.0, 1.0);
+
+    // alphaMode MASK: early discard (glTF spec 3.9.4)
     if (u_alpha_mode == 1 && u_use_texture == 1) {
-        if (texture(u_tex, t_uv).a < u_alpha_cutoff) discard;
+        if (materialAlpha < u_alpha_cutoff) discard;
     }
 
     vec3 N = normalize(v_normal);
@@ -1649,7 +1714,7 @@ void main() {
 
     // KHR_materials_unlit: skip all lighting, output baseColor directly
     if (u_unlit == 1) {
-        float alpha = (u_alpha_mode == 2) ? texture(u_tex, t_uv).a : 1.0;
+        float alpha = (u_alpha_mode == 2 || u_base_alpha < 0.999) ? materialAlpha : 1.0;
         fragColor = vec4(baseColor, alpha);
         return;
     }
@@ -1668,6 +1733,30 @@ void main() {
         vec3 kD_d = (vec3(1.0) - F_d) * (1.0 - metallic);
         vec3 d_d = kD_d * baseColor / PI;
         Lo += (d_d + s_d) * u_light_intensity * NdotL_d;
+    }
+
+    // Fill light 0 (viewer-side point light with range attenuation)
+    if (u_fill_light_enabled0 == 1) {
+        vec3 toFill0 = u_fill_light_pos0 - v_position;
+        float fillDist0 = length(toFill0);
+        if (fillDist0 > 0.001) {
+            Lo += pbrLight(N, V, baseColor, metallic, roughness,
+                           toFill0 / fillDist0,
+                           u_fill_light_color0,
+                           softRangeAttenuation(fillDist0, u_fill_light_range0));
+        }
+    }
+
+    // Fill light 1
+    if (u_fill_light_enabled1 == 1) {
+        vec3 toFill1 = u_fill_light_pos1 - v_position;
+        float fillDist1 = length(toFill1);
+        if (fillDist1 > 0.001) {
+            Lo += pbrLight(N, V, baseColor, metallic, roughness,
+                           toFill1 / fillDist1,
+                           u_fill_light_color1,
+                           softRangeAttenuation(fillDist1, u_fill_light_range1));
+        }
     }
 
     // --- Cinema bias light (rectangular area light = the virtual screen) ---
@@ -1696,11 +1785,11 @@ void main() {
             // 2) LAMBERTIAN cosine on the receiving surface
             float NdotL_s = max(dot(N, -L_s), 0.0);
             if (NdotL_s > 0.0) {
-                // 3) DISTANCE FALL-OFF with smooth windowing.  Pure 1/d虏 is
+                // 3) DISTANCE FALL-OFF with smooth windowing.  Pure 1/d is
                 //    physically correct but produces harsh hotspots near the
                 //    screen undesirable per Meta's "avoid harsh transitions"
                 //    rule.  We use the standard "windowed inverse square"
-                //    f(d) = (1 / (d虏 + r虏))   where r is the falloff knee.
+                //    f(d) = (1 / (d + r))   where r is the falloff knee.
                 //    A LARGER r pushes the knee outward, so the light keeps
                 //    its strength further into the room before rolling off
                 //    (attn = 0.5 at d = r, 0.2 at d 鈮2r, 0.1 at d 鈮3r).
@@ -1712,10 +1801,10 @@ void main() {
                 float attn      = (r0 * r0) / (d * d + r0 * r0);
                 // 4) AREA scale.  A rectangle of area A subtends an apparent
                 //    solid angle that grows with A approximate this as
-                //    A / (PI * d虏) for the diffuse term (small-angle limit) and
+                //    A / (PI * d) for the diffuse term (small-angle limit) and
                 //    clamp the near-field to avoid singularities (Meta:
                 //    smooth/comfortable response).  The near-field clamp uses
-                //    half_diag虏 (not r0虏) so the close-up brightness is not
+                //    half_diag (not r0) so the close-up brightness is not
                 //    suppressed by the wider falloff knee chosen above.
                 float area      = 4.0 * u_screen_light_half_size.x
                                        * u_screen_light_half_size.y;
@@ -1753,14 +1842,15 @@ void main() {
     if (u_use_emissive_tex == 1) {
         emissive *= texture(u_emissive_tex, t_uv).rgb;
     }
+    emissive *= u_emissive_strength;
 
-    vec3 color = Lo + ambient + emissive;
-    // HDR LDR: Reinhard-like soft tonemap
+    vec3 color = (Lo + ambient + emissive) * u_env_exposure;
+    // HDR->LDR: Reinhard-like soft tonemap
     color = color / (color + vec3(1.0));
     // Gamma correction
-    color = pow(color, vec3(1.0 / 2.2));
+    color = pow(color, vec3(1.0 / max(u_env_gamma, 0.001)));
 
-    float alpha = (u_alpha_mode == 2 && u_use_texture == 1) ? texture(u_tex, t_uv).a : 1.0;
+    float alpha = (u_alpha_mode == 2 || u_base_alpha < 0.999) ? materialAlpha : 1.0;
     fragColor = vec4(color, alpha);
 }
 """
@@ -2161,10 +2251,11 @@ class OpenXRViewer:
         self._input_monitor_index = monitor_index
         # Initial environment selection passed in from the launcher (settings.yaml
         # "Active Environment" field).  May be:
-        #   None / "" / "black"  -> opaque black backdrop, no env model
-        #   "passthrough"        -> VDXR green backdrop, no env model
+        #   None / "" / "black" / "default" -> opaque black backdrop, no env model
         #   "<folder name>"      -> subfolder under environment/ containing
         #                            environment.glb (and optional profile.json)
+        # Passthrough green is toggled via long-press X at runtime, not
+        # selected as an initial environment.
         self._initial_environment = environment_name
         self.ipd_uv = ipd
         self.depth_strength = 0.1 # multiplied by depth_ratio; effective = depth_strength * depth_ratio
@@ -2200,7 +2291,8 @@ class OpenXRViewer:
 
         self._x_press_t = 0.0          # timestamp when X was pressed
         self._x_long_fired = False     # whether long憄ress action already fired
-        self._prev_bg_color_idx = None # stores the index before switching to green
+        self._prev_bg_color_idx = None # stores bg color idx before switching to green
+        self._prev_active_env = None   # stores active environment before switching to green
 
         # FPS display timestamp ring: (len-1)/(last-first) is exact over the window
         self.actual_fps      = 0.0   # XR composition rate (this loop)
@@ -2254,7 +2346,7 @@ class OpenXRViewer:
         self._env_model_prims = []        # active list of {'vao', 'vbo', 'ibo', 'tex_key', 'tri_count'}
         self._scene_lights = []           # KHR_lights_punctual lights from active env
         self._env_model_tex_cache = {}    # cache_key -> moderngl Texture (active env)
-        self._env_model_visible = False   # hidden by default; left-stick short press cycles through colours then envs
+        self._env_model_visible = False   # hidden by default; left-stick short press cycles environments
         self._env_model_pos = [0.0, 0.0, 0.0]     # world-space position (x, y, z)
         self._env_model_rot = [0.0, 0.0, 0.0]     # Euler rotation (yaw, pitch, roll) in radians
         self._env_model_scale = [1.0, 1.0, 1.0]   # scale factor (x, y, z)
@@ -2288,6 +2380,7 @@ class OpenXRViewer:
         self._glow_color = (0.3, 0.6, 1.0)        # light blue, dynamically updated
         self._glow_width_m = 0.50                  # glow decay distance (larger volume)
         self._glow_intensity = 0.35                # softer glow
+        self._glow_intensity_multiplier = 0.0     # 0 = no glow (Default), 1.5 = "Default with Glow"
         self._glow_ref_screen = 2.4               # reference screen long edge (meters)
         self._glow_target_color = (0.3, 0.6, 1.0)  # latest sampled frame average
         self._glow_color_counter = 0              # reserved for future tuning
@@ -2297,6 +2390,15 @@ class OpenXRViewer:
         # Follows Meta Horizon "avoid overwhelming users with too many effects"
         # guidance kept subtle by default.
         self._screen_light_intensity = 3.5
+
+        # Environment lighting config (overridable via profile.json)
+        self._env_head_light_color = (0.45, 0.45, 0.48)
+        self._env_ambient_color = (0.08, 0.08, 0.09)
+        self._env_fill_lights = []           # [{position, color, range}, ...]
+        self._env_exposure = 1.0
+        self._env_gamma = 2.2
+        self._env_emissive_strength = 1.0
+        self._env_khr_light_scale = 1.0
 
         self._yaw_offset     = 0.0    # manual yaw offset (relative to face-head baseline)
         self._pitch_offset   = 0.0    # manual pitch offset
@@ -2320,6 +2422,7 @@ class OpenXRViewer:
         self._swapchain_sizes = {}      # {eye_index: (w, h)}
         self._fbo_cache = {}            # {(eye_index, image_index): (raw_id, mgl_fbo)}
         self._depth_rb_cache = {}       # {(eye_index, image_index): depth_rb}
+        self._show_preview_window = bool(kwargs.get('show_preview_window', True))
         self._preview_active = False
         self._session_running = False
 
@@ -2347,7 +2450,7 @@ class OpenXRViewer:
         self._act_y_btn           = None   # left  Y reset screen position/size/rotation
         self._act_left_trigger       = None   # left trigger (float) left mouse click
         self._act_right_trigger      = None   # right trigger (float) right mouse click / hold
-        self._act_left_stick_click   = None   # left thumbstick click cycle background (colours + environment)
+        self._act_left_stick_click   = None   # left thumbstick click cycle environment
         self._act_right_stick_click  = None   # right thumbstick click toggle curved screen
 
         # Vive trackpad button emulation (computed per-frame, OR'd into reads)
@@ -2606,6 +2709,8 @@ class OpenXRViewer:
         # Screen border (slightly larger quad, solid color)
         self._border_prog = None
         self._border_vao  = None
+        self._blit_prog = None
+        self._blit_vao  = None
 
         # Right thumbstick click state
         self._right_stick_click_prev = False
@@ -2654,9 +2759,9 @@ class OpenXRViewer:
         self._curved_verts_params = None        # curved screen VBO cache dirty flag
         self._curved_border_verts_params = None # border VBO cache dirty flag
 
-        # Background color cycling (left thumbstick click). The cycle steps
-        # through every _BG_COLORS entry and then one extra slot that shows the
-        # 3D environment model (see _cycle_background).
+        # Background color index: 0 = black (default), 1 = green (passthrough,
+        # toggled via long-press X). Left thumbstick click cycles environments
+        # (see _cycle_environment).
         self._bg_color_idx    = 0       # index into _BG_COLORS
 
         # Cached XrPath handles populated by _init_controller_actions to avoid
@@ -2984,6 +3089,27 @@ class OpenXRViewer:
         )
         self._build_help_texture()
 
+        # Swizzle blit program for the D3D11/EXT_memory_object interop path.
+        # Copies the offscreen RGBA eye-render into the shared GL texture, swapping
+        # R/B when the OpenXR runtime exposes a BGRA D3D11 swapchain.
+        self._blit_prog = self.ctx.program(
+            vertex_shader=_WORLD_VERT,
+            fragment_shader=_BLIT_FRAG,
+        )
+        self._blit_prog['u_src'].value = 4
+        self._blit_prog['u_swap_rb'].value = 0
+        self._blit_prog['u_mvp'].write(np.eye(4, dtype='f4').T.tobytes())
+        _blit_verts = np.array([
+            -1, -1, 0, 0,
+             1, -1, 1, 0,
+            -1,  1, 0, 1,
+             1,  1, 1, 1,
+        ], dtype='f4')
+        self._blit_vao = self.ctx.vertex_array(
+            self._blit_prog,
+            [(self.ctx.buffer(_blit_verts.tobytes()), '2f 2f', 'in_position', 'in_uv')],
+        )
+
         # Curved screen program: same fragment shader, but world-space arc geometry
         # (no model matrix verts are built directly in world space each frame).
         self._curved_prog = self.ctx.program(
@@ -3066,6 +3192,20 @@ class OpenXRViewer:
         self._env_prog['u_screen_light_half_size'].value   = (1.2, 0.675)
         self._env_prog['u_screen_light_color'].value       = (0.3, 0.6, 1.0)
         self._env_prog['u_screen_light_intensity'].value   = 2.0
+        # Fill lights: disabled by default (zero perf impact)
+        self._env_prog['u_fill_light_enabled0'].value = 0
+        self._env_prog['u_fill_light_pos0'].value = (0.0, 0.0, 0.0)
+        self._env_prog['u_fill_light_color0'].value = (0.0, 0.0, 0.0)
+        self._env_prog['u_fill_light_range0'].value = 1.0
+        self._env_prog['u_fill_light_enabled1'].value = 0
+        self._env_prog['u_fill_light_pos1'].value = (0.0, 0.0, 0.0)
+        self._env_prog['u_fill_light_color1'].value = (0.0, 0.0, 0.0)
+        self._env_prog['u_fill_light_range1'].value = 1.0
+        # Post-processing defaults
+        self._env_prog['u_env_exposure'].value = 1.0
+        self._env_prog['u_env_gamma'].value = 2.2
+        self._env_prog['u_emissive_strength'].value = 1.0
+        self._env_prog['u_base_alpha'].value = 1.0
 
         self._ctrl_tex_cache = {}
         self._ctrl_prims_l = []
@@ -3293,7 +3433,9 @@ class OpenXRViewer:
 
         Initial selection rules:
             None / "" / "default" / "black"  -> colour-only, env hidden
-            "passthrough"                    -> colour-only at VDXR-green slot
+            "passthrough"                    -> treated as default (passthrough
+                                                is now a runtime X long-press toggle)
+            "default with glow"              -> black + 1.5x cinema glow
             "dark room"                      -> built-in procedural dark room
             "<folder>"                       -> activate that env (if loaded successfully)
         """
@@ -3332,24 +3474,28 @@ class OpenXRViewer:
             print(f"[OpenXRViewer] Built-in 'Dark Room' registered "
                   f"({len(self._dark_room_prims)} primitives)")
 
+        # Register built-in "Default with Glow" slot (no 3D model, just
+        # black backdrop with 1.5x glow intensity multiplier).
+        if 'Default with Glow' not in self._environment_cache:
+            self._environment_cache['Default with Glow'] = {
+                'prims': [],
+                'tex_cache': {},
+                'scene_lights': [],
+            }
+            self._available_environments.append('Default with Glow')
+            print("[OpenXRViewer] Built-in 'Default with Glow' registered")
+
         # Apply the initial selection from the launcher / settings.yaml
         sel = (self._initial_environment or 'default').strip().lower()
-        if sel == 'passthrough':
-            self._bg_color_idx = 5      # VDXR green
-            # apply_profile=True so the Passthrough slot's last pose is
-            # restored on startup (matches every other slot's behaviour).
-            self._switch_environment(None, save_outgoing=False, apply_profile=True)
-        elif sel in ('', 'default', 'black'):
-            # "Black" kept as a backward-compat alias for users with an
-            # older settings.yaml; new GUI labels this option "Default".
+        if sel in ('', 'default', 'black', 'passthrough'):
+            # "passthrough" is now a runtime toggle (long-press X), not a
+            # startup environment treat it as Default on next launch.
+            # "Black" kept as a backward-compat alias.
             self._bg_color_idx = 0      # opaque black backdrop
-            # apply_profile=True so the Default slot's last pose is
-            # restored on startup, mirroring folder-env behaviour.
             self._switch_environment(None, save_outgoing=False, apply_profile=True)
         else:
             # Case-insensitive match on env names so the GUI dropdown's
-            # display string ("Monitor" / "Dark Room") matches the cache
-            # entry regardless of case.
+            # display string matches the cache entry regardless of case.
             match = next((n for n in self._available_environments
                           if n.lower() == sel), None)
             if match is None:
@@ -3362,40 +3508,90 @@ class OpenXRViewer:
                 self._switch_environment(match, save_outgoing=False, apply_profile=True)
 
     # ------------------------------------------------------------------
+    # Profile helper methods (safe parsing with fallbacks)
+    # ------------------------------------------------------------------
+    def _profile_vec3(self, profile, keys, default):
+        """Try multiple key names for a vec3, return [x, y, z] or *default*."""
+        for key in keys:
+            value = profile.get(key)
+            if isinstance(value, (list, tuple)) and len(value) >= 3:
+                try:
+                    return [float(value[0]), float(value[1]), float(value[2])]
+                except (TypeError, ValueError):
+                    pass
+        return list(default)
+
+    def _profile_float(self, profile, keys, default):
+        """Try multiple key names for a float, return float or *default*."""
+        for key in keys:
+            if key in profile:
+                try:
+                    return float(profile[key])
+                except (TypeError, ValueError):
+                    pass
+        return float(default)
+
+    def _profile_bool(self, profile, keys, default):
+        """Try multiple key names for a bool, return bool or *default*."""
+        for key in keys:
+            if key in profile:
+                value = profile[key]
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+                return bool(value)
+        return bool(default)
+
+    def _profile_rotation_rad(self, profile, deg_keys, rad_keys, default):
+        """Try degree keys first (convert to radians), then radian keys, then default."""
+        for key in deg_keys:
+            value = profile.get(key)
+            if isinstance(value, (list, tuple)) and len(value) >= 3:
+                try:
+                    return [math.radians(float(value[0])),
+                            math.radians(float(value[1])),
+                            math.radians(float(value[2]))]
+                except (TypeError, ValueError):
+                    pass
+        return self._profile_vec3(profile, rad_keys, default)
+
+    # ------------------------------------------------------------------
     # Per-environment profile.json (screen 6-DOF + size persistence)
     # ------------------------------------------------------------------
     def _env_profile_path(self, name):
         """Absolute path to the profile JSON for an environment.
 
         Folder-backed envs (e.g. ``Bedroom``) use
-        ``environment/<name>/profile.json``.  The three built-in slots
-        (``Default``, ``Passthrough``, ``Dark Room``) have no folder, so
-        their per-slot pose lives in a sibling file
+        ``environment/<name>/profile.json``.  The built-in slots
+        (``Default``, ``Default with Glow``, ``Dark Room``) have no folder,
+        so their per-slot pose lives in a sibling file
         ``environment/.builtin_<slug>.json``.  The leading dot keeps these
         files out of the folder-scan in ``_init_env_model`` (it only walks
         directories), so they cannot accidentally appear as cycle entries.
         """
         builtin_slugs = {
-            'Default':     '.builtin_default.json',
-            'Passthrough': '.builtin_passthrough.json',
-            'Dark Room':   '.builtin_dark_room.json',
+            'Default':            '.builtin_default.json',
+            'Default with Glow':  '.builtin_default_glow.json',
+            'Dark Room':          '.builtin_dark_room.json',
         }
         if name in builtin_slugs:
             return os.path.join(self._environments_root, builtin_slugs[name])
         return os.path.join(self._environments_root, name, 'profile.json')
 
     def _apply_environment_profile(self, name):
-        """Restore screen 6-DOF + size from environment/<name>/profile.json.
+        """Restore screen 6-DOF + size + lighting from profile.json.
 
-        Silently no-ops if the file is missing or malformed the user just
-        gets the current screen layout, which is the safe default.  Only the
-        fields actually present are applied (partial profiles are OK).
+        Supports two formats:
+          New (flat):  ``model_position``, ``model_rotation_deg``, ``screen.position``,
+                       ``screen.rotation_deg``, ``env_exposure``, ``env_fill_lights``, etc.
+          Old (nested): ``environment.pos/yaw/pitch/roll``, ``screen.pan_x/distance/yaw``.
 
-        On success (``screen`` section present and non-empty), sets
-        ``self._profile_loaded = True`` so the startup eye-init in the
-        render loop knows NOT to overwrite the just-restored pose with the
-        default in-front-of-gaze snap.  Without this flag the GUI Stop 
-        Restart cycle would silently lose every restored field.
+        Silently no-ops if the file is missing or malformed.  Only the fields
+        actually present are applied (partial profiles are OK).
+
+        On success sets ``self._profile_loaded = True`` so the startup eye-init
+        in the render loop knows NOT to overwrite the just-restored pose.
         """
         path = self._env_profile_path(name)
         if not os.path.isfile(path):
@@ -3407,101 +3603,203 @@ class OpenXRViewer:
         except Exception as exc:
             print(f"[OpenXRViewer] Failed to read {path}: {exc}")
             return
+
         screen = prof.get('screen') or {}
         if not screen:
-            # Profile exists but has no `screen` section nothing to
-            # restore, leave the default reset path enabled.
             return
-        env = prof.get('environment') or {}
-        self._env_model_pos = [0.0, 0.0, 0.0]
-        self._env_model_rot = [0.0, 0.0, 0.0]
-        self._env_model_scale = [1.0, 1.0, 1.0]
-        self._env_screen_locked = False
-        self._env_screen_offset = [0.0, 0.0, 0.0]
-        if isinstance(env, dict):
-            def _vec3(key, default):
-                v = env.get(key)
-                if not isinstance(v, (list, tuple)) or len(v) < 3:
-                    return list(default)
+
+        # ------------------------------------------------------------------
+        # Detect format: new flat format has top-level 'model_position'
+        # ------------------------------------------------------------------
+        is_new_format = ('model_position' in prof)
+
+        if is_new_format:
+            # --- New flat format (world-space coords, degrees) ---
+            _pos = self._profile_vec3(prof, ['model_position'], [0.0, 0.0, 0.0])
+            self._env_model_pos = [_pos[0], _pos[1], _pos[2]]
+
+            _rot = self._profile_rotation_rad(
+                prof, ['model_rotation_deg'], ['model_rotation_rad'], [0.0, 0.0, 0.0])
+            self._env_model_rot = [_rot[0], _rot[1], _rot[2]]
+
+            _scale = self._profile_vec3(prof, ['model_scale'], [1.0, 1.0, 1.0])
+            self._env_model_scale = [_scale[0], _scale[1], _scale[2]]
+
+            # lock_screen may be at top level (new format) or inside the
+            # backward-compat 'environment' section (old profiles migrated).
+            _env_sec = prof.get('environment') or {}
+            self._env_screen_locked = (
+                self._profile_bool(prof, ['lock_screen', 'env_lock_screen'], None)
+                or self._profile_bool(_env_sec, ['lock_screen'], False))
+
+            # Screen pose: world-space position → pan/distance
+            _spos = self._profile_vec3(screen, ['position'], [0.0, 0.0, -2.0])
+            self.screen_pan_x = _spos[0]
+            self.screen_pan_y = _spos[1]
+            self.screen_distance = -_spos[2]   # world -Z → positive distance
+
+            _srot = self._profile_rotation_rad(
+                screen, ['rotation_deg'], ['rotation_rad'], [0.0, 0.0, 0.0])
+            self.screen_yaw = _srot[0]
+            self.screen_pitch = _srot[1]
+            self.screen_roll = _srot[2]
+
+            self.screen_width = self._profile_float(screen, ['width'], self.screen_width)
+            if 'ref_size' in screen:
+                self._screen_ref_size = self._profile_float(screen, ['ref_size'], self._screen_ref_size)
+
+            if 'curved' in screen:
+                self._screen_curved = bool(screen['curved'])
+            if 'allow_curve' in screen:
+                self._env_allow_curve = bool(screen['allow_curve'])
+
+            # Screen node indices (for Cinema wall-lock)
+            if isinstance(screen.get('screen_node_indices'), (list, tuple)):
                 try:
-                    return [float(v[0]), float(v[1]), float(v[2])]
-                except (TypeError, ValueError):
-                    return list(default)
-            self._env_model_pos = _vec3('pos', self._env_model_pos)
-            self._env_model_scale = _vec3('scale', self._env_model_scale)
-            self._env_user_offset_pos = [0.0, 0.0, 0.0]
+                    self._environment_cache.setdefault(name, {})['screen_node_indices'] = [
+                        int(v) for v in screen['screen_node_indices']
+                    ]
+                except Exception:
+                    pass
+            if 'screen_node_index' in screen:
+                try:
+                    self._environment_cache.setdefault(name, {})['screen_node_index'] = int(
+                        screen['screen_node_index']
+                    )
+                except Exception:
+                    pass
+
+            # Screen offset
+            _soff = self._profile_vec3(screen, ['offset'], [0.0, 0.0, 0.0])
+            self._env_screen_offset = [_soff[0], _soff[1], _soff[2]]
+
+            # Lighting
+            _hlc = self._profile_vec3(
+                prof, ['head_light_color'], list(getattr(self, '_env_head_light_color', (0.45, 0.45, 0.48))))
+            self._env_head_light_color = (float(_hlc[0]), float(_hlc[1]), float(_hlc[2]))
+            _amb = self._profile_vec3(
+                prof, ['ambient_color'], list(getattr(self, '_env_ambient_color', (0.08, 0.08, 0.09))))
+            self._env_ambient_color = (float(_amb[0]), float(_amb[1]), float(_amb[2]))
+            self._env_exposure = self._profile_float(
+                prof, ['env_exposure'], getattr(self, '_env_exposure', 1.0))
+            self._env_gamma = self._profile_float(
+                prof, ['env_gamma'], getattr(self, '_env_gamma', 2.2))
+            self._env_emissive_strength = self._profile_float(
+                prof, ['env_emissive_strength'], getattr(self, '_env_emissive_strength', 1.0))
+            self._env_khr_light_scale = self._profile_float(
+                prof, ['env_khr_light_scale'], getattr(self, '_env_khr_light_scale', 1.0))
+
+            # Fill lights array
+            _fl = prof.get('env_fill_lights')
+            if isinstance(_fl, list):
+                self._env_fill_lights = []
+                for fl in _fl:
+                    if isinstance(fl, dict):
+                        self._env_fill_lights.append({
+                            'position': tuple(fl.get('position', (0.0, 0.0, 0.0))),
+                            'color': tuple(fl.get('color', (0.0, 0.0, 0.0))),
+                            'range': float(fl.get('range', 1.0)),
+                        })
+            else:
+                self._env_fill_lights = []
+
+            # View pose
+            _vp = prof.get('view_pose')
+            if isinstance(_vp, dict):
+                _vpos = self._profile_vec3(_vp, ['position'], [0.0, 0.0, 0.0])
+                self._env_user_offset_pos = [_vpos[0], _vpos[1], _vpos[2]]
+                _vrot = self._profile_rotation_rad(
+                    _vp, ['rotation_deg'], ['rotation_rad'], [0.0, 0.0, 0.0])
+                self._env_user_offset_yaw = _vrot[0]
+            else:
+                self._env_user_offset_pos = [0.0, 0.0, 0.0]
+                self._env_user_offset_yaw = 0.0
+
+            self._env_user_offset_dirty = False
+
+        else:
+            # --- Old format (environment section + screen pan/distance) ---
+            env = prof.get('environment') or {}
+            self._env_model_pos = [0.0, 0.0, 0.0]
+            self._env_model_rot = [0.0, 0.0, 0.0]
+            self._env_model_scale = [1.0, 1.0, 1.0]
+            self._env_screen_locked = False
             self._env_screen_offset = [0.0, 0.0, 0.0]
-            for key, idx in (('yaw', 0), ('pitch', 1), ('roll', 2)):
+            if isinstance(env, dict):
+                self._env_model_pos = self._profile_vec3(
+                    env, ['pos'], self._env_model_pos)
+                self._env_model_scale = self._profile_vec3(
+                    env, ['scale'], self._env_model_scale)
+                self._env_user_offset_pos = [0.0, 0.0, 0.0]
+                self._env_screen_offset = [0.0, 0.0, 0.0]
+                for key, idx in (('yaw', 0), ('pitch', 1), ('roll', 2)):
+                    try:
+                        self._env_model_rot[idx] = float(env.get(key, 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        pass
+                self._env_user_offset_yaw = 0.0
+                self._env_screen_locked = bool(env.get('lock_screen', False))
+            else:
+                self._env_user_offset_pos = [0.0, 0.0, 0.0]
+                self._env_user_offset_yaw = 0.0
+            self._env_user_offset_dirty = False
+            self._env_allow_curve = False
+
+            # Old format screen fields (flat values, not world-space position)
+            def _f(key, attr, lo=None, hi=None):
+                v = screen.get(key)
+                if v is None:
+                    return
                 try:
-                    self._env_model_rot[idx] = float(env.get(key, 0.0) or 0.0)
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    return
+                if lo is not None: fv = max(lo, fv)
+                if hi is not None: fv = min(hi, fv)
+                setattr(self, attr, fv)
+
+            _f('width',    'screen_width',    lo=0.10)
+            _f('distance', 'screen_distance', lo=0.01)
+            _f('pan_x',    'screen_pan_x')
+            _f('pan_y',    'screen_pan_y')
+            _f('yaw',      'screen_yaw')
+            _f('pitch',    'screen_pitch')
+            _f('roll',     'screen_roll')
+            if 'ref_size' in screen:
+                try:
+                    self._screen_ref_size = float(screen['ref_size'])
                 except (TypeError, ValueError):
                     pass
-            self._env_user_offset_yaw = 0.0
-            self._env_screen_locked = bool(env.get('lock_screen', False))
-        else:
-            self._env_user_offset_pos = [0.0, 0.0, 0.0]
-            self._env_user_offset_yaw = 0.0
-        self._env_user_offset_dirty = False
-        self._env_allow_curve = False
-        # Apply each field defensively missing or wrong-typed values are
-        # tolerated so a hand-edited profile.json can never crash the loop.
-        def _f(key, attr, lo=None, hi=None):
-            v = screen.get(key)
-            if v is None:
-                return
-            try:
-                fv = float(v)
-            except (TypeError, ValueError):
-                return
-            if lo is not None: fv = max(lo, fv)
-            if hi is not None: fv = min(hi, fv)
-            setattr(self, attr, fv)
-        _f('width',    'screen_width',    lo=0.10)
-        # Folder environments can place screens on side-facing surfaces whose
-        # world-space Z is near the origin.  Clamping profile load to 0.30m
-        # shifts those screens sideways after rotation, so only keep a tiny
-        # positive floor here.  Interactive distance controls still enforce
-        # their own comfort minimums.
-        _f('distance', 'screen_distance', lo=0.01)
-        _f('pan_x',    'screen_pan_x')
-        _f('pan_y',    'screen_pan_y')
-        _f('yaw',      'screen_yaw')
-        _f('pitch',    'screen_pitch')
-        _f('roll',     'screen_roll')
-        if 'ref_size' in screen:
-            try:
-                self._screen_ref_size = float(screen['ref_size'])
-            except (TypeError, ValueError):
-                pass
-        if 'curved' in screen:
-            self._screen_curved = bool(screen['curved'])
-        if 'allow_curve' in screen:
-            self._env_allow_curve = bool(screen['allow_curve'])
-        if isinstance(screen.get('screen_node_indices'), (list, tuple)):
-            try:
-                self._environment_cache.setdefault(name, {})['screen_node_indices'] = [
-                    int(v) for v in screen['screen_node_indices']
-                ]
-            except Exception:
-                pass
-        if 'screen_node_index' in screen:
-            try:
-                self._environment_cache.setdefault(name, {})['screen_node_index'] = int(
-                    screen['screen_node_index']
-                )
-            except Exception:
-                pass
-        if isinstance(screen.get('offset'), (list, tuple)) and len(screen['offset']) >= 3:
-            try:
-                self._env_screen_offset = [
-                    float(screen['offset'][0]),
-                    float(screen['offset'][1]),
-                    float(screen['offset'][2]),
-                ]
-            except (TypeError, ValueError):
+            if 'curved' in screen:
+                self._screen_curved = bool(screen['curved'])
+            if 'allow_curve' in screen:
+                self._env_allow_curve = bool(screen['allow_curve'])
+            if isinstance(screen.get('screen_node_indices'), (list, tuple)):
+                try:
+                    self._environment_cache.setdefault(name, {})['screen_node_indices'] = [
+                        int(v) for v in screen['screen_node_indices']
+                    ]
+                except Exception:
+                    pass
+            if 'screen_node_index' in screen:
+                try:
+                    self._environment_cache.setdefault(name, {})['screen_node_index'] = int(
+                        screen['screen_node_index']
+                    )
+                except Exception:
+                    pass
+            if isinstance(screen.get('offset'), (list, tuple)) and len(screen['offset']) >= 3:
+                try:
+                    self._env_screen_offset = [
+                        float(screen['offset'][0]),
+                        float(screen['offset'][1]),
+                        float(screen['offset'][2]),
+                    ]
+                except (TypeError, ValueError):
+                    self._env_screen_offset = [0.0, 0.0, 0.0]
+            else:
                 self._env_screen_offset = [0.0, 0.0, 0.0]
-        else:
-            self._env_screen_offset = [0.0, 0.0, 0.0]
+
         self._lock_cinema_screen_to_environment()
         # Force height recompute from frame aspect on next frame.
         self.screen_height = None
@@ -3710,11 +4008,12 @@ class OpenXRViewer:
             self._env_user_offset_last_save_t = now
 
     def _save_environment_profile(self, name):
-        """Snapshot the live screen 6-DOF + size into environment/<name>/profile.json.
+        """Snapshot live screen 6-DOF + lighting into environment/<name>/profile.json.
 
-        Writes a fresh JSON file (creating the folder if needed) so the user's
-        layout is restored next time they switch back to this environment.
-        Unrelated keys already in the file are preserved.
+        Writes the new flat format (world-space coords, degrees) so it
+        round-trips correctly with the new-format reader in
+        ``_apply_environment_profile``.  Existing non-screen keys in the file
+        (``displayName``, ``glb``, ``view_pose``, etc.) are preserved.
         """
         if not name:
             return
@@ -3734,23 +4033,55 @@ class OpenXRViewer:
                 return
             else:
                 self._lock_cinema_screen_to_environment()
+
+            # Model transform (world-space position, rotation in degrees)
+            prof['model_position'] = [float(v) for v in self._env_model_pos]
+            prof['model_rotation_deg'] = [
+                math.degrees(float(self._env_model_rot[0])),
+                math.degrees(float(self._env_model_rot[1])),
+                math.degrees(float(self._env_model_rot[2])),
+            ]
+            prof['model_scale'] = [float(v) for v in self._env_model_scale]
+
+            # Screen pose: reverse-translate pan/distance → world-space position
             entry = self._environment_cache.get(name) or {}
             prof['screen'] = {
-                'width':    float(self.screen_width),
-                'distance': float(self.screen_distance),
-                'pan_x':    float(self.screen_pan_x),
-                'pan_y':    float(self.screen_pan_y),
-                'yaw':      float(self.screen_yaw),
-                'pitch':    float(self.screen_pitch),
-                'roll':     float(self.screen_roll),
-                'ref_size': float(getattr(self, '_screen_ref_size', self.screen_width)),
-                'curved':   bool(self._screen_curved),
+                'width': float(self.screen_width),
+                'position': [
+                    float(self.screen_pan_x),
+                    float(self.screen_pan_y),
+                    float(-self.screen_distance),
+                ],
+                'rotation_deg': [
+                    math.degrees(float(self.screen_yaw)),
+                    math.degrees(float(self.screen_pitch)),
+                    math.degrees(float(self.screen_roll)),
+                ],
+                'curved': bool(self._screen_curved),
                 'allow_curve': bool(getattr(self, '_env_allow_curve', False)),
+                'ref_size': float(getattr(self, '_screen_ref_size', self.screen_width)),
+                'offset': [float(v) for v in getattr(self, '_env_screen_offset', [0.0, 0.0, 0.0])],
                 'screen_node_index': int(entry.get('screen_node_index'))
                     if entry.get('screen_node_index') is not None else None,
                 'screen_node_indices': [int(v) for v in (entry.get('screen_node_indices') or [])],
-                'offset':   [float(v) for v in getattr(self, '_env_screen_offset', [0.0, 0.0, 0.0])],
             }
+
+            # Lighting
+            _hlc = getattr(self, '_env_head_light_color', (0.45, 0.45, 0.48))
+            prof['head_light_color'] = [float(v) for v in _hlc]
+            _amb = getattr(self, '_env_ambient_color', (0.08, 0.08, 0.09))
+            prof['ambient_color'] = [float(v) for v in _amb]
+            prof['env_exposure'] = float(getattr(self, '_env_exposure', 1.0))
+            prof['env_gamma'] = float(getattr(self, '_env_gamma', 2.2))
+            prof['env_emissive_strength'] = float(getattr(self, '_env_emissive_strength', 1.0))
+            prof['env_khr_light_scale'] = float(getattr(self, '_env_khr_light_scale', 1.0))
+
+            # Fill lights
+            _fl = getattr(self, '_env_fill_lights', [])
+            prof['env_fill_lights'] = _fl if _fl else []
+
+            # Keep old-format environment section for backward compat with
+            # older viewers that still read the nested format.
             if (self._env_screen_locked
                     or any(abs(v) > 1e-9 for v in self._env_model_pos)
                     or any(abs(v) > 1e-9 for v in self._env_model_rot)
@@ -3763,6 +4094,7 @@ class OpenXRViewer:
                     'scale': [float(v) for v in self._env_model_scale],
                     'lock_screen': bool(self._env_screen_locked),
                 }
+
             with open(path, 'w', encoding='utf-8') as f:
                 _json.dump(prof, f, indent=2, ensure_ascii=False)
             self._env_user_offset_dirty = False
@@ -3776,17 +4108,16 @@ class OpenXRViewer:
         ``_bg_color_idx`` for built-in colour slots) to a single canonical
         key that ``_env_profile_path`` understands.  Returns one of:
 
-            <folder name>   when a glTF env is active
-            'Passthrough'   when the VDXR green slot is active (idx 5)
-            'Default'       for every other plain-colour slot (idx 0-4)
+            <folder name>        when a glTF env is active
+            'Default with Glow'  when the glow-boosted default slot is active
+            'Default'            for plain black backdrop
 
-        ``Dark Room`` is a folder-style env (registered in the cache), so it
-        is covered by the ``_active_environment`` branch automatically.
+        ``Dark Room`` and ``Default with Glow`` are registered in the env
+        cache.  ``Default with Glow`` has ``_env_model_visible=False`` but
+        still carries ``_active_environment`` set, so check that first.
         """
-        if self._env_model_visible and self._active_environment:
+        if self._active_environment:
             return self._active_environment
-        if self._bg_color_idx == 5:
-            return 'Passthrough'
         return 'Default'
 
     def _persist_current_pose(self):
@@ -3826,7 +4157,7 @@ class OpenXRViewer:
         cycles back into a colour-only slot).
         """
         # Auto-save the current env's screen layout before swapping out.
-        # Folder envs and the three built-in slots (Default / Passthrough /
+        # Folder envs and the built-in slots (Default / Default with Glow /
         # Dark Room) are all backed by JSON profiles, so the user's last
         # pose round-trips across both env switches AND full stop/restart.
         if save_outgoing:
@@ -3838,11 +4169,9 @@ class OpenXRViewer:
             self._scene_lights = []
             self._env_model_visible = False
             self._active_environment = None
+            self._glow_intensity_multiplier = 0.0
             self._persist_active_environment()
             # Restore the just-entered built-in slot's saved pose (if any).
-            # Mirrors the folder-env branch below without this, a Default
-            # / Passthrough / Dark Room slot always reads back as the live
-            # screen state instead of the user's last layout for that slot.
             if apply_profile:
                 slot = self._current_profile_slot_name()
                 if slot is not None:
@@ -3854,14 +4183,22 @@ class OpenXRViewer:
             print(f"[OpenXRViewer] Unknown environment '{name}'")
             return
 
-        # Constant-time swap point the live slots at the cached entry.
-        # We keep references to the cache's lists/dicts (not copies) so the
-        # render loop sees zero extra allocations.
-        self._env_model_prims = entry['prims']
-        self._env_model_tex_cache = entry['tex_cache']
-        self._scene_lights = entry['scene_lights']
-        self._env_model_visible = True
-        self._active_environment = name
+        if name == 'Default with Glow':
+            # No 3D model just black backdrop with 1.5x glow.
+            self._env_model_prims = []
+            self._env_model_tex_cache = {}
+            self._scene_lights = []
+            self._env_model_visible = False
+            self._active_environment = name
+            self._glow_intensity_multiplier = 1.5
+        else:
+            # Constant-time swap point the live slots at the cached entry.
+            self._env_model_prims = entry['prims']
+            self._env_model_tex_cache = entry['tex_cache']
+            self._scene_lights = entry['scene_lights']
+            self._env_model_visible = True
+            self._active_environment = name
+            self._glow_intensity_multiplier = 1.0
         self._env_switch_osd_t = time.perf_counter()
 
         if apply_profile:
@@ -3889,55 +4226,47 @@ class OpenXRViewer:
             print(f"[OpenXRViewer] _persist_setting({key!r}) failed: {exc}")
 
     def _persist_active_environment(self):
-        """Save the current environment selection in a form that round-trips
-        through the GUI dropdown options (``Default`` / ``Passthrough`` /
+        """Save the current environment selection so it round-trips
+        through the GUI dropdown options (``Default`` / ``Default with Glow`` /
         ``Dark Room`` / ``<folder>``)."""
         if self._active_environment:
             val = self._active_environment
-        elif self._bg_color_idx == 5:
-            val = 'Passthrough'
         else:
             val = 'Default'
         self._persist_setting('Active Environment', val)
 
-    def _cycle_background(self):
-        """Advance the background "circle" one slot (left-stick short press).
+    def _cycle_environment(self):
+        """Advance the environment one slot (left-stick short press).
 
-        The circle steps through every colour in ``_BG_COLORS`` and then one
-        slot per loaded environment, in the order discovered by
-        ``_init_env_model``.  Folding the env into the same cycle removes
-        the old "N-key" requirement so everything is reachable from the
-        controller alone::
+        Cycles through loaded environments only (no colour slots)::
 
-            black -> grey -> charcoal -> navy -> beige -> green
-                  -> [env_0] -> [env_1] -> ... -> [env_N] -> (back to black)
+            black -> [env_0] -> [env_1] -> ... -> [env_N] -> black -> ...
 
-        Each environment slot also restores that env's saved screen 6-DOF
+        Each environment slot restores that env's saved screen 6-DOF
         (via ``_apply_environment_profile``), and the previous env's layout
         is auto-saved before the swap, so each environment effectively
         "remembers" its preferred screen position.
         """
-        n_colours = len(_BG_COLORS)
         envs = self._available_environments
         n_envs = len(envs)
-        total = n_colours + n_envs
 
-        # Compute the current virtual slot.  Env-active states map to
-        # n_colours + index; colour-only states map to _bg_color_idx.
+        if n_envs == 0:
+            return
+
         if self._env_model_visible and self._active_environment in envs:
-            cur = n_colours + envs.index(self._active_environment)
+            cur_idx = envs.index(self._active_environment)
+            nxt_idx = (cur_idx + 1) % (n_envs + 1)  # +1 for the "black" slot
+            if nxt_idx == n_envs:
+                # Wrap to black (no environment)
+                self._bg_color_idx = 0
+                self._switch_environment(None)
+            else:
+                self._bg_color_idx = 0
+                self._switch_environment(envs[nxt_idx])
         else:
-            cur = self._bg_color_idx
-        nxt = (cur + 1) % total
-
-        if nxt < n_colours:
-            # Step into a colour slot turn the environment off.
-            self._bg_color_idx = nxt
-            self._switch_environment(None)
-        else:
-            env_name = envs[nxt - n_colours]
-            self._bg_color_idx = 0      # black backdrop behind the model
-            self._switch_environment(env_name)
+            # Currently at black step into the first environment
+            self._bg_color_idx = 0
+            self._switch_environment(envs[0])
 
     def _load_brand_models(self, brand_name):
         """Load models and configuration for a specific brand, returning {prims_l, prims_r, tex_cache, offset, rot_deg}."""
@@ -4233,7 +4562,7 @@ class OpenXRViewer:
         except Exception as e:
             print(f"[OpenXRViewer] Controller actions unavailable: {e}")
 
-    # GPU interop helpers鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    # GPU interop helpers
 
     @staticmethod
     def _is_nvidia_gpu():
@@ -4259,18 +4588,14 @@ class OpenXRViewer:
         Order: NV_DX_interop2 for NVIDIA GPUs, EXT_memory_object for all others.
         Falls back to the PBO path (already configured) if neither is available.
 
-        Interop is skipped for BGRA swapchains (common on WMR) because GL
-        renders RGBA natively and the R払 mismatch would swap colours.
-        The PBO path handles BGRA via GL_BGRA readback format.
+        BGRA swapchains (common on WMR) are supported through EXT_memory_object
+        with a final GPU swizzle blit. NV_DX_interop2 still requires RGBA, so
+        it is skipped for BGRA.
         """
         if not sys.platform == "win32":
             return
 
-        if self._swapchain_is_bgra:
-            print("[OpenXRViewer] BGRA swapchain GPU interop disabled (using PBO with GL_BGRA readback)")
-            return
-
-        is_nv = self._is_nvidia_gpu()
+        is_nv = self._is_nvidia_gpu() and not self._swapchain_is_bgra
 
         if is_nv and _load_nv_dx_interop():
             try:
@@ -4378,22 +4703,54 @@ class OpenXRViewer:
             mgl_fbo = self.ctx.detect_framebuffer(raw_fbo)
             self._ext_shared_tex[eye_index] = (d3d11_tex, mem_obj, gl_tex, mgl_fbo, raw_fbo)
 
-    def _blit_ext_to_swapchain(self, eye_index, d3d11_swapchain_tex):
-        """GPU-side CopyResource from our shared texture to the swapchain image."""
-        d3d11_shared_tex = self._ext_shared_tex[eye_index][0]
-        # ID3D11DeviceContext::CopyResource at vtable index 47
+    def _make_gl_fence(self):
+        """Insert a GL fence and flush so the driver submits it promptly."""
+        fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
+        glFlush()
+        return fence
+
+    def _d3d11_copy_resource(self, dst, src):
+        """ID3D11DeviceContext::CopyResource via vtable index 47."""
         ctx = self._d3d11_context
         vtbl = ctypes.cast(ctx, ctypes.POINTER(ctypes.c_void_p)).contents.value
         copy_fn = ctypes.CFUNCTYPE(
-            ctypes.c_void_p,
-            ctypes.c_void_p,  # ID3D11DeviceContext*
+            None,
+            ctypes.c_void_p,  # this
             ctypes.c_void_p,  # pDstResource
             ctypes.c_void_p,  # pSrcResource
         )(ctypes.cast(vtbl + 47 * ctypes.sizeof(ctypes.c_void_p),
                     ctypes.POINTER(ctypes.c_void_p)).contents.value)
-        # Sync: ensure GL is done before D3D11 reads the shared texture
-        glFinish()
-        copy_fn(ctx, d3d11_swapchain_tex, d3d11_shared_tex)
+        copy_fn(ctx, dst, src)
+
+    def _swizzle_blit_to_shared(self, eye_index, src_mgl_tex):
+        """Copy an offscreen RGBA eye render into the EXT-shared GL texture."""
+        _, _, _, mgl_fbo, _ = self._ext_shared_tex[eye_index]
+        sc_w, sc_h = self._swapchain_sizes[eye_index]
+        mgl_fbo.use()
+        self.ctx.viewport = (0, 0, sc_w, sc_h)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.disable(moderngl.BLEND)
+        src_mgl_tex.use(location=4)
+        self._blit_prog['u_swap_rb'].value = 1 if self._swapchain_is_bgra else 0
+        self._blit_vao.render(moderngl.TRIANGLE_STRIP)
+
+    def _wait_and_blit_ext(self, eye_index, d3d11_swapchain_tex, fence):
+        """Wait on this eye's GL fence, then copy the shared texture to OpenXR."""
+        if fence is not None:
+            glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 16_000_000)
+            glDeleteSync(fence)
+        self._d3d11_copy_resource(
+            d3d11_swapchain_tex,
+            self._ext_shared_tex[eye_index][0],
+        )
+
+    def _blit_ext_to_swapchain(self, eye_index, d3d11_swapchain_tex):
+        """Legacy single-phase EXT-memory copy path using a fence, not glFinish."""
+        self._wait_and_blit_ext(
+            eye_index,
+            d3d11_swapchain_tex,
+            self._make_gl_fence(),
+        )
 
     def _cleanup_interop(self):
         """Release all GPU interop resources."""
@@ -6560,7 +6917,7 @@ class OpenXRViewer:
             self._anchor_keyboard_below_screen()
 
     def _screen_uv_to_world(self, u, v):
-        """Convert a screen UV in [0,1]虏 to its world-space 3-D position on the screen plane."""
+        """Convert a screen UV in [0,1] to its world-space 3-D position on the screen plane."""
         sh = self.screen_height
         if sh is None:
             fw, fh = self.frame_size
@@ -7608,10 +7965,11 @@ class OpenXRViewer:
         self._env_prog['u_mvp'].write(vpf4.T.tobytes())
         self._env_prog['u_model'].write(model_mat.T.tobytes())
         self._env_prog['u_camera_pos'].write((cam_pos).tobytes())
-        # Dark Room is procedural black geometry, so it can rely almost
-        # entirely on screen spill. Cinema should use screen spill only,
-        # with no extra room fill. Other authored GLB environments keep the
-        # neutral fill so their material colors render consistently.
+        # Light colors: Dark Room / Cinema use near-zero head-lamp (they rely
+        # on cinema bias light / screen spill).  All other environments read
+        # from profile-backed attributes so each room can tune its own look.
+        _hlc = getattr(self, '_env_head_light_color', (0.45, 0.45, 0.48))
+        _amb = getattr(self, '_env_ambient_color', (0.08, 0.08, 0.09))
         if self._active_environment == 'Dark Room':
             self._env_prog['u_light_color'].value = (0.010, 0.010, 0.010)
             self._env_prog['u_ambient_color'].value = (0.008, 0.008, 0.009)
@@ -7619,8 +7977,10 @@ class OpenXRViewer:
             self._env_prog['u_light_color'].value = (0.0, 0.0, 0.0)
             self._env_prog['u_ambient_color'].value = (0.0, 0.0, 0.0)
         else:
-            self._env_prog['u_light_color'].value = (0.45, 0.45, 0.48)
-            self._env_prog['u_ambient_color'].value = (0.08, 0.08, 0.09)
+            self._env_prog['u_light_color'].value = (
+                float(_hlc[0]), float(_hlc[1]), float(_hlc[2]))
+            self._env_prog['u_ambient_color'].value = (
+                float(_amb[0]), float(_amb[1]), float(_amb[2]))
         # Directional light (KHR_lights_punctual)
         if self._scene_lights:
             dl = self._scene_lights[0]
@@ -7631,6 +7991,31 @@ class OpenXRViewer:
             self._env_prog['u_light_intensity'].value = (float(ci[0]), float(ci[1]), float(ci[2]))
         else:
             self._env_prog['u_light_intensity'].value = (0.0, 0.0, 0.0)
+
+        # Fill lights from profile env_fill_lights (up to 2)
+        _fl = getattr(self, '_env_fill_lights', [])
+        for i in range(2):
+            if i < len(_fl):
+                fl = _fl[i]
+                pos = fl.get('position', (0, 0, 0))
+                col = fl.get('color', (0, 0, 0))
+                rng = float(fl.get('range', 1.0))
+                self._env_prog[f'u_fill_light_enabled{i}'].value = 1
+                self._env_prog[f'u_fill_light_pos{i}'].value = (
+                    float(pos[0]), float(pos[1]), float(pos[2]))
+                self._env_prog[f'u_fill_light_color{i}'].value = (
+                    float(col[0]), float(col[1]), float(col[2]))
+                self._env_prog[f'u_fill_light_range{i}'].value = rng
+            else:
+                self._env_prog[f'u_fill_light_enabled{i}'].value = 0
+
+        # Exposure / gamma / emissive from profile (fall back to defaults)
+        self._env_prog['u_env_exposure'].value = float(
+            getattr(self, '_env_exposure', 1.0))
+        self._env_prog['u_env_gamma'].value = float(
+            getattr(self, '_env_gamma', 2.2))
+        self._env_prog['u_emissive_strength'].value = float(
+            getattr(self, '_env_emissive_strength', 1.0))
 
         # ----- Cinema bias light (screen as rectangular area light) ---------
         # Builds a world-space orthonormal basis for the screen from
@@ -7846,7 +8231,7 @@ class OpenXRViewer:
             self._glow_prog['u_screen_half'].value = (inner_w / 2, inner_h / 2)
             self._glow_prog['u_glow_color'].value  = self._glow_color
             self._glow_prog['u_glow_width'].value  = uv_glow_width
-            self._glow_prog['u_glow_intensity'].value = self._glow_intensity
+            self._glow_prog['u_glow_intensity'].value = self._glow_intensity * self._glow_intensity_multiplier
             self._glow_vao.render(moderngl.TRIANGLE_STRIP)
 
         self.ctx.disable(moderngl.BLEND)
@@ -7974,7 +8359,7 @@ class OpenXRViewer:
         # the same screen-content-tinted illumination onto the model surfaces
         # (with proper Lambertian shading + distance falloff), so the flat
         # additive glow quad would just sit in front of the model and look
-        # like a coloured fog.  For "Black" / "Passthrough" / plain-colour
+        # like a coloured fog.  For "Default" / "Default with Glow" / plain-colour
         # backdrops there's nothing else for the screen to spill light on,
         # so the planar glow stays on to give the picture a sense of
         # ambient bias light.
@@ -9278,7 +9663,8 @@ class OpenXRViewer:
         Right grip + Right stick X Screen width adjustment
         Right grip + Right stick Y Screen distance (with acceleration curve)
         Left grip + Left stick (when keyboard visible) Keyboard pan (preserved)
-        Left stick press hold 1s    Toggle background color
+        Left stick press hold 1s    Toggle FPS/shortcut panel
+        Left stick short press      Cycle environment
         Right stick press hold 1s   Toggle curved/flat (when no grip)
         Both sticks press 0.5s       Toggle FPS/help panel
         A/B/X/Y/Menu/Triggers      Original functions unchanged
@@ -9562,7 +9948,7 @@ class OpenXRViewer:
             # else: grip held but laser transiently off screen keep anchor so
             # the grab resumes as soon as the laser re-enters the screen quad.
 
-        # Keyboard grip-to-move: panel follows laser hit on head-sphere 鈹€鈹€
+        # Keyboard grip-to-move: panel follows laser hit on head-sphere 
         # Mirrors the screen grip-to-move loop: laser stays anchored on the
         # same local key point while the panel slides along the sphere
         # centred on the head.  Preserves Euclidean head抪anel distance so
@@ -9674,7 +10060,7 @@ class OpenXRViewer:
             self._kb_grab_local_l = None
             self._kb_grab_local_r = None
 
-        # Both grips held: system move鈹€鈹€鈹€鈹€鈹€
+        # Both grips held: system move
         # Average the two laser hit positions, project onto sphere around
         # head, and move the screen as a single rigid system.  This allows
         # two-handed repositioning without individual grip fighting.
@@ -9745,9 +10131,8 @@ class OpenXRViewer:
                     self.screen_yaw   = base_yaw   + self._yaw_offset
                     self.screen_pitch = base_pitch + self._pitch_offset
 
-        # Grip + stick fine-tuning (pan, resize, rotate, depth) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+        # Grip + stick fine-tuning (pan, resize, rotate, depth) 
         KB_MOVE_SPEED = 0.4    # m/s at full deflection
-        DEPTH_SPEED  = 0.08    # depth_strength units/s at full deflection
         # Depth-ratio stick control: replaces A/B + right-grip mapping
         DEPTH_RATIO_SPEED = 0.5   # units/s at full deflection
         DEPTH_RATIO_MIN   = 0.0
@@ -9832,11 +10217,11 @@ class OpenXRViewer:
             if not (self._grabbed or grip_l or grip_r):
                 self._accum_scroll(lx, ly, dt)
 
-        # Right grip + right stick X: resize screen width 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-        # Right grip + right stick Y: screen distance (acceleration curve) 鈹€鈹€鈹€鈹€鈹€
-        # Left grip + right stick X: rotate screen yaw around its centre 鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-        # Left grip + right stick Y: depth strength (unchanged) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-        # Right stick (no grip): mouse scroll鈹€鈹€鈹€鈹€鈹€
+        # Right grip + right stick X: resize screen width 
+        # Right grip + right stick Y: screen distance (acceleration curve) 
+        # Left grip + right stick X: rotate screen yaw around its centre 
+        # Left grip + right stick Y: depth strength (unchanged) 
+        # Right stick (no grip): mouse scroll
         RESIZE_SPEED = 1.2    # m/s of width change at full deflection
         if grip_r and not grip_l:
             if self._keyboard_visible and self._grip_target_r == 'keyboard':
@@ -10023,7 +10408,7 @@ class OpenXRViewer:
         self._y_last = y_now
 
         # X (left): short press toggle virtual keyboard.
-        #          long press  toggle VDXR green previous background.
+        #          long press  toggle VDXR green passthrough backdrop.
         X_LONG = 0.6   # seconds
         x_now = self._read_bool_action(self._act_x_btn, "/user/hand/left") or self._emu_x
 
@@ -10033,21 +10418,25 @@ class OpenXRViewer:
 
         if x_now and not self._x_long_fired:               # still held, not yet fired
             if time.perf_counter() - self._x_press_t >= X_LONG:
-                # Toggle between green and previous background
-                if self._bg_color_idx == 5 and self._prev_bg_color_idx is not None:
-                    # Restore previous background
+                # Toggle between green passthrough and previous background
+                if self._bg_color_idx == 1 and self._prev_bg_color_idx is not None:
+                    # Restore previous background + environment
                     self._bg_color_idx = self._prev_bg_color_idx
                     self._prev_bg_color_idx = None
+                    prev_env = self._prev_active_env
+                    self._prev_active_env = None
+                    if prev_env:
+                        self._switch_environment(prev_env, save_outgoing=False, apply_profile=False)
+                    else:
+                        self._switch_environment(None, save_outgoing=False, apply_profile=False)
                 else:
-                    # Save current background (if not already saved) and switch to green
+                    # Save current state and switch to green passthrough
                     if self._prev_bg_color_idx is None:
                         self._prev_bg_color_idx = self._bg_color_idx
-                    self._bg_color_idx = 5    # VDXR green
+                        self._prev_active_env = self._active_environment
+                    self._bg_color_idx = 1    # VDXR green
+                    self._switch_environment(None, save_outgoing=False, apply_profile=False)
                 self._x_long_fired = True
-                # Persist so the next launch lands on the right backdrop.
-                # When an environment is active the env name still wins (see
-                # _persist_active_environment), so the green toggle is purely
-                # cosmetic until the user explicitly switches env off.
                 self._persist_active_environment()
 
         if not x_now and self._x_last:                     # falling edge
@@ -10099,7 +10488,7 @@ class OpenXRViewer:
             now = self._frame_now
 
             # Left thumbstick: long-press toggle status/shortcut panel;
-            #                  short-press cycle background (colours + environment model)
+            #                  short-press cycle environment
             if lsc_now and not self._left_stick_click_prev:
                 self._lsc_press_t = now
                 self._lsc_long_fired = False
@@ -10117,7 +10506,7 @@ class OpenXRViewer:
                         else:
                             self.depth_strength = getattr(self, '_depth_strength_saved', 0.1)
                     else:
-                        self._cycle_background()
+                        self._cycle_environment()
 
             # Right thumbstick: long-press reset screen direction (keep distance + size);
             #          short-press toggle curved/flat
@@ -10188,6 +10577,21 @@ class OpenXRViewer:
             print(f"[OpenXRViewer] OpenXR init failed: {e}")
             self.cleanup()
             raise
+
+        # Optional desktop mirror of the left eye, useful for checking XR output
+        # without wearing the headset. The GUI controls this via settings.yaml.
+        try:
+            glfw.set_window_size(self.window, 960, 540)
+            glfw.set_window_pos(self.window, 100, 100)
+            if self._show_preview_window:
+                glfw.show_window(self.window)
+                self._preview_active = True
+                print("[OpenXRViewer] Desktop preview window opened")
+            else:
+                self._preview_active = False
+                print("[OpenXRViewer] Desktop preview window disabled")
+        except Exception as e:
+            print(f"[OpenXRViewer] Preview window setup failed: {e}")
 
         # Widen the system double-click window so VR trigger taps have more time.
         # Default Windows value is 500 ms too tight for controller triggers.
@@ -10365,7 +10769,7 @@ class OpenXRViewer:
                 eye_layer_views = []
 
                 if self._use_d3d11:
-                    # D3D11 rendering鈹€鈹€鈹€鈹€鈹€
+                    # D3D11 rendering
                     #
                     # Prefer GPU interop (NV_DX_interop2 or EXT_memory_object)
                     # which avoids the CPU round-trip entirely.
@@ -10408,7 +10812,10 @@ class OpenXRViewer:
                             ))
 
                     elif self._interop_mode == 'ext_mem':
-                        # EXT_memory_object: render to shared GL FBO, GPU-side blit to swapchain
+                        # EXT_memory_object two-phase loop. Phase 1 submits all
+                        # GL work and fences per eye; phase 2 waits/copies to
+                        # D3D11, avoiding a full-pipeline glFinish per eye.
+                        ext_pending = []  # (eye_index, fence, d3d11_tex, sc_w, sc_h, swapchain, view)
                         for eye_index in range(2):
                             swapchain = self._xr_swapchains[eye_index]
                             img_index = xr.acquire_swapchain_image(swapchain, self._xr_sc_acquire_info)
@@ -10419,10 +10826,21 @@ class OpenXRViewer:
                             view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
                             proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
 
-                            mgl_fbo = self._ext_shared_tex[eye_index][3]
-                            self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
-                            self._blit_ext_to_swapchain(eye_index, sc_image.texture)
+                            if self._swapchain_is_bgra:
+                                offs_mgl_fbo, _ = self._get_or_create_offscreen_fbo(eye_index, img_index, sc_w, sc_h)
+                                self._render_eye(eye_index, offs_mgl_fbo, view_mat, proj_mat, flip_y=True)
+                                offs_tex = self._offscreen_fbo_cache[(eye_index, img_index)][2]
+                                self._swizzle_blit_to_shared(eye_index, offs_tex)
+                            else:
+                                mgl_fbo = self._ext_shared_tex[eye_index][3]
+                                self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
 
+                            fence = self._make_gl_fence()
+                            ext_pending.append((eye_index, fence, sc_image.texture,
+                                                sc_w, sc_h, swapchain, view))
+
+                        for eye_index, fence, d3d11_tex, sc_w, sc_h, swapchain, view in ext_pending:
+                            self._wait_and_blit_ext(eye_index, d3d11_tex, fence)
                             xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
                             eye_layer_views.append(xr.CompositionLayerProjectionView(
                                 pose=view.pose if view else xr.Posef(),

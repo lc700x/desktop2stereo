@@ -1,3 +1,9 @@
+# openxr_viewer.py
+# Renders Desktop2Stereo's depth-parallax left/right eye views into a VR headset
+# via the pyopenxr binding (pip install pyopenxr).
+# Uses a world-space virtual screen quad with proper per-eye view/projection matrices
+# derived from xr.locate_views() for full 6DoF/3DoF head tracking.
+# The depth-parallax FRAGMENT_SHADER from viewer.py is reused unchanged.
 
 import sys
 import os
@@ -11,8 +17,7 @@ import glfw
 import moderngl
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-Image.MAX_IMAGE_PIXELS = None  # Allow loading large 16K atlas images.
-from utils import get_font_type, ROWS, ENV_ROWS
+from utils import get_font_type, ROWS
 from OpenGL.GL import (
     glGenFramebuffers, glBindFramebuffer, glFramebufferTexture2D,
     glDeleteFramebuffers, glCheckFramebufferStatus,
@@ -22,16 +27,17 @@ from OpenGL.GL import (
     glBindTexture, glTexSubImage2D, glGenerateMipmap,
     GL_PIXEL_UNPACK_BUFFER, GL_PIXEL_PACK_BUFFER, GL_DYNAMIC_DRAW, GL_STREAM_READ,
     GL_RGB, GL_RED, GL_RGBA, GL_BGRA, GL_UNSIGNED_BYTE, GL_FLOAT,
-    glDisable, glEnable, GL_FRAMEBUFFER_SRGB, GL_CULL_FACE,
+    glDisable, GL_FRAMEBUFFER_SRGB,
     glFrontFace, GL_CW, GL_CCW,
-    glReadBuffer, glBlitFramebuffer, glGenRenderbuffers, glBindRenderbuffer,
-    glRenderbufferStorage, glFramebufferRenderbuffer, glDeleteRenderbuffers,
-    GL_READ_FRAMEBUFFER, GL_DRAW_FRAMEBUFFER, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT, GL_LINEAR,
-    GL_RENDERBUFFER, GL_DEPTH_ATTACHMENT, GL_DEPTH_COMPONENT24,
     glTexParameterf, GL_TEXTURE_LOD_BIAS,
     glMapBuffer, glUnmapBuffer, GL_READ_ONLY, GL_MAP_UNSYNCHRONIZED_BIT,
-    glClear, glReadPixels, glFlush, glGenTextures, glDeleteTextures,
-    glFinish
+    glReadPixels, glFlush, glGenTextures, glDeleteTextures,
+    glFinish,
+    glFenceSync, glClientWaitSync, glDeleteSync,
+    GL_SYNC_GPU_COMMANDS_COMPLETE, GL_SYNC_FLUSH_COMMANDS_BIT,
+    glGenRenderbuffers, glDeleteRenderbuffers, glBindRenderbuffer,
+    glRenderbufferStorage, glFramebufferRenderbuffer,
+    GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, GL_DEPTH_ATTACHMENT,
 )
 
 try:
@@ -48,907 +54,6 @@ import io as _io
 from PIL import Image
 
 EDGE_STRENGTH = 0.6 # snapping strength of cursor around screen edge
-
-
-
-import ctypes
-import os
-import sys
-
-import numpy as np
-
-
-DXGI_FORMAT_R32G32_FLOAT = 16
-DXGI_FORMAT_R8G8B8A8_UNORM = 28
-DXGI_FORMAT_R32_FLOAT = 41
-
-D3D11_USAGE_DEFAULT = 0
-D3D11_BIND_VERTEX_BUFFER = 0x1
-D3D11_BIND_CONSTANT_BUFFER = 0x4
-D3D11_BIND_SHADER_RESOURCE = 0x8
-D3D11_BIND_RENDER_TARGET = 0x20
-D3D11_INPUT_PER_VERTEX_DATA = 0
-D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST = 4
-D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP = 5
-D3D11_SDK_VERSION = 7
-D3D11_FILL_SOLID = 3
-D3D11_CULL_NONE = 1
-D3D11_RTV_DIMENSION_TEXTURE2D = 4
-D3D11_RTV_DIMENSION_TEXTURE2DARRAY = 5
-D3D11_FILTER_MIN_MAG_MIP_LINEAR = 0x15
-D3D11_TEXTURE_ADDRESS_CLAMP = 3
-D3D11_COMPARISON_NEVER = 1
-
-
-class DXGISampleDesc(ctypes.Structure):
-    _fields_ = [
-        ("Count", ctypes.c_uint),
-        ("Quality", ctypes.c_uint),
-    ]
-
-
-class D3D11Texture2DDesc(ctypes.Structure):
-    _fields_ = [
-        ("Width", ctypes.c_uint),
-        ("Height", ctypes.c_uint),
-        ("MipLevels", ctypes.c_uint),
-        ("ArraySize", ctypes.c_uint),
-        ("Format", ctypes.c_uint),
-        ("SampleDesc", DXGISampleDesc),
-        ("Usage", ctypes.c_uint),
-        ("BindFlags", ctypes.c_uint),
-        ("CPUAccessFlags", ctypes.c_uint),
-        ("MiscFlags", ctypes.c_uint),
-    ]
-
-
-class D3D11BufferDesc(ctypes.Structure):
-    _fields_ = [
-        ("ByteWidth", ctypes.c_uint),
-        ("Usage", ctypes.c_uint),
-        ("BindFlags", ctypes.c_uint),
-        ("CPUAccessFlags", ctypes.c_uint),
-        ("MiscFlags", ctypes.c_uint),
-        ("StructureByteStride", ctypes.c_uint),
-    ]
-
-
-class D3D11SubresourceData(ctypes.Structure):
-    _fields_ = [
-        ("pSysMem", ctypes.c_void_p),
-        ("SysMemPitch", ctypes.c_uint),
-        ("SysMemSlicePitch", ctypes.c_uint),
-    ]
-
-
-class D3D11InputElementDesc(ctypes.Structure):
-    _fields_ = [
-        ("SemanticName", ctypes.c_char_p),
-        ("SemanticIndex", ctypes.c_uint),
-        ("Format", ctypes.c_uint),
-        ("InputSlot", ctypes.c_uint),
-        ("AlignedByteOffset", ctypes.c_uint),
-        ("InputSlotClass", ctypes.c_uint),
-        ("InstanceDataStepRate", ctypes.c_uint),
-    ]
-
-
-class D3D11Viewport(ctypes.Structure):
-    _fields_ = [
-        ("TopLeftX", ctypes.c_float),
-        ("TopLeftY", ctypes.c_float),
-        ("Width", ctypes.c_float),
-        ("Height", ctypes.c_float),
-        ("MinDepth", ctypes.c_float),
-        ("MaxDepth", ctypes.c_float),
-    ]
-
-
-class D3D11RenderTargetViewDesc(ctypes.Structure):
-    _fields_ = [
-        ("Format", ctypes.c_uint),
-        ("ViewDimension", ctypes.c_uint),
-        ("MipSlice", ctypes.c_uint),
-        ("FirstArraySlice", ctypes.c_uint),
-        ("ArraySize", ctypes.c_uint),
-    ]
-
-
-class D3D11SamplerDesc(ctypes.Structure):
-    _fields_ = [
-        ("Filter", ctypes.c_uint),
-        ("AddressU", ctypes.c_uint),
-        ("AddressV", ctypes.c_uint),
-        ("AddressW", ctypes.c_uint),
-        ("MipLODBias", ctypes.c_float),
-        ("MaxAnisotropy", ctypes.c_uint),
-        ("ComparisonFunc", ctypes.c_uint),
-        ("BorderColor", ctypes.c_float * 4),
-        ("MinLOD", ctypes.c_float),
-        ("MaxLOD", ctypes.c_float),
-    ]
-
-
-class D3D11RasterizerDesc(ctypes.Structure):
-    _fields_ = [
-        ("FillMode", ctypes.c_uint),
-        ("CullMode", ctypes.c_uint),
-        ("FrontCounterClockwise", ctypes.c_int),
-        ("DepthBias", ctypes.c_int),
-        ("DepthBiasClamp", ctypes.c_float),
-        ("SlopeScaledDepthBias", ctypes.c_float),
-        ("DepthClipEnable", ctypes.c_int),
-        ("ScissorEnable", ctypes.c_int),
-        ("MultisampleEnable", ctypes.c_int),
-        ("AntialiasedLineEnable", ctypes.c_int),
-    ]
-
-
-def _ptr_value(ptr):
-    if ptr is None:
-        return 0
-    if isinstance(ptr, int):
-        return ptr
-    if hasattr(ptr, "value"):
-        return ptr.value
-    return ctypes.cast(ptr, ctypes.c_void_p).value
-
-
-def _com_fn(obj, index, restype, *argtypes):
-    vtbl = ctypes.cast(obj, ctypes.POINTER(ctypes.c_void_p)).contents.value
-    fn_ptr = ctypes.cast(
-        vtbl + index * ctypes.sizeof(ctypes.c_void_p),
-        ctypes.POINTER(ctypes.c_void_p),
-    ).contents.value
-    return ctypes.CFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(fn_ptr)
-
-
-def _release(ptr):
-    if not ptr:
-        return
-    try:
-        fn = _com_fn(ptr, 2, ctypes.c_ulong)
-        fn(_ptr_value(ptr))
-    except Exception:
-        pass
-
-
-def _blob_ptr(blob):
-    fn = _com_fn(blob, 3, ctypes.c_void_p)
-    return fn(_ptr_value(blob))
-
-
-def _blob_size(blob):
-    fn = _com_fn(blob, 4, ctypes.c_size_t)
-    return fn(_ptr_value(blob))
-
-
-def _compile_shader(source, entry, target):
-    compiler = None
-    for dll in ("d3dcompiler_47", "d3dcompiler_43"):
-        try:
-            compiler = ctypes.WinDLL(dll)
-            break
-        except OSError:
-            continue
-    if compiler is None:
-        raise RuntimeError("d3dcompiler_47/d3dcompiler_43 not found")
-
-    code = source.encode("utf-8")
-    entry_b = entry.encode("ascii")
-    target_b = target.encode("ascii")
-    blob = ctypes.c_void_p()
-    err_blob = ctypes.c_void_p()
-    hr = compiler.D3DCompile(
-        code,
-        len(code),
-        None,
-        None,
-        None,
-        entry_b,
-        target_b,
-        0,
-        0,
-        ctypes.byref(blob),
-        ctypes.byref(err_blob),
-    )
-    if hr != 0:
-        msg = f"hr=0x{hr & 0xFFFFFFFF:08x}"
-        if err_blob:
-            try:
-                msg = ctypes.string_at(_blob_ptr(err_blob), _blob_size(err_blob)).decode("utf-8", "replace")
-            finally:
-                _release(err_blob)
-        raise RuntimeError(f"D3DCompile failed for {entry}/{target}: {msg}")
-    if err_blob:
-        _release(err_blob)
-    return blob
-
-
-def _check_hr(hr, label):
-    if hr != 0:
-        raise RuntimeError(f"{label} failed: hr=0x{hr & 0xFFFFFFFF:08x}")
-
-
-def _hr_hex(hr):
-    return f"0x{hr & 0xFFFFFFFF:08x}"
-
-
-class CUDART_D3D11:
-    CUDA_GRAPHICS_REGISTER_FLAGS_NONE = 0
-    CUDA_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD = 2
-    CUDA_MEMCPY_DEVICE_TO_DEVICE = 3
-
-    def __init__(self, torch_module, d3d11_device, device_id=0):
-        torch_dir = os.path.dirname(torch_module.__file__)
-        site_packages = os.path.dirname(torch_dir)
-        candidates = [
-            os.path.join(torch_dir, "lib"),
-            os.path.join(site_packages, "nvidia", "cuda_runtime", "bin"),
-            os.path.join(site_packages, "nvidia", "cuda_runtime", "lib"),
-        ]
-        cudart_path = None
-        for lib_dir in candidates:
-            if not os.path.exists(lib_dir):
-                continue
-            for name in os.listdir(lib_dir):
-                if sys.platform == "win32":
-                    if name.startswith("cudart64") and name.endswith(".dll"):
-                        cudart_path = os.path.join(lib_dir, name)
-                        break
-                elif name.startswith("libcudart") and ".so" in name:
-                    cudart_path = os.path.join(lib_dir, name)
-                    break
-            if cudart_path:
-                break
-        if not cudart_path:
-            raise RuntimeError("Could not find CUDA runtime library for D3D11 interop")
-
-        self.lib = ctypes.WinDLL(cudart_path) if sys.platform == "win32" else ctypes.CDLL(cudart_path)
-        self.lib.cudaSetDevice.argtypes = [ctypes.c_int]
-        self.lib.cudaSetDevice.restype = ctypes.c_int
-        self.lib.cudaGetLastError.argtypes = []
-        self.lib.cudaGetLastError.restype = ctypes.c_int
-        self.lib.cudaGraphicsD3D11RegisterResource.argtypes = [
-            ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_uint
-        ]
-        self.lib.cudaGraphicsD3D11RegisterResource.restype = ctypes.c_int
-        self.lib.cudaGraphicsUnregisterResource.argtypes = [ctypes.c_void_p]
-        self.lib.cudaGraphicsUnregisterResource.restype = ctypes.c_int
-        self.lib.cudaGraphicsMapResources.argtypes = [
-            ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
-        ]
-        self.lib.cudaGraphicsMapResources.restype = ctypes.c_int
-        self.lib.cudaGraphicsUnmapResources.argtypes = [
-            ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
-        ]
-        self.lib.cudaGraphicsUnmapResources.restype = ctypes.c_int
-        self.lib.cudaGraphicsSubResourceGetMappedArray.argtypes = [
-            ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint
-        ]
-        self.lib.cudaGraphicsSubResourceGetMappedArray.restype = ctypes.c_int
-        self.lib.cudaMemcpy2DToArrayAsync.argtypes = [
-            ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_void_p,
-            ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_int, ctypes.c_void_p
-        ]
-        self.lib.cudaMemcpy2DToArrayAsync.restype = ctypes.c_int
-        res = self.lib.cudaSetDevice(int(device_id))
-        if res != 0:
-            raise RuntimeError(f"cudaSetDevice failed: {res}")
-
-    def clear_last_error(self):
-        try:
-            self.lib.cudaGetLastError()
-        except Exception:
-            pass
-
-    def register_texture(self, texture_ptr):
-        resource = ctypes.c_void_p()
-        res = self.lib.cudaGraphicsD3D11RegisterResource(
-            ctypes.byref(resource),
-            ctypes.c_void_p(_ptr_value(texture_ptr)),
-            self.CUDA_GRAPHICS_REGISTER_FLAGS_NONE,
-        )
-        if res != 0:
-            self.clear_last_error()
-            raise RuntimeError(f"cudaGraphicsD3D11RegisterResource failed: {res}")
-        return resource
-
-    def unregister_resource(self, resource):
-        if resource:
-            self.lib.cudaGraphicsUnregisterResource(resource)
-
-    def copy_tensor_to_texture(self, resource, src_ptr, src_pitch, copy_width_bytes, height, stream=0):
-        stream_ptr = ctypes.c_void_p(stream) if stream else None
-        res = self.lib.cudaGraphicsMapResources(1, ctypes.byref(resource), stream_ptr)
-        if res != 0:
-            self.clear_last_error()
-            raise RuntimeError(f"cudaGraphicsMapResources failed: {res}")
-        try:
-            array = ctypes.c_void_p()
-            res = self.lib.cudaGraphicsSubResourceGetMappedArray(
-                ctypes.byref(array), resource, 0, 0
-            )
-            if res != 0:
-                self.clear_last_error()
-                raise RuntimeError(f"cudaGraphicsSubResourceGetMappedArray failed: {res}")
-            res = self.lib.cudaMemcpy2DToArrayAsync(
-                array,
-                0,
-                0,
-                ctypes.c_void_p(src_ptr),
-                ctypes.c_size_t(src_pitch),
-                ctypes.c_size_t(copy_width_bytes),
-                ctypes.c_size_t(height),
-                self.CUDA_MEMCPY_DEVICE_TO_DEVICE,
-                stream_ptr,
-            )
-            if res != 0:
-                self.clear_last_error()
-                raise RuntimeError(f"cudaMemcpy2DToArrayAsync failed: {res}")
-        finally:
-            unmap_res = self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), stream_ptr)
-            if unmap_res != 0:
-                self.clear_last_error()
-                raise RuntimeError(f"cudaGraphicsUnmapResources failed: {unmap_res}")
-
-
-HLSL_SOURCE = r"""
-Texture2D texColor : register(t0);
-Texture2D texDepth : register(t1);
-SamplerState sampLinear : register(s0);
-
-cbuffer Params : register(b0)
-{
-    float4 mvpRow0;
-    float4 mvpRow1;
-    float4 mvpRow2;
-    float4 mvpRow3;
-    float4 params;
-};
-
-#define eyeOffset params.x
-#define depthStrength params.y
-#define convergence params.z
-
-struct VSOut {
-    float4 pos : SV_POSITION;
-    float2 uv  : TEXCOORD0;
-};
-
-VSOut vs_main(uint vertexId : SV_VertexID)
-{
-    static const float2 pos[4] = {
-        float2(-1.0, -1.0),
-        float2(-1.0,  1.0),
-        float2( 1.0, -1.0),
-        float2( 1.0,  1.0)
-    };
-    static const float2 uv[4] = {
-        float2(0.0, 0.0),
-        float2(0.0, 1.0),
-        float2(1.0, 0.0),
-        float2(1.0, 1.0)
-    };
-    VSOut output;
-    float4 localPos = float4(pos[vertexId], 0.0, 1.0);
-#if D2S_SPACE_MODE == 1
-    output.pos = float4(pos[vertexId] * float2(0.35, 0.2), 0.5, 1.0);
-#else
-    output.pos = float4(
-        dot(mvpRow0, localPos),
-        dot(mvpRow1, localPos),
-        dot(mvpRow2, localPos),
-        dot(mvpRow3, localPos)
-    );
-#endif
-    output.uv = uv[vertexId];
-    return output;
-}
-
-float4 ps_main(VSOut input) : SV_TARGET
-{
-    float2 uv = float2(input.uv.x, 1.0 - input.uv.y);
-
-#if D2S_SHADER_MODE == 0
-    return float4(0.05, 0.10, 0.16, 1.0);
-#elif D2S_SHADER_MODE == 1
-    return float4(texColor.Sample(sampLinear, uv).rgb, 1.0);
-#else
-    float depth = saturate(texDepth.Sample(sampLinear, uv).r);
-    float depthInv = -depth;
-    float shift = (depthInv + convergence) * eyeOffset * depthStrength;
-    float2 shiftedUv = uv - float2(shift, 0.0);
-    if (shiftedUv.x < 0.0 || shiftedUv.x > 1.0 || shiftedUv.y < 0.0 || shiftedUv.y > 1.0) {
-        return float4(0.0, 0.0, 0.0, 1.0);
-    }
-    return float4(texColor.Sample(sampLinear, shiftedUv).rgb, 1.0);
-#endif
-}
-"""
-
-
-class D3D11NativeRenderer:
-    def __init__(self, device, context, swapchain_format=DXGI_FORMAT_R8G8B8A8_UNORM):
-        self.device = device
-        self.context = context
-        self.swapchain_format = int(swapchain_format or DXGI_FORMAT_R8G8B8A8_UNORM)
-        self.color_tex = ctypes.c_void_p()
-        self.depth_tex = ctypes.c_void_p()
-        self.color_srv = ctypes.c_void_p()
-        self.depth_srv = ctypes.c_void_p()
-        self.color_cuda = ctypes.c_void_p()
-        self.depth_cuda = ctypes.c_void_p()
-        self.cuda = None
-        self.cuda_failed = False
-        self.cuda_active_logged = False
-        self.render_tex = ctypes.c_void_p()
-        self.render_rtv = ctypes.c_void_p()
-        self.render_target_size = None
-        self.vertex_buffer = ctypes.c_void_p()
-        self.constant_buffer = ctypes.c_void_p()
-        self.input_layout = ctypes.c_void_p()
-        self.vertex_shader = ctypes.c_void_p()
-        self.pixel_shader = ctypes.c_void_p()
-        self.sampler = ctypes.c_void_p()
-        self.rasterizer = ctypes.c_void_p()
-        self.swapchain_rtvs = {}
-        self._logged_swapchain_desc = set()
-        self.shader_mode = os.environ.get("D2S_D3D11_SHADER_MODE", "stereo").strip().lower()
-        self.space_mode = os.environ.get("D2S_D3D11_SPACE_MODE", "world").strip().lower()
-        self.debug = str(
-            os.environ.get("D2S_D3D11_DEBUG", os.environ.get("D2S_OPENXR_DEBUG", "0")) or "0"
-        ).strip().lower() in ("1", "true", "yes", "on")
-        self._logged_world_mvp = False
-        self.size = None
-        self.has_frame = False
-        self._init_pipeline()
-
-    def _device_call(self, index, restype, *argtypes):
-        return _com_fn(self.device, index, restype, *argtypes)
-
-    def _context_call(self, index, restype, *argtypes):
-        return _com_fn(self.context, index, restype, *argtypes)
-
-    def _device_removed_reason(self):
-        try:
-            get_reason = self._device_call(39, ctypes.c_long)
-            return get_reason(_ptr_value(self.device))
-        except Exception:
-            return None
-
-    def _shader_source(self):
-        mode_id = {
-            "clear": -1,
-            "solid": 0,
-            "color": 1,
-            "color_only": 1,
-            "stereo": 2,
-        }.get(self.shader_mode, 2)
-        self.shader_mode = (
-            "clear" if mode_id < 0 else
-            "solid" if mode_id == 0 else
-            "color" if mode_id == 1 else
-            "stereo"
-        )
-        if self.debug or self.shader_mode != "stereo":
-            print(f"[OpenXRViewer] D3D11 shader mode: {self.shader_mode}")
-        space_id = 1 if self.space_mode in ("clip", "screen", "debug") else 0
-        self.space_mode = "clip" if space_id else "world"
-        if self.debug or self.space_mode != "world":
-            print(f"[OpenXRViewer] D3D11 space mode: {self.space_mode}")
-        return (
-            f"#define D2S_SHADER_MODE {mode_id}\n"
-            f"#define D2S_SPACE_MODE {space_id}\n"
-            + HLSL_SOURCE
-        )
-
-    def _init_pipeline(self):
-        shader_source = self._shader_source()
-        vs_blob = _compile_shader(shader_source, "vs_main", "vs_5_0")
-        ps_blob = _compile_shader(shader_source, "ps_main", "ps_5_0")
-        try:
-            create_vs = self._device_call(
-                12, ctypes.c_long, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)
-            )
-            create_ps = self._device_call(
-                15, ctypes.c_long, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)
-            )
-            _check_hr(create_vs(_ptr_value(self.device), _blob_ptr(vs_blob), _blob_size(vs_blob), None, ctypes.byref(self.vertex_shader)), "CreateVertexShader")
-            _check_hr(create_ps(_ptr_value(self.device), _blob_ptr(ps_blob), _blob_size(ps_blob), None, ctypes.byref(self.pixel_shader)), "CreatePixelShader")
-
-            self.input_layout = ctypes.c_void_p()
-        finally:
-            _release(vs_blob)
-            _release(ps_blob)
-
-        self.vertex_buffer = ctypes.c_void_p()
-        self.constant_buffer = self._create_buffer(np.zeros(20, dtype=np.float32), D3D11_BIND_CONSTANT_BUFFER)
-
-        samp_desc = D3D11SamplerDesc(
-            D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-            D3D11_TEXTURE_ADDRESS_CLAMP,
-            D3D11_TEXTURE_ADDRESS_CLAMP,
-            D3D11_TEXTURE_ADDRESS_CLAMP,
-            0.0,
-            1,
-            D3D11_COMPARISON_NEVER,
-            (ctypes.c_float * 4)(0.0, 0.0, 0.0, 0.0),
-            0.0,
-            3.4028234663852886e38,
-        )
-        create_sampler = self._device_call(23, ctypes.c_long, ctypes.POINTER(D3D11SamplerDesc), ctypes.POINTER(ctypes.c_void_p))
-        _check_hr(create_sampler(_ptr_value(self.device), ctypes.byref(samp_desc), ctypes.byref(self.sampler)), "CreateSamplerState")
-
-        rast_desc = D3D11RasterizerDesc(
-            D3D11_FILL_SOLID,
-            D3D11_CULL_NONE,
-            0,
-            0,
-            0.0,
-            0.0,
-            1,
-            0,
-            0,
-            0,
-        )
-        create_rasterizer = self._device_call(
-            22, ctypes.c_long, ctypes.POINTER(D3D11RasterizerDesc), ctypes.POINTER(ctypes.c_void_p)
-        )
-        _check_hr(
-            create_rasterizer(_ptr_value(self.device), ctypes.byref(rast_desc), ctypes.byref(self.rasterizer)),
-            "CreateRasterizerState",
-        )
-
-    def _create_buffer(self, array, bind_flags):
-        data = np.ascontiguousarray(array)
-        desc = D3D11BufferDesc(data.nbytes, D3D11_USAGE_DEFAULT, bind_flags, 0, 0, 0)
-        init = D3D11SubresourceData(ctypes.c_void_p(data.ctypes.data), 0, 0)
-        out = ctypes.c_void_p()
-        create_buffer = self._device_call(
-            3, ctypes.c_long, ctypes.POINTER(D3D11BufferDesc), ctypes.POINTER(D3D11SubresourceData), ctypes.POINTER(ctypes.c_void_p)
-        )
-        _check_hr(create_buffer(_ptr_value(self.device), ctypes.byref(desc), ctypes.byref(init), ctypes.byref(out)), "CreateBuffer")
-        return out
-
-    def _create_texture_srv(self, width, height, fmt):
-        tex = ctypes.c_void_p()
-        srv = ctypes.c_void_p()
-        desc = D3D11Texture2DDesc(
-            width, height, 1, 1, fmt, DXGISampleDesc(1, 0),
-            D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0,
-        )
-        create_tex = self._device_call(
-            5, ctypes.c_long, ctypes.POINTER(D3D11Texture2DDesc), ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)
-        )
-        _check_hr(create_tex(_ptr_value(self.device), ctypes.byref(desc), None, ctypes.byref(tex)), "CreateTexture2D")
-        create_srv = self._device_call(
-            7, ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)
-        )
-        _check_hr(create_srv(_ptr_value(self.device), tex, None, ctypes.byref(srv)), "CreateShaderResourceView")
-        return tex, srv
-
-    def _ensure_render_target(self, width, height):
-        if self.render_target_size == (width, height, self.swapchain_format):
-            return
-        _release(self.render_rtv)
-        _release(self.render_tex)
-        self.render_rtv = ctypes.c_void_p()
-        self.render_tex = ctypes.c_void_p()
-        desc = D3D11Texture2DDesc(
-            width, height, 1, 1, self.swapchain_format, DXGISampleDesc(1, 0),
-            D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0, 0,
-        )
-        create_tex = self._device_call(
-            5, ctypes.c_long, ctypes.POINTER(D3D11Texture2DDesc), ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)
-        )
-        _check_hr(create_tex(_ptr_value(self.device), ctypes.byref(desc), None, ctypes.byref(self.render_tex)), "CreateTexture2D(render)")
-        create_rtv = self._device_call(
-            9, ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)
-        )
-        _check_hr(create_rtv(_ptr_value(self.device), _ptr_value(self.render_tex), None, ctypes.byref(self.render_rtv)), "CreateRenderTargetView(render)")
-        self.render_target_size = (width, height, self.swapchain_format)
-
-    def _get_texture_desc(self, texture_ptr):
-        desc = D3D11Texture2DDesc()
-        get_desc = _com_fn(texture_ptr, 10, None, ctypes.POINTER(D3D11Texture2DDesc))
-        get_desc(texture_ptr, ctypes.byref(desc))
-        return desc
-
-    def _format_texture_desc(self, desc):
-        return (
-            f"size={desc.Width}x{desc.Height} fmt={desc.Format} "
-            f"mips={desc.MipLevels} array={desc.ArraySize} "
-            f"sample={desc.SampleDesc.Count}/{desc.SampleDesc.Quality} "
-            f"usage={desc.Usage} bind=0x{desc.BindFlags:x} "
-            f"cpu=0x{desc.CPUAccessFlags:x} misc=0x{desc.MiscFlags:x}"
-        )
-
-    def _get_or_create_swapchain_rtv(self, swapchain_texture):
-        texture_ptr = _ptr_value(swapchain_texture)
-        if not texture_ptr:
-            raise RuntimeError("OpenXR D3D11 swapchain texture is null")
-
-        cached = self.swapchain_rtvs.get(texture_ptr)
-        if cached:
-            return cached
-
-        desc = self._get_texture_desc(texture_ptr)
-        if self.debug and texture_ptr not in self._logged_swapchain_desc:
-            print(f"[OpenXRViewer] D3D11 swapchain texture desc: {self._format_texture_desc(desc)}")
-            self._logged_swapchain_desc.add(texture_ptr)
-
-        if not (desc.BindFlags & D3D11_BIND_RENDER_TARGET):
-            raise RuntimeError(
-                "OpenXR D3D11 swapchain texture is not render-target bindable: "
-                f"{self._format_texture_desc(desc)}"
-            )
-
-        # OpenXR runtimes may expose the swapchain image as a typeless texture.
-        # The RTV itself must use the typed swapchain format requested at
-        # xrCreateSwapchain, not the typeless texture storage format.
-        rtv_format = self.swapchain_format or desc.Format
-        if desc.ArraySize > 1:
-            rtv_desc = D3D11RenderTargetViewDesc(
-                rtv_format,
-                D3D11_RTV_DIMENSION_TEXTURE2DARRAY,
-                0,
-                0,
-                1,
-            )
-        else:
-            rtv_desc = D3D11RenderTargetViewDesc(
-                rtv_format,
-                D3D11_RTV_DIMENSION_TEXTURE2D,
-                0,
-                0,
-                0,
-            )
-
-        rtv = ctypes.c_void_p()
-        create_rtv = self._device_call(
-            9, ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)
-        )
-        hr = create_rtv(_ptr_value(self.device), texture_ptr, ctypes.byref(rtv_desc), ctypes.byref(rtv))
-        if hr != 0:
-            removed_reason = self._device_removed_reason()
-            reason_text = "" if removed_reason is None else f" removed_reason={_hr_hex(removed_reason)}"
-            raise RuntimeError(
-                "CreateRenderTargetView(OpenXR swapchain direct) failed: "
-                f"hr={_hr_hex(hr)}{reason_text} rtv_fmt={rtv_format} {self._format_texture_desc(desc)}"
-            )
-
-        self.swapchain_rtvs[texture_ptr] = rtv
-        return rtv
-
-    def _ensure_frame_textures(self, width, height):
-        if self.size == (width, height):
-            return
-        self._release_frame_textures()
-        self.color_tex, self.color_srv = self._create_texture_srv(width, height, DXGI_FORMAT_R8G8B8A8_UNORM)
-        self.depth_tex, self.depth_srv = self._create_texture_srv(width, height, DXGI_FORMAT_R32_FLOAT)
-        self.size = (width, height)
-        self.has_frame = False
-
-    def _release_frame_textures(self):
-        if self.cuda is not None:
-            for resource in (self.color_cuda, self.depth_cuda):
-                try:
-                    self.cuda.unregister_resource(resource)
-                except Exception:
-                    pass
-        self.color_cuda = ctypes.c_void_p()
-        self.depth_cuda = ctypes.c_void_p()
-        for ptr in (self.color_srv, self.depth_srv, self.color_tex, self.depth_tex):
-            _release(ptr)
-        self.color_srv = ctypes.c_void_p()
-        self.depth_srv = ctypes.c_void_p()
-        self.color_tex = ctypes.c_void_p()
-        self.depth_tex = ctypes.c_void_p()
-
-    def _ensure_cuda_resources(self, torch_module, device_id):
-        if self.cuda_failed:
-            return False
-        if self.cuda is None:
-            self.cuda = CUDART_D3D11(torch_module, self.device, device_id)
-        if not self.color_cuda:
-            self.color_cuda = self.cuda.register_texture(self.color_tex)
-        if not self.depth_cuda:
-            self.depth_cuda = self.cuda.register_texture(self.depth_tex)
-        return True
-
-    def _update_frame_cuda(self, torch_module, rgb, depth):
-        if not (
-            hasattr(rgb, "is_cuda") and rgb.is_cuda and
-            hasattr(depth, "is_cuda") and depth.is_cuda
-        ):
-            return False
-
-        device = depth.device
-        device_id = 0 if device.index is None else int(device.index)
-        depth_gpu = depth.detach()
-        h, w = depth_gpu.shape[:2]
-        self._ensure_frame_textures(w, h)
-        self._ensure_cuda_resources(torch_module, device_id)
-
-        rgb_gpu = rgb.detach()
-        if rgb_gpu.device != device:
-            rgb_gpu = rgb_gpu.to(device, non_blocking=True)
-        if rgb_gpu.ndim == 3 and rgb_gpu.shape[0] in (3, 4):
-            rgb_hwc = rgb_gpu[:3].permute(1, 2, 0)
-        elif rgb_gpu.ndim == 3 and rgb_gpu.shape[-1] >= 3:
-            rgb_hwc = rgb_gpu[..., :3]
-        else:
-            raise RuntimeError(f"Unsupported RGB tensor shape for D3D11 CUDA upload: {tuple(rgb_gpu.shape)}")
-
-        if rgb_hwc.shape[0] != h or rgb_hwc.shape[1] != w:
-            raise RuntimeError(
-                f"RGB/depth size mismatch for D3D11 CUDA upload: rgb={tuple(rgb_hwc.shape)} depth={(h, w)}"
-            )
-
-        rgba = torch_module.empty((h, w, 4), device=device, dtype=torch_module.uint8)
-        rgba[..., :3] = rgb_hwc.contiguous().clamp(0, 255).to(torch_module.uint8)
-        rgba[..., 3] = 255
-
-        depth_f = depth_gpu.contiguous().float()
-        depth_f = torch_module.nan_to_num(depth_f, nan=0.0, posinf=1.0, neginf=0.0).clamp_(0.0, 1.0)
-
-        stream = torch_module.cuda.current_stream(device_id)
-        stream_ptr = stream.cuda_stream
-        self.cuda.copy_tensor_to_texture(self.color_cuda, rgba.data_ptr(), w * 4, w * 4, h, stream_ptr)
-        self.cuda.copy_tensor_to_texture(self.depth_cuda, depth_f.data_ptr(), w * 4, w * 4, h, stream_ptr)
-        stream.synchronize()
-        if not self.cuda_active_logged:
-            print("[OpenXRViewer] D3D11 CUDA upload active (device-to-device)")
-            self.cuda_active_logged = True
-        self.has_frame = True
-        return w, h
-
-    def update_frame(self, rgb, depth):
-        try:
-            import torch
-        except Exception:
-            torch = None
-
-        if torch is not None and not self.cuda_failed:
-            try:
-                result = self._update_frame_cuda(torch, rgb, depth)
-                if result:
-                    return result
-            except Exception as e:
-                self.cuda_failed = True
-                if self.cuda is not None:
-                    try:
-                        self.cuda.clear_last_error()
-                    except Exception:
-                        pass
-                try:
-                    self._release_frame_textures()
-                except Exception:
-                    pass
-                print(f"[OpenXRViewer] D3D11 CUDA upload unavailable: {e}; falling back to CPU upload")
-
-        if torch is not None and hasattr(rgb, "detach"):
-            rgb_np = rgb.detach().permute(1, 2, 0).contiguous().clamp(0, 255).to(torch.uint8).cpu().numpy()
-        else:
-            rgb_np = np.asarray(rgb, dtype=np.uint8)
-        if torch is not None and hasattr(depth, "detach"):
-            depth_np = depth.detach().contiguous().float().cpu().numpy()
-        else:
-            depth_np = np.asarray(depth, dtype=np.float32)
-
-        h, w = depth_np.shape[:2]
-        self._ensure_frame_textures(w, h)
-        rgba = np.empty((h, w, 4), dtype=np.uint8)
-        rgba[:, :, :3] = np.ascontiguousarray(rgb_np[:, :, :3])
-        rgba[:, :, 3] = 255
-        depth_f = depth_np.astype(np.float32, copy=False)
-        depth_f = np.nan_to_num(depth_f, nan=0.0, posinf=1.0, neginf=0.0)
-        depth_f = np.ascontiguousarray(np.clip(depth_f, 0.0, 1.0))
-        self._update_subresource(self.color_tex, rgba.ctypes.data, w * 4)
-        self._update_subresource(self.depth_tex, depth_f.ctypes.data, w * 4)
-        self.has_frame = True
-        return w, h
-
-    def _update_subresource(self, dst, src_ptr, row_pitch):
-        fn = self._context_call(
-            48, None, ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p,
-            ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint,
-        )
-        fn(_ptr_value(self.context), _ptr_value(dst), 0, None, src_ptr, row_pitch, 0)
-
-    def _log_world_mvp_once(self, mvp):
-        if not self.debug or self._logged_world_mvp or self.space_mode != "world":
-            return
-        self._logged_world_mvp = True
-        try:
-            mat = np.asarray(mvp, dtype=np.float32)
-            corners = np.array([
-                [-1.0, -1.0, 0.0, 1.0],
-                [-1.0,  1.0, 0.0, 1.0],
-                [ 1.0, -1.0, 0.0, 1.0],
-                [ 1.0,  1.0, 0.0, 1.0],
-            ], dtype=np.float32)
-            clip = (mat @ corners.T).T
-            ndc = clip[:, :3] / np.maximum(np.abs(clip[:, 3:4]), 1e-6)
-            parts = []
-            for i in range(4):
-                parts.append(
-                    f"{i}:clip=({clip[i,0]:.3f},{clip[i,1]:.3f},{clip[i,2]:.3f},{clip[i,3]:.3f}) "
-                    f"ndc=({ndc[i,0]:.3f},{ndc[i,1]:.3f},{ndc[i,2]:.3f})"
-                )
-            print("[OpenXRViewer] D3D11 world screen corners " + " | ".join(parts))
-        except Exception as e:
-            print(f"[OpenXRViewer] D3D11 world MVP debug failed: {e}")
-
-    def render_eye(self, swapchain_texture, width, height, eye_index, ipd, depth_strength, convergence, mvp):
-        rtv = self._get_or_create_swapchain_rtv(swapchain_texture)
-        try:
-            clear = self._context_call(50, None, ctypes.c_void_p, ctypes.POINTER(ctypes.c_float))
-            color = (ctypes.c_float * 4)(0.0, 0.0, 0.0, 1.0)
-            clear(_ptr_value(self.context), _ptr_value(rtv), color)
-            if self.shader_mode == "clear":
-                removed_reason = self._device_removed_reason()
-                if removed_reason not in (0, None):
-                    raise RuntimeError(f"D3D11 device removed after ClearRenderTargetView: removed_reason={_hr_hex(removed_reason)}")
-                return
-
-            viewport = D3D11Viewport(0.0, 0.0, float(width), float(height), 0.0, 1.0)
-            self._context_call(44, None, ctypes.c_uint, ctypes.POINTER(D3D11Viewport))(_ptr_value(self.context), 1, ctypes.byref(viewport))
-
-            rtv_arr = (ctypes.c_void_p * 1)(_ptr_value(rtv))
-            self._context_call(33, None, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p)(_ptr_value(self.context), 1, rtv_arr, None)
-
-            self._context_call(17, None, ctypes.c_void_p)(_ptr_value(self.context), 0)
-            self._context_call(43, None, ctypes.c_void_p)(_ptr_value(self.context), _ptr_value(self.rasterizer))
-            self._context_call(24, None, ctypes.c_uint)(_ptr_value(self.context), D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP)
-            self._context_call(11, None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint)(_ptr_value(self.context), _ptr_value(self.vertex_shader), None, 0)
-            self._context_call(9, None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint)(_ptr_value(self.context), _ptr_value(self.pixel_shader), None, 0)
-
-            eye_sign = -1.0 if eye_index == 0 else 1.0
-            self._log_world_mvp_once(mvp)
-            constants = np.zeros(20, dtype=np.float32)
-            constants[:16] = np.asarray(mvp, dtype=np.float32).reshape(16)
-            constants[16:20] = np.array([eye_sign * ipd * 0.5, depth_strength, convergence, 0.0], dtype=np.float32)
-            self._update_subresource(self.constant_buffer, constants.ctypes.data, constants.nbytes)
-            cb_arr = (ctypes.c_void_p * 1)(_ptr_value(self.constant_buffer))
-            self._context_call(7, None, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p))(_ptr_value(self.context), 0, 1, cb_arr)
-            self._context_call(16, None, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p))(_ptr_value(self.context), 0, 1, cb_arr)
-
-            srv_arr = (ctypes.c_void_p * 2)(_ptr_value(self.color_srv), _ptr_value(self.depth_srv))
-            self._context_call(8, None, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p))(_ptr_value(self.context), 0, 2, srv_arr)
-            sampler_arr = (ctypes.c_void_p * 1)(_ptr_value(self.sampler))
-            self._context_call(10, None, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p))(_ptr_value(self.context), 0, 1, sampler_arr)
-            self._context_call(13, None, ctypes.c_uint, ctypes.c_uint)(_ptr_value(self.context), 4, 0)
-            removed_reason = self._device_removed_reason()
-            if removed_reason not in (0, None):
-                raise RuntimeError(f"D3D11 device removed after Draw: removed_reason={_hr_hex(removed_reason)}")
-        finally:
-            null_srvs = (ctypes.c_void_p * 2)(0, 0)
-            null_rtvs = (ctypes.c_void_p * 1)(0)
-            try:
-                self._context_call(8, None, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p))(_ptr_value(self.context), 0, 2, null_srvs)
-            except Exception:
-                pass
-            try:
-                self._context_call(33, None, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p)(_ptr_value(self.context), 1, null_rtvs, None)
-            except Exception:
-                pass
-
-    def cleanup(self):
-        for rtv in self.swapchain_rtvs.values():
-            _release(rtv)
-        self.swapchain_rtvs.clear()
-        self._release_frame_textures()
-        for attr in (
-            "sampler", "pixel_shader", "vertex_shader", "input_layout",
-            "rasterizer", "constant_buffer", "vertex_buffer", "render_rtv", "render_tex",
-        ):
-            ptr = getattr(self, attr, None)
-            _release(ptr)
-            setattr(self, attr, ctypes.c_void_p())
-        self.render_target_size = None
-
 
 def _read_glb_chunks(data):
     magic = struct.unpack_from('<I', data, 0)[0]
@@ -976,29 +81,16 @@ _TYPE_NC = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4,
 
 
 def _get_accessor(gltf, bin_data, acc_idx):
-    """Extract numpy array from a glTF accessor.
-    Handles both contiguous and interleaved (byteStride) vertex attributes.
-    """
+    """Extract numpy array from a glTF accessor."""
     acc = gltf['accessors'][acc_idx]
     bv = gltf['bufferViews'][acc['bufferView']]
-    byte_offset = bv.get('byteOffset', 0) + acc.get('byteOffset', 0)
-    byte_stride = bv.get('byteStride', 0)
+    off = bv.get('byteOffset', 0) + acc.get('byteOffset', 0)
     nc = _TYPE_NC[acc['type']]
     dt = np.dtype(_DTYPE_MAP[acc['componentType']]).newbyteorder('<')
-    elem_size = nc * dt.itemsize
-
-    if byte_stride == 0 or byte_stride == elem_size:
-        # Contiguous (no stride or stride equals element size)
-        arr = np.frombuffer(bin_data, dtype=dt, count=acc['count'] * nc,
-                           offset=byte_offset).copy()
-    else:
-        # Interleaved vertex attributes -read each row with stride
-        arr = np.ndarray(shape=(acc['count'], nc), dtype=dt,
-                         buffer=bin_data,
-                         offset=byte_offset,
-                         strides=(byte_stride, dt.itemsize)).copy()
+    arr = np.frombuffer(bin_data[off:off + acc['count'] * nc * dt.itemsize], dtype=dt)
     if nc > 1:
         arr = arr.reshape(acc['count'], nc)
+    # Normalize data types for consistency
     if acc['componentType'] in (5121, 5123, 5125):
         arr = arr.astype(np.uint32)
     elif acc['componentType'] == 5126:
@@ -1048,8 +140,7 @@ def _build_node_matrices(gltf):
     parent = [-1] * n
     for pi, node in enumerate(nodes):
         for ci in node.get('children', []):
-            if isinstance(ci, int) and 0 <= ci < n:
-                parent[ci] = pi
+            parent[ci] = pi
 
     # Topological order (BFS from roots) to compute world matrices
     world_mats = [None] * n
@@ -1062,8 +153,6 @@ def _build_node_matrices(gltf):
         pi = queue[head]
         head += 1
         for ci in nodes[pi].get('children', []):
-            if not isinstance(ci, int) or ci < 0 or ci >= n:
-                continue
             if world_mats[ci] is None:
                 world_mats[ci] = world_mats[pi] @ local_mats[ci]
                 queue.append(ci)
@@ -1085,16 +174,6 @@ def _apply_transform(vertices_xyz, matrix_4x4):
     return t[:, :3].astype(np.float32)
 
 
-def _apply_normal_transform(vectors_xyz, matrix_4x4):
-    """Apply inverse-transpose normal transform and normalize the result."""
-    rot3 = matrix_4x4[:3, :3].astype(np.float64)
-    normal_mat = np.linalg.inv(rot3.T)
-    out = (normal_mat @ vectors_xyz.astype(np.float64).T).T
-    lens = np.linalg.norm(out, axis=1, keepdims=True)
-    out = out / np.maximum(lens, 1e-8)
-    return out.astype(np.float32)
-
-
 def load_glb_model(path):
     """Load a GLB model, apply node transformations.
     Returns:
@@ -1104,8 +183,6 @@ def load_glb_model(path):
             tex_id (int, index into textures)
         textures: list of numpy RGBA uint8 arrays
     """
-    _mat_log = open(os.devnull, 'w', encoding='utf-8')
-    _mat_log.write(f"=== Material debug for: {path} ===\n")
     with open(path, 'rb') as f:
         data = f.read()
     gltf, bin_data = _read_glb_chunks(data)
@@ -1114,18 +191,12 @@ def load_glb_model(path):
     world_mats = _build_node_matrices(gltf)
     nodes = gltf.get('nodes', [])
 
-    # Map mesh index to all node instances that reference it.  glTF allows
-    # table legs, curtains, string lights, etc. to reuse one mesh from many
-    # nodes; the old loader kept only the first node and dropped/misplaced the
-    # rest.
+    # Map mesh index to world matrix (first node referencing the mesh)
     mesh_world_mat = {}
-    mesh_world_mats = {}
     for ni, node in enumerate(nodes):
         mi = node.get('mesh')
-        if mi is not None:
-            mesh_world_mats.setdefault(mi, []).append(world_mats[ni])
-            if mi not in mesh_world_mat:
-                mesh_world_mat[mi] = world_mats[ni]
+        if mi is not None and mi not in mesh_world_mat:
+            mesh_world_mat[mi] = world_mats[ni]
 
     # Extract textures
     all_textures = []
@@ -1166,35 +237,15 @@ def load_glb_model(path):
             else:
                 norm = np.zeros((pos.shape[0], 3), dtype=np.float32)
 
-            # Extract tangent (vec4: xyz + bitangent_sign), or zeros if absent
-            if 'TANGENT' in attrs:
-                tangent = _get_accessor(gltf, bin_data, attrs['TANGENT'])
-                if tangent.shape[1] < 4:
-                    t4 = np.ones((tangent.shape[0], 4), dtype=np.float32)
-                    t4[:, :tangent.shape[1]] = tangent
-                    tangent = t4
-            else:
-                tangent = np.zeros((pos.shape[0], 4), dtype=np.float32)
-                tangent[:, 3] = 1.0  # bitangent sign defaults to 1
-
-            # Apply node world matrix: position with full 4x4, normals with inverse-transpose
+            # Apply node world matrix: position with full 4x4, normals with rotation part only
             if not np.allclose(world_mat, np.eye(4)):
                 pos = _apply_transform(pos, world_mat)
-                rot3 = world_mat[:3, :3].astype(np.float64)
-                normal_mat = np.linalg.inv(rot3.T)  # inverse-transpose handles non-uniform scaling
-                norm = (normal_mat @ norm.T).T.astype(np.float32)
-                # Transform tangent xyz with rotation, keep w (bitangent sign)
-                if tangent is not None:
-                    t_xyz = (rot3[:3, :3].astype(np.float64) @ tangent[:, :3].T).T.astype(np.float32)
-                    tangent = np.hstack([t_xyz, tangent[:, 3:4]]).astype(np.float32)
+                rot3 = world_mat[:3, :3].astype(np.float32)
+                norm = (rot3 @ norm.T).T.astype(np.float32)
 
             # Extract UV coordinates
             if 'TEXCOORD_0' in attrs:
                 uv = _get_accessor(gltf, bin_data, attrs['TEXCOORD_0'])
-                if uv.shape[1] > 2:
-                    uv = uv[:, :2]
-            elif 'TEXCOORD_1' in attrs:
-                uv = _get_accessor(gltf, bin_data, attrs['TEXCOORD_1'])
                 if uv.shape[1] > 2:
                     uv = uv[:, :2]
             else:
@@ -1209,250 +260,21 @@ def load_glb_model(path):
             else:
                 indices = np.arange(pos.shape[0], dtype=np.uint32)
 
-            # Texture ID, base color, and roughness from material
+            # Texture ID from material
             tex_id = -1
-            base_color = np.array([1.0, 1.0, 1.0], dtype=np.float32)
-            base_alpha = 1.0
-            roughness_factor = 1.0
             mat_idx = prim.get('material')
             if mat_idx is not None and 'materials' in gltf:
                 mat = gltf['materials'][mat_idx]
-                mat_name = mat.get('name', f'material_{mat_idx}')
-                pbr = mat.get('pbrMetallicRoughness', {})
-                ext = mat.get('extensions', {})
-                sg = ext.get('KHR_materials_pbrSpecularGlossiness')
-
-                # --- Texture extraction ---
-                # 1) Standard pbrMetallicRoughness.baseColorTexture
-                bt = pbr.get('baseColorTexture')
-                tex_index = bt.get('index') if bt else None
-                # 2) KHR_materials_pbrSpecularGlossiness.diffuseTexture
-                if tex_index is None and sg:
-                    dt = sg.get('diffuseTexture')
-                    tex_index = dt.get('index') if dt else None
-
-                if tex_index is not None:
-                    tid = tex_img_map.get(tex_index, -1)
-                    if tid >= 0 and tid < len(all_textures) and all_textures[tid] is not None:
+                bt = mat.get('pbrMetallicRoughness', {}).get('baseColorTexture')
+                if bt and 'index' in bt:
+                    tid = tex_img_map.get(bt['index'], -1)
+                    if tid >= 0 and all_textures[tid] is not None:
                         tex_id = tid
 
-                # KHR_texture_transform on baseColorTexture
-                tex_offset = np.array([0.0, 0.0], dtype=np.float32)
-                tex_scale = np.array([1.0, 1.0], dtype=np.float32)
-                if isinstance(bt, dict):
-                    tx_ext = bt.get('extensions', {}).get('KHR_texture_transform')
-                    if tx_ext:
-                        if 'offset' in tx_ext:
-                            tex_offset = np.array(tx_ext['offset'][:2], dtype=np.float32)
-                        if 'scale' in tx_ext:
-                            tex_scale = np.array(tx_ext['scale'][:2], dtype=np.float32)
-
-                bcf = pbr.get('baseColorFactor')
-                if bcf is not None:
-                    base_color = np.array(bcf[:3], dtype=np.float32)
-                    if len(bcf) > 3:
-                        base_alpha = float(bcf[3])
-                rf = pbr.get('roughnessFactor')
-                if rf is not None:
-                    roughness_factor = float(rf)
-                mf = pbr.get('metallicFactor')
-                metallic_factor = float(mf) if mf is not None else 1.0
-
-                # metallicRoughnessTexture (glTF spec: B=metallic, G=roughness)
-                mr_tex_id = -1
-                mrt = pbr.get('metallicRoughnessTexture')
-                if mrt and 'index' in mrt:
-                    mr_tid = tex_img_map.get(mrt['index'], -1)
-                    if mr_tid >= 0 and mr_tid < len(all_textures) and all_textures[mr_tid] is not None:
-                        mr_tex_id = mr_tid
-
-                # SpecGloss diffuseFactor (color, applies regardless of texture)
-                if sg and 'diffuseFactor' in sg:
-                    if bcf is None:
-                        base_color = np.array(sg['diffuseFactor'][:3], dtype=np.float32)
-                        if len(sg['diffuseFactor']) > 3:
-                            base_alpha = float(sg['diffuseFactor'][3])
-
-                material_name_l = mat_name.lower()
-                if base_alpha >= 0.999 and (
-                    'glass' in material_name_l
-                    or 'window' in material_name_l
-                    or 'transparent' in material_name_l
-                ):
-                    base_alpha = 0.38
-
-                # Normal texture
-                normal_tex_id = -1
-                normal_scale = 1.0
-                nt = mat.get('normalTexture')
-                if nt and 'index' in nt:
-                    n_tid = tex_img_map.get(nt['index'], -1)
-                    if n_tid >= 0 and n_tid < len(all_textures) and all_textures[n_tid] is not None:
-                        normal_tex_id = n_tid
-                    ns = nt.get('scale')
-                    if ns is not None:
-                        normal_scale = float(ns)
-
-                # Occlusion texture
-                occlusion_tex_id = -1
-                occlusion_strength = 1.0
-                ot = mat.get('occlusionTexture')
-                if ot and 'index' in ot:
-                    o_tid = tex_img_map.get(ot['index'], -1)
-                    if o_tid >= 0 and o_tid < len(all_textures) and all_textures[o_tid] is not None:
-                        occlusion_tex_id = o_tid
-                    os_ = ot.get('strength')
-                    if os_ is not None:
-                        occlusion_strength = float(os_)
-
-                # KHR_materials_unlit
-                unlit = bool(ext.get('KHR_materials_unlit'))
-
-                # doubleSided (glTF spec 3.9.4)
-                double_sided = bool(mat.get('doubleSided', False))
-
-                # alphaMode + alphaCutoff (glTF spec 3.9.4)
-                alpha_mode = mat.get('alphaMode', 'OPAQUE')
-                alpha_cutoff = float(mat.get('alphaCutoff', 0.5))
-
-                # Emissive: emissiveFactor * emissiveStrength.
-                # If all 3 channels are identical ->Unity export default ->suppress.
-                emissive_factor = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-                emissive_tex_id = -1
-                ef = mat.get('emissiveFactor')
-                if ef is not None:
-                    raw_ef = np.array(ef[:3], dtype=np.float32)
-                    # Only keep emissive when channels DIFFER (intentional colored glow)
-                    if not (abs(raw_ef[0] - raw_ef[1]) < 0.001 and abs(raw_ef[0] - raw_ef[2]) < 0.001):
-                        emissive_factor = raw_ef
-                        es_ext = ext.get('KHR_materials_emissive_strength')
-                        if es_ext and 'emissiveStrength' in es_ext:
-                            emissive_factor = emissive_factor * float(es_ext['emissiveStrength'])
-                # emissiveTexture
-                et = mat.get('emissiveTexture')
-                if et and 'index' in et:
-                    e_tid = tex_img_map.get(et['index'], -1)
-                    if e_tid >= 0 and e_tid < len(all_textures) and all_textures[e_tid] is not None:
-                        emissive_tex_id = e_tid
-                # Also read emissive from specGloss if no standard emissive factor
-                if sg and emissive_factor.any() == False:
-                    df = sg.get('diffuseFactor')
-                    if df:
-                        raw_sg = np.array(df[:3], dtype=np.float32)
-                        if not (abs(raw_sg[0] - raw_sg[1]) < 0.001 and abs(raw_sg[0] - raw_sg[2]) < 0.001):
-                            emissive_factor = raw_sg
-
-                # Debug log
-                emissive_info = f' emissive={emissive_factor.tolist()}' if emissive_factor.any() else ''
-                if mat_idx < 300:
-                    _mat_log.write(f"[MAT] {mat_idx}: {mat_name}  "
-                          f"bcf={bcf}  rough={rf}  "
-                          f"tex_index={tex_index}  tex_id={tex_id}"
-                          f"{emissive_info}  "
-                          f"ext={list(ext.keys())}\n")
-
             primitives.append({'vertices': vertices, 'indices': indices,
-                            'tex_id': tex_id, 'base_color': base_color,
-                            'base_alpha': base_alpha,
-                            'roughness_factor': roughness_factor,
-                            'metallic_factor': metallic_factor,
-                            'emissive_factor': emissive_factor,
-                            'normal_tex_id': normal_tex_id,
-                            'normal_scale': normal_scale,
-                            'occlusion_tex_id': occlusion_tex_id,
-                            'occlusion_strength': occlusion_strength,
-                            'unlit': unlit,
-                            'alpha_mode': alpha_mode,
-                            'alpha_cutoff': alpha_cutoff,
-                            'mr_tex_id': mr_tex_id,
-                            'emissive_tex_id': emissive_tex_id,
-                            'double_sided': double_sided,
-                            'tex_offset': tex_offset,
-                            'tex_scale': tex_scale,
-                            'tangent': tangent,
-                            '_mesh_index': mi,
-                            '_world_matrix': world_mat})
+                            'tex_id': tex_id})
 
-    extra_instances = []
-    for primitive in primitives:
-        mi = primitive.get('_mesh_index')
-        instances = mesh_world_mats.get(mi, [])
-        if len(instances) <= 1:
-            continue
-
-        first_world = primitive.get('_world_matrix', np.eye(4, dtype=np.float64)).astype(np.float64)
-        try:
-            inv_first_world = np.linalg.inv(first_world)
-        except Exception:
-            continue
-
-        local_positions = _apply_transform(primitive['vertices'][:, :3], inv_first_world)
-        first_rot = first_world[:3, :3].astype(np.float64)
-        local_normals = (first_rot.T @ primitive['vertices'][:, 3:6].astype(np.float64).T).T
-        local_normals /= np.maximum(np.linalg.norm(local_normals, axis=1, keepdims=True), 1e-8)
-
-        tangent = primitive.get('tangent')
-        if tangent is not None:
-            local_tangent = tangent.copy()
-            local_tangent[:, :3] = (first_rot.T @ tangent[:, :3].astype(np.float64).T).T.astype(np.float32)
-        else:
-            local_tangent = None
-
-        for inst_world in instances[1:]:
-            inst_world = inst_world.astype(np.float64)
-            clone = dict(primitive)
-            clone_vertices = primitive['vertices'].copy()
-            clone_vertices[:, :3] = _apply_transform(local_positions, inst_world)
-            clone_vertices[:, 3:6] = _apply_normal_transform(local_normals, inst_world)
-            clone['vertices'] = clone_vertices
-            clone['indices'] = primitive['indices'].copy()
-            if local_tangent is not None:
-                inst_tangent = local_tangent.copy()
-                inst_tangent[:, :3] = (inst_world[:3, :3].astype(np.float64) @ local_tangent[:, :3].astype(np.float64).T).T.astype(np.float32)
-                clone['tangent'] = inst_tangent
-            clone['_world_matrix'] = inst_world
-            extra_instances.append(clone)
-
-    if extra_instances:
-        primitives.extend(extra_instances)
-        _mat_log.write(f"[INSTANCE] Added {len(extra_instances)} mesh node instances\n")
-
-    # Extract KHR_lights_punctual
-    lights = []
-    try:
-        gltf_lights = gltf.get('extensions', {}).get('KHR_lights_punctual', {})
-        if isinstance(gltf_lights, dict):
-            gltf_lights = gltf_lights.get('lights', [])
-        else:
-            gltf_lights = []
-        for ni, node in enumerate(gltf.get('nodes', [])):
-            lext = node.get('extensions', {}).get('KHR_lights_punctual')
-            if lext and 'light' in lext:
-                li = lext['light']
-                if li < len(gltf_lights):
-                    ldef = gltf_lights[li]
-                    world_mat = world_mats[ni] if ni < len(world_mats) else np.eye(4, dtype=np.float64)
-                    direction = -world_mat[:3, 2].astype(np.float32)
-                    direction = direction / (np.linalg.norm(direction) + 1e-8)
-                    position = world_mat[:3, 3].astype(np.float32)
-                    spot = ldef.get('spot', {}) if isinstance(ldef.get('spot', {}), dict) else {}
-                    lights.append({
-                        'type': ldef.get('type', 'directional'),
-                        'color': np.array(ldef.get('color', [1, 1, 1])[:3], dtype=np.float32),
-                        'intensity': float(ldef.get('intensity', 1.0)),
-                        'direction': direction,
-                        'position': position,
-                        'range': float(ldef.get('range', 0.0) or 0.0),
-                        'innerConeAngle': float(spot.get('innerConeAngle', 0.0) or 0.0),
-                        'outerConeAngle': float(spot.get('outerConeAngle', 0.7853981633974483) or 0.7853981633974483),
-                    })
-                    _mat_log.write(f"[LIGHT] {ldef.get('name', '?')}: type={ldef.get('type')} color={ldef.get('color')} intensity={ldef.get('intensity')}\n")
-    except Exception as e:
-        _mat_log.write(f"[LIGHT] extraction failed: {e}\n")
-
-    _mat_log.write("=== End ===\n")
-    _mat_log.close()
-    return primitives, all_textures, lights
+    return primitives, all_textures
 
 # D3D11 ctypes helpers (Windows only)
 # DXGI / D3D11 format constants used for swapchain negotiation
@@ -1462,10 +284,10 @@ _DXGI_FORMAT_B8G8R8A8_UNORM_SRGB = 91
 _DXGI_FORMAT_B8G8R8A8_UNORM      = 87
 
 _D3D11_PREFERRED_FORMATS = [
-    _DXGI_FORMAT_R8G8B8A8_UNORM,
     _DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
-    _DXGI_FORMAT_B8G8R8A8_UNORM,
+    _DXGI_FORMAT_R8G8B8A8_UNORM,
     _DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+    _DXGI_FORMAT_B8G8R8A8_UNORM,
 ]
 
 if sys.platform == "win32":
@@ -1591,7 +413,7 @@ if sys.platform == "win32":
 
     def _d3d11_update_subresource(context, dst, src_ptr, row_pitch):
         """Write CPU data into a D3D11 texture via UpdateSubresource (vtbl index 48).
-        Works with any format including SRGB -no staging texture needed.
+        Works with any format including SRGB — no staging texture needed.
         src_ptr: integer address of the source data (already row-reversed).
         """
         _UPDATE_SR_VTBL_IDX = 48
@@ -1622,7 +444,7 @@ if sys.platform == "win32":
 
 
 
-    # NV_DX_interop2 helpers (NVIDIA only, zero-copy GL->D3D11)
+    # NV_DX_interop2 helpers (NVIDIA only, zero-copy GL↔D3D11)
     _nv_dx_interop_available = False
     _wglDXOpenDeviceNV        = None
     _wglDXCloseDeviceNV       = None
@@ -1655,7 +477,7 @@ if sys.platform == "win32":
         except ImportError:
             try:
                 # Fallback: load via wglGetProcAddress
-                from OpenGL.WGL.NV.DX_interop import (
+                from OpenGL.GL.WGL.NV.DX_interop import (
                     wglDXOpenDeviceNV, wglDXCloseDeviceNV,
                     wglDXRegisterObjectNV, wglDXLockObjectsNV,
                     wglDXUnlockObjectsNV, wglDXUnregisterObjectNV,
@@ -1673,7 +495,7 @@ if sys.platform == "win32":
         except (ImportError, AttributeError):
             return False
 
-    # EXT_memory_object_win32 helpers (cross-vendor, GL 4.5+) ----------
+    # EXT_memory_object_win32 helpers (cross-vendor, GL 4.5+) ──────────
     _ext_mem_available       = False
     _glImportMemoryWin32HandleEXT  = None
     _glTextureStorageMem2DEXT      = None
@@ -1862,11 +684,63 @@ else:
     def _create_d3d11_device(adapter_luid=None):
         raise RuntimeError("D3D11 only available on Windows")
 
-from viewer import FRAGMENT_SHADER, BACKEND
+from viewer import FRAGMENT_SHADER as _FRAGMENT_SHADER_BASE, BACKEND
 try:
     from viewer import CUDART_GL
 except ImportError:
     CUDART_GL = None
+
+# XR-only extension of the base fragment shader: adds contrast-adaptive sharpening
+# (CAS) and fixes pixel_size when u_resolution is unset. Injected just before the
+# closing brace of main() so it runs after FXAA and edge-feathering.
+_XR_SHARPEN_UNIFORMS = """
+    uniform float u_sharpen;       // CAS sharpening strength (0 = off, 1 = strong)
+"""
+
+_XR_SHARPEN_CODE = """
+        // Contrast-adaptive sharpening (CAS, 4-tap cross, luma-weighted).
+        // Runs last so it restores detail after FXAA / feathering.
+        // Flat areas (text, fine lines) sharpen most; hard edges stay clean.
+        if (u_sharpen > 0.0) {
+            vec2 _px = 1.0 / vec2(textureSize(tex_color, 0));
+            vec3 _cn = texture(tex_color, shifted_uv + vec2( 0.0,  _px.y)).rgb;
+            vec3 _cs = texture(tex_color, shifted_uv + vec2( 0.0, -_px.y)).rgb;
+            vec3 _ce = texture(tex_color, shifted_uv + vec2( _px.x,  0.0)).rgb;
+            vec3 _cw = texture(tex_color, shifted_uv + vec2(-_px.x,  0.0)).rgb;
+            const vec3 _LUM = vec3(0.2126, 0.7152, 0.0722);
+            float _lmin = min(min(dot(_cn,_LUM), dot(_cs,_LUM)),
+                              min(dot(_ce,_LUM), dot(_cw,_LUM)));
+            float _lmax = max(max(dot(_cn,_LUM), dot(_cs,_LUM)),
+                              max(dot(_ce,_LUM), dot(_cw,_LUM)));
+            float _w = (1.0 - clamp((_lmax - _lmin) / max(_lmax, 0.001), 0.0, 1.0))
+                       * u_sharpen;
+            vec3 _avg = (_cn + _cs + _ce + _cw) * 0.25;
+            frag_color.rgb = clamp(frag_color.rgb + (frag_color.rgb - _avg) * _w,
+                                   0.0, 1.0);
+        }
+        // Force full opacity: the base shader fades alpha to 0 near UV edges
+        // (border smoothstep), which with UNPREMULTIPLIED_ALPHA_BIT causes the
+        // compositor to bleed through its background (appears as blue flicker at
+        // distance). The XR quad geometry already clips the boundary, so alpha=1
+        // is always correct here.
+        frag_color.a = 1.0;
+"""
+
+# Inject uniform declaration after the last existing uniform block line,
+# then append sharpening just before the shader's closing brace.
+def _patch_fragment_shader(src):
+    # Insert uniform after the last "uniform" declaration before void main()
+    _uni_marker = "    uniform vec4 u_viewport;"
+    if _uni_marker in src:
+        src = src.replace(_uni_marker,
+                          _uni_marker + _XR_SHARPEN_UNIFORMS, 1)
+    # Append CAS pass just before the final closing brace
+    src = src.rstrip()
+    assert src.endswith("}"), "Unexpected shader structure"
+    src = src[:-1] + _XR_SHARPEN_CODE + "}\n"
+    return src
+
+FRAGMENT_SHADER = _patch_fragment_shader(_FRAGMENT_SHADER_BASE)
 
 # GL_SRGB8_ALPHA8: desktop captures are sRGB-encoded; signalling this to the
 # compositor prevents it from treating gamma values as linear (which causes pale/washed-out colours).
@@ -1899,7 +773,23 @@ void main() {
 }
 """
 
-# Solid-color vertex shader (no UV -avoids GLSL optimizer stripping in_uv)
+# Fullscreen swizzle blit: copies an RGBA texture into a target that the
+# compositor reads as BGRA. Without u_swap_rb=1 the channel order ends up
+# swapped (red ↔ blue). Used by the EXT_memory_object interop path when the
+# OpenXR runtime hands us a BGRA swapchain (most WMR runtimes).
+_BLIT_FRAG = """
+#version 330
+uniform sampler2D u_src;
+uniform int u_swap_rb;
+in vec2 uv;
+out vec4 fragColor;
+void main() {
+    vec4 c = texture(u_src, uv);
+    fragColor = (u_swap_rb != 0) ? c.bgra : c;
+}
+"""
+
+# Solid-color vertex shader (no UV — avoids GLSL optimizer stripping in_uv)
 _SOLID_VERT = """
 #version 330
 in vec2 in_position;
@@ -1915,87 +805,6 @@ _SOLID_FRAG = """
 uniform vec4 u_color;
 out vec4 fragColor;
 void main() { fragColor = u_color; }
-"""
-
-# Brushed-metal border fragment shader
-_BORDER_FRAG = """
-#version 330
-in vec2 uv;
-out vec4 fragColor;
-uniform vec3 u_color;
-uniform float u_alpha;
-uniform vec2 u_border_uv;    // border half-width in UV (x, y)
-void main() {
-    vec2 d = min(uv, 1.0 - uv);
-    if (d.x > u_border_uv.x && d.y > u_border_uv.y) discard;
-    float bx = 1.0 - d.x / u_border_uv.x;
-    float by = 1.0 - d.y / u_border_uv.y;
-    float bp = clamp(max(bx, by), 0.0, 1.0);
-    float bevel = (1.0 - smoothstep(0.0, 0.4, bp)) * 0.25;
-    float shade = mix(1.0, 0.5, bp * bp);
-    float brush = sin(uv.y * 3000.0 + uv.x * 500.0) * 0.015;
-    brush += sin(uv.y * 5000.0) * 0.008;
-    vec3 col = u_color * shade + vec3(bevel) + vec3(brush);
-    fragColor = vec4(col, u_alpha);
-}
-"""
-
-# Glow fragment shader: renders a soft glow outside a centered rectangle
-_GLOW_FRAG = """
-#version 330
-in vec2 uv;
-out vec4 frag_color;
-uniform vec2 u_screen_half;   // screen half-size in UV space (e.g., 0.35, 0.30)
-uniform vec3 u_glow_color;
-uniform float u_glow_width;   // glow decay distance in UV space
-uniform float u_glow_intensity;
-void main() {
-    vec2 d = abs(uv - 0.5) - u_screen_half;
-    float dist = length(max(d, vec2(0.0)));
-    if (dist > 0.001) {
-        float glow = exp(-dist / max(u_glow_width, 0.001));
-        glow *= u_glow_intensity;
-        frag_color = vec4(u_glow_color * glow, glow);
-    } else {
-        discard;
-    }
-}
-"""
-
-# Shadow fragment shader: soft ground shadow beneath the screen
-_SHADOW_FRAG = """
-#version 330
-in vec2 uv;
-out vec4 frag_color;
-uniform float u_opacity;
-void main() {
-    vec2 centered = uv - 0.5;
-    float dist = length(centered);
-    // Gaussian falloff: darkest at center, smooth fade to edges
-    float shadow = exp(-dist * dist * 6.0);
-    shadow *= u_opacity;
-    vec2 shadow_edge = smoothstep(0.0, 0.08, uv) * smoothstep(1.0, 0.92, uv);
-    shadow *= min(shadow_edge.x, shadow_edge.y);
-    frag_color = vec4(0.0, 0.0, 0.0, shadow);
-}
-"""
-
-# Ground ambient light fragment shader: colored light pool cast by the screen
-_GROUND_FRAG = """
-#version 330
-in vec2 uv;
-out vec4 frag_color;
-uniform vec3 u_color;
-uniform float u_intensity;
-void main() {
-    vec2 dir = uv - vec2(0.5, 1.0);
-    float dist = length(dir);
-    float light = exp(-dist * dist * 3.0);
-    light *= u_intensity;
-    vec2 edge = smoothstep(0.0, 0.1, uv) * smoothstep(1.0, 0.9, uv);
-    light *= min(edge.x, edge.y);
-    frag_color = vec4(u_color * light, light);
-}
 """
 
 # 3D vertex shader for tapered rainbow beam
@@ -2017,7 +826,7 @@ in float v_v;
 out vec4 fragColor;
 uniform float u_time;
 void main() {
-    // Rainbow gradient: blue->cyan->green->yellow->red, flowing from root to tip
+    // Rainbow gradient: blue→cyan→green→yellow→red, flowing from root to tip
     float t = fract(v_v + u_time * 0.4);
     vec3 col;
     if (t < 0.167)      col = mix(vec3(0.0,0.4,1.0), vec3(0.0,1.0,1.0), t/0.167);
@@ -2032,7 +841,7 @@ void main() {
 
 # Background color presets: (r, g, b) in linear [0,1].  Index 0 = opaque black (default).
 _BG_COLORS = [
-    (0.000, 0.000, 0.000),   # default -opaque black
+    (0.000, 0.000, 0.000),   # default — opaque black
     (0.827, 0.827, 0.827),   # light grey
     (0.196, 0.196, 0.216),   # charcoal
     (0.047, 0.071, 0.149),   # dark navy
@@ -2089,9 +898,9 @@ uniform int u_use_texture;     // 0: use solid color, 1: sample texture
 uniform vec3 u_camera_pos;     // Camera world coordinates (= headset position)
 
 void main() {
-    vec2 t_uv = v_uv;  // alias (no transform for controllers)
     // Discard back faces (inner walls), keep only front faces (outer shell)
     if (!gl_FrontFacing) discard;
+
     vec3 N = normalize(v_normal);
     vec3 light_pos = u_camera_pos + vec3(0.0, 0.05, 0.0);
     vec3 L = normalize(light_pos - v_position);
@@ -2100,12 +909,12 @@ void main() {
 
     vec3 baseColor;
     if (u_use_texture == 1) {
-        baseColor = texture(u_tex, t_uv).rgb * u_base_color_factor;
+        baseColor = texture(u_tex, v_uv).rgb * u_base_color_factor;
     } else {
         baseColor = u_base_color_factor;
     }
 
-    float diff = max(dot(N, L), 0.0);
+    float diff = abs(dot(N, L));
     vec3 diffuse = u_light_color * diff;
     vec3 ambient = u_ambient_color;
     float spec = pow(max(dot(N, H), 0.0), 32.0);
@@ -2114,260 +923,6 @@ void main() {
     fragColor = vec4((ambient + diffuse + specular) * baseColor, 1.0);
 }
 """
-
-_ENV_VERT = """
-#version 330
-in vec3 in_position;
-in vec3 in_normal;
-in vec2 in_uv;
-in vec4 in_tangent;  // xyz + bitangent_sign (glTF spec 3.7.4)
-out vec2 v_uv;
-out vec3 v_normal;
-out vec3 v_position;
-out vec3 v_tangent;
-out float v_bitangent_sign;
-uniform mat4 u_mvp;
-uniform mat4 u_model;
-void main() {
-    v_uv = in_uv;
-    v_normal = mat3(transpose(inverse(u_model))) * in_normal;
-    v_tangent = normalize(mat3(transpose(inverse(u_model))) * in_tangent.xyz);
-    v_bitangent_sign = in_tangent.w;
-    vec4 world_pos = u_model * vec4(in_position, 1.0);
-    v_position = world_pos.xyz;
-    gl_Position = u_mvp * world_pos;
-}
-"""
-
-_ENV_FRAG = """
-#version 330
-in vec2 v_uv;
-in vec3 v_normal;
-in vec3 v_position;
-in vec3 v_tangent;
-in float v_bitangent_sign;
-out vec4 fragColor;
-
-uniform sampler2D u_tex;
-uniform sampler2D u_normal_tex;    // normal map (texture unit 4)
-uniform sampler2D u_occlusion_tex; // occlusion map (texture unit 5)
-uniform sampler2D u_mr_tex;        // metallicRoughness (texture unit 6: B=metal, G=rough)
-uniform sampler2D u_emissive_tex;  // emissive map (texture unit 7)
-uniform vec3 u_light_color;
-uniform vec3 u_ambient_color;
-uniform vec3 u_base_color_factor;
-uniform float u_base_alpha;
-uniform int u_use_texture;
-uniform int u_use_normal_tex;
-uniform float u_normal_scale;
-uniform int u_use_occlusion_tex;
-uniform float u_occlusion_strength;
-uniform vec3 u_camera_pos;
-uniform float u_roughness;
-uniform float u_metallic;
-uniform vec3 u_emissive_factor;
-uniform int u_unlit;             // KHR_materials_unlit: skip lighting
-uniform float u_alpha_cutoff;    // alphaMode=MASK discard threshold
-uniform int u_alpha_mode;        // 0=OPAQUE, 1=MASK, 2=BLEND
-uniform int u_use_mr_tex;        // 0: use uniform factors, 1: sample mr texture
-uniform int u_use_emissive_tex;  // 0: use factor only, 1: sample emissive texture
-uniform vec2 u_tex_offset;       // KHR_texture_transform offset
-uniform vec2 u_tex_scale;        // KHR_texture_transform scale
-uniform vec3 u_light_dir;        // KHR_lights_punctual directional light
-uniform vec3 u_light_intensity;  // light_color * intensity for directional light
-uniform vec3 u_fill_light_pos0;  // viewer-side or KHR punctual fill light
-uniform vec3 u_fill_light_color0;
-uniform float u_fill_light_range0;
-uniform vec3 u_fill_light_pos1;
-uniform vec3 u_fill_light_color1;
-uniform float u_fill_light_range1;
-uniform float u_env_exposure;
-uniform float u_env_gamma;
-uniform float u_emissive_strength;
-
-const float PI = 3.14159265359;
-
-// Fresnel-Schlick
-vec3 fresnelSchlick(float cosTheta, vec3 F0) {
-    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
-
-// GGX / Trowbridge-Reitz normal distribution
-float DistributionGGX(float NdotH, float roughness) {
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-    return a2 / (PI * denom * denom);
-}
-
-// Smith GGX geometry (Schlick)
-float GeometrySchlickGGX(float NdotV, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0;
-    return NdotV / (NdotV * (1.0 - k) + k);
-}
-
-float GeometrySmith(float NdotV, float NdotL, float roughness) {
-    return GeometrySchlickGGX(NdotV, roughness) * GeometrySchlickGGX(NdotL, roughness);
-}
-
-vec3 pbrLight(vec3 N, vec3 V, vec3 baseColor, float metallic, float roughness, vec3 L, vec3 lightColor, float attenuation) {
-    float NdotL = max(dot(N, L), 0.0);
-    if (NdotL <= 0.0 || attenuation <= 0.0 || length(lightColor) <= 0.001) {
-        return vec3(0.0);
-    }
-
-    vec3 H = normalize(L + V);
-    float NdotV = max(dot(N, V), 0.001);
-    float NdotH = max(dot(N, H), 0.0);
-    float VdotH = max(dot(V, H), 0.0);
-    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
-
-    float D = DistributionGGX(NdotH, roughness);
-    float G = GeometrySmith(NdotV, NdotL, roughness);
-    vec3 F = fresnelSchlick(VdotH, F0);
-    vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
-
-    vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
-    vec3 diffuse = kD * baseColor / PI;
-    return (diffuse + specular) * lightColor * NdotL * attenuation;
-}
-
-float softRangeAttenuation(float dist, float rangeMeters) {
-    float r = max(rangeMeters, 0.001);
-    float x = dist / r;
-    return 1.0 / (1.0 + x * x * 4.0);
-}
-
-void main() {
-    // KHR_texture_transform: compute transformed UV (glTF spec)
-    vec2 t_uv = v_uv * u_tex_scale + u_tex_offset;
-    float texAlpha = (u_use_texture == 1) ? texture(u_tex, t_uv).a : 1.0;
-    float materialAlpha = clamp(texAlpha * u_base_alpha, 0.0, 1.0);
-
-    // alphaMode MASK: early discard (glTF spec 3.9.4)
-    if (u_alpha_mode == 1 && u_use_texture == 1) {
-        if (materialAlpha < u_alpha_cutoff) discard;
-    }
-
-    vec3 N = normalize(v_normal);
-    if (!gl_FrontFacing) N = -N;
-
-    // Normal map perturbation (glTF MikkTSpace tangent)
-    if (u_use_normal_tex == 1) {
-        vec3 nm = texture(u_normal_tex, t_uv).rgb * 2.0 - 1.0;
-        nm.xy *= u_normal_scale;
-        nm = normalize(nm);
-        // Use TANGENT attribute if available, else Gram-Schmidt fallback
-        vec3 T = length(v_tangent) > 0.001 ? normalize(v_tangent) : normalize(cross(vec3(0.0, 1.0, 0.0), N));
-        vec3 B = normalize(cross(N, T)) * v_bitangent_sign;
-        N = normalize(T * nm.x + B * nm.y + N * nm.z);
-    }
-
-    vec3 baseColor;
-    if (u_use_texture == 1) {
-        baseColor = texture(u_tex, t_uv).rgb * u_base_color_factor;
-    } else {
-        baseColor = u_base_color_factor;
-    }
-
-    float metallic = clamp(u_metallic, 0.0, 1.0);
-    float roughness = clamp(u_roughness, 0.04, 1.0);
-    // metallicRoughnessTexture: B=metallic, G=roughness (glTF spec 3.9.4)
-    if (u_use_mr_tex == 1) {
-        vec3 mr = texture(u_mr_tex, t_uv).rgb;
-        roughness = clamp(roughness * mr.g, 0.04, 1.0);
-        metallic = clamp(metallic * mr.b, 0.0, 1.0);
-    }
-
-    vec3 light_pos = u_camera_pos + vec3(0.0, 0.05, 0.0);
-    vec3 L = normalize(light_pos - v_position);
-    vec3 V = normalize(u_camera_pos - v_position);
-    vec3 H = normalize(L + V);
-
-    float NdotL = max(dot(N, L), 0.0);
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotH = max(dot(N, H), 0.0);
-    float VdotH = max(dot(V, H), 0.0);
-
-    // PBR: dielectric F0 = 0.04, metals use baseColor as F0
-    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
-
-    // Cook-Torrance specular BRDF
-    float D = DistributionGGX(NdotH, roughness);
-    float G = GeometrySmith(NdotV, NdotL, roughness);
-    vec3 F = fresnelSchlick(VdotH, F0);
-    vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
-
-    // Diffuse: dielectrics scatter, metals have zero diffuse
-    vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
-    vec3 diffuse = kD * baseColor / PI;
-
-    // KHR_materials_unlit: skip all lighting, output baseColor directly
-    if (u_unlit == 1) {
-        float alpha = (u_alpha_mode == 2 || u_base_alpha < 0.999) ? materialAlpha : 1.0;
-        fragColor = vec4(baseColor, alpha);
-        return;
-    }
-
-    // Head-lamp point light
-    vec3 Lo = (diffuse + specular) * u_light_color * NdotL;
-
-    // Directional light (KHR_lights_punctual)
-    if (length(u_light_intensity) > 0.001) {
-        float NdotL_d = max(dot(N, -u_light_dir), 0.0);
-        vec3 H_d = normalize(-u_light_dir + V);
-        float D_d = DistributionGGX(max(dot(N, H_d), 0.0), roughness);
-        float G_d = GeometrySmith(NdotV, NdotL_d, roughness);
-        vec3 F_d = fresnelSchlick(max(dot(V, H_d), 0.0), F0);
-        vec3 s_d = (D_d * G_d * F_d) / max(4.0 * NdotV * NdotL_d, 0.001);
-        vec3 kD_d = (vec3(1.0) - F_d) * (1.0 - metallic);
-        vec3 d_d = kD_d * baseColor / PI;
-        Lo += (d_d + s_d) * u_light_intensity * NdotL_d;
-    }
-
-    vec3 toFill0 = u_fill_light_pos0 - v_position;
-    float fillDist0 = length(toFill0);
-    if (fillDist0 > 0.001) {
-        Lo += pbrLight(N, V, baseColor, metallic, roughness,
-                       toFill0 / fillDist0,
-                       u_fill_light_color0,
-                       softRangeAttenuation(fillDist0, u_fill_light_range0));
-    }
-
-    vec3 toFill1 = u_fill_light_pos1 - v_position;
-    float fillDist1 = length(toFill1);
-    if (fillDist1 > 0.001) {
-        Lo += pbrLight(N, V, baseColor, metallic, roughness,
-                       toFill1 / fillDist1,
-                       u_fill_light_color1,
-                       softRangeAttenuation(fillDist1, u_fill_light_range1));
-    }
-
-    // Ambient
-    float ao = 1.0;
-    if (u_use_occlusion_tex == 1) {
-        ao = mix(1.0, texture(u_occlusion_tex, t_uv).r, u_occlusion_strength);
-    }
-    vec3 ambient = u_ambient_color * baseColor * ao;
-
-    vec3 emissive = u_emissive_factor;
-    if (u_use_emissive_tex == 1) {
-        emissive *= texture(u_emissive_tex, t_uv).rgb;
-    }
-    emissive *= u_emissive_strength;
-
-    vec3 color = (Lo + ambient + emissive) * u_env_exposure;
-    // HDR ->LDR: Reinhard-like soft tonemap
-    color = color / (color + vec3(1.0));
-    // Gamma correction
-    color = pow(color, vec3(1.0 / max(u_env_gamma, 0.001)));
-
-    float alpha = (u_alpha_mode == 2 || u_base_alpha < 0.999) ? materialAlpha : 1.0;
-    fragColor = vec4(color, alpha);
-}
-"""
-
 
 
 
@@ -2398,7 +953,7 @@ if sys.platform == "win32":
     _KEYEVENTF_KEYUP      = 0x0002
 
     def _set_cursor_pos(x, y):
-        # Use SetCursorPos with virtual-desktop pixel coordinates -works across all
+        # Use SetCursorPos with virtual-desktop pixel coordinates — works across all
         # monitors.  The old SendInput+MOVE+ABSOLUTE approach required manual
         # normalisation against the primary-monitor size and was fragile for
         # multi-monitor setups where the primary monitor isn't at (0,0).
@@ -2462,7 +1017,7 @@ DEAD = 0.15
 # generates no keystroke (used to align the navigation/arrow clusters).
 _KB_UNITS_WIDE = 18   # total horizontal units per row
 _KB_ROWS = [
-    # Row F: Esc + F1-F12 + PrtSc/ScrLk/Pause   (1.5 + 12 + 4.5 = 18)
+    # Row F: Esc + F1–F12 + PrtSc/ScrLk/Pause   (1.5 + 12 + 4.5 = 18)
     [('Esc',0x1B,None,0x1B,1.5),
     ('F1',0x70,None,0x70,1),('F2',0x71,None,0x71,1),
     ('F3',0x72,None,0x72,1),('F4',0x73,None,0x73,1),
@@ -2493,32 +1048,32 @@ _KB_ROWS = [
     ('Enter',0x0D,None,0x0D,2.25),
     ('',-1,None,-1,3)],
     # Row 3: ZXCV + Up arrow directly above Down
-    # 2.25 + 10 + 2.75 = 15.0   then  gap(1) | ->1) | gap(1)  -> ->occupies col 16-17 (same as ->
+    # 2.25 + 10 + 2.75 = 15.0   then  gap(1) | ↑(1) | gap(1)  →  ↑ occupies col 16-17 (same as ↓)
     [('Shift',0x10,None,0x10,2.25),('Z',0x5A,None,0x5A,1),('X',0x58,None,0x58,1),
     ('C',0x43,None,0x43,1),('V',0x56,None,0x56,1),('B',0x42,None,0x42,1),
     ('N',0x4E,None,0x4E,1),('M',0x4D,None,0x4D,1),(',',0xBC,'<',0xBC,1),
     ('.',0xBE,'>',0xBE,1),('/',0xBF,'?',0xBF,1),('Shift',0x10,None,0x10,2.75),
-    ('',-1,None,-1,1),('Up',0x26,None,0x26,1),('',-1,None,-1,1)],
-    # Row 4: bottom + arrow cluster -Down sits directly under Up at col 16-17.
-    # 1.5+1+1.25+7.5+1.25+1+1.5 = 15.0   then  ->1) | ->1) | ->1)
+    ('',-1,None,-1,1),('↑',0x26,None,0x26,1),('',-1,None,-1,1)],
+    # Row 4: bottom + arrow cluster — Down sits directly under Up at col 16-17.
+    # 1.5+1+1.25+7.5+1.25+1+1.5 = 15.0   then  ←(1) | ↓(1) | →(1)
     [('Ctrl',0x11,None,0x11,1.5),('Win',0x5B,None,0x5B,1),
     ('Alt',0x12,None,0x12,1.25),
     ('Space',0x20,None,0x20,7.5),
     ('Alt',0x12,None,0x12,1.25),('Apps',0x5D,None,0x5D,1),
     ('Ctrl',0x11,None,0x11,1.5),
-    ('Left',0x25,None,0x25,1),('Down',0x28,None,0x28,1),('Right',0x27,None,0x27,1)],
+    ('←',0x25,None,0x25,1),('↓',0x28,None,0x28,1),('→',0x27,None,0x27,1)],
 ]
 
 import collections as _collections
 _KeyEntry = _collections.namedtuple('_KeyEntry', 'label shifted_label vk shifted_vk rect_uv rect_local')
 
-_KB_TEX_W, _KB_TEX_H = 1280, 384   # keyboard texture: 6 rows x 18 units
+_KB_TEX_W, _KB_TEX_H = 1280, 384   # keyboard texture: 6 rows × 18 units
 
 
 # XR math helpers (module-level, pure functions)
 
 def _xr_quat_to_mat4(q):
-    """XrQuaternionf ->standard 4x4 rotation matrix (numpy, math row/col convention).
+    """XrQuaternionf → standard 4×4 rotation matrix (numpy, math row/col convention).
 
     Produces the matrix that left-multiplies a column vector: v' = R @ v.
     Callers must transpose before writing to OpenGL (which reads column-major).
@@ -2533,7 +1088,7 @@ def _xr_quat_to_mat4(q):
 
 
 def _pose_to_view_mat4(pose):
-    """XrPosef ->standard 4x4 view matrix (numpy, math row/col convention).
+    """XrPosef → standard 4×4 view matrix (numpy, math row/col convention).
 
     The view matrix is the inverse of the head-pose model matrix:
     V = [ R^T | -R^T @ pos ]
@@ -2549,80 +1104,8 @@ def _pose_to_view_mat4(pose):
     return V
 
 
-def xr_pose_to_model_mat4(pose):
-    """XrPosef -> standard 4x4 model matrix."""
-    M = _xr_quat_to_mat4(pose.orientation)
-    M[:3, 3] = np.array([pose.position.x, pose.position.y, pose.position.z], dtype=np.float32)
-    return M
-
-
-def euler_to_mat4(yaw, pitch, roll):
-    """Yaw/pitch/roll radians -> 4x4 rotation matrix."""
-    cy, sy = math.cos(yaw), math.sin(yaw)
-    cp, sp = math.cos(pitch), math.sin(pitch)
-    cr, sr = math.cos(roll), math.sin(roll)
-    ry = np.array([[cy, 0.0, sy, 0.0],
-                   [0.0, 1.0, 0.0, 0.0],
-                   [-sy, 0.0, cy, 0.0],
-                   [0.0, 0.0, 0.0, 1.0]], dtype=np.float32)
-    rx = np.array([[1.0, 0.0, 0.0, 0.0],
-                   [0.0, cp, -sp, 0.0],
-                   [0.0, sp, cp, 0.0],
-                   [0.0, 0.0, 0.0, 1.0]], dtype=np.float32)
-    rz = np.array([[cr, -sr, 0.0, 0.0],
-                   [sr, cr, 0.0, 0.0],
-                   [0.0, 0.0, 1.0, 0.0],
-                   [0.0, 0.0, 0.0, 1.0]], dtype=np.float32)
-    return ry @ rx @ rz
-
-
-def _mat3_to_quat_xyzw(m33):
-    """3x3 rotation matrix -> normalized quaternion (x, y, z, w)."""
-    t = m33[0, 0] + m33[1, 1] + m33[2, 2]
-    if t > 0.0:
-        s = np.sqrt(t + 1.0) * 2.0
-        w = 0.25 * s
-        x = (m33[2, 1] - m33[1, 2]) / s
-        y = (m33[0, 2] - m33[2, 0]) / s
-        z = (m33[1, 0] - m33[0, 1]) / s
-    elif m33[0, 0] > m33[1, 1] and m33[0, 0] > m33[2, 2]:
-        s = np.sqrt(1.0 + m33[0, 0] - m33[1, 1] - m33[2, 2]) * 2.0
-        w = (m33[2, 1] - m33[1, 2]) / s
-        x = 0.25 * s
-        y = (m33[0, 1] + m33[1, 0]) / s
-        z = (m33[0, 2] + m33[2, 0]) / s
-    elif m33[1, 1] > m33[2, 2]:
-        s = np.sqrt(1.0 + m33[1, 1] - m33[0, 0] - m33[2, 2]) * 2.0
-        w = (m33[0, 2] - m33[2, 0]) / s
-        x = (m33[0, 1] + m33[1, 0]) / s
-        y = 0.25 * s
-        z = (m33[1, 2] + m33[2, 1]) / s
-    else:
-        s = np.sqrt(1.0 + m33[2, 2] - m33[0, 0] - m33[1, 1]) * 2.0
-        w = (m33[1, 0] - m33[0, 1]) / s
-        x = (m33[0, 2] + m33[2, 0]) / s
-        y = (m33[1, 2] + m33[2, 1]) / s
-        z = 0.25 * s
-    q = np.array([x, y, z, w], dtype=np.float64)
-    return q / np.linalg.norm(q)
-
-
-def mat4_to_xr_posef(mat4):
-    """4x4 rigid transform -> XrPosef."""
-    q = _mat3_to_quat_xyzw(mat4[:3, :3].astype(np.float64))
-    pose = xr.Posef()
-    pose.orientation.x = float(q[0])
-    pose.orientation.y = float(q[1])
-    pose.orientation.z = float(q[2])
-    pose.orientation.w = float(q[3])
-    pose.position.x = float(mat4[0, 3])
-    pose.position.y = float(mat4[1, 3])
-    pose.position.z = float(mat4[2, 3])
-    return pose
-
-
 def _fov_to_proj_mat4(fov, near=0.05, far=100.0):
-    """XrFovf ->standard 4x4 OpenGL asymmetric-frustum projection matrix
+    """XrFovf → standard 4×4 OpenGL asymmetric-frustum projection matrix
     (numpy, math row/col convention). Caller must transpose before writing to OpenGL.
 
     Includes a small epsilon offset to prevent division by zero when the
@@ -2651,52 +1134,24 @@ def _fov_to_proj_mat4(fov, near=0.05, far=100.0):
     return p
 
 
-def _fov_to_proj_mat4_d3d(fov, near=0.05, far=100.0):
-    """XrFovf ->D3D-style asymmetric-frustum projection matrix.
-
-    D3D clip-space depth is 0..1. The view convention still looks down -Z,
-    matching _pose_to_view_mat4 and the existing OpenGL world transforms.
-    """
-    l = math.tan(fov.angle_left)  * near
-    r = math.tan(fov.angle_right) * near
-    t = math.tan(fov.angle_up)    * near
-    b = math.tan(fov.angle_down)  * near
-
-    EPS = 1e-6
-    if abs(r - l) < EPS:
-        r += EPS
-    if abs(t - b) < EPS:
-        t += EPS
-
-    p = np.zeros((4, 4), dtype=np.float32)
-    p[0, 0] =  2 * near / (r - l)
-    p[0, 2] =  (r + l)  / (r - l)
-    p[1, 1] =  2 * near / (t - b)
-    p[1, 2] =  (t + b)  / (t - b)
-    p[2, 2] = -far / (far - near)
-    p[2, 3] = -(far * near) / (far - near)
-    p[3, 2] = -1.0
-    return p
-
-
 class OneEuroFilter:
     """Adaptive low-pass filter for hand-jitter reduction.
 
-    Algorithm (from "One Euro Filter" by Gery Casiez et al.):
+    Algorithm (from "1€ Filter" by Géry Casiez et al.):
     dx  = (x - x_prev) / dt                  raw derivative
     dx^ = low_pass(dx, f_Cd, dt)             smoothed derivative
     f_C = min_cutoff + beta * |dx^|          adaptive cutoff (Hz)
     x^  = low_pass(x, f_C, dt)               filtered output
 
     The low-pass is a 1st-order RC filter:
-    alpha   = 1 / (1 + tau / dt)                   smoothing factor
-    tau   = 1 / (2pi * f_C)                     time constant
-    y   = alpha*x + (1-alpha)*y_prev
+    α   = 1 / (1 + τ / dt)                   smoothing factor
+    τ   = 1 / (2π · f_C)                     time constant
+    y   = α·x + (1-α)·y_prev
 
     Tuning guide:
-    min_cutoff (Hz):      1.0-.0 for hand tracking. Lower = smoother, more lag.
+    min_cutoff (Hz):      1.0–3.0 for hand tracking. Lower = smoother, more lag.
                             Start at 1.2.
-    beta:                 0.007-.05. Speed sensitivity -higher responds faster
+    beta:                 0.007–0.05. Speed sensitivity — higher responds faster
                             to quick moves but transmits more jitter. Start at 0.01.
     derivative_cutoff (Hz): 1.0 is typical. Lower = smoother derivative estimate.
     """
@@ -2732,7 +1187,7 @@ class OneEuroFilter:
         alpha_d = self._alpha(self.derivative_cutoff, dt)
         dx_hat = alpha_d * dx + (1.0 - alpha_d) * self._dx_prev
 
-        # Adaptive cutoff: rises with speed ->less lag during fast motion
+        # Adaptive cutoff: rises with speed → less lag during fast motion
         cutoff = self.min_cutoff + self.beta * abs(dx_hat)
 
         # Low-pass with adaptive cutoff
@@ -2745,9 +1200,9 @@ class OneEuroFilter:
 
 
 class EMAPositionFilter:
-    """Simple exponential moving average -fallback for debugging.
+    """Simple exponential moving average — fallback for debugging.
 
-    y = alpha*x + (1-alpha)*y_prev
+    y = α·x + (1-α)·y_prev
     """
     __slots__ = ('alpha', '_prev')
 
@@ -2787,7 +1242,8 @@ class OneEuroFilter3D:
         z = self._fz.filter(float(pos[2]), dt)
         return np.array([x, y, z], dtype='f8')
 
-class OpenXRViewerCore:
+
+class OpenXRViewer:
     """
     Renders the depth-parallax stereo views into a VR headset using OpenXR.
 
@@ -2811,7 +1267,6 @@ class OpenXRViewerCore:
         depth_q=None,
         show_fps=True,
         controller_model='pico',
-        environment_model='Default',
         capture_mode='Monitor',
         monitor_index=1,
         **kwargs,
@@ -2821,10 +1276,9 @@ class OpenXRViewerCore:
         self._input_monitor_index = monitor_index
         self.ipd_uv = ipd
         self.depth_strength = 0.1 # multiplied by depth_ratio; effective = depth_strength * depth_ratio
-        self._stereo_enabled = True
-        self._saved_depth_ratio = depth_ratio
         self.depth_ratio = depth_ratio
         self.convergence = convergence
+        self.sharpen_strength = 0.6  # CAS sharpening: 0 = off, 1 = strong
         self.frame_size = frame_size
         self.fps = fps
         self.depth_q = depth_q
@@ -2832,7 +1286,7 @@ class OpenXRViewerCore:
 
         self._screen_grab_local_l = None
         self._screen_grab_local_r = None
-        # Keyboard grip-to-move anchor -local (lx, ly) on keyboard plane
+        # Keyboard grip-to-move anchor — local (lx, ly) on keyboard plane
         # at the moment the grip was pressed.  Mirrors _screen_grab_local_*.
         self._kb_grab_local_l     = None
         self._kb_grab_local_r     = None
@@ -2843,7 +1297,7 @@ class OpenXRViewerCore:
         # gets a negative base_pitch that tilts the surface up toward the user).
         self._kb_yaw_offset       = 0.0
         self._kb_pitch_offset     = 0.0
-        # Per-hand grip lock -once a grip press latches onto 'screen' or
+        # Per-hand grip lock — once a grip press latches onto 'screen' or
         # 'keyboard', it stays there until release.  Enforces "only grip one
         # item at a time" so a single press cannot jump between objects.
         self._grip_target_l       = None   # None | 'screen' | 'keyboard'
@@ -2853,15 +1307,18 @@ class OpenXRViewerCore:
         self._grip_l_now          = False
         self._grip_r_now          = False
 
+        self._x_press_t = 0.0          # timestamp when X was pressed
+        self._x_long_fired = False     # whether long‑press action already fired
+        self._prev_bg_color_idx = None # stores the index before switching to green
 
-        # FPS display -timestamp ring: (len-1)/(last-first) is exact over the window
+        # FPS display — timestamp ring: (len-1)/(last-first) is exact over the window
         self.actual_fps      = 0.0   # XR composition rate (this loop)
         self.sbs_fps         = 0.0   # SBS source rate (depth_q producer in main.py)
         self.total_latency   = 0.0
         self._frame_ts_ring  = collections.deque(maxlen=60)  # ~1 s at 60 Hz
         self._sbs_ts_ring    = collections.deque(maxlen=60)  # SBS frame arrivals
 
-        # Overlay redraw throttle -texture is rebuilt at most once per second
+        # Overlay redraw throttle — texture is rebuilt at most once per second
         self._last_overlay_update   = 0.0
         self._cached_actual_fps     = 0.0
         self._cached_sbs_fps        = 0.0
@@ -2869,6 +1326,7 @@ class OpenXRViewerCore:
         self._cached_screen_width   = 0.0
         self._cached_screen_height  = 0.0
         self._cached_screen_dist    = 0.0
+        self._cached_screen_curved  = False
         self._cached_depth_ratio    = 1.0
         self._cached_vr_res         = (0, 0)
         self._cached_sbs_res        = (0, 0)
@@ -2876,127 +1334,23 @@ class OpenXRViewerCore:
         # Virtual screen transform (world space, metres / radians)
         self.screen_distance = 2.0
         self.screen_width    = 2.4
-        self._screen_ref_size = 2.4   # long-dimension reference for resize
         self.screen_height   = None   # derived from frame aspect ratio on first frame
 
-        # Environment-screen mode: keep a plain fixed screen, no visual effects.
-        self._corner_radius = 0.0
-
-        # Environment model (glTF 3D scene) -loaded from environment/environment.glb
-        self._environment_model = str(environment_model or 'Default')
-        # Thin entry modules can pass environment_model='None' to run without
-        # loading or rendering any room/environment scene.
-        self._environment_enabled = self._environment_model.strip().lower() != 'none'
-        self._environment_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'environment')
-        self._available_environment_models = self._discover_environment_models()
-        self._env_profile = {}
-        self._env_model_path = None
-        self._env_model_prims = []        # list of {'vao', 'vbo', 'ibo', 'tex_key', 'tri_count'}
-        self._scene_lights = []            # KHR_lights_punctual lights
-        self._env_model_tex_cache = {}    # cache_key -> moderngl Texture
-        self._env_model_visible = False   # hidden by default, toggle with N key
-        self._env_model_pos = [0.0, -1.0, -3.0]   # world-space position (x, y, z)
-        self._env_model_rot = [0.0, 0.0, 0.0]     # Euler rotation (yaw, pitch, roll) in radians
-        self._env_model_scale = [1.0, 1.0, 1.0]   # scale factor (x, y, z)
-        self._env_model_init_done = False  # lazy init: tried loading gltf once
-        # Viewer-side room lighting.  glTF emissive surfaces do not light other
-        # surfaces, so XR uses a small fixed light rig unless the GLB provides
-        # KHR_lights_punctual lights.
-        self._env_head_light_color = tuple(kwargs.get('env_head_light_color', (0.24, 0.24, 0.26)))
-        self._env_ambient_color = tuple(kwargs.get('env_ambient_color', (0.14, 0.13, 0.15)))
-        self._env_fallback_dir = np.array(kwargs.get('env_directional_dir', (0.25, -0.82, -0.52)), dtype=np.float32)
-        self._env_fallback_dir = self._env_fallback_dir / (np.linalg.norm(self._env_fallback_dir) + 1e-8)
-        self._env_fallback_dir_color = tuple(kwargs.get('env_directional_color', (0.34, 0.31, 0.28)))
-        self._env_fill_lights = list(kwargs.get('env_fill_lights', [
-            {'position': (-0.9, 1.45, -2.4), 'color': (0.55, 0.30, 0.46), 'range': 3.8},
-            {'position': (1.35, 1.10, -3.3), 'color': (0.24, 0.32, 0.46), 'range': 4.6},
-        ]))
-        self._env_exposure = float(kwargs.get('env_exposure', 1.12))
-        self._env_gamma = float(kwargs.get('env_gamma', 2.2))
-        self._env_emissive_strength = float(kwargs.get('env_emissive_strength', 0.85))
-        self._env_khr_light_scale = float(kwargs.get('env_khr_light_scale', 1.0))
-        self._env_render_quality = str(kwargs.get('env_render_quality', 'balanced')).strip().lower()
-        self._env_texture_anisotropy = float(kwargs.get('env_texture_anisotropy', 16.0))
-        self._xr_render_scale = max(0.5, min(1.0, float(kwargs.get('xr_render_scale', 1.0))))
-        self._env_base_settings = {
-            'model_pos': list(self._env_model_pos),
-            'model_rot': list(self._env_model_rot),
-            'model_scale': list(self._env_model_scale),
-            'head_light_color': tuple(self._env_head_light_color),
-            'ambient_color': tuple(self._env_ambient_color),
-            'fallback_dir': self._env_fallback_dir.copy(),
-            'fallback_dir_color': tuple(self._env_fallback_dir_color),
-            'fill_lights': list(self._env_fill_lights),
-            'exposure': self._env_exposure,
-            'gamma': self._env_gamma,
-            'emissive_strength': self._env_emissive_strength,
-            'khr_light_scale': self._env_khr_light_scale,
-            'render_quality': self._env_render_quality,
-            'texture_anisotropy': self._env_texture_anisotropy,
-            'xr_render_scale': self._xr_render_scale,
-        }
-        self._configure_environment_profile()
-
-        # Desktop preview window (mirror of left eye)
-        self._show_preview_window = bool(kwargs.get('show_preview_window', True))
-        self._preview_active = False
-        self._preview_only_mode = False
-        self._waiting_for_headset = False
-        self._openxr_debug = str(
-            kwargs.get('openxr_debug', os.environ.get('D2S_OPENXR_DEBUG', '0')) or '0'
-        ).strip().lower() in ('1', 'true', 'yes', 'on')
-        self._openxr_retry_interval = float(kwargs.get('openxr_retry_interval', 2.0))
-        self._openxr_standby_retry_interval = float(kwargs.get('openxr_standby_retry_interval', 3.0))
-        self._openxr_no_headset_retry_interval = float(kwargs.get('openxr_no_headset_retry_interval', 3.0))
-        self._openxr_standby_retry_max_interval = max(
-            self._openxr_standby_retry_interval,
-            float(kwargs.get('openxr_standby_retry_max_interval', 30.0))
-        )
-        self._openxr_standby_stable_seconds = max(
-            0.0,
-            float(kwargs.get('openxr_standby_stable_seconds', 8.0))
-        )
-        self._openxr_opengl_probe_attempts = max(1, int(kwargs.get('openxr_opengl_probe_attempts', 5)))
-        self._openxr_opengl_probe_interval = max(0.0, float(kwargs.get('openxr_opengl_probe_interval', 1.0)))
-        self._openxr_restore_opengl_probe_attempts = max(1, int(kwargs.get('openxr_restore_opengl_probe_attempts', 8)))
-        self._openxr_restore_opengl_probe_interval = max(0.0, float(kwargs.get('openxr_restore_opengl_probe_interval', 1.0)))
-        self._last_openxr_retry_time = 0.0
-        self._openxr_retry_cooldown_until = 0.0
-        self._openxr_ready_since = 0.0
-        self._openxr_standby_retry_count = 0
-        self._source_frame_timeout = float(kwargs.get('source_frame_timeout', 5.0))
-        self._source_resume_grace = float(kwargs.get('source_resume_grace', 3.0))
-        self._source_resume_grace_until = 0.0
-        self._session_idle_render_timeout = float(kwargs.get('session_idle_render_timeout', 60.0))
-        self._session_idle_since = 0.0
-        self._session_idle_notice_emitted = False
-        self._last_source_frame_time = 0.0
-        self._source_stalled = False
-        self._source_stall_count = 0
-        self._pending_source_frame = None
-        self._render_active_event = kwargs.get('render_active_event')
-        self._source_active_event = kwargs.get('source_active_event')
-        self._idle_active_event = kwargs.get('idle_active_event')
-        self._headset_wait_inference_timeout = float(kwargs.get('headset_wait_inference_timeout', 60.0))
-        self._headset_wait_idle_sleep = max(0.05, float(kwargs.get('headset_wait_idle_sleep', 0.25)))
-        self._headset_wait_inference_deadline = 0.0
-        self._headset_wait_inference_paused = False
-        self._hard_idle_active = False
-        self._waiting_retry_notice_pending = False
-        self._suppress_next_wait_notice = False
-        self._set_source_active(True)
-        self._set_idle_active(False)
-
-        # Soft projection shadow (darkens whatever background is behind the screen)
-
-        # Screen floating/breathing animation
-
-        # screen presets: (name, width_m, distance_m) -height is derived from width and frame aspect ratio
+        # screen presets: (name, width_m, distance_m) — height is derived from width and frame aspect ratio
+        self._screen_presets = [
+            ("10\" Tablet",        0.30, 0.4),
+            ("27\" Monitor",       0.60, 0.6),
+            ("65\" TV",            1.44, 2.0),
+            ("100\" Projector 1",  2.40, 2.0),
+            ("100\" Projector 2",  2.21, 2.5),
+            ("1000\" IMAX",       22.0,  20),
+        ]
+        self._preset_index = 3  # default 4: 100-inch projector with 2.0 m distance
+        self._preset_name_overlay = None   # preset name overlay (permanently visible)
         self.screen_pan_x    = 0.0
         self.screen_pan_y    = 0.0
         self.screen_yaw      = 0.0    # rotation around Y axis
         self.screen_pitch    = 0.0    # rotation around X axis
-        self.screen_roll     = 0.0    # rotation around Z axis (screen normal)
         self._yaw_offset     = 0.0    # manual yaw offset (relative to face-head baseline)
         self._pitch_offset   = 0.0    # manual pitch offset
 
@@ -3013,17 +1367,15 @@ class OpenXRViewerCore:
         self._xr_instance = None
         self._xr_system_id = None
         self._xr_session = None
+        self._fb_layer_settings_enabled = False  # set True if runtime supports XR_FB_composition_layer_settings
         self._xr_space = None
-        self._xr_ref_space_type = None
-        self._xr_space_pose_in_ref = np.eye(4, dtype=np.float32)
         self._xr_swapchains = {}        # {eye_index: xr.Swapchain}
         self._swapchain_images = {}     # {eye_index: [XrSwapchainImageOpenGLKHR, ...]}
         self._swapchain_sizes = {}      # {eye_index: (w, h)}
         self._fbo_cache = {}            # {(eye_index, image_index): (raw_id, mgl_fbo)}
-        self._depth_rb_cache = {}       # {(eye_index, image_index): depth_rb}
         self._session_running = False
 
-        # Pre-built XR call argument structs -stateless inputs reused every
+        # Pre-built XR call argument structs — stateless inputs reused every
         # frame to avoid 6+ ctypes allocations per frame (per eye for swapchain
         # acquire/wait/release). pyopenxr structs are read-only inputs to the
         # runtime so reusing them across calls is safe.
@@ -3041,50 +1393,48 @@ class OpenXRViewerCore:
         self._act_menu_btn        = None
         self._act_left_grip       = None   # grab/move mode
         self._act_right_grip      = None   # resize mode
-        self._act_a_btn           = None   # right A -double press = hide all
-        self._act_b_btn           = None   # right B -right mouse click
-        self._act_x_btn           = None   # left  X -toggle virtual keyboard
-        self._act_y_btn           = None   # left  Y -reset screen position/size/rotation
-        self._act_left_trigger       = None   # left trigger (float) -left mouse click
-        self._act_right_trigger      = None   # right trigger (float) -right mouse click / hold
-        self._act_left_stick_click   = None   # left thumbstick click -cycle background color
-        self._act_right_stick_click  = None   # right thumbstick click -toggle curved screen
+        self._act_a_btn           = None   # right A — double press = hide all
+        self._act_b_btn           = None   # right B — right mouse click
+        self._act_x_btn           = None   # left  X — toggle virtual keyboard
+        self._act_y_btn           = None   # left  Y — reset screen position/size/rotation
+        self._act_left_trigger       = None   # left trigger (float) — left mouse click
+        self._act_right_trigger      = None   # right trigger (float) — right mouse click / hold
+        self._act_left_stick_click   = None   # left thumbstick click — cycle background color
+        self._act_right_stick_click  = None   # right thumbstick click — toggle curved screen
 
         # Menu button debounce + FPS overlay toggle + long-press reset
         self._menu_pressed_last   = False
-        self._panel_mode          = 0 if show_fps else 2  # 0=head-facing, 1=fixed, 2=hidden
-        self._fps_overlay_visible = show_fps  # derived from _panel_mode, kept for render guards
+        self._fps_overlay_visible = show_fps
+        self._help_panel_visible  = False   # shortcuts panel, toggled independently
         self._menu_press_t        = 0.0    # perf_counter when menu was pressed
         self._menu_long_fired     = False  # True once long-press action has fired
 
         # Quest-like window state
         self._screen_visible = True   # hide-all toggle (A double-press)
-        self._grabbed        = False  # left grip held  ->move mode
+        self._grabbed        = False  # left grip held  → move mode
         self._screen_grab_grip_l = None  # grab offset (screen_centre - grip_pos) for left
         self._screen_grab_grip_r = None  # grab offset (screen_centre - grip_pos) for right
-        self._resizing       = False  # right grip held ->resize mode
+        self._resizing       = False  # right grip held → resize mode
         self._a_last         = False  # A-button previous frame state
-        self._a_press_t      = 0.0    # A-button long-press start time
-        self._a_long_fired   = False  # A-button long-press already fired
-        self._b_last         = False  # B-button previous frame state
-        self._b_press_t      = 0.0    # B-button long-press start time
-        self._b_long_fired   = False  # B-button long-press already fired
+        self._a_last_t       = 0.0   # timestamp of last A press (double-press detection)
+        self._b_last              = False  # B-button previous frame state
         self._ltrig_state   = 'idle'  # 'idle' | 'pressed' | 'dragging'
         self._rtrig_state   = 'idle'
-        self._ltrig_press_t = 0.0    # perf_counter of last rising edge -left
-        self._rtrig_press_t = 0.0    # perf_counter of last rising edge -right
-        self._y_last         = False  # Y-button previous frame state
+        self._ltrig_press_t = 0.0    # perf_counter of last rising edge — left
+        self._rtrig_press_t = 0.0    # perf_counter of last rising edge — right
+        self._ov_ltrig_held = False  # overlay panel trigger state (separate from normal)
+        self._ov_rtrig_held = False
+        self._status_panel_alpha = 1.0  # animated alpha: fades when trigger held on panel
+        self._y_last         = False  # Y-button previous frame state (reset screen)
         self._y_press_t      = 0.0   # perf_counter when Y was pressed
         self._y_long_fired   = False # True once long-press action fired this hold
         self._x_last         = False  # X-button previous frame state (toggle keyboard)
-        # Head pose (world) cached each frame from xr.locate_views -used as the orbit
+        # Head pose (world) cached each frame from xr.locate_views — used as the orbit
         # pivot for the left thumbstick and as the anchor when the keyboard is summoned.
         self._head_pos_w      = None   # (x, y, z) head/eye centre in world space, or None
         self._head_fwd_w      = None   # (fx, fy, fz) head forward unit vector, or None
         self._screen_eye_init = False  # screen_pan_y aligned to headset height on first frame
         self._initial_head_y  = 0.0   # headset eye height at session start, used for Y-reset
-        self._xr_profile_space_applied = False  # rebase XrSpace to profile view_pose once
-        self._last_located_views = None
         # Border fade: shown during interaction, fades out when idle
         self._border_alpha   = 0.0    # 0.0 = invisible, 1.0 = fully opaque
         self._border_idle_t  = 0.0    # wall time when interaction last ended
@@ -3096,25 +1446,26 @@ class OpenXRViewerCore:
         # Mouse cursor control
         self._cursor_uv_l         = None  # (u,v,t) where left laser hits screen, or None
         self._cursor_uv_r         = None  # (u,v,t) where right laser hits screen, or None
-        self._cursor_ctrl         = None  # 'left' | 'right' | None -active cursor controller
-        # Smoothed UV -exponential moving average tames hand tremor so the cursor
+        self._overlay_hit_l       = False # left laser hits FPS overlay panel
+        self._overlay_hit_r       = False # right laser hits FPS overlay panel
+        self._cursor_ctrl         = None  # 'left' | 'right' | None — active cursor controller
+        # Smoothed UV — exponential moving average tames hand tremor so the cursor
         # doesn't jitter or skip pixels at long laser distances. Reset when the active
         # controller changes so we don't drag the cursor across the screen on swap.
         self._cursor_smooth_uv    = None
-        self._left_btn_down       = False # left mouse button held (right trigger)
-        self._right_btn_down      = False # right mouse button held (left trigger)
+        self._left_btn_down       = False # left mouse button held via left trigger
 
         # Target monitor for cursor mapping (multi-monitor support)
         self._target_mon_rect = None  # cached (left, top, width, height) in virtual-desktop pixels
 
         # Virtual keyboard
         self._keyboard_visible     = False
-        self._keyboard_tex         = None  # moderngl Texture (RGBA, _KB_TEX_W x _KB_TEX_H)
+        self._keyboard_tex         = None  # moderngl Texture (RGBA, _KB_TEX_W × _KB_TEX_H)
         self._keyboard_vao         = None  # quad VAO using _overlay_prog
         self._keyboard_keys        = []    # list of _KeyEntry
         self._keyboard_width       = 1.6   # metres
         self._keyboard_height      = 0.33  # metres (6 rows)
-        self._kb_show_shifted      = False # True ->render shifted labels on keys
+        self._kb_show_shifted      = False # True → render shifted labels on keys
         self._kb_last_build_width  = 0.0   # track width changes for texture rebuild
         # World-space anchor of the keyboard centre. Re-snapped to the user's current
         # head pose every time the keyboard is toggled on so it materialises within
@@ -3134,10 +1485,10 @@ class OpenXRViewerCore:
         }
         self._caps_lock            = False
         self._left_stick_click_prev= False
-        self._scroll_accum_x       = 0.0   # fractional scroll accumulator -horizontal
-        self._scroll_accum_y       = 0.0   # fractional scroll accumulator -vertical
-        self._kb_trig_prev_l       = 0.0   # keyboard trigger debounce -left controller
-        self._kb_trig_prev_r       = 0.0   # keyboard trigger debounce -right controller
+        self._scroll_accum_x       = 0.0   # fractional scroll accumulator — horizontal
+        self._scroll_accum_y       = 0.0   # fractional scroll accumulator — vertical
+        self._kb_trig_prev_l       = 0.0   # keyboard trigger debounce — left controller
+        self._kb_trig_prev_r       = 0.0   # keyboard trigger debounce — right controller
         self._kb_hover_l           = None  # index of key under left laser, or None
         self._kb_hover_r           = None  # index of key under right laser, or None
         self._kb_held_key_l        = None  # index of key held by left trigger, or None
@@ -3145,7 +1496,7 @@ class OpenXRViewerCore:
         self._kb_held_mods_l       = None  # (shift, ctrl, alt, win, vk) snapshot for left held key
         self._kb_held_mods_r       = None  # (shift, ctrl, alt, win, vk) snapshot for right held key
 
-        # GPU interop (CUDA / HIP) -initialised lazily on first frame
+        # GPU interop (CUDA / HIP) — initialised lazily on first frame
         self._cuda_gl         = None   # CUDART_GL instance, False = permanently failed
         self._pbo_color       = None   # GL PBO id for RGB upload
         self._pbo_depth       = None   # GL PBO id for depth upload
@@ -3158,9 +1509,22 @@ class OpenXRViewerCore:
         self.label_font = None   # smaller font for section header labels
         self.font_type = get_font_type()
         self.base_font_size = 26
-        try:
-            self.font = ImageFont.truetype(self.font_type, self.base_font_size)
-        except Exception:
+        # Match the bold font family so label and value share the same metrics
+        _regular_fonts = [r"C:\Windows\Fonts\segoeui.ttf",
+                          r"C:\Windows\Fonts\arial.ttf",
+                          r"C:\Windows\Fonts\calibri.ttf"]
+        for _rf in _regular_fonts:
+            try:
+                self.font = ImageFont.truetype(_rf, self.base_font_size)
+                break
+            except Exception:
+                continue
+        if self.font is None:
+            try:
+                self.font = ImageFont.truetype(self.font_type, self.base_font_size)
+            except Exception:
+                pass
+        if self.font is None:
             try:
                 self.font = ImageFont.load_default()
             except Exception:
@@ -3185,14 +1549,28 @@ class OpenXRViewerCore:
         self._overlay_prog     = None
         self._overlay_vao      = None
         self._overlay_tex      = None
-        self._overlay_tex_size = (768, 224)  # 5-row info panel
+        self._overlay_tex_size = (768, 238)  # 5-row info panel (1.25x taller)
 
-        # Help panel: follows right controller, shows key functions
+        # Help/shortcut panel: anchored to right side of screen, shows key functions
         self._help_tex      = None
         self._help_vao      = None
         self._help_tex_size = (1, 1)  # Dynamic, _build_help_texture sets the actual size based on text layout
 
         # Depth-ratio OSD: floating panel that appears when depth_ratio changes
+        self._depth_osd_tex       = None   # moderngl Texture (RGBA, 256×64)
+        self._depth_osd_vao       = None   # quad VAO (reuses _overlay_prog)
+        self._depth_osd_tex_size  = (256, 78)
+        self._depth_osd_alpha     = 0.0    # current alpha (1 = fully visible, 0 = hidden)
+        self._depth_osd_show_t    = -999.0 # perf_counter when OSD was last triggered
+        self._depth_osd_last_val  = None   # last depth_ratio value rendered into the texture
+
+        # Screen-preset OSD: shows preset name when user cycles through presets
+        self._preset_osd_tex      = None   # moderngl Texture (RGBA, w×64)
+        self._preset_osd_vao      = None
+        self._preset_osd_tex_size = (768, 78)  # wide enough for long preset names
+        self._preset_osd_alpha    = 0.0
+        self._preset_osd_show_t   = -999.0
+        self._preset_osd_last_key = None   # last preset index rendered into the texture
 
         # Brand switch OSD: right-controller-attached indicator
         self._brand_osd_tex       = None
@@ -3213,7 +1591,13 @@ class OpenXRViewerCore:
         self._brand_switch_osd_t = 0.0
         self._brand_sw_start = 0.0
         self._brand_sw_fired = False
-        self._ab_was_held = False
+
+        # Screen-info OSD: shows size + distance while right grip + right stick adjusts
+        self._screen_osd_tex      = None   # moderngl Texture (RGBA, 512×64)
+        self._screen_osd_vao      = None
+        self._screen_osd_tex_size = (512, 78)
+        self._screen_osd_show_t   = -999.0
+        self._screen_osd_last_key = None   # (round(w,2), round(dist,2)) — change detection
 
         # Screen border (slightly larger quad, solid color)
         self._border_prog = None
@@ -3227,21 +1611,10 @@ class OpenXRViewerCore:
         self._lsc_long_fired     = False
         self._rsc_press_t        = 0.0    # right stick click press start
         self._rsc_long_fired     = False
-        self._grip_l_prev     = False  # left grip previous frame (edge detection)
-        self._grip_r_prev      = False # right grip previous frame (edge detection)
-        self._grip_l_ref_mat  = None  # left grip 3x3 rotation matrix when pressed (roll tracking)
-        self._grip_l_base_roll = 0.0  # screen_roll at left grip press
-        self._grip_l_snapped  = False # left grip 90 deg snap already fired
-        self._grip_r_ref_mat  = None  # right grip 3x3 rotation matrix when pressed (roll tracking)
-        self._grip_r_base_roll = 0.0  # screen_roll at right grip press
+        self._both_stick_start   = 0.0    # both sticks pressed together timer
+        self._both_stick_fired   = False
 
-        # Arrow key hold tracking (left stick ->arrow keys when no grip)
-        self._arrow_up_held    = False
-        self._arrow_down_held  = False
-        self._arrow_left_held  = False
-        self._arrow_right_held = False
-
-        # VR controller model offsets -default zero, absolute offset loaded from profile.json
+        # VR controller model offsets — default zero, absolute offset loaded from profile.json
         self._ctrl_model_offset = [0.0, 0.0, 0.0]
         self._ctrl_model_rot_deg = 0.0
 
@@ -3249,10 +1622,12 @@ class OpenXRViewerCore:
         self._calibration_mode = False
         self._calibration_temp_offset = [0.0, 0.0, 0.0]
         self._calibration_temp_rot = 0.0
+        self._calib_combo_start = 0.0
+        self._calib_combo_fired = False
         self._calib_tex = None
         self._calib_tex_size = (420, 200)  # Calibration combo instructions texture size
 
-        # Right grip + A/B ->depth_ratio control (hold A = increase, hold B = decrease)
+        # Right grip + A/B → depth_ratio control (hold A = increase, hold B = decrease)
         # Reset to default: right grip + right thumbstick click
 
         # Physical mouse priority: suppress VR cursor when physical mouse is active
@@ -3264,12 +1639,21 @@ class OpenXRViewerCore:
         # Controller idle detection: skip input polling when no controllers tracked
         self._controller_miss_frames = 0     # consecutive frames with no controller pose
 
-        self._configure_profile_view_layout()
+        # Curved screen mode
+        self._screen_curved   = False   # True = cylindrical arc; False = flat quad
+        self._curved_prog     = None    # shader program (uses _CURVED_VERT)
+        self._curved_vbo      = None    # dynamic VBO for arc strip vertices
+        self._curved_vao      = None
+        self._curved_border_prog = None  # solid-color arc border program
+        self._curved_border_vbo  = None  # dynamic VBO for border arc vertices
+        self._curved_border_vao  = None
+        self._curved_verts_params = None        # curved screen VBO cache dirty flag
+        self._curved_border_verts_params = None # border VBO cache dirty flag
 
         # Background color cycling (left thumbstick click)
         self._bg_color_idx    = 0       # index into _BG_COLORS
 
-        # Cached XrPath handles -populated by _init_controller_actions to avoid
+        # Cached XrPath handles — populated by _init_controller_actions to avoid
         # calling xr.string_to_path on every frame (it's a round-trip into the runtime).
         self._path_left  = None
         self._path_right = None
@@ -3306,7 +1690,7 @@ class OpenXRViewerCore:
         self._laser_prev_mat_l   = None
         self._laser_prev_mat_r   = None
         self._LASER_HIDE_AFTER   = 10.0   # seconds of idle before hiding
-        self._LASER_MOVE_THRESH  = 0.015 # metres or radians -minimum motion to count
+        self._LASER_MOVE_THRESH  = 0.015 # metres or radians — minimum motion to count
 
         # Ray smoothing (quaternion SLERP + position EMA, simulates VD damping effect)
         self._smooth_ray_origin_l = None   # left hand smoothed position
@@ -3315,8 +1699,8 @@ class OpenXRViewerCore:
         self._smooth_ray_quat_r = None     # right hand smoothed direction (quaternion xyzw)
         self._smooth_ray_fwd_l  = None     # cached forward vector (pre-computed per frame)
         self._smooth_ray_fwd_r  = None
-        self._pos_smooth = 0.02   # position smoothing (base damping)
-        self._rot_smooth = 0.10   # rotation smoothing (base damping)
+        self._pos_smooth = 0.04   # position smoothing (base damping)
+        self._rot_smooth = 0.05   # rotation smoothing (base damping)
         self._ray_deadzone_rad = 0.0052  # angle dead zone (~0.3 degrees)
         self._ray_deadzone_pos = 0.002   # position dead zone (2mm)
         self._ray_edge_deadzone_rad = 0.1745  # edge snap release angle (~10 degrees)
@@ -3327,15 +1711,15 @@ class OpenXRViewerCore:
         self._smooth_ray_prev_fwd_l = None  # previous frame smoothed direction (used for edge lock)
         self._smooth_ray_prev_fwd_r = None
 
-        # One Euro Filter for raw controller position -replaces EMA in
+        # One Euro Filter for raw controller position — replaces EMA in
         # _apply_ray_smoothing.  Smooths the source data so laser beam,
         # cursor, and grip-to-move all benefit from the same stabilized input.
         # Tuned for VR controller tracking (meter-scale, ~90 fps):
-        #   min_cutoff=3 Hz ->alpha~=.17 at rest  (smooth but responsive)
-        #   beta=15        ->alpha~=.42 at 0.5 m/s (tight tracking at speed)
-        self._ray_filter_min_cutoff       = 8.0   # Hz (higher = less lag)
-        self._ray_filter_beta             = 8.0   # speed sensitivity
-        self._ray_filter_derivative_cutoff = 8.0  # Hz
+        #   min_cutoff=3 Hz → α≈0.17 at rest  (smooth but responsive)
+        #   beta=15        → α≈0.42 at 0.5 m/s (tight tracking at speed)
+        self._ray_filter_min_cutoff       = 3.0   # Hz
+        self._ray_filter_beta             = 15.0  # speed sensitivity
+        self._ray_filter_derivative_cutoff = 3.0  # Hz (faster speed adaptation)
         self._ray_filter_l = OneEuroFilter3D(
             self._ray_filter_min_cutoff,
             self._ray_filter_beta,
@@ -3349,34 +1733,25 @@ class OpenXRViewerCore:
         self._cached_beams  = None
         self._beams_frame   = -1
 
-        # Screen position animation -used by home-button gaze-reset to glide
+        # Screen position animation — used by home-button gaze-reset to glide
         # smoothly instead of snapping.  None = no animation in progress.
+        self._anim_target_pan_x    = None   # target screen_pan_x
+        self._anim_target_pan_y    = None   # target screen_pan_y
+        self._anim_target_distance = None   # target screen_distance
+        self._anim_target_yaw      = None   # target screen_yaw
+        self._anim_target_pitch    = None   # target screen_pitch
 
         # D3D11 backend state (populated by _init_d3d11_device when D3D11 path is active)
-        forced_backend = str(
-            kwargs.get('openxr_backend', os.environ.get('D2S_OPENXR_BACKEND', 'auto')) or 'auto'
-        ).strip().lower()
-        if forced_backend not in ('auto', 'opengl', 'd3d11'):
-            print(f"[OpenXRViewer] Invalid D2S_OPENXR_BACKEND={forced_backend!r}; using auto")
-            forced_backend = 'auto'
-        self._forced_xr_backend     = forced_backend
-        self._xr_backend            = None if forced_backend == 'auto' else forced_backend
-        self._use_d3d11             = False   # True = D3D11 OpenXR session
-        if forced_backend != 'auto':
-            print(f"[OpenXRViewer] Forced OpenXR backend: {forced_backend}")
+        self._use_d3d11             = False   # True = D3D11 OpenXR session + readback path
         self._d3d11_device          = None    # c_void_p ID3D11Device*
         self._d3d11_context         = None    # c_void_p ID3D11DeviceContext*
         self._d3d11_swapchain_fmt   = _DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
         self._swapchain_is_bgra     = False  # True when WMR runtime only offers BGRA
-        self._d3d11_native_renderer = None
-        self._d3d11_native_requested = str(
-            kwargs.get('d3d11_native_renderer', os.environ.get('D2S_D3D11_NATIVE', '1')) or '1'
-        ).strip().lower() not in ('0', 'false', 'no', 'off')
         # Offscreen GL FBOs used when rendering for D3D11 swapchain images.
-        # Key: (eye_index, img_index) ->(mgl_fbo, mgl_tex, raw_fbo_id, w, h)
+        # Key: (eye_index, img_index) → (mgl_fbo, mgl_tex, raw_fbo_id, w, h)
         self._offscreen_fbo_cache   = {}
-        # PBOs for the legacy GL-to-D3D11 fallback path.
-        # Key: (eye_index, img_index) ->(pbo_id, w, h)
+        # PBOs for async pixel readback in the D3D11 path.
+        # Key: (eye_index, img_index) → (pbo_id, w, h)
         self._d3d11_pbo_cache       = {}
 
         # GPU interop state (NV_DX_interop2 or EXT_memory_object) for zero-copy
@@ -3401,7 +1776,7 @@ class OpenXRViewerCore:
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 4)
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 5)
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-        glfw.window_hint(glfw.VISIBLE, glfw.FALSE)   # hidden -GL context only
+        glfw.window_hint(glfw.VISIBLE, glfw.FALSE)   # hidden — GL context only
         glfw.window_hint(glfw.RESIZABLE, glfw.FALSE)
         self.window = glfw.create_window(1, 1, "D2S-XR", None, None)
         if not self.window:
@@ -3410,7 +1785,7 @@ class OpenXRViewerCore:
         glfw.make_context_current(self.window)
         glfw.swap_interval(0)
 
-        # Keyboard controls -keep a reference so it isn't GC'd
+        # Keyboard controls — keep a reference so it isn't GC'd
         self._key_callback_ref = self._make_key_callback()
         glfw.set_key_callback(self.window, self._key_callback_ref)
 
@@ -3420,38 +1795,38 @@ class OpenXRViewerCore:
             if action not in (glfw.PRESS, glfw.REPEAT):
                 return
             d = 0.1; s = 0.15; p = 0.1; r = 0.05
-            screen_locked = viewer._environment_screen_locked()
-            if key == glfw.KEY_F:
-                viewer._panel_mode = (viewer._panel_mode + 1) % 3
-                viewer._fps_overlay_visible = viewer._panel_mode != 2
-            elif key == glfw.KEY_Z:
-                viewer.depth_strength = max(0.0, viewer.depth_strength - 0.01)
-            elif key == glfw.KEY_C:
-                viewer.depth_strength = min(0.5, viewer.depth_strength + 0.01)
-            elif key == glfw.KEY_X:
-                viewer.depth_strength = 0.0   # flat mode -no parallax distortion
-            elif key == glfw.KEY_R:
-                viewer._reset_screen_to_default(show_border=True)
-            elif screen_locked:
-                return
+            if   key == glfw.KEY_W:     viewer.screen_distance = max(0.3, viewer.screen_distance - d)
+            elif key == glfw.KEY_S:     viewer.screen_distance += d
             elif key == glfw.KEY_UP:    viewer.screen_pan_y += p
             elif key == glfw.KEY_DOWN:  viewer.screen_pan_y -= p
             elif key == glfw.KEY_LEFT:  viewer.screen_pan_x -= p
             elif key == glfw.KEY_RIGHT: viewer.screen_pan_x += p
             elif key in (glfw.KEY_EQUAL, glfw.KEY_KP_ADD):
-                viewer._screen_ref_size += s; viewer.screen_height = None
+                viewer.screen_width += s; viewer.screen_height = None
             elif key in (glfw.KEY_MINUS, glfw.KEY_KP_SUBTRACT):
-                viewer._screen_ref_size = max(0.8, viewer._screen_ref_size - s)
+                viewer.screen_width = max(0.3, viewer.screen_width - s)
                 viewer.screen_height = None
             elif key == glfw.KEY_Q: viewer.screen_yaw += r
             elif key == glfw.KEY_E: viewer.screen_yaw -= r
             elif key == glfw.KEY_T: viewer.screen_pitch += r
             elif key == glfw.KEY_G: viewer.screen_pitch -= r
+            elif key == glfw.KEY_F: viewer._fps_overlay_visible = not viewer._fps_overlay_visible
+            elif key == glfw.KEY_Z:
+                viewer.depth_strength = max(0.0, viewer.depth_strength - 0.01)
+            elif key == glfw.KEY_C:
+                viewer.depth_strength = min(0.5, viewer.depth_strength + 0.01)
+            elif key == glfw.KEY_X:
+                viewer.depth_strength = 0.0   # flat mode — no parallax distortion
+            elif key == glfw.KEY_R:
+                viewer._reset_orientation_offsets()
+                viewer.screen_distance = 2.0; viewer.screen_pan_x = 0.0
+                viewer.screen_pan_y = 0.0;    viewer.screen_yaw = 0.0
+                viewer.screen_pitch = 0.0;    viewer.screen_width = 2.4
+                viewer.screen_height = None
         return _cb
 
     def _init_moderngl(self):
         self.ctx = moderngl.create_context()
-        self.ctx.enable(moderngl.DEPTH_TEST)
 
         # World-space stereo rendering program (HMD eyes)
         self.prog = self.ctx.program(
@@ -3483,46 +1858,6 @@ class OpenXRViewerCore:
             self._border_prog, [(vbo_border, '2f 8x', 'in_position')]
         )
 
-        # Metallic border (brushed metal look with bevel, uses UV from _WORLD_VERT)
-        self._metallic_border_prog = self.ctx.program(
-            vertex_shader=_WORLD_VERT,
-            fragment_shader=_BORDER_FRAG,
-        )
-        vbo_metal = self.ctx.buffer(vertices.tobytes())
-        self._metallic_border_vao = self.ctx.vertex_array(
-            self._metallic_border_prog, [(vbo_metal, '2f 2f', 'in_position', 'in_uv')]
-        )
-
-        # Glow quad (soft glow rendered behind the screen beyond the border)
-        self._glow_prog = self.ctx.program(
-            vertex_shader=_WORLD_VERT,
-            fragment_shader=_GLOW_FRAG,
-        )
-        vbo_glow = self.ctx.buffer(vertices.tobytes())
-        self._glow_vao = self.ctx.vertex_array(
-            self._glow_prog, [(vbo_glow, '2f 2f', 'in_position', 'in_uv')]
-        )
-
-        # Soft shadow quad (dark gradient beneath the screen)
-        self._shadow_prog = self.ctx.program(
-            vertex_shader=_WORLD_VERT,
-            fragment_shader=_SHADOW_FRAG,
-        )
-        vbo_shadow = self.ctx.buffer(vertices.tobytes())
-        self._shadow_vao = self.ctx.vertex_array(
-            self._shadow_prog, [(vbo_shadow, '2f 2f', 'in_position', 'in_uv')]
-        )
-
-        # Ground ambient light: colored light pool cast by the screen on the floor
-        self._ground_prog = self.ctx.program(
-            vertex_shader=_WORLD_VERT,
-            fragment_shader=_GROUND_FRAG,
-        )
-        vbo_ground = self.ctx.buffer(vertices.tobytes())
-        self._ground_vao = self.ctx.vertex_array(
-            self._ground_prog, [(vbo_ground, '2f 2f', 'in_position', 'in_uv')]
-        )
-
         # Laser beam: a very thin elongated quad (width=0.003 m, length=5 m)
         # in local space X=[-0.5,0.5], Y=[-1,1]; we scale X to beam_w, Y to half-length
         laser_verts = np.array([
@@ -3540,7 +1875,7 @@ class OpenXRViewerCore:
             vertex_shader=_BEAM_VERT,
             fragment_shader=_BEAM_FRAG,
         )
-        # Single quadrilateral: Y=0(base, thick) ->Y=1(tip, thin)
+        # Single quadrilateral: Y=0(base, thick) → Y=1(tip, thin)
         beam_verts = np.array([
             -1.0, 0.0, 0.0, 0.0,   # bottom-left, v=0
             1.0, 0.0, 0.0, 0.0,   # bottom-right, v=0
@@ -3583,6 +1918,24 @@ class OpenXRViewerCore:
             self._overlay_prog, [(vbo2, '2f 2f', 'in_position', 'in_uv')]
         )
 
+        # Depth OSD: small floating panel (reuses _overlay_prog)
+        dw, dh = self._depth_osd_tex_size
+        self._depth_osd_tex = self.ctx.texture((dw, dh), 4, dtype='f1')
+        self._depth_osd_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        vbo_dosd = self.ctx.buffer(vertices.tobytes())
+        self._depth_osd_vao = self.ctx.vertex_array(
+            self._overlay_prog, [(vbo_dosd, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        # Preset OSD: preset name panel (reuses _overlay_prog)
+        pw, ph = self._preset_osd_tex_size
+        self._preset_osd_tex = self.ctx.texture((pw, ph), 4, dtype='f1')
+        self._preset_osd_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        vbo_posd = self.ctx.buffer(vertices.tobytes())
+        self._preset_osd_vao = self.ctx.vertex_array(
+            self._overlay_prog, [(vbo_posd, '2f 2f', 'in_position', 'in_uv')]
+        )
+
         # Brand switch OSD: controller model indicator (reuses _overlay_prog)
         bw, bh = self._brand_osd_tex_size
         self._brand_osd_tex = self.ctx.texture((bw, bh), 4, dtype='f1')
@@ -3592,7 +1945,16 @@ class OpenXRViewerCore:
             self._overlay_prog, [(vbo_bosd, '2f 2f', 'in_position', 'in_uv')]
         )
 
-        # Help panel: follows right controller, shows key functions (reuses _overlay_prog)
+        # Screen-info OSD: size + distance panel (reuses _overlay_prog)
+        sw, sh = self._screen_osd_tex_size
+        self._screen_osd_tex = self.ctx.texture((sw, sh), 4, dtype='f1')
+        self._screen_osd_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        vbo_sosd = self.ctx.buffer(vertices.tobytes())
+        self._screen_osd_vao = self.ctx.vertex_array(
+            self._overlay_prog, [(vbo_sosd, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        # Help/shortcut panel: anchored to right side of screen (reuses _overlay_prog)
         hw, hh = self._help_tex_size
         self._help_tex = self.ctx.texture((hw, hh), 4, dtype='f1')
         self._help_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
@@ -3601,6 +1963,59 @@ class OpenXRViewerCore:
             self._overlay_prog, [(vbo_help, '2f 2f', 'in_position', 'in_uv')]
         )
         self._build_help_texture()
+
+        # Swizzle blit program for the D3D11/EXT_memory_object interop path.
+        # Used to copy the offscreen RGBA eye-render into the BGRA-backed shared
+        # texture with channel-swap, so we never pay a CPU readback.
+        self._blit_prog = self.ctx.program(
+            vertex_shader=_WORLD_VERT,
+            fragment_shader=_BLIT_FRAG,
+        )
+        self._blit_prog['u_src'].value = 4   # texture unit 4 (avoids overlay/ctrl conflicts)
+        self._blit_prog['u_swap_rb'].value = 0
+        self._blit_prog['u_mvp'].write(np.eye(4, dtype='f4').T.tobytes())
+        _blit_verts = np.array([
+            -1, -1, 0, 0,
+             1, -1, 1, 0,
+            -1,  1, 0, 1,
+             1,  1, 1, 1,
+        ], dtype='f4')
+        self._blit_vao = self.ctx.vertex_array(
+            self._blit_prog,
+            [(self.ctx.buffer(_blit_verts.tobytes()), '2f 2f', 'in_position', 'in_uv')],
+        )
+
+        # Curved screen program: same fragment shader, but world-space arc geometry
+        # (no model matrix — verts are built directly in world space each frame).
+        self._curved_prog = self.ctx.program(
+            vertex_shader=_CURVED_VERT,
+            fragment_shader=FRAGMENT_SHADER,
+        )
+        self._curved_prog['u_convergence'].value = self.convergence
+        self._curved_prog['tex_color'].value = 0
+        self._curved_prog['tex_depth'].value  = 1
+        # Allocate dynamic VBO large enough for N=48 segments × 2 verts × (3+2) floats.
+        _CURVED_N = 48
+        _curved_buf_bytes = (_CURVED_N + 1) * 2 * (3 + 2) * 4   # f4
+        self._curved_vbo = self.ctx.buffer(reserve=_curved_buf_bytes, dynamic=True)
+        self._curved_vao = self.ctx.vertex_array(
+            self._curved_prog,
+            [(self._curved_vbo, '3f 2f', 'in_position', 'in_uv')],
+        )
+
+        # Curved border: reuse _CURVED_VERT (vec3 pos + vec2 uv) with solid-color frag.
+        # _SOLID_FRAG doesn't use UV, so the GLSL optimizer strips in_uv from the
+        # linked program's active attribute table.  Only bind in_position (3f) and
+        # skip the trailing 8 bytes of UV data — same pattern as the flat border VAO.
+        self._curved_border_prog = self.ctx.program(
+            vertex_shader=_CURVED_VERT,
+            fragment_shader=_SOLID_FRAG,
+        )
+        self._curved_border_vbo = self.ctx.buffer(reserve=_curved_buf_bytes, dynamic=True)
+        self._curved_border_vao = self.ctx.vertex_array(
+            self._curved_border_prog,
+            [(self._curved_border_vbo, '3f 8x', 'in_position')],
+        )
 
         # VR controller 3D model shader
         self._controller_prog = self.ctx.program(
@@ -3613,52 +2028,10 @@ class OpenXRViewerCore:
         self._controller_prog['u_light_color'].value = (0.60, 0.60, 0.65)
         self._controller_prog['u_ambient_color'].value = (0.22, 0.22, 0.24)
 
-        # Environment model shader (no gl_FrontFacing discard, double-sided lighting)
-        self._env_prog = self.ctx.program(
-            vertex_shader=_ENV_VERT,
-            fragment_shader=_ENV_FRAG,
-        )
-        self._env_prog['u_tex'].value = 3
-        self._env_prog['u_use_texture'].value = 1
-        self._env_prog['u_base_color_factor'].value = (1.0, 1.0, 1.0)
-        self._env_prog['u_base_alpha'].value = 1.0
-        self._env_prog['u_light_color'].value = (0.45, 0.45, 0.48)
-        self._env_prog['u_ambient_color'].value = (0.08, 0.08, 0.09)
-        self._env_prog['u_roughness'].value = 1.0
-        self._env_prog['u_metallic'].value = 0.0
-        self._env_prog['u_emissive_factor'].value = (0.0, 0.0, 0.0)
-        self._env_prog['u_unlit'].value = 0
-        self._env_prog['u_alpha_cutoff'].value = 0.5
-        self._env_prog['u_alpha_mode'].value = 0
-        self._env_prog['u_mr_tex'].value = 6
-        self._env_prog['u_use_mr_tex'].value = 0
-        self._env_prog['u_emissive_tex'].value = 7
-        self._env_prog['u_use_emissive_tex'].value = 0
-        self._env_prog['u_tex_offset'].value = (0.0, 0.0)
-        self._env_prog['u_tex_scale'].value = (1.0, 1.0)
-        self._env_prog['u_light_dir'].value = (0.0, -1.0, 0.0)
-        self._env_prog['u_light_intensity'].value = (0.0, 0.0, 0.0)
-        self._env_prog['u_fill_light_pos0'].value = (0.0, 0.0, 0.0)
-        self._env_prog['u_fill_light_color0'].value = (0.0, 0.0, 0.0)
-        self._env_prog['u_fill_light_range0'].value = 1.0
-        self._env_prog['u_fill_light_pos1'].value = (0.0, 0.0, 0.0)
-        self._env_prog['u_fill_light_color1'].value = (0.0, 0.0, 0.0)
-        self._env_prog['u_fill_light_range1'].value = 1.0
-        self._env_prog['u_env_exposure'].value = self._env_exposure
-        self._env_prog['u_env_gamma'].value = self._env_gamma
-        self._env_prog['u_emissive_strength'].value = self._env_emissive_strength
-        self._env_prog['u_normal_tex'].value = 4
-        self._env_prog['u_use_normal_tex'].value = 0
-        self._env_prog['u_normal_scale'].value = 1.0
-        self._env_prog['u_occlusion_tex'].value = 5
-        self._env_prog['u_use_occlusion_tex'].value = 0
-        self._env_prog['u_occlusion_strength'].value = 1.0
-
         self._ctrl_tex_cache = {}
         self._ctrl_prims_l = []
         self._ctrl_prims_r = []
         self._init_all_controller_models()
-        # Environment model loaded lazily after OpenXR session starts
 
     def _load_brand_models(self, brand_name):
         """Load models and configuration for a specific brand, returning {prims_l, prims_r, tex_cache, offset, rot_deg}."""
@@ -3685,7 +2058,7 @@ class OpenXRViewerCore:
         _dir_key = brand_name
 
         def _create_prims(glb_path, target_list):
-            prims_data, textures, _lights = load_glb_model(glb_path)
+            prims_data, textures = load_glb_model(glb_path)
             _file_stem = os.path.splitext(os.path.basename(glb_path))[0]
             _prefix = f"{_dir_key}/{_file_stem}"
             for tid, tex_arr in enumerate(textures):
@@ -3738,156 +2111,6 @@ class OpenXRViewerCore:
         self._switch_brand(default)
         print(f"[OpenXRViewer] Controller: {self._current_brand}")
 
-    def _profile_vec3(self, profile, keys, default):
-        for key in keys:
-            value = profile.get(key)
-            if isinstance(value, (list, tuple)) and len(value) >= 3:
-                try:
-                    return [float(value[0]), float(value[1]), float(value[2])]
-                except (TypeError, ValueError):
-                    pass
-        return list(default)
-
-    def _profile_float(self, profile, keys, default):
-        for key in keys:
-            if key in profile:
-                try:
-                    return float(profile[key])
-                except (TypeError, ValueError):
-                    pass
-        return float(default)
-
-    def _profile_bool(self, profile, keys, default):
-        for key in keys:
-            if key in profile:
-                value = profile[key]
-                if isinstance(value, bool):
-                    return value
-                if isinstance(value, str):
-                    return value.strip().lower() in ('1', 'true', 'yes', 'on')
-                return bool(value)
-        return bool(default)
-
-    def _profile_rotation_rad(self, profile, deg_keys, rad_keys, default):
-        for key in deg_keys:
-            value = profile.get(key)
-            if isinstance(value, (list, tuple)) and len(value) >= 3:
-                try:
-                    return [math.radians(float(value[0])),
-                            math.radians(float(value[1])),
-                            math.radians(float(value[2]))]
-                except (TypeError, ValueError):
-                    pass
-        return self._profile_vec3(profile, rad_keys, default)
-
-
-    # Environment extension hooks.  The base viewer is intentionally environment-free;
-    # xrviewer_env.OpenXRViewer overrides these methods with the room/profile/model code.
-    def _discover_environment_models(self):
-        return []
-
-    def _reset_environment_profile_defaults(self):
-        return None
-
-    def _configure_environment_profile(self):
-        self._environment_enabled = False
-        self._environment_model = 'None'
-        self._env_profile = {}
-        self._env_model_path = None
-        self._env_model_visible = False
-        self._env_model_prims = []
-        self._env_model_textures = []
-        self._env_model_lights = []
-        self._env_current_name = 'None'
-
-    def _configure_profile_view_layout(self):
-        # No room profile: keep the default screen placement configured in __init__.
-        return None
-
-    def _screen_profile_value(self, key, default=None):
-        return default
-
-    def _environment_screen_locked(self):
-        return False
-
-    def _head_model_mat4_from_views(self, views):
-        return np.eye(4, dtype=np.float32)
-
-    def _level_head_model_mat4(self, head_model):
-        return head_model
-
-    def _apply_profile_view_pose_to_xr_space(self, views=None):
-        return None
-
-    def _recenter_profile_view_pose(self, views=None):
-        return None
-
-    def _auto_view_position_from_screen(self):
-        return None
-
-    def _apply_profile_screen_layout(self):
-        return None
-
-    def _build_env_model_mat4(self):
-        return np.eye(4, dtype=np.float32)
-
-    def _transform_env_point(self, point):
-        return np.asarray(point, dtype=np.float32)
-
-    def _transform_env_direction(self, direction):
-        d = np.asarray(direction, dtype=np.float32)
-        return d / (np.linalg.norm(d) + 1e-8)
-
-    def _env_light_range_scale(self):
-        return 1.0
-
-    def _load_env_model(self, path):
-        return [], [], []
-
-    def _release_env_model_resources(self):
-        self._env_model_prims = []
-        self._env_model_textures = []
-        self._env_model_lights = []
-
-    def _generate_default_room(self):
-        return [], [], []
-
-    def _init_env_model(self):
-        self._env_model_visible = False
-        self._env_model_prims = []
-        self._env_model_textures = []
-        self._env_model_lights = []
-        self._env_available_models = []
-        self._env_current_name = 'None'
-
-    def _switch_environment_model(self, direction=1):
-        return None
-
-    def _render_env_model(self, mgl_fbo, vp_mat, view_mat):
-        return None
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     def _switch_brand(self, brand_name):
         """Switch controller brand with zero latency."""
         if brand_name not in self._all_models:
@@ -3903,476 +2126,22 @@ class OpenXRViewerCore:
         print(f"[OpenXRViewer] Switched to: {brand_name} "
             f"offset={self._ctrl_model_offset} rot={self._ctrl_model_rot_deg}")
 
-    def _init_openxr(self, quiet=False, opengl_probe_attempts=None, opengl_probe_interval=None):
+    def _init_openxr(self):
         """Try OpenGL first; fall back to D3D11 on Windows if OpenGL fails."""
-        if self._xr_backend is None and self._forced_xr_backend in ('opengl', 'd3d11'):
-            self._xr_backend = self._forced_xr_backend
-        if self._xr_backend == 'opengl':
-            self._init_openxr_opengl_with_retry(
-                quiet=quiet,
-                attempts=opengl_probe_attempts,
-                interval=opengl_probe_interval,
-            )
-            return
-        if self._xr_backend == 'd3d11':
-            self._init_openxr_d3d11(quiet=quiet)
-            self._use_d3d11 = True
-            return
         try:
-            self._init_openxr_opengl_with_retry(
-                quiet=quiet,
-                attempts=opengl_probe_attempts,
-                interval=opengl_probe_interval,
-            )
+            self._init_openxr_opengl()
             return
         except Exception as e:
-            if self._is_no_headset_error(e):
-                raise
             if sys.platform != "win32":
                 raise
-            if not quiet:
-                print("[OpenXRViewer] OpenGL init failed, fallback to D3D11")
-            self._cleanup_partial_openxr(destroy_instance=True)
+            print(f"[OpenXRViewer] OpenGL init failed ({e}), falling back to D3D11")
+            self._cleanup_partial_openxr()
 
-        self._init_openxr_d3d11(quiet=quiet)
+        self._init_openxr_d3d11()
         self._use_d3d11 = True
 
-    def _init_openxr_opengl_with_retry(self, quiet=False, attempts=None, interval=None):
-        attempts = self._openxr_opengl_probe_attempts if attempts is None else max(1, int(attempts))
-        interval = self._openxr_opengl_probe_interval if interval is None else max(0.0, float(interval))
-        last_exc = None
-        for attempt in range(1, attempts + 1):
-            try:
-                self._init_openxr_opengl(quiet=quiet)
-                return
-            except Exception as exc:
-                last_exc = exc
-                self._cleanup_partial_openxr(destroy_instance=True)
-                if self._is_no_headset_error(exc):
-                    break
-                if attempt >= attempts:
-                    break
-                if not quiet:
-                    print(
-                        f"[OpenXRViewer] OpenGL probe retry {attempt}/{attempts} "
-                        f"in {interval:.1f}s"
-                    )
-                time.sleep(interval)
-        raise last_exc
-
-    def _ensure_preview_swapchain_size(self):
-        if 0 in self._swapchain_sizes:
-            return
-        pw = max(640, min(1920, int(self.frame_size[0]) if self.frame_size else 1280))
-        ph = max(360, min(1080, int(self.frame_size[1]) if self.frame_size else 720))
-        if pw % 2:
-            pw += 1
-        if ph % 2:
-            ph += 1
-        self._swapchain_sizes[0] = (pw, ph)
-
-    def _enter_preview_only_wait(self):
-        was_waiting = self._waiting_for_headset
-        self._preview_only_mode = True
-        self._session_running = False
-        self._session_ready_pending = False
-        self._source_resume_grace_until = 0.0
-        self._set_render_active(False)
-        self._ensure_preview_swapchain_size()
-        if not self._waiting_for_headset:
-            if not self._suppress_next_wait_notice:
-                print(
-                    f"[OpenXRViewer] Waiting for VR headset connect... "
-                    f"(stop inference after {self._headset_wait_inference_timeout:.0f}s)"
-                )
-            self._suppress_next_wait_notice = False
-        self._waiting_for_headset = True
-        if not was_waiting:
-            self._waiting_retry_notice_pending = True
-            self._arm_headset_wait_inference_timeout()
-
-    def _defer_openxr_retry(self, delay_s):
-        now = time.perf_counter()
-        self._openxr_retry_cooldown_until = max(
-            self._openxr_retry_cooldown_until,
-            now + max(0.0, float(delay_s)),
-        )
-
-    def _compute_standby_retry_delay(self, now=None):
-        now = time.perf_counter() if now is None else now
-        runtime_s = 0.0
-        if self._openxr_ready_since > 0.0:
-            runtime_s = max(0.0, now - self._openxr_ready_since)
-        if runtime_s >= self._openxr_standby_stable_seconds:
-            self._openxr_standby_retry_count = 0
-            return self._openxr_standby_retry_interval
-        self._openxr_standby_retry_count += 1
-        return min(
-            self._openxr_standby_retry_max_interval,
-            self._openxr_standby_retry_interval * (2 ** self._openxr_standby_retry_count),
-        )
-
-    def _track_session_idle_render(self, should_render, now=None):
-        now = time.perf_counter() if now is None else now
-        if should_render:
-            if self._session_idle_since > 0.0 and self._session_idle_notice_emitted:
-                print("[OpenXRViewer] Headset online : render resumed")
-            self._session_idle_since = 0.0
-            self._session_idle_notice_emitted = False
-            return False
-        if self._session_idle_since <= 0.0:
-            self._session_idle_since = now
-            self._session_idle_notice_emitted = True
-            print("[OpenXRViewer] Headset offline: render paused")
-        timeout = self._session_idle_render_timeout
-        return timeout > 0.0 and (now - self._session_idle_since) >= timeout
-
-    def _debug_openxr_trace(self, message, now=None):
-        if not getattr(self, "_openxr_debug", False):
-            return
-        print(f"[OpenXRViewer][debug] {message}")
-
-    @staticmethod
-    def _is_no_headset_error(exc):
-        return type(exc).__name__ == "FormFactorUnavailableError"
-
-    def _set_source_active(self, active: bool):
-        if self._source_active_event is None:
-            return
-        try:
-            if active:
-                self._source_active_event.set()
-            else:
-                self._source_active_event.clear()
-        except Exception:
-            pass
-
-    def _set_idle_active(self, active: bool):
-        if self._idle_active_event is None:
-            return
-        try:
-            if active:
-                self._idle_active_event.set()
-            else:
-                self._idle_active_event.clear()
-        except Exception:
-            pass
-
-    def _release_idle_gpu_resources(self):
-        if self._pbo_color is not None and self._cuda_gl:
-            try:
-                self._cuda_gl.unregister_resource(self._cuda_res_color)
-                self._cuda_gl.unregister_resource(self._cuda_res_depth)
-                glDeleteBuffers(2, [self._pbo_color, self._pbo_depth])
-            except Exception:
-                pass
-        self._pbo_color = None
-        self._pbo_depth = None
-        self._cuda_res_color = None
-        self._cuda_res_depth = None
-        self._pbo_texture_size = None
-        if self._cuda_gl is not False:
-            self._cuda_gl = None
-
-        for tex_name in ("color_tex", "depth_tex"):
-            tex = getattr(self, tex_name, None)
-            if tex is not None:
-                try:
-                    tex.release()
-                except Exception:
-                    pass
-                setattr(self, tex_name, None)
-        self._texture_size = None
-
-    def _arm_headset_wait_inference_timeout(self, now=None):
-        now = time.perf_counter() if now is None else now
-        timeout = self._headset_wait_inference_timeout
-        if timeout <= 0.0:
-            self._headset_wait_inference_deadline = now
-            self._headset_wait_inference_paused = True
-            self._set_source_active(False)
-            return
-        self._headset_wait_inference_deadline = now + timeout
-        self._headset_wait_inference_paused = False
-        self._set_source_active(True)
-
-    def _refresh_headset_wait_inference_timeout(self, now=None):
-        if self._headset_wait_inference_paused:
-            return
-        if not self._waiting_for_headset:
-            return
-        if self._headset_wait_inference_deadline <= 0.0:
-            return
-        now = time.perf_counter() if now is None else now
-        if now < self._headset_wait_inference_deadline:
-            return
-        self._headset_wait_inference_paused = True
-        self._set_source_active(False)
-        self._enter_hard_idle_wait()
-        print(
-            f"[OpenXRViewer] No headset detected for {self._headset_wait_inference_timeout:.0f}s; "
-            "stopping source inference (source_active_event cleared)"
-        )
-        print(
-            f"[OpenXRViewer] Waiting for VR headset connect... "
-            f"(retry in {self._openxr_no_headset_retry_interval:.1f}s)"
-        )
-
-    def _resume_source_inference(self):
-        self._headset_wait_inference_deadline = 0.0
-        self._headset_wait_inference_paused = False
-        self._leave_hard_idle_wait()
-        self._set_source_active(True)
-        print("[OpenXRViewer] Source inference enabled")
-
-    def _enter_hard_idle_wait(self):
-        if self._hard_idle_active:
-            return
-        self._hard_idle_active = True
-        self._set_render_active(False)
-        self._set_idle_active(True)
-        self._release_idle_gpu_resources()
-        if self._preview_active and self._show_preview_window:
-            try:
-                glfw.hide_window(self.window)
-                self._preview_active = False
-            except Exception:
-                pass
-        print("[OpenXRViewer] Enter hard idle: source/render paused")
-
-    def _leave_hard_idle_wait(self):
-        if not self._hard_idle_active:
-            return
-        self._hard_idle_active = False
-        self._set_idle_active(False)
-        if (not self._preview_active) and self._show_preview_window:
-            try:
-                glfw.show_window(self.window)
-                self._preview_active = True
-            except Exception:
-                pass
-        print("[OpenXRViewer] Exit hard idle")
-
-    def _try_restore_openxr(self, now=None):
-        if not self._preview_only_mode:
-            return False
-        now = time.perf_counter() if now is None else now
-        if now < self._openxr_retry_cooldown_until:
-            return False
-        if (now - self._last_openxr_retry_time) < self._openxr_retry_interval:
-            return False
-        self._last_openxr_retry_time = now
-        try:
-            self._debug_openxr_trace("_try_restore_openxr attempt", now)
-            if self._xr_backend == 'd3d11':
-                # Re-probe from a clean instance so restore attempts still try
-                # OpenGL first before falling back to D3D11 again.
-                self._cleanup_partial_openxr(destroy_instance=True)
-                self._ensure_preview_swapchain_size()
-            self._debug_openxr_trace(
-                f"_try_restore_openxr attempt probes={self._openxr_restore_opengl_probe_attempts}x{self._openxr_restore_opengl_probe_interval:.1f}s",
-                now,
-            )
-            self._init_openxr(
-                quiet=True,
-                opengl_probe_attempts=self._openxr_restore_opengl_probe_attempts,
-                opengl_probe_interval=self._openxr_restore_opengl_probe_interval,
-            )
-            self._preview_only_mode = False
-            self._debug_openxr_trace("_try_restore_openxr success", now)
-            print("[OpenXRViewer] OpenXR session created, waiting for render confirmation")
-            return True
-        except Exception as exc:
-            self._cleanup_partial_openxr(destroy_instance=False)
-            self._ensure_preview_swapchain_size()
-            if self._is_no_headset_error(exc):
-                self._defer_openxr_retry(self._openxr_no_headset_retry_interval)
-            self._debug_openxr_trace(f"_try_restore_openxr failed: {type(exc).__name__}", now)
-            return False
-
-    def _mark_source_frame_received(self, now=None):
-        self._last_source_frame_time = time.perf_counter() if now is None else now
-        self._source_resume_grace_until = 0.0
-        self._source_stalled = False
-        self._source_stall_count = 0
-        if self._session_running and not self._session_ready_pending:
-            self._set_render_active(True)
-
-    def _has_fresh_source_frame(self, now=None):
-        now = time.perf_counter() if now is None else now
-        if now <= self._source_resume_grace_until:
-            return True
-        if self._last_source_frame_time <= 0.0:
-            return False
-        return (now - self._last_source_frame_time) <= self._source_frame_timeout
-
-    def _pause_xr_output_for_source_stall(self):
-        now = time.perf_counter()
-        last_notice = getattr(self, "_last_source_stall_notice_time", 0.0)
-        self._source_stall_count += 1
-        if not self._source_stalled or (now - last_notice) >= 5.0:
-            age = -1.0
-            if self._last_source_frame_time > 0.0:
-                age = now - self._last_source_frame_time
-            try:
-                queued = self.depth_q.qsize()
-            except Exception:
-                queued = -1
-            if getattr(self, "_openxr_debug", False):
-                print(
-                    "[OpenXRViewer][debug] Source stale: "
-                    f"age={age:.2f}s timeout={self._source_frame_timeout:.2f}s "
-                    f"q={queued} count={self._source_stall_count}; keeping previous frame"
-                )
-            self._last_source_stall_notice_time = now
-        self._source_stalled = True
-
-    def _set_render_active(self, active: bool):
-        if self._render_active_event is None:
-            return
-        try:
-            if active:
-                self._render_active_event.set()
-            else:
-                self._render_active_event.clear()
-        except Exception:
-            pass
-
-    def _poll_source_frame(self, upload=False):
-        latest = None
-        try:
-            while True:
-                latest = self.depth_q.get_nowait()
-        except _queue.Empty:
-            pass
-
-        if latest is not None:
-            self._pending_source_frame = latest
-            self._mark_source_frame_received()
-
-        if not upload:
-            return latest is not None
-
-        if self._pending_source_frame is None:
-            return False
-
-        rgb, depth, frame_ts = self._pending_source_frame
-        self._pending_source_frame = None
-
-        self._update_frame(rgb, depth)
-        if frame_ts is not None:
-            self.total_latency = (time.perf_counter() - frame_ts) * 1000.0
-        sbs_now = time.perf_counter()
-        self._sbs_ts_ring.append(sbs_now)
-        m = len(self._sbs_ts_ring)
-        if m >= 2:
-            sbs_span = sbs_now - self._sbs_ts_ring[0]
-            if sbs_span > 0:
-                self.sbs_fps = (m - 1) / sbs_span
-        return True
-
-    def _reset_controller_actions(self):
-        self._xr_actions_sync_info = None
-        self._action_set = None
-        self._act_left_stick = None
-        self._act_right_stick = None
-        self._act_menu_btn = None
-        self._act_left_grip = None
-        self._act_right_grip = None
-        self._act_a_btn = None
-        self._act_b_btn = None
-        self._act_x_btn = None
-        self._act_y_btn = None
-        self._act_left_stick_click = None
-        self._act_right_stick_click = None
-        self._act_left_trigger = None
-        self._act_right_trigger = None
-        self._act_aim_left = None
-        self._act_aim_right = None
-        self._act_grip_left = None
-        self._act_grip_right = None
-        self._path_left = None
-        self._path_right = None
-
-    def _release_openxr_swapchain_resources(self):
-        self._cleanup_interop()
-
-        for _, mgl_fbo in self._fbo_cache.values():
-            try:
-                mgl_fbo.release()
-            except Exception:
-                pass
-        raw_ids = [raw_id for raw_id, _ in self._fbo_cache.values()]
-        if raw_ids:
-            try:
-                glDeleteFramebuffers(len(raw_ids), raw_ids)
-            except Exception:
-                pass
-        self._fbo_cache.clear()
-
-        depth_rbs = list(self._depth_rb_cache.values())
-        if depth_rbs:
-            try:
-                glDeleteRenderbuffers(len(depth_rbs), depth_rbs)
-            except Exception:
-                pass
-        self._depth_rb_cache.clear()
-
-        if self._d3d11_pbo_cache:
-            try:
-                glDeleteBuffers(len(self._d3d11_pbo_cache), [v[0] for v in self._d3d11_pbo_cache.values()])
-            except Exception:
-                pass
-            self._d3d11_pbo_cache.clear()
-
-        offscreen_raw_ids = [entry[1] for entry in self._offscreen_fbo_cache.values()]
-        if offscreen_raw_ids:
-            try:
-                glDeleteFramebuffers(len(offscreen_raw_ids), offscreen_raw_ids)
-            except Exception:
-                pass
-        for entry in self._offscreen_fbo_cache.values():
-            try:
-                entry[0].release()
-            except Exception:
-                pass
-            try:
-                entry[2].release()
-            except Exception:
-                pass
-            try:
-                glDeleteRenderbuffers(1, [entry[5]])
-            except Exception:
-                pass
-        self._offscreen_fbo_cache.clear()
-
-    def _release_d3d11_device(self):
-        if self._d3d11_native_renderer is not None:
-            try:
-                self._d3d11_native_renderer.cleanup()
-            except Exception:
-                pass
-            self._d3d11_native_renderer = None
-        for d3d_obj in (self._d3d11_context, self._d3d11_device):
-            if d3d_obj is not None:
-                try:
-                    vtbl = ctypes.cast(d3d_obj, ctypes.POINTER(ctypes.c_void_p)).contents.value
-                    release_fn = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
-                        ctypes.cast(vtbl + 2 * ctypes.sizeof(ctypes.c_void_p),
-                                    ctypes.POINTER(ctypes.c_void_p)).contents.value
-                    )
-                    release_fn(d3d_obj.value)
-                except Exception:
-                    pass
-        self._d3d11_device = None
-        self._d3d11_context = None
-
-    def _cleanup_partial_openxr(self, destroy_instance=True):
-        """Tear down OpenXR session state; optionally destroy the instance too."""
-        self._session_running = False
-        self._session_ready_pending = False
-        self._release_openxr_swapchain_resources()
-
+    def _cleanup_partial_openxr(self):
+        """Tear down any partially-initialised OpenXR + D3D11 state so a retry is clean."""
         for swapchain in self._xr_swapchains.values():
             try:
                 xr.destroy_swapchain(swapchain)
@@ -4398,54 +2167,75 @@ class OpenXRViewerCore:
                 pass
             self._xr_session = None
 
-        self._release_d3d11_device()
+        if self._xr_instance:
+            try:
+                xr.destroy_instance(self._xr_instance)
+            except Exception:
+                pass
+            self._xr_instance = None
 
-        if destroy_instance:
-            if self._xr_instance:
+        self._xr_system_id = None
+
+        # Release D3D11 COM objects if they were created
+        for d3d_obj in (self._d3d11_context, self._d3d11_device):
+            if d3d_obj is not None:
                 try:
-                    xr.destroy_instance(self._xr_instance)
+                    vtbl = ctypes.cast(d3d_obj, ctypes.POINTER(ctypes.c_void_p)).contents.value
+                    release_fn = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
+                        ctypes.cast(vtbl + 2 * ctypes.sizeof(ctypes.c_void_p),
+                                    ctypes.POINTER(ctypes.c_void_p)).contents.value
+                    )
+                    release_fn(d3d_obj.value)
                 except Exception:
                     pass
-                self._xr_instance = None
-            self._xr_system_id = None
-            self._xr_backend = None
-            self._use_d3d11 = False
-            self._reset_controller_actions()
+        self._d3d11_device  = None
+        self._d3d11_context = None
 
-    def _init_openxr_d3d11(self, quiet=False):
-        """Create or resume an OpenXR session backed by a D3D11 device.
+    @staticmethod
+    def _supported_xr_extensions():
+        """Return the set of extension name strings the current runtime supports."""
+        try:
+            props = xr.enumerate_instance_extension_properties()
+            return {p.extension_name.decode() if isinstance(p.extension_name, (bytes, bytearray))
+                    else str(p.extension_name) for p in props}
+        except Exception:
+            return set()
 
-        The native path renders directly into OpenXR D3D11 swapchain images.
-        Legacy GL interop/PBO paths remain available only as fallbacks when the
-        native renderer cannot be created.
+    def _init_openxr_d3d11(self):
+        """Create an OpenXR instance + session backed by a D3D11 device.
+
+        Rendering still happens in ModernGL; each frame the completed eye texture
+        is read back via glReadPixels and uploaded into the D3D11 swapchain image
+        via UpdateSubresource.  This is a CPU-round-trip but avoids the need for
+        NV_DX_interop or a full D3D11 rendering port.
         """
-        if self._xr_backend not in (None, 'd3d11'):
-            raise RuntimeError(f"OpenXR backend mismatch: {self._xr_backend}")
-        if self._xr_instance is None:
-            app_info = xr.ApplicationInfo(
-                application_name="Desktop2Stereo",
-                application_version=1,
-                engine_name="D2S",
-                engine_version=1,
-                api_version=xr.XR_CURRENT_API_VERSION,
-            )
-            create_info = xr.InstanceCreateInfo(
-                application_info=app_info,
-                enabled_extension_names=[xr.KHR_D3D11_ENABLE_EXTENSION_NAME],
-            )
-            self._xr_instance = xr.create_instance(create_info)
-            self._xr_backend = 'd3d11'
-            if not quiet:
-                print("[OpenXRViewer] XrInstance created (D3D11)")
+        # 1. Instance (D3D11 extension)
+        app_info = xr.ApplicationInfo(
+            application_name="Desktop2Stereo",
+            application_version=1,
+            engine_name="D2S",
+            engine_version=1,
+            api_version=xr.XR_CURRENT_API_VERSION,
+        )
+        _supported = self._supported_xr_extensions()
+        _fb_layer_settings = xr.FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME
+        _want_exts = [xr.KHR_D3D11_ENABLE_EXTENSION_NAME]
+        self._fb_layer_settings_enabled = _fb_layer_settings in _supported
+        if self._fb_layer_settings_enabled:
+            _want_exts.append(_fb_layer_settings)
+        create_info = xr.InstanceCreateInfo(
+            application_info=app_info,
+            enabled_extension_names=_want_exts,
+        )
+        self._xr_instance = xr.create_instance(create_info)
+        print(f"[OpenXRViewer] XrInstance created (D3D11)"
+              f"{' + FB layer sharpening' if self._fb_layer_settings_enabled else ''}")
 
-        if self._xr_system_id is None:
-            self._xr_system_id = xr.get_system(
-                self._xr_instance,
-                xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
-            )
-
-        if self._xr_session is not None:
-            return
+        # 2. System
+        self._xr_system_id = xr.get_system(
+            self._xr_instance,
+            xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
+        )
 
         # 3. Query D3D11 requirements (runtime mandates this call before session creation)
         _pfn = ctypes.cast(
@@ -4464,9 +2254,7 @@ class OpenXRViewerCore:
         device, context, feat = _create_d3d11_device(adapter_luid=_reqs.adapter_luid)
         self._d3d11_device  = device
         self._d3d11_context = context
-        self._use_d3d11 = True
-        if not quiet:
-            print(f"[OpenXRViewer] D3D11 device created (feature level 0x{feat:04x})")
+        print(f"[OpenXRViewer] D3D11 device created (feature level 0x{feat:04x})")
 
         # 5. Graphics binding
         binding = xr.GraphicsBindingD3D11KHR(
@@ -4479,8 +2267,7 @@ class OpenXRViewerCore:
             next=ctypes.cast(ctypes.pointer(binding), ctypes.c_void_p),
         )
         self._xr_session = xr.create_session(self._xr_instance, session_info)
-        if not quiet:
-            print("[OpenXRViewer] XrSession created (D3D11)")
+        print("[OpenXRViewer] XrSession created (D3D11)")
 
         # 7. Reference space
         available_spaces = xr.enumerate_reference_spaces(self._xr_session)
@@ -4489,7 +2276,6 @@ class OpenXRViewerCore:
             if xr.ReferenceSpaceType.STAGE in available_spaces
             else xr.ReferenceSpaceType.LOCAL
         )
-        self._xr_ref_space_type = ref_type
         self._xr_space = xr.create_reference_space(
             self._xr_session,
             xr.ReferenceSpaceCreateInfo(
@@ -4497,7 +2283,6 @@ class OpenXRViewerCore:
                 pose_in_reference_space=xr.Posef(),
             ),
         )
-        self._xr_space_pose_in_ref = np.eye(4, dtype=np.float32)
 
         # 8. Swapchains with DXGI format
         view_configs = xr.enumerate_view_configuration_views(
@@ -4524,10 +2309,9 @@ class OpenXRViewerCore:
         for eye_index, vcv in enumerate(view_configs):
             rec_w = vcv.recommended_image_rect_width
             rec_h = vcv.recommended_image_rect_height
-            scale = float(getattr(self, '_xr_render_scale', 1.0))
-            sc_w  = max(16, int(rec_w * scale)) & ~1
-            sc_h  = max(16, int(rec_h * scale)) & ~1
-            print(f"[OpenXRViewer] Eye {eye_index} swapchain: {sc_w}x{sc_h} (D3D11, scale={scale:.2f})")
+            sc_w  = rec_w & ~1
+            sc_h  = rec_h & ~1
+            print(f"[OpenXRViewer] Eye {eye_index} swapchain: {sc_w}x{sc_h} (D3D11)")
 
             sc_info = xr.SwapchainCreateInfo(
                 usage_flags=(
@@ -4548,34 +2332,16 @@ class OpenXRViewerCore:
             self._swapchain_images[eye_index] = images
             self._swapchain_sizes[eye_index]  = (sc_w, sc_h)
 
-        # 9. Prefer native D3D11 rendering. It avoids OpenGL -> D3D11 cross-API
-        # transfer entirely; interop/PBO remain fallback paths only.
-        if self._d3d11_native_requested:
-            try:
-                self._d3d11_native_renderer = D3D11NativeRenderer(
-                    self._d3d11_device, self._d3d11_context, self._d3d11_swapchain_fmt
-                )
-                self._interop_mode = None
-                print("[OpenXRViewer] D3D11 native renderer active")
-            except Exception as e:
-                self._d3d11_native_renderer = None
-                print(f"[OpenXRViewer] D3D11 native renderer unavailable: {e}")
+        # 9. Try GPU interop to avoid the PBO readback path
+        self._setup_gpu_interop_d3d11()
 
-        # 10. Try GPU interop to avoid the PBO readback path when native D3D11
-        # rendering is not available.
-        if self._d3d11_native_renderer is None:
-            self._setup_gpu_interop_d3d11()
-
-        # 11. Controller actions (best-effort)
+        # 10. Controller actions (best-effort)
         try:
-            if self._action_set is None:
-                self._init_controller_actions()
-            else:
-                self._attach_controller_actions_to_session()
+            self._init_controller_actions()
         except Exception as e:
             print(f"[OpenXRViewer] Controller actions unavailable: {e}")
 
-    # GPU interop helpers---------------
+    # GPU interop helpers───────────────
 
     @staticmethod
     def _is_nvidia_gpu():
@@ -4601,18 +2367,15 @@ class OpenXRViewerCore:
         Order: NV_DX_interop2 for NVIDIA GPUs, EXT_memory_object for all others.
         Falls back to the PBO path (already configured) if neither is available.
 
-        Interop is skipped for BGRA swapchains (common on WMR) because GL
-        renders RGBA natively and the R/B mismatch would swap colours.
-        The PBO path handles BGRA via GL_BGRA readback format.
+        BGRA swapchains (common on WMR) are now supported via the
+        EXT_memory_object path with a swizzle blit; we no longer fall back
+        to PBO readback just because of channel order. NV_DX_interop2 still
+        requires RGBA so we skip it for BGRA.
         """
         if not sys.platform == "win32":
             return
 
-        if self._swapchain_is_bgra:
-            print("[OpenXRViewer] BGRA swapchain - GPU interop disabled (using PBO with GL_BGRA readback)")
-            return
-
-        is_nv = self._is_nvidia_gpu()
+        is_nv = self._is_nvidia_gpu() and not self._swapchain_is_bgra
 
         if is_nv and _load_nv_dx_interop():
             try:
@@ -4633,21 +2396,7 @@ class OpenXRViewerCore:
                 print(f"[OpenXRViewer] EXT_memory_object setup failed: {e}")
 
         self._interop_mode = None
-        print("[OpenXRViewer] GPU interop unavailable - using PBO fallback")
-
-    def _disable_nv_interop_after_failure(self, reason):
-        print(f"[OpenXRViewer] NV_DX_interop2 disabled after swapchain registration failure: {reason}")
-        self._cleanup_interop()
-        if _load_ext_memory_object():
-            try:
-                self._init_interop_ext_mem()
-                self._interop_mode = 'ext_mem'
-                print("[OpenXRViewer] GPU interop active: EXT_memory_object (GPU-side blit)")
-                return
-            except Exception as e:
-                print(f"[OpenXRViewer] EXT_memory_object setup failed after NV fallback: {e}")
-        self._interop_mode = None
-        print("[OpenXRViewer] D3D11 GPU interop unavailable - using PBO fallback")
+        print("[OpenXRViewer] GPU interop unavailable — using PBO fallback")
 
     def _init_interop_nv(self):
         """Set up WGL_NV_DX_interop2: register the D3D11 device with GL.
@@ -4667,79 +2416,38 @@ class OpenXRViewerCore:
         """
         key = (eye_index, img_index)
         if key in self._nv_dx_objects:
-            gl_tex, raw_fbo, _dx_obj = self._nv_dx_objects[key]
+            gl_tex, raw_fbo, dx_obj, depth_rb = self._nv_dx_objects[key]
             return self.ctx.detect_framebuffer(raw_fbo), raw_fbo
 
         gl_tex = glGenTextures(1)
-        dx_obj = None
-        raw_fbo = None
         # Register the D3D11 texture as a GL texture
-        register_errors = []
-        for access, access_name in (
-            (0x0002, "WRITE_DISCARD"),  # WGL_ACCESS_WRITE_DISCARD_NV
-            (0x0001, "READ_WRITE"),     # WGL_ACCESS_READ_WRITE_NV
-        ):
-            try:
-                dx_obj = _wglDXRegisterObjectNV(
-                    self._nv_dx_device,
-                    d3d11_tex,
-                    gl_tex,
-                    GL_TEXTURE_2D,
-                    access,
-                )
-                if dx_obj:
-                    if access_name != "WRITE_DISCARD":
-                        print(f"[OpenXRViewer] NV_DX_interop registered with {access_name}")
-                    break
-                register_errors.append(f"{access_name}: returned NULL")
-            except Exception as e:
-                register_errors.append(f"{access_name}: {type(e).__name__}: {e}")
+        dx_obj = _wglDXRegisterObjectNV(
+            self._nv_dx_device,
+            d3d11_tex,
+            gl_tex,
+            GL_TEXTURE_2D,
+            0x0002,  # WGL_ACCESS_WRITE_DISCARD_NV → the driver knows we overwrite
+        )
         if not dx_obj:
-            try:
-                glDeleteTextures(1, [gl_tex])
-            except Exception:
-                pass
-            detail = "; ".join(register_errors) if register_errors else "no detail"
-            raise RuntimeError(
-                f"wglDXRegisterObjectNV failed for eye {eye_index} img {img_index} "
-                f"(format={self._d3d11_swapchain_fmt}, {detail})"
-            )
+            glDeleteTextures(1, [gl_tex])
+            raise RuntimeError(f"wglDXRegisterObjectNV failed for eye {eye_index} img {img_index}")
 
-        try:
-            # Set up FBO attached to the registered texture
-            raw_fbo = glGenFramebuffers(1)
-            glBindFramebuffer(GL_FRAMEBUFFER, raw_fbo)
-            locked = _wglDXLockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
-            if not locked:
-                raise RuntimeError("wglDXLockObjectsNV returned false")
-            try:
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_tex, 0)
-                status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
-                if status != GL_FRAMEBUFFER_COMPLETE:
-                    raise RuntimeError(
-                        f"NV_DX_interop FBO incomplete for eye {eye_index} "
-                        f"img {img_index}: {status:#x}"
-                    )
-            finally:
-                _wglDXUnlockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
-                glBindFramebuffer(GL_FRAMEBUFFER, 0)
-        except Exception:
-            try:
-                if raw_fbo:
-                    glDeleteFramebuffers(1, [raw_fbo])
-            except Exception:
-                pass
-            try:
-                _wglDXUnregisterObjectNV(self._nv_dx_device, dx_obj)
-            except Exception:
-                pass
-            try:
-                glDeleteTextures(1, [gl_tex])
-            except Exception:
-                pass
-            raise
+        # Set up FBO attached to the registered texture
+        raw_fbo = glGenFramebuffers(1)
+        glBindFramebuffer(GL_FRAMEBUFFER, raw_fbo)
+        # Lock, attach, unlock
+        _wglDXLockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_tex, 0)
+        # Depth renderbuffer for occlusion
+        depth_rb = glGenRenderbuffers(1)
+        glBindRenderbuffer(GL_RENDERBUFFER, depth_rb)
+        sc_w, sc_h = self._swapchain_sizes[eye_index]
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, sc_w, sc_h)
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_rb)
+        _wglDXUnlockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-        self._nv_dx_objects[key] = (gl_tex, raw_fbo, dx_obj)
+        self._nv_dx_objects[key] = (gl_tex, raw_fbo, dx_obj, depth_rb)
         return self.ctx.detect_framebuffer(raw_fbo), raw_fbo
 
     def _init_interop_ext_mem(self):
@@ -4781,10 +2489,16 @@ class OpenXRViewerCore:
             mgl_fbo = self.ctx.detect_framebuffer(raw_fbo)
             self._ext_shared_tex[eye_index] = (d3d11_tex, mem_obj, gl_tex, mgl_fbo, raw_fbo)
 
-    def _blit_ext_to_swapchain(self, eye_index, d3d11_swapchain_tex):
-        """GPU-side CopyResource from our shared texture to the swapchain image."""
-        d3d11_shared_tex = self._ext_shared_tex[eye_index][0]
-        # ID3D11DeviceContext::CopyResource at vtable index 47
+    def _make_gl_fence(self):
+        """Insert a GL fence and flush so the driver actually submits it.
+        Returns the fence sync object (caller is responsible for waiting + deleting).
+        """
+        fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
+        glFlush()
+        return fence
+
+    def _d3d11_copy_resource(self, dst, src):
+        """ID3D11DeviceContext::CopyResource via vtable index 47."""
         ctx = self._d3d11_context
         vtbl = ctypes.cast(ctx, ctypes.POINTER(ctypes.c_void_p)).contents.value
         copy_fn = ctypes.CFUNCTYPE(
@@ -4794,14 +2508,56 @@ class OpenXRViewerCore:
             ctypes.c_void_p,  # pSrcResource
         )(ctypes.cast(vtbl + 47 * ctypes.sizeof(ctypes.c_void_p),
                     ctypes.POINTER(ctypes.c_void_p)).contents.value)
-        # Sync: ensure GL is done before D3D11 reads the shared texture
-        glFinish()
-        copy_fn(ctx, d3d11_swapchain_tex, d3d11_shared_tex)
+        copy_fn(ctx, dst, src)
+
+    def _swizzle_blit_to_shared(self, eye_index, src_mgl_tex):
+        """Copy `src_mgl_tex` (an offscreen RGBA8 eye-render) into the EXT-shared
+        GL texture for this eye, swapping R↔B if the swapchain is BGRA.
+
+        The shared GL texture is imported as GL_RGBA8 over a D3D11 surface that
+        D3D11 interprets in its native format. Writing `.bgra` bytes from the
+        shader means the byte order on disk matches what D3D11 expects, so the
+        subsequent CopyResource to the swapchain image is a no-op format match.
+        """
+        _, _, _, mgl_fbo, _ = self._ext_shared_tex[eye_index]
+        sc_w, sc_h = self._swapchain_sizes[eye_index]
+        mgl_fbo.use()
+        self.ctx.viewport = (0, 0, sc_w, sc_h)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.disable(moderngl.BLEND)
+        src_mgl_tex.use(location=4)
+        self._blit_prog['u_swap_rb'].value = 1 if self._swapchain_is_bgra else 0
+        self._blit_vao.render(moderngl.TRIANGLE_STRIP)
+
+    def _wait_and_blit_ext(self, eye_index, d3d11_swapchain_tex, fence):
+        """Wait on the per-eye GL fence (instead of a global glFinish stall),
+        then issue the GPU-side CopyResource into the swapchain texture.
+
+        Using a fence instead of glFinish lets the GL driver keep submitting
+        commands for the other eye while this eye's sync resolves — that's the
+        whole reason the EXT path got slow before.
+        """
+        if fence is not None:
+            # 16 ms timeout: one full frame at 90 Hz. With two-phase rendering
+            # the wait is normally near-instant because eye 1's GPU work has
+            # already overlapped with eye 0's pending submissions.
+            glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 16_000_000)
+            glDeleteSync(fence)
+        self._d3d11_copy_resource(d3d11_swapchain_tex,
+                                  self._ext_shared_tex[eye_index][0])
+
+    def _blit_ext_to_swapchain(self, eye_index, d3d11_swapchain_tex):
+        """Legacy single-phase blit. Kept for callers that haven't been
+        restructured to the two-phase pattern; uses a fence under the hood
+        instead of glFinish so it still avoids the full pipeline stall.
+        """
+        self._wait_and_blit_ext(eye_index, d3d11_swapchain_tex,
+                                self._make_gl_fence())
 
     def _cleanup_interop(self):
         """Release all GPU interop resources."""
         if self._interop_mode == 'nv_dx' and self._nv_dx_device:
-            for (gl_tex, raw_fbo, dx_obj) in self._nv_dx_objects.values():
+            for (gl_tex, raw_fbo, dx_obj, depth_rb) in self._nv_dx_objects.values():
                 try:
                     _wglDXUnregisterObjectNV(self._nv_dx_device, dx_obj)
                 except Exception:
@@ -4812,6 +2568,10 @@ class OpenXRViewerCore:
                     pass
                 try:
                     glDeleteTextures(1, [gl_tex])
+                except Exception:
+                    pass
+                try:
+                    glDeleteRenderbuffers(1, [depth_rb])
                 except Exception:
                     pass
             self._nv_dx_objects.clear()
@@ -4849,36 +2609,35 @@ class OpenXRViewerCore:
 
         self._interop_mode = None
 
-    def _init_openxr_opengl(self, quiet=False):
-        """Create or resume an OpenGL-backed OpenXR runtime/session."""
-        if self._xr_backend not in (None, 'opengl'):
-            raise RuntimeError(f"OpenXR backend mismatch: {self._xr_backend}")
-        if self._xr_instance is None:
-            app_info = xr.ApplicationInfo(
-                application_name="Desktop2Stereo",
-                application_version=1,
-                engine_name="D2S",
-                engine_version=1,
-                api_version=xr.XR_CURRENT_API_VERSION,
-            )
-            create_info = xr.InstanceCreateInfo(
-                application_info=app_info,
-                enabled_extension_names=[xr.KHR_OPENGL_ENABLE_EXTENSION_NAME],
-            )
-            self._xr_instance = xr.create_instance(create_info)
-            self._xr_backend = 'opengl'
-            self._use_d3d11 = False
-            if not quiet:
-                print("[OpenXRViewer] XrInstance created (OpenGL)")
+    def _init_openxr_opengl(self):
+        """Original OpenGL-backed OpenXR session."""
+        # 1. Instance
+        app_info = xr.ApplicationInfo(
+            application_name="Desktop2Stereo",
+            application_version=1,
+            engine_name="D2S",
+            engine_version=1,
+            api_version=xr.XR_CURRENT_API_VERSION,
+        )
+        _supported = self._supported_xr_extensions()
+        _fb_layer_settings = xr.FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME
+        _want_exts = [xr.KHR_OPENGL_ENABLE_EXTENSION_NAME]
+        self._fb_layer_settings_enabled = _fb_layer_settings in _supported
+        if self._fb_layer_settings_enabled:
+            _want_exts.append(_fb_layer_settings)
+        create_info = xr.InstanceCreateInfo(
+            application_info=app_info,
+            enabled_extension_names=_want_exts,
+        )
+        self._xr_instance = xr.create_instance(create_info)
+        print(f"[OpenXRViewer] XrInstance created (OpenGL)"
+              f"{' + FB layer sharpening' if self._fb_layer_settings_enabled else ''}")
 
-        if self._xr_system_id is None:
-            self._xr_system_id = xr.get_system(
-                self._xr_instance,
-                xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
-            )
-
-        if self._xr_session is not None:
-            return
+        # 2. System
+        self._xr_system_id = xr.get_system(
+            self._xr_instance,
+            xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
+        )
 
         # 3. Verify GL requirements (mandatory before session creation)
         _pfn = ctypes.cast(
@@ -4888,7 +2647,7 @@ class OpenXRViewerCore:
         _reqs = xr.GraphicsRequirementsOpenGLKHR()
         xr.check_result(xr.Result(_pfn(self._xr_instance, self._xr_system_id, ctypes.byref(_reqs))))
 
-        # 4. Graphics binding -platform-specific
+        # 4. Graphics binding — platform-specific
         if sys.platform == "win32":
             from OpenGL.WGL import wglGetCurrentContext, wglGetCurrentDC
             binding = xr.GraphicsBindingOpenGLWin32KHR(
@@ -4909,17 +2668,15 @@ class OpenXRViewerCore:
             next=ctypes.cast(ctypes.pointer(binding), ctypes.c_void_p),
         )
         self._xr_session = xr.create_session(self._xr_instance, session_info)
-        if not quiet:
-            print("[OpenXRViewer] XrSession created (OpenGL)")
+        print("[OpenXRViewer] XrSession created (OpenGL)")
 
-        # 6. Reference space -prefer STAGE (floor origin), fall back to LOCAL
+        # 6. Reference space — prefer STAGE (floor origin), fall back to LOCAL
         available_spaces = xr.enumerate_reference_spaces(self._xr_session)
         ref_type = (
             xr.ReferenceSpaceType.STAGE
             if xr.ReferenceSpaceType.STAGE in available_spaces
             else xr.ReferenceSpaceType.LOCAL
         )
-        self._xr_ref_space_type = ref_type
         self._xr_space = xr.create_reference_space(
             self._xr_session,
             xr.ReferenceSpaceCreateInfo(
@@ -4927,9 +2684,8 @@ class OpenXRViewerCore:
                 pose_in_reference_space=xr.Posef(),
             ),
         )
-        self._xr_space_pose_in_ref = np.eye(4, dtype=np.float32)
 
-        # 7. Swapchains -one per eye
+        # 7. Swapchains — one per eye
         view_configs = xr.enumerate_view_configuration_views(
             self._xr_instance,
             self._xr_system_id,
@@ -4938,10 +2694,11 @@ class OpenXRViewerCore:
         for eye_index, vcv in enumerate(view_configs):
             rec_w = vcv.recommended_image_rect_width
             rec_h = vcv.recommended_image_rect_height
-            scale = float(getattr(self, '_xr_render_scale', 1.0))
-            sc_w = max(16, int(rec_w * scale)) & ~1
-            sc_h = max(16, int(rec_h * scale)) & ~1
-            print(f"[OpenXRViewer] Eye {eye_index} swapchain: {sc_w}x{sc_h} (scale={scale:.2f})")
+            # Use exactly the recommended resolution — this matches the HMD panel
+            # pixel density and is what the runtime expects for correct reprojection.
+            sc_w = rec_w & ~1
+            sc_h = rec_h & ~1
+            print(f"[OpenXRViewer] Eye {eye_index} swapchain: {sc_w}x{sc_h}")
 
             sc_info = xr.SwapchainCreateInfo(
                 usage_flags=(
@@ -4962,63 +2719,11 @@ class OpenXRViewerCore:
             self._swapchain_images[eye_index] = images
             self._swapchain_sizes[eye_index] = (sc_w, sc_h)
 
-        # 8. Controller actions (optional -silently disabled if action set creation fails)
+        # 8. Controller actions (optional — silently disabled if action set creation fails)
         try:
-            if self._action_set is None:
-                self._init_controller_actions()
-            else:
-                self._attach_controller_actions_to_session()
+            self._init_controller_actions()
         except Exception as e:
             print(f"[OpenXRViewer] Controller actions unavailable: {e}")
-
-    def _attach_controller_actions_to_session(self):
-        xr.attach_session_action_sets(
-            self._xr_session,
-            xr.SessionActionSetsAttachInfo(action_sets=[self._action_set]),
-        )
-
-        self._xr_actions_sync_info = xr.ActionsSyncInfo(active_action_sets=[
-            xr.ActiveActionSet(
-                action_set=self._action_set,
-                subaction_path=xr.NULL_PATH,
-            )
-        ])
-
-        # Create action spaces for aim poses (used to locate controller each frame)
-        for act, attr in [
-            (self._act_aim_left,  "_aim_space_l"),
-            (self._act_aim_right, "_aim_space_r"),
-        ]:
-            try:
-                space = xr.create_action_space(
-                    self._xr_session,
-                    xr.ActionSpaceCreateInfo(
-                        action=act,
-                        pose_in_action_space=xr.Posef(),
-                    ),
-                )
-                setattr(self, attr, space)
-            except Exception as e:
-                print(f"[OpenXRViewer] Aim space creation failed: {e}")
-
-        # Create action spaces for grip poses (used to place controller 3D models)
-        for act, attr in [
-            (self._act_grip_left,  "_grip_space_l"),
-            (self._act_grip_right, "_grip_space_r"),
-        ]:
-            if act is None:
-                continue
-            try:
-                space = xr.create_action_space(
-                    self._xr_session,
-                    xr.ActionSpaceCreateInfo(
-                        action=act,
-                        pose_in_action_space=xr.Posef(),
-                    ),
-                )
-                setattr(self, attr, space)
-            except Exception as e:
-                print(f"[OpenXRViewer] Grip space creation failed: {e}")
 
     def _init_controller_actions(self):
         """Set up OpenXR action set with thumbstick and menu button actions."""
@@ -5134,7 +2839,7 @@ class OpenXRViewerCore:
         )
 
         # Per-profile binding table.
-        # Use squeeze/value (float path) for grip -the runtime auto-thresholds it
+        # Use squeeze/value (float path) for grip — the runtime auto-thresholds it
         # for BOOLEAN_INPUT actions, and it works on more firmware versions than
         # squeeze/click (which requires a discrete click event on some runtimes).
         _b = {
@@ -5174,7 +2879,7 @@ class OpenXRViewerCore:
                 ("/user/hand/left/input/grip/pose",         self._act_grip_left),
                 ("/user/hand/right/input/grip/pose",        self._act_grip_right),
             ],
-            # KHR simple only has select/click (boolean) and menu -no sticks or grip
+            # KHR simple only has select/click (boolean) and menu — no sticks or grip
             "/interaction_profiles/khr/simple_controller": [
                 ("/user/hand/left/input/menu/click",    self._act_menu_btn),
                 ("/user/hand/left/input/aim/pose",      self._act_aim_left),
@@ -5222,7 +2927,56 @@ class OpenXRViewerCore:
             except Exception:
                 pass
 
-        self._attach_controller_actions_to_session()
+        xr.attach_session_action_sets(
+            self._xr_session,
+            xr.SessionActionSetsAttachInfo(action_sets=[self._action_set]),
+        )
+
+        # Pre-build the sync_actions arg now that the action set exists.
+        # Same struct is reused every frame — saves a list+struct allocation
+        # per frame inside the hot loop.
+        self._xr_actions_sync_info = xr.ActionsSyncInfo(active_action_sets=[
+            xr.ActiveActionSet(
+                action_set=self._action_set,
+                subaction_path=xr.NULL_PATH,
+            )
+        ])
+
+        # Create action spaces for aim poses (used to locate controller each frame)
+        for act, attr in [
+            (self._act_aim_left,  "_aim_space_l"),
+            (self._act_aim_right, "_aim_space_r"),
+        ]:
+            try:
+                space = xr.create_action_space(
+                    self._xr_session,
+                    xr.ActionSpaceCreateInfo(
+                        action=act,
+                        pose_in_action_space=xr.Posef(),
+                    ),
+                )
+                setattr(self, attr, space)
+            except Exception as e:
+                print(f"[OpenXRViewer] Aim space creation failed: {e}")
+
+        # Create action spaces for grip poses (used to place controller 3D models)
+        for act, attr in [
+            (self._act_grip_left,  "_grip_space_l"),
+            (self._act_grip_right, "_grip_space_r"),
+        ]:
+            if act is None:
+                continue
+            try:
+                space = xr.create_action_space(
+                    self._xr_session,
+                    xr.ActionSpaceCreateInfo(
+                        action=act,
+                        pose_in_action_space=xr.Posef(),
+                    ),
+                )
+                setattr(self, attr, space)
+            except Exception as e:
+                print(f"[OpenXRViewer] Grip space creation failed: {e}")
 
     def _init_textures(self, w, h):
         if self.color_tex:
@@ -5242,7 +2996,7 @@ class OpenXRViewerCore:
         glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
         glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, -0.5)
         glBindTexture(GL_TEXTURE_2D, 0)
-        # Depth texture: plain LINEAR -NO mipmaps.
+        # Depth texture: plain LINEAR — NO mipmaps.
         # Mipmapping depth averages foreground+background values at edges,
         # producing wrong depth that breaks the DIBR shift formula and
         # disocclusion detection. viewer.py (FullSBS reference) also uses
@@ -5343,7 +3097,7 @@ class OpenXRViewerCore:
         self._keyboard_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._keyboard_tex.write(tex_data.tobytes())
 
-        # VAO (first build only -geometry never changes)
+        # VAO (first build only — geometry never changes)
         if self._keyboard_vao is None:
             verts = np.array([-1,-1,0,0, 1,-1,1,0, -1,1,0,1, 1,1,1,1], dtype='f4')
             self._keyboard_vao = self.ctx.vertex_array(
@@ -5357,7 +3111,7 @@ class OpenXRViewerCore:
         self._build_keyboard_texture()
 
     def _kb_world_mat(self):
-        """Build the keyboard's world transform: rot_y(yaw) -rot_x(pitch) then translate.
+        """Build the keyboard's world transform: rot_y(yaw) ∘ rot_x(pitch) then translate.
 
         The keyboard's local frame has Z = surface normal. Negative pitch tilts the
         face up so a user looking down at it sees the face dead-on (friendly angle,
@@ -5374,7 +3128,7 @@ class OpenXRViewerCore:
                         [0, sp,  cp, 0],
                         [0,  0,   0, 1]], dtype=np.float32)
         trans = np.eye(4, dtype=np.float32)
-        # Translate to (pan_x, pan_y, -distance) -matches the world-anchor convention
+        # Translate to (pan_x, pan_y, -distance) — matches the world-anchor convention
         # used by the main screen.
         trans[0, 3] = self._keyboard_pan_x
         trans[1, 3] = self._keyboard_pan_y
@@ -5384,20 +3138,16 @@ class OpenXRViewerCore:
     def _anchor_keyboard_below_screen(self):
         """Snap the keyboard below the screen's bottom edge, facing the same direction.
 
-        The keyboard sits below the FPS overlay panel so it doesn't overlap.
+        Keyboard sits below the FPS overlay panel so they don't overlap.
         """
-        FPS_GAP = 0.05   # gap between screen bottom and FPS overlay
-        FPS_H   = 0.12   # FPS overlay panel height
-        KB_GAP  = 0.05   # gap between FPS overlay bottom and keyboard top (same as FPS_GAP)
         if self.screen_height is None:
             fw, fh = self.frame_size
-            if fh > fw:  # portrait: width becomes height
-                sh = self.screen_width
-            else:
-                sh = self.screen_width * 9.0 / 16.0
+            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
         else:
             sh = self.screen_height
-        # Place keyboard below the FPS overlay panel, same distance + yaw
+        FPS_GAP = sh * 0.02    # matches _render_fps_overlay gap
+        FPS_H   = sh / 8.0     # matches _render_fps_overlay height
+        KB_GAP  = FPS_GAP      # same proportional gap below FPS overlay
         self._keyboard_pan_x    = self.screen_pan_x
         self._keyboard_pan_y    = (self.screen_pan_y - sh / 2.0
                                 - FPS_GAP - FPS_H - KB_GAP
@@ -5442,8 +3192,6 @@ class OpenXRViewerCore:
         mvp = vp_kb @ scale_kb
 
         mgl_fbo.use()
-        # depth_mask = False  # do not write semi-transparent pixels to depth
-        self.ctx.depth_mask = False
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
 
@@ -5503,7 +3251,6 @@ class OpenXRViewerCore:
                 _hl_quad(self._keyboard_keys[hover_idx].rect_local, (0.2, 0.7, 1.0, 0.35))
 
         self.ctx.disable(moderngl.BLEND)
-        self.ctx.depth_mask = True
 
     def _init_cuda_pbos(self, w, h):
         """Create or recreate PBOs and register them with CUDA/HIP."""
@@ -5537,7 +3284,7 @@ class OpenXRViewerCore:
 
     # Per-frame helpers
     def _update_frame(self, rgb, depth):
-        """Upload RGB and depth to GL textures -GPU path when available, CPU fallback."""
+        """Upload RGB and depth to GL textures — GPU path when available, CPU fallback."""
         import torch
 
         is_tensor = hasattr(rgb, 'data_ptr')
@@ -5552,25 +3299,11 @@ class OpenXRViewerCore:
             depth_np = np.asarray(depth, dtype=np.float32)
             h, w = depth_np.shape[0], depth_np.shape[1]
 
-        if self._use_d3d11 and self._d3d11_native_renderer is not None:
-            try:
-                self._d3d11_native_renderer.update_frame(rgb, depth)
-                self.frame_size = (w, h)
-                self.screen_height = None
-                return
-            except Exception as e:
-                print(f"[OpenXRViewer] D3D11 native frame upload failed: {e}")
-                try:
-                    self._d3d11_native_renderer.cleanup()
-                except Exception:
-                    pass
-                self._d3d11_native_renderer = None
-                self._texture_size = None
-
         if self._texture_size != (w, h):
             self._init_textures(w, h)
             self.frame_size = (w, h)
             self.screen_height = None
+            self._target_mon_rect = None  # force re-query: resolution changed, cursor mapping must update
 
         # Lazy GPU interop init (includes PBO registration to verify interop)
         if self._cuda_gl is None and CUDART_GL is not None and BACKEND in ("CUDA", "HIP"):
@@ -5588,7 +3321,7 @@ class OpenXRViewerCore:
             if self._pbo_texture_size != (w, h):
                 self._init_cuda_pbos(w, h)
 
-            # Color: CHW tensor ->HWC contiguous uint8 on GPU, DMA into PBO
+            # Color: CHW tensor → HWC contiguous uint8 on GPU, DMA into PBO
             rgb_gpu = rgb.permute(1, 2, 0).contiguous().clamp(0, 255).to(torch.uint8)
             ptr = self._cuda_gl.map_resource(self._cuda_res_color)
             self._cuda_gl.memcpy_d2d(ptr, rgb_gpu.data_ptr(), rgb_gpu.nbytes)
@@ -5628,7 +3361,6 @@ class OpenXRViewerCore:
             # No glGenerateMipmap for depth: keep DIBR sampling at full-res
             # to match viewer.py FullSBS numerics.
 
-
     def _build_model_mat4(self):
         """
         Build the model matrix for the screen in world space.
@@ -5636,12 +3368,7 @@ class OpenXRViewerCore:
         """
         if self.screen_height is None:
             fw, fh = self.frame_size
-            if fh > fw:  # portrait: ref ->long dim, derive short from 16:9
-                self.screen_height = self._screen_ref_size
-                self.screen_width = self.screen_height * 9.0 / 16.0
-            else:
-                self.screen_width = self._screen_ref_size
-                self.screen_height = self.screen_width * 9.0 / 16.0
+            self.screen_height = self.screen_width * (fh / fw if fw > 0 else 9 / 16)
 
         sx  = self.screen_width  / 2.0
         sy  = self.screen_height / 2.0
@@ -5664,17 +3391,8 @@ class OpenXRViewerCore:
             [0,  0,   0,  1],
         ], dtype=np.float32)
 
-        cr  = math.cos(self.screen_roll)
-        sr  = math.sin(self.screen_roll)
-        rot_z = np.array([
-            [cr, -sr, 0, 0],
-            [sr,  cr, 0, 0],
-            [ 0,   0, 1, 0],
-            [ 0,   0, 0, 1],
-        ], dtype=np.float32)
-
         S = np.diag([sx, sy, 1.0, 1.0]).astype(np.float32)
-        R = rot_y @ rot_x @ rot_z
+        R = rot_y @ rot_x
         T = np.eye(4, dtype=np.float32)
         T[0, 3] = self.screen_pan_x
         T[1, 3] = self.screen_pan_y
@@ -5682,12 +3400,77 @@ class OpenXRViewerCore:
 
         return T @ R @ S
 
-    def _get_or_create_fbo(self, eye_index, image_index, texture_id, w, h):
+    def _build_curved_screen_verts(self, N=48, width_override=None, height_override=None, dist_offset=0.0):
+        """Return a float32 numpy array for a TRIANGLE_STRIP curved screen arc.
+
+        The arc is a cylinder section centred on (pan_x, pan_y, -distance) with
+        radius = screen_distance, spanning screen_width metres along the arc
+        horizontally and screen_height metres vertically.  Vertices are in world
+        space so the shader only needs the view-projection matrix (no model matrix).
+
+        width_override / height_override: use instead of screen_width/height (for border).
+        dist_offset: added to screen_distance to push the surface slightly back.
+
+        Layout per vertex: x y z  u v  (5 floats).
+        The strip has (N+1)*2 vertices — one column pair per segment.
+        """
+        if self.screen_height is None:
+            fw, fh = self.frame_size
+            self.screen_height = self.screen_width * (fh / fw if fw > 0 else 9 / 16)
+
+        R        = self.screen_distance + dist_offset  # cylinder radius
+        half_w   = (width_override  if width_override  is not None else self.screen_width)  / 2.0
+        half_h   = (height_override if height_override is not None else self.screen_height) / 2.0
+        # Angular half-span so the arc LENGTH equals screen_width (not the chord).
+        # arc_length = R * 2 * half_ang  →  half_ang = half_w / R
+        half_ang = min(half_w / max(R, 0.01), math.pi / 2)
+
+        yaw   = self.screen_yaw
+        pitch = self.screen_pitch
+        cy, sy_ = math.cos(yaw),   math.sin(yaw)
+        cp, sp  = math.cos(pitch), math.sin(pitch)
+
+        cx = self.screen_pan_x
+        cy_pan = self.screen_pan_y
+
+        verts = []
+        for i in range(N + 1):
+            t    = i / N                         # [0, 1]
+            ang  = -half_ang + 2.0 * half_ang * t   # angle from left to right
+            u    = t
+
+            # Local arc point: x along arc, z = depth into screen.
+            # Surface centre (ang=0) is at local origin so that yaw/pitch
+            # rotate around the surface centre — matching flat-screen behaviour.
+            lx   = R * math.sin(ang)
+            lz   = R * (1.0 - math.cos(ang))
+
+            # Apply yaw around Y, then pitch around X, then translate
+            # Yaw: (lx, 0, lz) → (lx*cy + lz*sy_, 0, -lx*sy_ + lz*cy)
+            rx   =  lx * cy  + lz * sy_
+            rz   = -lx * sy_ + lz * cy
+
+            # Two rows: bottom (v=0) and top (v=1)
+            for row, v in ((0, 0.0), (1, 1.0)):
+                ly = (-half_h if row == 0 else half_h)
+                # Pitch: rotate (rx, ly, rz) around X by pitch
+                wy =  ly * cp - rz * sp
+                wz =  ly * sp + rz * cp
+                wx = rx
+
+                # Translate to world position
+                wx += cx
+                wy += cy_pan
+                wz += -R
+
+                verts.extend([wx, wy, wz, u, v])
+
+        return np.array(verts, dtype='f4')
+
+    def _get_or_create_fbo(self, eye_index, image_index, texture_id, sc_w=None, sc_h=None):
         """Lazily create and cache a ModernGL Framebuffer wrapping the swapchain texture.
 
-        ctx.detect_framebuffer() is used so ModernGL's internal state tracking stays
-        consistent -raw glBindFramebuffer() is invisible to ModernGL and would cause
-        ctx.clear() / vao.render() to target the wrong framebuffer.
+        A depth renderbuffer is attached so depth testing works for opaque occlusion.
         """
         key = (eye_index, image_index)
         if key in self._fbo_cache:
@@ -5698,11 +3481,13 @@ class OpenXRViewerCore:
         glFramebufferTexture2D(
             GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture_id, 0
         )
+        # Depth renderbuffer (size from sc_w/sc_h or swapchain sizes)
+        if sc_w is None or sc_h is None:
+            sc_w, sc_h = self._swapchain_sizes[eye_index]
         depth_rb = glGenRenderbuffers(1)
         glBindRenderbuffer(GL_RENDERBUFFER, depth_rb)
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h)
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, sc_w, sc_h)
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_rb)
-        glBindRenderbuffer(GL_RENDERBUFFER, 0)
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         if status != GL_FRAMEBUFFER_COMPLETE:
@@ -5711,20 +3496,18 @@ class OpenXRViewerCore:
                 f"image {image_index}: {status:#x}"
             )
         mgl_fbo = self.ctx.detect_framebuffer(raw_id)
-        self._fbo_cache[key] = (raw_id, mgl_fbo)
-        self._depth_rb_cache[key] = depth_rb
-        return raw_id, mgl_fbo
+        self._fbo_cache[key] = (raw_id, mgl_fbo, depth_rb)
+        return raw_id, mgl_fbo, depth_rb
 
     def _get_or_create_offscreen_fbo(self, eye_index, image_index, w, h):
-        """Return a ModernGL FBO backed by an RGBA texture + depth renderbuffer.
+        """Return a ModernGL FBO backed by an RGBA texture of size (w, h).
 
         Used in the D3D11 path: ModernGL renders into this offscreen FBO, then
         _blit_gl_to_d3d11() reads it back and uploads it to the D3D11 swapchain image.
-        Cache entry: (mgl_fbo, raw_id, mgl_tex, w, h, depth_rb)
         """
         key = (eye_index, image_index)
         cached = self._offscreen_fbo_cache.get(key)
-        if cached and cached[3] == w and cached[4] == h:
+        if cached and cached[4] == w and cached[5] == h:
             return cached[0], cached[1]   # mgl_fbo, raw_id
 
         # Discard old entry if dimensions changed
@@ -5732,7 +3515,6 @@ class OpenXRViewerCore:
             try:
                 cached[2].release()    # mgl Texture
                 glDeleteFramebuffers(1, [cached[1]])
-                glDeleteRenderbuffers(1, [cached[5]])  # depth_rb
             except Exception:
                 pass
 
@@ -5741,11 +3523,11 @@ class OpenXRViewerCore:
         glBindFramebuffer(GL_FRAMEBUFFER, raw_id)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                             GL_TEXTURE_2D, mgl_tex.glo, 0)
+        # Depth renderbuffer for occlusion
         depth_rb = glGenRenderbuffers(1)
         glBindRenderbuffer(GL_RENDERBUFFER, depth_rb)
         glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h)
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_rb)
-        glBindRenderbuffer(GL_RENDERBUFFER, 0)
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         if status != GL_FRAMEBUFFER_COMPLETE:
@@ -5753,7 +3535,7 @@ class OpenXRViewerCore:
                 f"[OpenXRViewer] Offscreen FBO incomplete for eye {eye_index}: {status:#x}"
             )
         mgl_fbo = self.ctx.detect_framebuffer(raw_id)
-        self._offscreen_fbo_cache[key] = (mgl_fbo, raw_id, mgl_tex, w, h, depth_rb)
+        self._offscreen_fbo_cache[key] = (mgl_fbo, raw_id, mgl_tex, depth_rb, w, h)
         return mgl_fbo, raw_id
 
     def _get_or_create_d3d11_pbo(self, eye_index, img_index, w, h):
@@ -5788,7 +3570,7 @@ class OpenXRViewerCore:
         """Map the readback PBO and upload straight into the D3D11 swapchain texture.
 
         GL renders Y-flipped (see _render_eye flip_y) so glReadPixels already
-        produces top-down rows -no CPU row-reversal needed.  The mapped PBO
+        produces top-down rows — no CPU row-reversal needed.  The mapped PBO
         pointer is passed directly to D3D11 UpdateSubresource, eliminating the
         intermediate flip-buffer and its per-frame memcpy.
         """
@@ -5809,35 +3591,13 @@ class OpenXRViewerCore:
             glUnmapBuffer(GL_PIXEL_PACK_BUFFER)
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
 
-    def _render_preview_only_frame(self, proj_mat):
-        """Render a single desktop-preview frame without an active XR session."""
-        self._ensure_preview_swapchain_size()
-        if not self._poll_source_frame(upload=True) and not self._has_fresh_source_frame():
-            self._source_stalled = True
-            return False
-
-        sc_w, sc_h = self._swapchain_sizes[0]
-        mgl_fbo, raw_fbo = self._get_or_create_offscreen_fbo(0, 0, sc_w, sc_h)
-        self._render_eye(0, mgl_fbo, np.eye(4, dtype=np.float32), proj_mat)
-
-        if self._preview_active:
-            pw, ph = glfw.get_window_size(self.window)
-            if pw > 0 and ph > 0:
-                glBindFramebuffer(GL_READ_FRAMEBUFFER, raw_fbo)
-                glReadBuffer(GL_COLOR_ATTACHMENT0)
-                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0)
-                glBlitFramebuffer(0, 0, sc_w, sc_h, 0, 0, pw, ph,
-                                  GL_COLOR_BUFFER_BIT, GL_LINEAR)
-            glfw.swap_buffers(self.window)
-        return True
-
     def _render_fps_overlay(self, eye_index, mgl_fbo, vp_mat):
-        """Render the FPS/latency text quad (head-relative or left-controller-attached)."""
+        """Render the FPS/latency text quad on the top-left of the screen surface."""
         if self.screen_height is None:
             return
 
         now = self._frame_now
-        
+
         # Update cached values once per second
         if now - self._last_overlay_update >= 1.0:
             self._cached_actual_fps    = self.actual_fps
@@ -5846,163 +3606,465 @@ class OpenXRViewerCore:
             self._cached_screen_width  = self.screen_width
             self._cached_screen_height = self.screen_height if self.screen_height is not None else 0.0
             self._cached_screen_dist   = self.screen_distance
+            self._cached_screen_curved = self._screen_curved
             self._cached_depth_ratio   = self.depth_ratio
+            self._cached_help_visible  = self._help_panel_visible
             self._cached_vr_res        = self._swapchain_sizes.get(0, (0, 0))
             self._cached_sbs_res       = self.frame_size
             self._last_overlay_update  = now
 
-            # Rebuild text texture -left eye only
+            # Rebuild text texture — left eye only
             if eye_index == 0 and self.font is not None:
                 ow, oh = self._overlay_tex_size
                 img  = Image.new('RGBA', (ow, oh), (0, 0, 0, 0))
                 draw = ImageDraw.Draw(img)
 
-                # Rounded dark-grey background
                 draw.rounded_rectangle(
                     [0, 0, ow - 1, oh - 1],
                     radius=14,
                     fill=(32, 32, 36, 210),
                 )
 
-                # Palette
-                C_LABEL = (150, 158, 185, 255)   # dim blue-grey for section labels
-                C_GREEN = (  0, 230,  90, 255)   # Performance values
-                C_CYAN  = (  0, 210, 230, 255)   # 3D Display values
-                C_AMBER = (255, 190,  40, 255)   # Resolution values
-                bfont   = self.bold_font or self.font   # bold for labels
+                C_LABEL = (150, 158, 185, 255)
+                C_GREEN = (  0, 230,  90, 255)
+                C_CYAN  = (  0, 210, 230, 255)
+                C_AMBER = (255, 190,  40, 255)
+                label_font = self.bold_font or self.font
+                value_font = self.font
 
                 PAD    = 14
-                ROW0   = 22   # y baseline: 5 rows
+                ROW0   = 22
                 ROW1   = 56
                 ROW2   = 90
                 ROW3   = 124
                 ROW4   = 158
 
-                # Compute VAL_X from the widest label so all values align
-                labels = ["[Performance]", "[3D Display]", "[Resolution]", "[Controller]", "[Environment]"]
+                # Compute per-font ascent so both columns sit on the same baseline.
+                # getmetrics() returns (ascent, descent); fall back to 0 if unavailable.
+                def _ascent(f):
+                    try:
+                        return f.getmetrics()[0]
+                    except Exception:
+                        return 0
+                lbl_asc = _ascent(label_font)
+                val_asc = _ascent(value_font)
+                # Positive offset shifts the shorter font down to align cap-heights.
+                lbl_dy = max(0, val_asc - lbl_asc)
+                val_dy = max(0, lbl_asc - val_asc)
+
+                labels = ["[Performance]", "[3D Display]", "[Resolution]", "[Show Shortcuts]", "[Controller]"]
                 try:
-                    max_lw = max(int(draw.textlength(l, font=bfont)) for l in labels)
+                    max_lw = max(int(draw.textlength(l, font=label_font)) for l in labels)
                 except AttributeError:
                     max_lw = max(
-                        (int(bfont.getsize(l)[0]) if hasattr(bfont, 'getsize') else 190)
+                        (int(label_font.getsize(l)[0]) if hasattr(label_font, 'getsize') else 190)
                         for l in labels
                     )
                 VAL_X = PAD + max_lw + 10
 
                 def _draw_row(y, label, label_color, value, value_color):
-                    draw.text((PAD, y), label, font=bfont, fill=label_color)
-                    draw.text((VAL_X, y), value, font=self.font, fill=value_color)
+                    draw.text((PAD,   y + lbl_dy), label, font=label_font, fill=label_color)
+                    draw.text((VAL_X, y + val_dy), value, font=value_font, fill=value_color)
 
-                lat_str   = f"{self._cached_latency:.0f}ms" if self._cached_latency > 0 else "N/A"
-                fps_str   = (f"XR {self._cached_actual_fps:.0f} FPS"
-                            f"   SBS {self._cached_sbs_fps:.0f} FPS"
-                            f"   Latency {lat_str}")
+                lat_str = f"{self._cached_latency:.0f}ms" if self._cached_latency > 0 else "—"
+                fps_str = (f"XR {self._cached_actual_fps:.0f} FPS"
+                          f"   SBS {self._cached_sbs_fps:.0f} FPS"
+                          f"   Latency {lat_str}")
                 _draw_row(ROW0, "[Performance]", C_LABEL, fps_str, C_GREEN)
-                # Current controller brand (always displayed)
                 if self._current_brand:
                     brand_str = f"Model: {self._current_brand}"
                     _draw_row(ROW3, "[Controller]", C_LABEL, brand_str, C_CYAN)
-                scr_str   = (f"{self._cached_screen_width:.2f}"
-                            f" x {self._cached_screen_height:.2f} m"
-                            f"  @  {self._cached_screen_dist:.2f} m"
-                            f"   Depth {self._cached_depth_ratio:.2f}")
+                scr_str = (f"{self._cached_screen_width:.2f}"
+                          f" x {self._cached_screen_height:.2f} m"
+                          f"  @  {self._cached_screen_dist:.2f} m"
+                          f"   Depth {self._cached_depth_ratio:.2f}")
                 _draw_row(ROW1, "[3D Display]", C_LABEL, scr_str, C_CYAN)
 
-                vw, vh  = self._cached_vr_res
-                sw, sh  = self._cached_sbs_res
+                vw, vh = self._cached_vr_res
+                sw, sh = self._cached_sbs_res
                 res_str = f"XR {vw}x{vh}/eye   Screen {sw}x{sh}"
                 _draw_row(ROW2, "[Resolution]", C_LABEL, res_str, C_AMBER)
-                # Environment model status
-                env_str = "ON" if self._env_model_visible else "OFF"
-                _draw_row(ROW4, "[Environment]", C_LABEL, env_str, C_CYAN)
+
+                draw.text((PAD, ROW4 + lbl_dy), "[Show Shortcuts]", font=label_font, fill=C_LABEL)
+                # Toggle switch: pill track + circle knob
+                SW_W, SW_H = 52, 26          # track width, height
+                SW_X = VAL_X                 # left edge of switch
+                SW_Y = ROW4 + (34 - SW_H) // 2  # vertically centred in row
+                on   = self._cached_help_visible
+                track_col = (0, 200, 80, 255) if on else (80, 84, 100, 255)
+                draw.rounded_rectangle([SW_X, SW_Y, SW_X + SW_W, SW_Y + SW_H],
+                                       radius=SW_H // 2, fill=track_col)
+                KR   = SW_H // 2 - 2         # knob radius
+                KX   = (SW_X + SW_W - KR - 3) if on else (SW_X + KR + 3)
+                KY   = SW_Y + SW_H // 2
+                draw.ellipse([KX - KR, KY - KR, KX + KR, KY + KR],
+                             fill=(255, 255, 255, 255))
 
                 data = np.flipud(np.array(img, dtype=np.uint8))
                 self._overlay_tex.write(data.tobytes())
 
-        OVERLAY_H = 0.075  # world-space height (3 rows, shrunk from 0.10)
-        ow, oh    = self._overlay_tex_size
+        # Position below the screen bottom edge, same plane, left-aligned
+        sh = self.screen_height
+        sx = self.screen_width / 2.0
+        sy = sh / 2.0
+        GAP = sh * 0.02  # proportional gap scales with screen size
+
+        ow, oh = self._overlay_tex_size
+        OVERLAY_H = sh / 8.0
         OVERLAY_W = OVERLAY_H * (ow / oh)
 
-        panel_pos = None
-        panel_fwd = None
-        panel_up  = None
+        # Below bottom edge: cy = -sy - GAP - OVERLAY_H/2
+        # Left edge flush with screen left edge
+        local_cx = -sx + OVERLAY_W / 2.0
+        local_cy = -sy - GAP - OVERLAY_H / 2.0
 
-        # Try left-controller attachment first; fall back to head-relative
-        if self._grip_mat_l is not None and self._aim_mat_l is not None:
-            # Grip axes in world space (columns of grip_mat)
-            grip_right = self._grip_mat_l[:3, 0].astype('f8')
-            grip_up    = self._grip_mat_l[:3, 1].astype('f8')
-            grip_fwd   = self._grip_mat_l[:3, 2].astype('f8')
-            grip_right /= np.linalg.norm(grip_right) + 1e-10
-            grip_up    /= np.linalg.norm(grip_up) + 1e-10
-            grip_fwd   /= np.linalg.norm(grip_fwd) + 1e-10
+        # Screen rotation + translation (reuse _build_model_mat4 pattern)
+        cy_s = math.cos(self.screen_yaw);   sy_s = math.sin(self.screen_yaw)
+        cp_s = math.cos(self.screen_pitch); sp_s = math.sin(self.screen_pitch)
+        R = (np.array([[ cy_s,  0, sy_s, 0],
+                       [    0,  1,     0, 0],
+                       [-sy_s,  0, cy_s,  0],
+                       [    0,  0,     0, 1]], dtype=np.float32) @
+             np.array([[1,    0,     0, 0],
+                       [0, cp_s, -sp_s, 0],
+                       [0, sp_s,  cp_s, 0],
+                       [0,    0,     0, 1]], dtype=np.float32))
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x
+        T[1, 3] = self.screen_pan_y
+        T[2, 3] = -self.screen_distance
 
-            # Laser forward direction (same as _laser_beam_setup)
-            fwd_w = -self._aim_mat_l[:3, 2].astype('f8')
-            right_w = self._aim_mat_l[:3, 0].astype('f8')
-            _ang = math.radians(12); _ca, _sa = math.cos(_ang), math.sin(_ang)
-            _k = right_w / (np.linalg.norm(right_w) + 1e-10)
-            laser_fwd = fwd_w * _ca + np.cross(_k, fwd_w) * _sa + _k * np.dot(_k, fwd_w) * (1 - _ca)
-            laser_fwd /= np.linalg.norm(laser_fwd) + 1e-10
+        S_ov = np.diag([OVERLAY_W / 2.0, OVERLAY_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        T_local = np.eye(4, dtype=np.float32)
+        T_local[0, 3] = local_cx
+        T_local[1, 3] = local_cy
+        model = T @ R @ T_local @ S_ov
 
-            # Laser start point (same origin as _laser_beam_setup)
-            grip_pos = self._grip_mat_l[:3, 3].astype('f8')
-            laser_origin = grip_pos + grip_up * 0.020 + laser_fwd * 0.11
-
-            # Panel faces user: blend grip_up (button-surface normal) with
-            # toward_user (-laser_fwd). Both are controller-relative ->tracks.
-            toward_user = (-laser_fwd).astype('f8')
-            panel_fwd = grip_up + toward_user
-            panel_fwd /= np.linalg.norm(panel_fwd) + 1e-10
-            panel_up  = grip_up.copy()
-
-            # Pre-compute orthonormal basis
-            _pr = np.cross(panel_up, panel_fwd)
-            _pr /= np.linalg.norm(_pr) + 1e-10
-            _pu2 = np.cross(panel_fwd, _pr)
-            _pu2 /= np.linalg.norm(_pu2) + 1e-10
-
-            # Bottom edge midpoint at laser_origin + offset along panel normal.
-            # Top edge fixed at old 0.10 height so shrinking leaves gap below.
-            PANEL_OFFSET = 0.05
-            _top_ref = 0.10  # original OVERLAY_H, top edge anchor
-            panel_pos = laser_origin + panel_fwd * PANEL_OFFSET + _pu2 * (_top_ref - OVERLAY_H / 2.0)
-
-        if panel_pos is None and self._head_pos_w is not None and self._head_fwd_w is not None:
-            # Fallback: 1m in front of head, 0.15m below. Panel faces toward user.
-            hx, hy, hz = self._head_pos_w
-            fx, fy, fz = self._head_fwd_w
-            panel_pos = np.array([hx + fx * 1.0, hy + fy * 1.0 - 0.15, hz + fz * 1.0], dtype='f8')
-            panel_fwd = np.array([-fx, -fy, -fz], dtype='f8')
-            panel_up  = np.array([0.0, 1.0, 0.0], dtype='f8')
-
-        if panel_pos is not None:
-            # Build T @ R @ S: scale -> rotate -> translate
-            S = np.diag([OVERLAY_W/2.0, OVERLAY_H/2.0, 1.0, 1.0]).astype(np.float32)
-            panel_right = np.cross(panel_up, panel_fwd)
-            panel_right /= np.linalg.norm(panel_right) + 1e-10
-            panel_up2 = np.cross(panel_fwd, panel_right)
-            panel_up2 /= np.linalg.norm(panel_up2) + 1e-10
-            R = np.eye(4, dtype=np.float32)
-            R[:3, 0] = panel_right.astype(np.float32)
-            R[:3, 1] = panel_up2.astype(np.float32)
-            R[:3, 2] = panel_fwd.astype(np.float32)
-            T = np.eye(4, dtype=np.float32)
-            T[0, 3] = panel_pos[0]; T[1, 3] = panel_pos[1]; T[2, 3] = panel_pos[2]
-            mvp = vp_mat @ T @ R @ S
+        # Fade panel while trigger is held on it; snap back to full immediately on release.
+        trigger_held = self._ov_ltrig_held or self._ov_rtrig_held
+        if trigger_held:
+            FADE_SPEED = 8.0  # alpha units/sec toward faded (smooth fade-in)
+            dt = max(0.001, getattr(self, '_last_frame_dt', 0.016))
+            self._status_panel_alpha = max(0.15, self._status_panel_alpha - FADE_SPEED * dt)
         else:
-            mvp = vp_mat  # fallback
+            self._status_panel_alpha = 1.0  # instant recovery on trigger release
 
+        mvp = vp_mat @ model
         mgl_fbo.use()
-        # depth_mask = False  # do not write semi-transparent pixels to depth
-        self.ctx.depth_mask = False
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         self._overlay_tex.use(location=2)
         self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = self._status_panel_alpha
         self._overlay_vao.render(moderngl.TRIANGLE_STRIP)
+        self._overlay_prog['u_alpha'].value = 1.0   # restore for other overlays
         self.ctx.disable(moderngl.BLEND)
-        self.ctx.depth_mask = True
+
+    def _render_depth_osd(self, eye_index, mgl_fbo, vp_mat):
+        """Floating depth-ratio indicator panel.
+
+        Appears when depth_ratio changes; fades out automatically.
+        Floats in front of the screen; distance from screen grows with depth_ratio.
+        Style matches the FPS status panel (dark rounded rectangle).
+        """
+        if self._depth_osd_tex is None or self.screen_height is None:
+            return
+
+        now = self._frame_now
+
+        # Detect change and (re)trigger on left eye only to avoid double writes.
+        # Composite key encodes both depth_ratio and the on/off state from
+        # depth_strength so the right-grip + left-stick-click toggle also
+        # fires the indicator.
+        if eye_index == 0:
+            depth_on = self.depth_strength > 0.0
+            cur_val  = round(self.depth_ratio, 3)
+            cur_key  = (cur_val, depth_on)
+            if cur_key != self._depth_osd_last_val:
+                self._depth_osd_last_val = cur_key
+                self._depth_osd_show_t   = now
+                self._depth_osd_alpha    = 1.0
+
+                # Rebuild PIL texture
+                if self.font is not None:
+                    dw, dh = self._depth_osd_tex_size
+                    img  = Image.new('RGBA', (dw, dh), (0, 0, 0, 0))
+                    draw = ImageDraw.Draw(img)
+                    draw.rounded_rectangle(
+                        [0, 0, dw - 1, dh - 1],
+                        radius=12,
+                        fill=(32, 32, 36, 210),
+                    )
+                    label = "Depth"
+                    value = f"{cur_val:.2f}" if depth_on else "0.00"
+                    bfont = self.bold_font or self.font
+                    C_LABEL = (150, 158, 185, 255)
+                    C_VALUE = (  0, 210, 230, 255)
+                    PAD = 12
+                    cy  = (dh - 32) // 2
+                    draw.text((PAD, cy), label, font=bfont, fill=C_LABEL)
+                    try:
+                        lw = int(draw.textlength(label, font=bfont))
+                    except AttributeError:
+                        lw = int(bfont.getsize(label)[0]) if hasattr(bfont, 'getsize') else 60
+                    draw.text((PAD + lw + 8, cy), value, font=self.font, fill=C_VALUE)
+                    data = np.flipud(np.array(img, dtype=np.uint8))
+                    self._depth_osd_tex.write(data.tobytes())
+
+        # Fade: hold for 1.5 s then decay over 0.8 s
+        HOLD  = 1.5
+        DECAY = 0.8
+        elapsed = now - self._depth_osd_show_t
+        if elapsed < HOLD:
+            alpha = 1.0
+        elif elapsed < HOLD + DECAY:
+            alpha = 1.0 - (elapsed - HOLD) / DECAY
+        else:
+            alpha = 0.0
+        self._depth_osd_alpha = alpha
+
+        if alpha <= 0.0:
+            return
+
+        # Screen-relative positioning above the screen; text size scales with screen width
+        OSD_H = self.screen_width * 0.03  # scales with screen size (0.072m @ 2.4m default)
+        dw, dh = self._depth_osd_tex_size
+        OSD_W = OSD_H * (dw / dh)
+
+        BASE_Z_EXTRA = 0.05
+        SCALE_Z      = 0.028
+        z_extra = BASE_Z_EXTRA + self.depth_ratio * SCALE_Z
+        dist = self.screen_distance - z_extra
+
+        cy_  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+        cp   = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+        rot_y = np.array([
+            [ cy_,  0, sy_, 0],
+            [  0,   1,   0, 0],
+            [-sy_,  0, cy_, 0],
+            [  0,   0,   0, 1],
+        ], dtype=np.float32)
+        rot_x = np.array([
+            [1,  0,   0, 0],
+            [0,  cp, -sp, 0],
+            [0,  sp,  cp, 0],
+            [0,  0,   0,  1],
+        ], dtype=np.float32)
+
+        y_pos = self.screen_pan_y + self.screen_height / 2.0 + self.screen_width * 0.016 + OSD_H / 2.0
+        S = np.diag([OSD_W / 2.0, OSD_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        R = rot_y @ rot_x
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x; T[1, 3] = y_pos; T[2, 3] = -dist
+        mvp = vp_mat @ T @ R @ S
+
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self._depth_osd_tex.use(location=2)
+        self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = alpha
+        self._depth_osd_vao.render(moderngl.TRIANGLE_STRIP)
+        self._overlay_prog['u_alpha'].value = 1.0   # restore for other overlays
+        self.ctx.disable(moderngl.BLEND)
+
+    def _render_preset_osd(self, eye_index, mgl_fbo, vp_mat):
+        """Floating preset-name indicator panel.
+
+        Appears when the user cycles screen presets (Y button); fades out automatically.
+        Same style as the depth-ratio OSD.
+        """
+        if self._preset_osd_tex is None or self.screen_height is None:
+            return
+
+        now = self._frame_now
+
+        if eye_index == 0:
+            cur_key = self._preset_index
+            if cur_key != self._preset_osd_last_key:
+                self._preset_osd_last_key = cur_key
+                self._preset_osd_show_t   = now
+                self._preset_osd_alpha    = 1.0
+
+                if self.font is not None and self._preset_name_overlay:
+                    dw, dh = self._preset_osd_tex_size
+                    img  = Image.new('RGBA', (dw, dh), (0, 0, 0, 0))
+                    draw = ImageDraw.Draw(img)
+                    draw.rounded_rectangle(
+                        [0, 0, dw - 1, dh - 1],
+                        radius=12,
+                        fill=(32, 32, 36, 210),
+                    )
+                    bfont = self.bold_font or self.font
+                    C_LABEL = (150, 158, 185, 255)
+                    C_VALUE = (  0, 210, 230, 255)
+                    PAD = 12
+                    cy  = (dh - 32) // 2
+                    draw.text((PAD, cy), "Preset", font=bfont, fill=C_LABEL)
+                    try:
+                        lw = int(draw.textlength("Preset", font=bfont))
+                    except AttributeError:
+                        lw = int(bfont.getsize("Preset")[0]) if hasattr(bfont, 'getsize') else 60
+                    draw.text((PAD + lw + 8, cy), self._preset_name_overlay,
+                            font=self.font, fill=C_VALUE)
+                    data = np.flipud(np.array(img, dtype=np.uint8))
+                    self._preset_osd_tex.write(data.tobytes())
+
+        # Fade: hold 1.5 s then decay over 0.8 s
+        HOLD  = 1.5
+        DECAY = 0.8
+        elapsed = now - self._preset_osd_show_t
+        if elapsed < HOLD:
+            alpha = 1.0
+        elif elapsed < HOLD + DECAY:
+            alpha = 1.0 - (elapsed - HOLD) / DECAY
+        else:
+            alpha = 0.0
+        self._preset_osd_alpha = alpha
+
+        if alpha <= 0.0:
+            return
+
+        # Screen-relative positioning; text size scales with screen width
+        OSD_H = self.screen_width * 0.03
+        dw, dh = self._preset_osd_tex_size
+        OSD_W  = OSD_H * (dw / dh)
+
+        cy_  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+        cp   = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+        rot_y = np.array([
+            [ cy_,  0, sy_, 0],
+            [  0,   1,   0, 0],
+            [-sy_,  0, cy_, 0],
+            [  0,   0,   0, 1],
+        ], dtype=np.float32)
+        rot_x = np.array([
+            [1,  0,   0, 0],
+            [0,  cp, -sp, 0],
+            [0,  sp,  cp, 0],
+            [0,  0,   0,  1],
+        ], dtype=np.float32)
+
+        y_pos = self.screen_pan_y + self.screen_height / 2.0 + self.screen_width * 0.016 + OSD_H / 2.0
+        S = np.diag([OSD_W / 2.0, OSD_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        R = rot_y @ rot_x
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x; T[1, 3] = y_pos; T[2, 3] = -(self.screen_distance - 0.05)
+        mvp = vp_mat @ T @ R @ S
+
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self._preset_osd_tex.use(location=2)
+        self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = alpha
+        self._preset_osd_vao.render(moderngl.TRIANGLE_STRIP)
+        self._overlay_prog['u_alpha'].value = 1.0
+        self.ctx.disable(moderngl.BLEND)
+
+    def _render_screen_osd(self, eye_index, mgl_fbo, vp_mat):
+        """Floating size+distance indicator shown while right grip + right stick adjusts."""
+        if self._screen_osd_tex is None or self.screen_height is None:
+            return
+
+        now = self._frame_now
+
+        # Rebuild texture on left eye whenever values change
+        if eye_index == 0 and self.font is not None:
+            cur_key = (round(self.screen_width, 2), round(self.screen_distance, 2))
+            if cur_key != self._screen_osd_last_key:
+                self._screen_osd_last_key = cur_key
+                sw, sh = self._screen_osd_tex_size
+                img  = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+                draw.rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1],
+                    radius=12,
+                    fill=(32, 32, 36, 210),
+                )
+                bfont   = self.bold_font or self.font
+                C_LABEL = (150, 158, 185, 255)
+                C_VALUE = (  0, 210, 230, 255)
+                PAD = 12
+                GAP = 8
+                cy  = (sh - 32) // 2
+
+                h = self.screen_height if self.screen_height is not None else 0.0
+
+                def _tw(text, font):
+                    try:
+                        return int(draw.textlength(text, font=font))
+                    except AttributeError:
+                        return int(font.getsize(text)[0]) if hasattr(font, 'getsize') else 80
+
+                # "Size" label + value
+                size_lbl = "Size"
+                size_val = f"{self.screen_width:.2f} × {h:.2f} m"
+                draw.text((PAD, cy), size_lbl, font=bfont, fill=C_LABEL)
+                x = PAD + _tw(size_lbl, bfont) + GAP
+                draw.text((x, cy), size_val, font=self.font, fill=C_VALUE)
+                x += _tw(size_val, self.font) + GAP * 3
+
+                # "Dist" label (same grey as "Size") + value
+                dist_lbl = "Dist"
+                dist_val = f"{self.screen_distance:.2f} m"
+                draw.text((x, cy), dist_lbl, font=bfont, fill=C_LABEL)
+                x += _tw(dist_lbl, bfont) + GAP
+                draw.text((x, cy), dist_val, font=self.font, fill=C_VALUE)
+
+                data = np.flipud(np.array(img, dtype=np.uint8))
+                self._screen_osd_tex.write(data.tobytes())
+
+        # Fade: hold 1.5 s then decay over 0.8 s (same rhythm as depth OSD)
+        HOLD  = 1.5
+        DECAY = 0.8
+        elapsed = now - self._screen_osd_show_t
+        if elapsed < HOLD:
+            alpha = 1.0
+        elif elapsed < HOLD + DECAY:
+            alpha = 1.0 - (elapsed - HOLD) / DECAY
+        else:
+            alpha = 0.0
+
+        if alpha <= 0.0:
+            return
+
+        # Screen-relative positioning; text size scales with screen width
+        OSD_H = self.screen_width * 0.03
+        sw, sh = self._screen_osd_tex_size
+        OSD_W = OSD_H * (sw / sh)
+
+        cy_  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+        cp   = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+        rot_y = np.array([
+            [ cy_,  0, sy_, 0],
+            [  0,   1,   0, 0],
+            [-sy_,  0, cy_, 0],
+            [  0,   0,   0, 1],
+        ], dtype=np.float32)
+        rot_x = np.array([
+            [1,  0,   0, 0],
+            [0,  cp, -sp, 0],
+            [0,  sp,  cp, 0],
+            [0,  0,   0,  1],
+        ], dtype=np.float32)
+
+        y_pos = self.screen_pan_y + self.screen_height / 2.0 + self.screen_width * 0.016 + OSD_H / 2.0
+        S = np.diag([OSD_W / 2.0, OSD_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        R = rot_y @ rot_x
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x; T[1, 3] = y_pos; T[2, 3] = -self.screen_distance
+        mvp = vp_mat @ T @ R @ S
+
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self._screen_osd_tex.use(location=2)
+        self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = alpha
+        self._screen_osd_vao.render(moderngl.TRIANGLE_STRIP)
+        self._overlay_prog['u_alpha'].value = 1.0
+        self.ctx.disable(moderngl.BLEND)
 
     def _render_brand_osd(self, eye_index, mgl_fbo, vp_mat):
         """Controller brand indicator attached to the right controller.
@@ -6073,10 +4135,7 @@ class OpenXRViewerCore:
         sh = self.screen_height
         if sh is None:
             fw, fh = self.frame_size
-            if fh > fw:  # portrait: width becomes height
-                sh = self.screen_width
-            else:
-                sh = self.screen_width * 9.0 / 16.0
+            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
         bottom_edge = np.array([self.screen_pan_x,
                                 self.screen_pan_y - sh / 2.0,
                                 -self.screen_distance], dtype='f8')
@@ -6104,8 +4163,6 @@ class OpenXRViewerCore:
         mvp = vp_mat @ T @ R @ S
 
         mgl_fbo.use()
-        # depth_mask = False  # do not write semi-transparent pixels to depth
-        self.ctx.depth_mask = False
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         self._brand_osd_tex.use(location=2)
@@ -6114,10 +4171,9 @@ class OpenXRViewerCore:
         self._brand_osd_vao.render(moderngl.TRIANGLE_STRIP)
         self._overlay_prog['u_alpha'].value = 1.0
         self.ctx.disable(moderngl.BLEND)
-        self.ctx.depth_mask = True
 
     def _update_aim_poses(self, display_time):
-        """Locate both controller aim spaces and cache their world-space 4x4 matrices."""
+        """Locate both controller aim spaces and cache their world-space 4×4 matrices."""
         now = self._frame_now
         for space, mat_attr, prev_attr, move_attr in [
             (self._aim_space_l, "_aim_mat_l", "_laser_prev_mat_l", "_laser_last_move_l"),
@@ -6184,6 +4240,163 @@ class OpenXRViewerCore:
         self._yaw_offset   = 0.0
         self._pitch_offset = 0.0
 
+    def _reset_screen_to_gaze(self, show_border=False):
+        """Instantly snap the screen to 2 m in front of the current head gaze.
+
+        Size and shape are preserved — only position/orientation are updated.
+        """
+        RESET_DIST = 2.0
+        self._anim_target_pan_x = None  # cancel any stale animation
+        self._reset_orientation_offsets()
+        if self._head_pos_w is not None and self._head_fwd_w is not None:
+            hx, hy, hz = self._head_pos_w
+            fx, fy, fz = self._head_fwd_w
+            flen = math.sqrt(fx*fx + fy*fy + fz*fz)
+            if flen > 1e-4:
+                fx /= flen; fy /= flen; fz /= flen
+            else:
+                fx, fy, fz = 0.0, 0.0, -1.0
+            # World-space target point
+            tx = hx + fx * RESET_DIST
+            ty = hy + fy * RESET_DIST
+            tz = hz + fz * RESET_DIST
+            horiz = math.sqrt(fx*fx + fz*fz)
+            yaw   = math.atan2(-fx, -fz) if horiz > 1e-4 else self.screen_yaw
+            pitch = math.asin(max(-0.999, min(0.999, fy)))
+            # Invert model matrix (rot_y @ rot_x then translate) to get local coords
+            cy, sy_ = math.cos(yaw),   math.sin(yaw)
+            cp, sp  = math.cos(pitch), math.sin(pitch)
+            # Inverse rot_y
+            x1 =  cy * tx - sy_ * tz
+            y1 =  ty
+            z1 =  sy_ * tx + cy * tz
+            # Inverse rot_x
+            x2 =  x1
+            y2 =  cp * y1 + sp * z1
+            z2 = -sp * y1 + cp * z1
+            self.screen_pan_x    = x2
+            self.screen_pan_y    = y2
+            self.screen_distance = -z2
+            self.screen_yaw      = yaw
+            self.screen_pitch    = pitch
+        else:
+            self.screen_distance = RESET_DIST
+            self.screen_pan_x    = 0.0
+            self.screen_pan_y    = float(self._initial_head_y)
+            self.screen_pitch    = 0.0
+            self.screen_yaw      = 0.0
+        if show_border:
+            self._border_alpha  = 1.0
+            self._border_idle_t = time.perf_counter()
+        if self._keyboard_visible:
+            self._anchor_keyboard_below_screen()
+
+    def _tick_screen_anim(self, dt):
+        """Exponential-decay glide toward the animation target set by _reset_screen_to_gaze.
+
+        Uses a critically-damped-style lerp: alpha = 1 - exp(-k * dt), which gives
+        frame-rate-independent smoothing.  k controls speed: higher = snappier.
+        Clears targets once the screen is close enough to avoid infinite ticking.
+        """
+        if self._anim_target_pan_x is None:
+            return
+
+        K     = 6.0   # decay constant: ~63% of the gap closed per 1/K seconds
+        alpha = 1.0 - math.exp(-K * max(dt, 1e-4))
+
+        def _lerp(a, b): return a + alpha * (b - a)
+        def _lerp_angle(a, b):
+            # Shortest-path lerp for angles
+            d = (b - a + math.pi) % (2 * math.pi) - math.pi
+            return a + alpha * d
+
+        self.screen_pan_x    = _lerp(self.screen_pan_x,    self._anim_target_pan_x)
+        self.screen_pan_y    = _lerp(self.screen_pan_y,    self._anim_target_pan_y)
+        self.screen_distance = _lerp(self.screen_distance, self._anim_target_distance)
+        self.screen_yaw      = _lerp_angle(self.screen_yaw,   self._anim_target_yaw)
+        self.screen_pitch    = _lerp_angle(self.screen_pitch, self._anim_target_pitch)
+
+        # Stop animating once close enough (< 1 mm / 0.01°)
+        close = (
+            abs(self.screen_pan_x    - self._anim_target_pan_x)    < 0.001 and
+            abs(self.screen_pan_y    - self._anim_target_pan_y)    < 0.001 and
+            abs(self.screen_distance - self._anim_target_distance) < 0.001 and
+            abs((self.screen_yaw   - self._anim_target_yaw   + math.pi) % (2*math.pi) - math.pi) < 0.0002 and
+            abs((self.screen_pitch - self._anim_target_pitch + math.pi) % (2*math.pi) - math.pi) < 0.0002
+        )
+        if close:
+            self.screen_pan_x    = self._anim_target_pan_x
+            self.screen_pan_y    = self._anim_target_pan_y
+            self.screen_distance = self._anim_target_distance
+            self.screen_yaw      = self._anim_target_yaw
+            self.screen_pitch    = self._anim_target_pitch
+            self._anim_target_pan_x = None   # clear — animation complete
+
+    def _reset_screen_direction(self):
+        """Reset screen to face the user's current gaze, preserving distance and size."""
+        if self._head_pos_w is None or self._head_fwd_w is None:
+            return
+        hx, hy, hz = self._head_pos_w
+        fx, fy, fz = self._head_fwd_w
+        flen = math.sqrt(fx*fx + fy*fy + fz*fz)
+        if flen > 1e-4:
+            fx /= flen; fy /= flen; fz /= flen
+        else:
+            fx, fy, fz = 0.0, 0.0, -1.0
+
+        # Preserve Euclidean distance from head to screen centre
+        dx = self.screen_pan_x - hx
+        dy = self.screen_pan_y - hy
+        dz = -self.screen_distance - hz
+        dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+
+        # Target screen centre in world space, following head gaze
+        tx = hx + fx * dist
+        ty = hy + fy * dist
+        tz = hz + fz * dist
+        pitch = math.asin(max(-0.999, min(0.999, fy)))
+
+        self.screen_pan_x = tx
+        self.screen_pan_y = ty
+        self.screen_distance = -tz
+        self.screen_yaw = math.atan2(-fx, -fz)
+        self.screen_pitch = pitch
+
+        self._border_alpha = 1.0
+        self._border_idle_t = time.perf_counter()
+
+    def _apply_preset(self, index):
+        """Apply screen preset: size, distance, and reposition to face the user."""
+        name, width, dist = self._screen_presets[index]
+        self._reset_orientation_offsets()
+        self.screen_width    = width
+        self.screen_height   = None
+        self.screen_pitch    = 0.0
+        self._screen_curved  = False
+        self._preset_index            = index
+        self.screen_pan_y    = float(self._initial_head_y)
+
+        if self._head_pos_w is not None and self._head_fwd_w is not None:
+            hx, _, hz = self._head_pos_w
+            fx, fy, fz = self._head_fwd_w
+            flen = math.sqrt(fx*fx + fy*fy + fz*fz)
+            if flen > 1e-4:
+                fx /= flen; fy /= flen; fz /= flen
+            else:
+                fx, fy, fz = 0.0, 0.0, -1.0
+            self.screen_pan_x    = hx + fx * dist
+            self.screen_distance = -(hz + fz * dist)
+            self.screen_yaw      = math.atan2(-fx, -fz)
+        else:
+            self.screen_pan_x    = 0.0
+            self.screen_distance = dist
+            self.screen_yaw      = 0.0
+
+        self._preset_name_overlay = f"{name}  {width:.2f}m / {dist:.2f}m"
+        self._last_overlay_update = 0.0
+        self._border_alpha  = 1.0
+        self._border_idle_t = time.perf_counter()
+
     def _reset_screen_to_default(self, show_border=False):
         """Reset screen to upright default: 2 m ahead horizontally, perpendicular to floor.
 
@@ -6192,15 +4405,12 @@ class OpenXRViewerCore:
         session start so the screen sits comfortably in front of the user.
         Called at session start and by the Y button.
         """
-        if self._apply_profile_screen_layout(show_border=show_border):
-            return
-
         RESET_DIST = 2.0
         self._reset_orientation_offsets()
-        self.screen_width     = 2.4
-        self._screen_ref_size = 2.4
-        self.screen_height    = None
-        self.screen_pitch     = 0.0   # always vertical -perpendicular to floor
+        self.screen_width    = 2.4
+        self.screen_height   = None
+        self.screen_pitch    = 0.0   # always vertical — perpendicular to floor
+        self._screen_curved  = False
         if self._head_pos_w is not None and self._head_fwd_w is not None:
             hx, _, hz = self._head_pos_w
             fx, _, fz = self._head_fwd_w
@@ -6214,11 +4424,11 @@ class OpenXRViewerCore:
             # model matrix applies rot_y(yaw) before the translation).  Inverting
             # _screen_world_pos at pitch=0 gives the correct local-frame values so
             # the world-space centre lands exactly RESET_DIST m in front of the head:
-            #   world_x = pan_x*cos(yaw) -distance*sin(yaw)   = hx + fx*RESET_DIST
-            #   world_z = -pan_x*sin(yaw) - distance*cos(yaw) = hz + fz*RESET_DIST
-            # Solving (with cy=-fz, sy_=-fx from yaw=atan2(-fx, -fz)):
-            #   screen_distance = hx*fx + hz*fz + RESET_DIST
-            #   screen_pan_x    = hz*fx -hx*fz
+            #   world_x = pan_x·cos(yaw) − distance·sin(yaw)   = hx + fx·RESET_DIST
+            #   world_z =−pan_x·sin(yaw) − distance·cos(yaw)   = hz + fz·RESET_DIST
+            # Solving (with cy=−fz, sy_=−fx from yaw=atan2(−fx,−fz)):
+            #   screen_distance = hx·fx + hz·fz + RESET_DIST
+            #   screen_pan_x    = hz·fx − hx·fz
             self.screen_distance = hx * fx + hz * fz + RESET_DIST
             self.screen_pan_x    = hz * fx - hx * fz
             self.screen_pan_y    = float(self._initial_head_y)
@@ -6235,49 +4445,53 @@ class OpenXRViewerCore:
             self._anchor_keyboard_below_screen()
 
     def _screen_uv_to_world(self, u, v):
-        """Convert a screen UV in [0,1] to its world-space 3-D position on the screen plane."""
-        sh, screen_pos, r_ax, u_ax, _screen_n = self._screen_basis()
-        return screen_pos + r_ax * ((u - 0.5) * self.screen_width) + u_ax * ((v - 0.5) * sh)
-
-    def _screen_basis(self):
-        """Return screen height, center, right/up axes, and normal in world space."""
+        """Convert a screen UV in [0,1]² to its world-space 3-D position on the screen plane."""
         sh = self.screen_height
         if sh is None:
             fw, fh = self.frame_size
-            if fh > fw:
-                sh = self.screen_width
-            else:
-                sh = self.screen_width * 9.0 / 16.0
+            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
 
-        cy = math.cos(self.screen_yaw)
-        sy_ = math.sin(self.screen_yaw)
-        cp = math.cos(self.screen_pitch)
-        sp = math.sin(self.screen_pitch)
-        cr = math.cos(self.screen_roll)
-        sr = math.sin(self.screen_roll)
+        # Curved-screen mapping: parametric cylindrical arc (world-space verts
+        # are generated in _build_curved_screen_verts). For a given (u,v) we can
+        # reconstruct the same world-space vertex analytically.
+        if self._screen_curved:
+            R = self.screen_distance
+            half_w = self.screen_width / 2.0
+            half_h = sh / 2.0
+            # angular half-span so arc length == screen_width
+            half_ang = min(half_w / max(R, 1e-6), math.pi / 2)
 
-        rot_y = np.array([
-            [ cy,  0.0, sy_],
-            [0.0,  1.0, 0.0],
-            [-sy_, 0.0, cy],
-        ], dtype='f8')
-        rot_x = np.array([
-            [1.0, 0.0,  0.0],
-            [0.0, cp,  -sp],
-            [0.0, sp,   cp],
-        ], dtype='f8')
-        rot_z = np.array([
-            [cr, -sr, 0.0],
-            [sr,  cr, 0.0],
-            [0.0, 0.0, 1.0],
-        ], dtype='f8')
-        rot = rot_y @ rot_x @ rot_z
+            cy = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+            cp = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+
+            cx = self.screen_pan_x
+            cy_pan = self.screen_pan_y
+
+            ang = -half_ang + 2.0 * half_ang * float(u)
+            lx = R * math.sin(ang)
+            lz = -(R * math.cos(ang))
+            ly = (v - 0.5) * sh
+
+            # Apply yaw (around Y) then pitch (around X) then translate
+            rx = lx * cy + lz * sy_
+            rz = -lx * sy_ + lz * cy
+            wy = ly * cp - rz * sp
+            wz = ly * sp + rz * cp
+            wx = rx + cx
+            wy += cy_pan
+            return np.array([wx, wy, wz], dtype='f8')
+
+        # Flat screen mapping (original behaviour)
+        cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+        cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
         screen_pos = self._screen_world_pos(cy, sy_, cp, sp)
-        return sh, screen_pos, rot[:, 0], rot[:, 1], rot[:, 2]
+        r_ax = np.array([cy,      0.0,    -sy_    ], dtype='f8')
+        u_ax = np.array([sp*sy_,  cp,      sp*cy  ], dtype='f8')
+        return screen_pos + r_ax * ((u - 0.5) * self.screen_width) + u_ax * ((v - 0.5) * sh)
 
     def _screen_world_pos(self, cy, sy_, cp, sp):
         """Return the world-space position of the screen centre based on current pan/pitch/yaw.
-        Used by both _screen_uv_to_world and _laser_screen_hit_dist, which are called frequently during aiming -so we take pan/pitch/yaw as arguments to avoid redundant trig calls.
+        Used by both _screen_uv_to_world and _laser_screen_hit_dist, which are called frequently during aiming — so we take pan/pitch/yaw as arguments to avoid redundant trig calls.
         """
         return np.array([self.screen_pan_x, self.screen_pan_y, -self.screen_distance], dtype='f8')
 
@@ -6318,7 +4532,7 @@ class OpenXRViewerCore:
                                     ctypes.POINTER(RECT), wintypes.LPARAM)
         ctypes.windll.user32.EnumDisplayMonitors(None, None, _CBFUNC(_callback), 0)
 
-        idx = max(1, self._input_monitor_index) - 1  # MSS is 1-based ->0-based
+        idx = max(1, self._input_monitor_index) - 1  # MSS is 1-based → 0-based
         if idx < len(monitors):
             self._target_mon_rect = monitors[idx]
         else:
@@ -6367,24 +4581,100 @@ class OpenXRViewerCore:
             return max(0.01, t - 0.005)
         return BEAM_MAX
 
+    def _overlay_panel_hit(self, cp, fw):
+        """
+        Returns True if the controller laser hits the FPS/status panel.
+        """
+        if self.screen_height is None:
+            return False
+
+        # Panel placement must match _render_fps_overlay() and _overlay_panel_hit_dist()
+        sh = self.screen_height
+        sx = self.screen_width / 2.0
+        sy = sh / 2.0
+        GAP = sh * 0.02
+        ow, oh = self._overlay_tex_size
+        OVERLAY_H = sh / 8.0
+        OVERLAY_W = OVERLAY_H * (ow / oh)
+
+        local_cx = -sx + OVERLAY_W / 2.0
+        local_cy = -sy - GAP - OVERLAY_H / 2.0
+
+        # Build screen transform
+        cy = math.cos(self.screen_yaw)
+        sy = math.sin(self.screen_yaw)
+        cpitch = math.cos(self.screen_pitch)
+        spitch = math.sin(self.screen_pitch)
+
+        R = (
+            np.array([
+                [ cy, 0, sy],
+                [  0, 1,  0],
+                [-sy, 0, cy],
+            ], dtype='f8')
+            @
+            np.array([
+                [1,      0,       0],
+                [0, cpitch, -spitch],
+                [0, spitch,  cpitch],
+            ], dtype='f8')
+        )
+
+        panel_center = np.array([
+            self.screen_pan_x,
+            self.screen_pan_y,
+            -self.screen_distance
+        ], dtype='f8')
+
+        panel_center += R @ np.array([local_cx, local_cy, 0.0], dtype='f8')
+
+        normal = R @ np.array([0.0, 0.0, 1.0], dtype='f8')
+
+        denom = np.dot(fw, normal)
+        if abs(denom) < 1e-5:
+            return False
+
+        t = np.dot(panel_center - cp, normal) / denom
+        if t <= 0:
+            return False
+
+        hit = cp + fw * t
+        local = hit - panel_center
+
+        right = R @ np.array([1.0, 0.0, 0.0], dtype='f8')
+        up    = R @ np.array([0.0, 1.0, 0.0], dtype='f8')
+
+        lx = np.dot(local, right)
+        ly = np.dot(local, up)
+
+        return (
+            abs(lx) <= OVERLAY_W * 0.5 and
+            abs(ly) <= OVERLAY_H * 0.5
+        )
+
     def _overlay_panel_hit_dist(self, ctrl_pos, fwd_w):
         """Return the distance along fwd_w where the ray hits the FPS overlay panel.
 
         The panel sits just below the screen, shares the same yaw/pitch rotation,
         and has the same surface normal. Returns BEAM_MAX if the overlay is hidden,
         screen_height is unknown, the ray is parallel, or the hit misses the rect.
+        Math matches _render_fps_overlay exactly.
         """
         BEAM_MAX = 30.0
         if not self._fps_overlay_visible or self.screen_height is None:
             return BEAM_MAX
 
-        GAP       = 0.05
-        OVERLAY_H = 0.12
-        ow, oh    = self._overlay_tex_size
+        sh = self.screen_height
+        sx = self.screen_width / 2.0
+        sy = sh / 2.0
+        GAP = sh * 0.02
+        ow, oh = self._overlay_tex_size
+        OVERLAY_H = sh / 8.0
         OVERLAY_W = OVERLAY_H * (ow / oh)
 
-        # Panel local-space centre (before yaw/pitch rotation) -matches _render_fps_overlay
-        ly_local = self.screen_pan_y - self.screen_height / 2.0 - GAP - OVERLAY_H / 2.0
+        # Panel local-space centre matches _render_fps_overlay T_local
+        local_cx = -sx + OVERLAY_W / 2.0
+        local_cy = -sy - GAP - OVERLAY_H / 2.0
 
         cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
         cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
@@ -6392,12 +4682,19 @@ class OpenXRViewerCore:
         # Panel normal is identical to the screen normal
         panel_n = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
 
-        # Rotate the panel's local centre into world space (same as _screen_world_pos)
-        lx, ly, lz = self.screen_pan_x, ly_local, -self.screen_distance
-        ix  =  lx
-        iy  =  ly * cp - lz * sp
-        iz  =  ly * sp + lz * cp
-        panel_pos = np.array([ix * cy + iz * sy_, iy, -ix * sy_ + iz * cy], dtype='f8')
+        # Panel right/up axes in world space
+        r_ax = np.array([cy,      0.0,    -sy_    ], dtype='f8')
+        u_ax = np.array([sp*sy_,  cp,      sp*cy  ], dtype='f8')
+
+        # Panel world position: T @ R @ [local_cx, local_cy, 0, 1]
+        # R_pitch @ [local_cx, local_cy, 0] = [local_cx, local_cy*cp, local_cy*sp]
+        py = local_cy * cp
+        pz = local_cy * sp
+        # R_yaw @ [local_cx, py, pz] + screen translation
+        wx = self.screen_pan_x + local_cx * cy + pz * sy_
+        wy = self.screen_pan_y + py
+        wz = -self.screen_distance - local_cx * sy_ + pz * cy
+        panel_pos = np.array([wx, wy, wz], dtype='f8')
 
         denom = float(np.dot(panel_n, fwd_w))
         if abs(denom) < 1e-6:
@@ -6408,8 +4705,6 @@ class OpenXRViewerCore:
 
         hit  = ctrl_pos + fwd_w * t
         diff = hit - panel_pos
-        r_ax = np.array([cy,      0.0,    -sy_    ], dtype='f8')
-        u_ax = np.array([sp*sy_,  cp,      sp*cy  ], dtype='f8')
         loc_x = float(np.dot(diff, r_ax))
         loc_y = float(np.dot(diff, u_ax))
         if abs(loc_x) <= OVERLAY_W / 2.0 and abs(loc_y) <= OVERLAY_H / 2.0:
@@ -6488,7 +4783,7 @@ class OpenXRViewerCore:
                 raw_pos = aim_mat[:3, 3].astype('f8')
             self._apply_ray_smoothing(raw_pos, aim_mat, pos_attr, quat_attr)
             # Pre-compute forward vector from smoothed quaternion (done once
-            # per frame, shared by all consumers -avoids 12x 3x3 rebuilds).
+            # per frame, shared by all consumers — avoids 12x 3x3 rebuilds).
             sm_quat = getattr(self, quat_attr)
             if sm_quat is not None:
                 x, y, z, w = sm_quat
@@ -6512,6 +4807,25 @@ class OpenXRViewerCore:
             return None, None
         return sm_pos.copy(), sm_fwd.copy()
 
+    def _pre_snap_overlay_ray(self, is_left, aim_mat, grip_mat):
+        """Return (cp, fw) for overlay hit testing: smoothed direction + 12° tilt, no edge-snap.
+
+        The regular laser direction snaps toward the screen edge when the ray misses the screen.
+        The overlay panel sits below the screen, so the snapped direction points away from it.
+        This returns the unsnapped tilted direction so overlay detection works correctly.
+        """
+        sm_pos, sm_fw = self._get_smoothed_ray(is_left)
+        if sm_pos is None:
+            raw_pos = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8') if grip_mat is not None else aim_mat[:3, 3].astype('f8')
+            fw = -aim_mat[:3, 2].astype('f8')
+            return raw_pos + fw * 0.11, fw
+        right = aim_mat[:3, 0].astype('f8')
+        ang = math.radians(12); ca, sa = math.cos(ang), math.sin(ang)
+        k = right / (np.linalg.norm(right) + 1e-10)
+        fw = sm_fw * ca + np.cross(k, sm_fw) * sa + k * np.dot(k, sm_fw) * (1 - ca)
+        raw_pos = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8') if grip_mat is not None else aim_mat[:3, 3].astype('f8')
+        return raw_pos + fw * 0.11, fw
+
     def _apply_ray_smoothing(self, raw_pos, aim_mat, smooth_pos_attr, smooth_quat_attr):
         """Position EMA + quaternion SLERP smoothing (with dead zone). Returns (smoothed_pos, smoothed_fwd_world)."""
         raw_quat = self._mat3_to_quat(aim_mat[:3, :3].astype('f8'))
@@ -6520,7 +4834,7 @@ class OpenXRViewerCore:
         prev_quat = getattr(self, smooth_quat_attr)
 
         # One Euro Filter position smoothing (replaces adaptive EMA)
-        # Filters raw controller position at source -laser beam, cursor,
+        # Filters raw controller position at source — laser beam, cursor,
         # and grip-to-move all consume the same stabilized data.
         # No dead zone needed: adaptive cutoff naturally filters micro-jitter
         # while responding quickly to intentional movement.
@@ -6541,7 +4855,7 @@ class OpenXRViewerCore:
             else:
                 # The greater the angular velocity, the larger the smoothing factor, resulting in tighter tracking. When hand motion stops, the factor decreases, leading to a smooth, gradual deceleration.
                 _adaptive = self._rot_smooth * (1.0 + min(_ang * 30.0, 2.0))
-                _adaptive = min(_adaptive, 0.30)
+                _adaptive = min(_adaptive, 0.20)
                 sm_quat = self._slerp_quat(prev_quat, raw_quat, _adaptive)
         else:
             sm_quat = raw_quat
@@ -6556,7 +4870,7 @@ class OpenXRViewerCore:
         return sm_pos, fwd_w
 
     def _laser_beam_setup(self):
-        """Ray sharing: Quaternion SLERP (direction) + Position EMA ->simulates VD damping."""
+        """Ray sharing: Quaternion SLERP (direction) + Position EMA → simulates VD damping."""
         now = self._frame_now
         beams = []
         for aim_mat, grip_mat, last_move_attr, ctrl_name, \
@@ -6579,26 +4893,26 @@ class OpenXRViewerCore:
             if ctrl_pos is None:
                 continue
 
-            # Raw origin (for edge constraint -uses unsmoothed position)
+            # Raw origin (for edge constraint — uses unsmoothed position)
             if grip_mat is not None:
                 raw_pos = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
             else:
                 raw_pos = aim_mat[:3, 3].astype('f8')
 
-            # Laser direction: apply a fixed 12 deg upward tilt to the smoothed forward vector, around the right axis (parallel to the screen when facing it head-on) -mimics the natural resting pose of the hand and makes it easier to point at things without needing to tilt the wrist up.
+            # Laser direction: apply a fixed 12° upward tilt to the smoothed forward vector, around the right axis (parallel to the screen when facing it head-on) — mimics the natural resting pose of the hand and makes it easier to point at things without needing to tilt the wrist up.
             right_w = aim_mat[:3, 0].astype('f8')
             _ang = math.radians(12); _ca, _sa = math.cos(_ang), math.sin(_ang)
             _k = right_w / (np.linalg.norm(right_w) + 1e-10)
             fwd_w = fwd_w * _ca + np.cross(_k, fwd_w) * _sa + _k * np.dot(_k, fwd_w) * (1 - _ca)
 
-            # Screen edge constraint: if the smoothed ray goes off-screen, try the raw ray (with the same 12 deg tilt) before giving up and snapping to the edge.  This lets the laser stay more stable near edges while still allowing the user to intentionally point off-screen by moving steadily in that direction.
+            # Screen edge constraint: if the smoothed ray goes off-screen, try the raw ray (with the same 12° tilt) before giving up and snapping to the edge.  This lets the laser stay more stable near edges while still allowing the user to intentionally point off-screen by moving steadily in that direction.
             if self._laser_screen_hit_uv(raw_pos, fwd_w) is None:
-                # Smoothed ray misses screen ->check raw ray (same tilt)
+                # Smoothed ray misses screen → check raw ray (same tilt)
                 _raw_fwd = -aim_mat[:3, 2].astype('f8')
                 _raw_rw = aim_mat[:3, 0].astype('f8')
                 _raw_fwd = _raw_fwd * _ca + np.cross(_k, _raw_fwd) * _sa + _k * np.dot(_k, _raw_fwd) * (1 - _ca)
                 if self._laser_screen_hit_uv(raw_pos, _raw_fwd) is None:
-                    # Raw ray also goes off-screen ->snap to edge (ring follows manual movement along the edge)
+                    # Raw ray also goes off-screen → snap to edge (ring follows manual movement along the edge)
                     _plane_uv = self._laser_plane_uv(raw_pos, fwd_w)
                     if _plane_uv is not None:
                         _cu = max(0.0, min(1.0, _plane_uv[0]))
@@ -6612,7 +4926,9 @@ class OpenXRViewerCore:
                             _dot2 = max(-1.0, min(1.0, _dot2))
                             _ang2 = math.acos(_dot2)
                             if _ang2 < self._ray_edge_deadzone_rad:
-                                fwd_w = _edge_dir  # Point along the constrained edge.
+                                # Blend 40% of the edge direction, keep 60% of the raw direction
+                                blend = (1.0 - EDGE_STRENGTH) * _raw_fwd + EDGE_STRENGTH * _edge_dir
+                                fwd_w = blend / (np.linalg.norm(blend) + 1e-10)  # edge snapping
             if ctrl_name == 'left':
                 self._smooth_ray_prev_fwd_l = fwd_w.copy()
             else:
@@ -6628,9 +4944,9 @@ class OpenXRViewerCore:
             beams.append((now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up))
         return beams
 
-    def _render_lasers(self, mgl_fbo, vp_mat, blend=False):
+    def _render_lasers(self, mgl_fbo, vp_mat, view_mat, blend=False):
         """blend=False: opaque rainbow beam; blend=True: semi-transparent hit circles."""
-        # Cache beam setup once per frame (called 4x: 2 eyes x 2 blend passes).
+        # Cache beam setup once per frame (called 4x: 2 eyes × 2 blend passes).
         if getattr(self, '_beams_frame', -1) != self._frame_count:
             self._cached_beams = self._laser_beam_setup()
             self._beams_frame = self._frame_count
@@ -6638,12 +4954,12 @@ class OpenXRViewerCore:
         if not beams:
             return
         if blend:
-            self._render_laser_hit_circles(mgl_fbo, vp_mat, beams)
+            self._render_laser_hit_circles(mgl_fbo, vp_mat, view_mat, beams)
             return
         mgl_fbo.use()
         BEAM_MAX_LEN = 0.4
         for now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up in beams:
-            # Auto-shorten beam when target is closer than the default length -
+            # Auto-shorten beam when target is closer than the default length —
             # mirrors the priority logic in _render_laser_hit_circles so the
             # beam tip lines up with the hit circle (no over/undershoot).
             cursor_uv = self._cursor_uv_l if ctrl_name == 'left' else self._cursor_uv_r
@@ -6652,7 +4968,11 @@ class OpenXRViewerCore:
             else:
                 kb_dist = self._keyboard_laser_hit_dist(ctrl_pos, fwd_w)
                 sc_dist = self._laser_screen_hit_dist(ctrl_pos, fwd_w)
-                ov_dist = self._overlay_panel_hit_dist(ctrl_pos, fwd_w)
+                # Use pre-snap direction for overlay hit (edge-snap deflects away from panel)
+                _is_left = (ctrl_name == 'left')
+                _bgrip = self._grip_mat_l if _is_left else self._grip_mat_r
+                _bov_cp, _bov_fw = self._pre_snap_overlay_ray(_is_left, aim_mat, _bgrip)
+                ov_dist = self._overlay_panel_hit_dist(_bov_cp, _bov_fw)
                 if self._keyboard_visible and kb_dist < 5.0:
                     hit_dist = kb_dist
                 else:
@@ -6666,49 +4986,66 @@ class OpenXRViewerCore:
             self._beam_prog['u_mvp'].write(beam_mvp.T.tobytes())
             self._beam_prog['u_time'].value = float(now)
             self._beam_vao.render(moderngl.TRIANGLE_STRIP)
-    def _render_laser_hit_circles(self, mgl_fbo, vp_mat, beams):
+    def _render_laser_hit_circles(self, mgl_fbo, vp_mat, view_mat, beams):
         mgl_fbo.use()
-        # Per-beam keyboard priority: each controller's laser independently
-        # chooses keyboard hit over screen hit (no cross-controller suppression).
+        view_inv = np.linalg.inv(view_mat)
+        cam_r = view_inv[:3, 0].astype('f4')
+        cam_u = view_inv[:3, 1].astype('f4')
+        cam_pos = view_inv[:3, 3].astype('f4')
+        cam_r /= np.linalg.norm(cam_r) + 1e-10
+        cam_u /= np.linalg.norm(cam_u) + 1e-10
+
         for now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up in beams:
-            # Compute all possible hit distances
             kb_dist = self._keyboard_laser_hit_dist(ctrl_pos, fwd_w)
             sc_dist = self._laser_screen_hit_dist(ctrl_pos, fwd_w)
-            ov_dist = self._overlay_panel_hit_dist(ctrl_pos, fwd_w)
+            # Use pre-snap direction for overlay hit so edge-snapping doesn't
+            # deflect the ray away from the panel (which sits below the screen).
+            is_left = (ctrl_name == 'left')
+            grip_mat = self._grip_mat_l if is_left else self._grip_mat_r
+            _ov_cp, _ov_fw = self._pre_snap_overlay_ray(is_left, aim_mat, grip_mat)
+            _sm_pos = self._get_smoothed_ray(is_left)[0]  # None when no smoothed data yet
+            ov_dist = self._overlay_panel_hit_dist(_ov_cp, _ov_fw)
 
-            # Pick the closest valid hit (ignore distances >= 5.0 m)
             beam_len = 30.0
-            hit_target = None
+            hit_ray_cp  = ctrl_pos   # origin for hit_pos computation (may be overridden by overlay)
+            hit_ray_fwd = fwd_w
             if self._keyboard_visible and kb_dist < 5.0:
                 beam_len = kb_dist
-                hit_target = 'keyboard'
             if sc_dist < beam_len:
                 beam_len = sc_dist
-                hit_target = 'screen'
             if ov_dist < beam_len:
                 beam_len = ov_dist
-                hit_target = 'overlay'
+                # Use pre-snap ray origin/direction for overlay hit position
+                if _sm_pos is not None:
+                    hit_ray_cp  = _ov_cp
+                    hit_ray_fwd = _ov_fw
 
-            if beam_len >= 5.0:
+            if beam_len >= 30.0:
                 continue
 
-            # Draw the hit circle at beam_len distance
             HIT_OFFSET = 0.0
-            hit_pos = ctrl_pos + fwd_w * (beam_len - HIT_OFFSET)
-            STROKE_R = 0.0096
-            FILL_R   = 0.0056
-            for radius, color in [(STROKE_R, (0.2, 0.6, 1.0, 0.75)),
-                                (FILL_R,   (1.0, 1.0, 1.0, 0.75))]:
+            hit_pos = hit_ray_cp + hit_ray_fwd * (beam_len - HIT_OFFSET)
+
+            # Direction toward camera for fill offset (GL_LESS depth test)
+            to_cam = cam_pos - hit_pos.astype('f4')
+            to_cam_dir = to_cam / (np.linalg.norm(to_cam) + 1e-10)
+
+            # Mild distance compensation: between pure world-space (grows on
+            # screen when close) and pure angular (constant). sqrt scaling
+            # keeps the cursor close to constant but slightly larger when near.
+            import math
+            _eye_dist = float(np.linalg.norm(to_cam))
+            _scale = math.sqrt(max(_eye_dist, 0.2))
+            STROKE_R = 0.0096 * _scale
+            FILL_R   = 0.0064 * _scale
+            for radius, color, z_bias in [
+                (STROKE_R, (0.2, 0.6, 1.0, 0.75), 0.0),
+                (FILL_R,   (1.0, 1.0, 1.0, 0.75), 0.0001),
+            ]:
                 model = np.eye(4, dtype='f4')
-                if hit_target == 'screen':
-                    _sh, _screen_pos, r_ax, u_ax, screen_n = self._screen_basis()
-                    model[:3, 0] = (r_ax * radius).astype('f4')
-                    model[:3, 1] = (u_ax * radius).astype('f4')
-                    model[:3, 2] = screen_n.astype('f4')
-                else:
-                    model[0, 0] = radius
-                    model[1, 1] = radius
-                model[:3, 3] = hit_pos.astype('f4')
+                model[:3, 0] = cam_r * radius
+                model[:3, 1] = cam_u * radius
+                model[:3, 3] = (hit_pos + to_cam_dir * z_bias).astype('f4')
                 circle_mvp = vp_mat @ model
                 self._border_prog['u_mvp'].write(circle_mvp.T.tobytes())
                 self._border_prog['u_color'].value = color
@@ -6770,12 +5107,12 @@ class OpenXRViewerCore:
             model_mat = (grip_mat @ _corr).astype(np.float32)
 
             # Set common uniforms for the current controller
-            # u_model: model ->world (grip @ _corr)
-            # u_mvp: world ->clip (VP only, no model, because shader computes world_pos = u_model * v)
+            # u_model: model → world (grip @ _corr)
+            # u_mvp: world → clip (VP only, no model, because shader computes world_pos = u_model * v)
             self._controller_prog['u_mvp'].write(vp_mat.astype(np.float32).T.tobytes())
             self._controller_prog['u_model'].write(model_mat.T.tobytes())
-            self._controller_prog['u_light_color'].value = (0.60, 0.60, 0.65)
-            self._controller_prog['u_ambient_color'].value = (0.22, 0.22, 0.24)
+            self._controller_prog['u_light_color'].write((light_color).tobytes())
+            self._controller_prog['u_ambient_color'].write((ambient_color).tobytes())
             self._controller_prog['u_camera_pos'].write((cam_pos).tobytes())
 
             # Sort primitives by triangle count (descending): larger items rendered first (bottom), smaller ones later (top)
@@ -6788,11 +5125,6 @@ class OpenXRViewerCore:
                 tex = self._ctrl_tex_cache.get(prim['tex_key'])
                 if tex is not None:
                     tex.use(location=3)
-                    self._controller_prog['u_use_texture'].value = 1
-                    self._controller_prog['u_base_color_factor'].value = (1.0, 1.0, 1.0)
-                else:
-                    self._controller_prog['u_use_texture'].value = 0
-                    self._controller_prog['u_base_color_factor'].value = (0.7, 0.7, 0.7)
                 prim['vao'].render(moderngl.TRIANGLES)
 
             if self._use_d3d11:
@@ -6846,7 +5178,7 @@ class OpenXRViewerCore:
         else:
             print("[Calibration] Discarded changes.")
         self._calibration_mode = False
-        self._calib_ab_fired = False
+        self._calib_combo_fired = False
 
     def _render_calibration_panel(self, mgl_fbo, vp_mat):
         """Draw semi-transparent calibration panel in VR (reuses FPS overlay shader)."""
@@ -6885,7 +5217,7 @@ class OpenXRViewerCore:
         draw = ImageDraw.Draw(img)
         draw.rounded_rectangle([0, 0, fw - 1, fh - 1], radius=12,
                             fill=(20, 20, 28, 200))
-        # Cache the consola font once -re-loading from disk every 0.5s
+        # Cache the consola font once — re-loading from disk every 0.5s
         # (the panel's rebuild cadence) is wasted I/O.
         if not hasattr(self, '_calib_font') or self._calib_font is None:
             try:
@@ -6935,8 +5267,6 @@ class OpenXRViewerCore:
         else:
             return
         mgl_fbo.use()
-        # depth_mask = False  # do not write semi-transparent pixels to depth
-        self.ctx.depth_mask = False
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         tex.use(location=2)
@@ -6944,12 +5274,8 @@ class OpenXRViewerCore:
         self._overlay_prog['u_alpha'].value = alpha
         self._overlay_vao.render(moderngl.TRIANGLE_STRIP)
         self.ctx.disable(moderngl.BLEND)
-        self.ctx.depth_mask = True
 
     # Shortcuts help panel (right controller attachment)
-    def _controller_guide_rows(self):
-        return ENV_ROWS if getattr(self, 'ENVIRONMENT_MODE', False) else ROWS
-
     def _build_help_texture(self):
         """Generate help panel texture (3-column layout, adaptive size, Chinese font priority)."""
         try:
@@ -6970,8 +5296,8 @@ class OpenXRViewerCore:
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
         ]
-        _font_size = 16
-        _title_size = 18
+        _font_size = 21
+        _title_size = 21
         font = None
         for fp in _font_paths:
             if os.path.isfile(fp):
@@ -6990,42 +5316,23 @@ class OpenXRViewerCore:
                 bfont = font
 
         draw = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
-        # Measure column widths for 3-column layout
+        # Measure maximum width for each column
         col_w = [0, 0, 0]
-        rows = self._controller_guide_rows()
-        for r in rows:
-            if len(r) >= 4:
-                is_title = r[3]
-                fields = list(r[:3])
-            else:
-                is_title = False
-                fields = list(r[:3])
+        for r in ROWS:
             for ci in range(3):
-                b = draw.textbbox((0, 0), fields[ci], font=bfont if is_title else font)
+                b = draw.textbbox((0, 0), r[ci], font=bfont if r[3] else font)
                 w = b[2] - b[0]
                 if w > col_w[ci]:
                     col_w[ci] = w
 
-        GAP = 20       # Column spacing
-        MID_GAP = 50   # Gap between left and right section groups
-        PAD_X = 30
-        PAD_Y = 20
+        GAP = 20    # Column spacing
+        PAD_X = 30  # Left and right padding
+        PAD_Y = 20  # Top and bottom padding
         LINE_H = (_font_size + 6) if font else 20
+        tw = col_w[0] + GAP + col_w[1] + GAP + col_w[2] + PAD_X * 2
+        th = len(ROWS) * LINE_H + PAD_Y * 2
 
-        # Split guide rows into left and right groups at the 4th section title (index 3).
-        title_indices = [i for i, r in enumerate(rows) if len(r) >= 4 and r[3]]
-        mid_idx = title_indices[4] if len(title_indices) > 4 else len(rows)
-
-        left_rows = rows[:mid_idx]
-        right_rows = rows[mid_idx:]
-
-        left_h = len(left_rows) * LINE_H
-        right_h = len(right_rows) * LINE_H
-        th = max(left_h, right_h) + PAD_Y * 2
-
-        inner_w = col_w[0] + GAP + col_w[1] + GAP + col_w[2]
-        tw = inner_w * 2 + MID_GAP + PAD_X * 2
-
+        # Rebuild texture with correct dimensions
         if hasattr(self, '_help_tex') and self._help_tex is not None:
             try:
                 self._help_tex.release()
@@ -7041,17 +5348,8 @@ class OpenXRViewerCore:
                             fill=(18, 18, 28, 210))
 
         col_x = [PAD_X, PAD_X + col_w[0] + GAP,
-                 PAD_X + col_w[0] + GAP + col_w[1] + GAP]
-        col_x2 = [PAD_X + inner_w + MID_GAP,
-                  PAD_X + inner_w + MID_GAP + col_w[0] + GAP,
-                  PAD_X + inner_w + MID_GAP + col_w[0] + GAP + col_w[1] + GAP]
-
-        # Render left column (sections 0-2)
-        for ri, r in enumerate(left_rows):
-            if len(r) >= 4:
-                c1, c2, c3, is_title = r[0], r[1], r[2], r[3]
-            else:
-                c1, c2, c3, is_title = r[0], r[1], r[2], False
+                PAD_X + col_w[0] + GAP + col_w[1] + GAP]
+        for ri, (c1, c2, c3, is_title) in enumerate(ROWS):
             y = PAD_Y + ri * LINE_H
             f = bfont if is_title else font
             color = (90, 190, 255, 255) if is_title else (200, 210, 235, 255)
@@ -7059,112 +5357,77 @@ class OpenXRViewerCore:
                 if txt:
                     draw.text((col_x[ci], y), txt, font=f, fill=color)
 
-        # Render right column (sections 3+)
-        for ri, r in enumerate(right_rows):
-            if len(r) >= 4:
-                c1, c2, c3, is_title = r[0], r[1], r[2], r[3]
-            else:
-                c1, c2, c3, is_title = r[0], r[1], r[2], False
-            y = PAD_Y + ri * LINE_H
-            f = bfont if is_title else font
-            color = (90, 190, 255, 255) if is_title else (200, 210, 235, 255)
-            for ci, txt in enumerate([c1, c2, c3]):
-                if txt:
-                    draw.text((col_x2[ci], y), txt, font=f, fill=color)
-
         data = np.flipud(np.array(img, dtype=np.uint8))
         self._help_tex.write(data.tobytes())
 
     def _render_help_panel(self, mgl_fbo, vp_mat):
-        """Render the help/shortcut panel attached to the right controller.
+        """Render the help/shortcut panel anchored to the left side of the screen.
 
-        Attach exactly like the left-controller status panel: compute a controller-
-        relative origin and basis so the panel moves/rotates with the right grip
-        (no head-facing billboard behaviour).
+        Hinged at its right edge and rotated to face the user. The right edge
+        stays fixed to the screen's left edge; screen yaw/pitch/pan translate
+        the entire assembly in world space.
         """
-        if self._help_tex is None:
+        if self._help_tex is None or self.screen_height is None:
             return
 
-        # Default panel size (world metres)
         tex_w, tex_h = self._help_tex_size
-        PANEL_H = 0.2
+        sh = self.screen_height
+        sx = self.screen_width / 2.0
+        GAP = sh * 0.02
+
+        PANEL_H = sh
         PANEL_W = PANEL_H * (tex_w / tex_h)
 
-        panel_pos = None
-        panel_fwd = None
-        panel_up = None
+        # Screen rotation
+        cy_s = math.cos(self.screen_yaw);   sy_s = math.sin(self.screen_yaw)
+        cp_s = math.cos(self.screen_pitch); sp_s = math.sin(self.screen_pitch)
+        R_yaw = np.array([[ cy_s,  0, sy_s, 0],
+                          [    0,  1,     0, 0],
+                          [-sy_s,  0, cy_s,  0],
+                          [    0,  0,     0, 1]], dtype=np.float32)
+        R_pitch = np.array([[1,    0,     0, 0],
+                            [0, cp_s, -sp_s, 0],
+                            [0, sp_s,  cp_s, 0],
+                            [0,    0,     0, 1]], dtype=np.float32)
+        R = R_yaw @ R_pitch
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x
+        T[1, 3] = self.screen_pan_y
+        T[2, 3] = -self.screen_distance
 
-        # Prefer right-controller attachment; fall back to head-relative placement
-        if self._grip_mat_r is not None and self._aim_mat_r is not None:
-            # Grip axes in world space (columns of grip_mat)
-            grip_right = self._grip_mat_r[:3, 0].astype('f8')
-            grip_up    = self._grip_mat_r[:3, 1].astype('f8')
-            grip_fwd   = self._grip_mat_r[:3, 2].astype('f8')
-            grip_right /= np.linalg.norm(grip_right) + 1e-10
-            grip_up    /= np.linalg.norm(grip_up) + 1e-10
-            grip_fwd   /= np.linalg.norm(grip_fwd) + 1e-10
+        # Head position in screen-local space to compute hinge angle
+        head_w = np.array(self._head_pos_w, dtype=np.float32) if self._head_pos_w is not None else np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        screen_c_w = np.array([self.screen_pan_x, self.screen_pan_y, -self.screen_distance], dtype=np.float32)
+        R3 = R[:3, :3].astype(np.float32)
+        head_local = R3.T @ (head_w - screen_c_w)
+        # Panel right edge fixed to screen's left edge
+        right_edge_local = np.array([-sx - GAP, 0.0, 0.0], dtype=np.float32)
+        to_user = head_local - right_edge_local
+        to_user /= np.linalg.norm(to_user) + 1e-10
 
-            # Laser forward (same offset used for laser beam)
-            fwd_w = -self._aim_mat_r[:3, 2].astype('f8')
-            right_w = self._aim_mat_r[:3, 0].astype('f8')
-            _ang = math.radians(12); _ca, _sa = math.cos(_ang), math.sin(_ang)
-            _k = right_w / (np.linalg.norm(right_w) + 1e-10)
-            laser_fwd = fwd_w * _ca + np.cross(_k, fwd_w) * _sa + _k * np.dot(_k, fwd_w) * (1 - _ca)
-            laser_fwd /= np.linalg.norm(laser_fwd) + 1e-10
+        # Hinge angle: panel normal [sinθ,0,cosθ] points toward user
+        theta = math.atan2(float(to_user[0]), float(to_user[2]))
+        ct = math.cos(theta); st = math.sin(theta)
 
-            # Laser origin similar to status panel
-            grip_pos = self._grip_mat_r[:3, 3].astype('f8')
-            laser_origin = grip_pos + grip_up * 0.020 + laser_fwd * 0.11
+        # Position right edge at (-sx - GAP, 0, 0) in screen-local (screen's left edge)
+        T_right_edge = np.eye(4, dtype=np.float32)
+        T_right_edge[0, 3] = -sx - GAP
 
-            # Panel forward: blend grip_up (button surface normal) with toward_user
-            toward_user = (-laser_fwd).astype('f8')
-            panel_fwd = grip_up + toward_user
-            panel_fwd /= np.linalg.norm(panel_fwd) + 1e-10
-            panel_up = grip_up.copy()
+        # Shift quad so right edge is at origin before hinge rotation (panel extends left)
+        T_offset = np.eye(4, dtype=np.float32)
+        T_offset[0, 3] = -PANEL_W / 2.0
 
-            # Pre-compute orthonormal basis
-            _pr = np.cross(panel_up, panel_fwd)
-            _pr /= np.linalg.norm(_pr) + 1e-10
-            _pu2 = np.cross(panel_fwd, _pr)
-            _pu2 /= np.linalg.norm(_pu2) + 1e-10
+        # Hinge rotation around Y (vertical axis through right edge)
+        Ry = np.eye(4, dtype=np.float32)
+        Ry[0, 0] = ct; Ry[0, 2] = st
+        Ry[2, 0] = -st; Ry[2, 2] = ct
 
-            PANEL_OFFSET = 0.05
-            _top_ref = PANEL_H + 0.025  # bottom edge gap matches status panel (0.025)
-            panel_pos = laser_origin + panel_fwd * PANEL_OFFSET + _pu2 * (_top_ref - PANEL_H / 2.0)
+        S_panel = np.diag([PANEL_W / 2.0, PANEL_H / 2.0, 1.0, 1.0]).astype(np.float32)
 
-        if panel_pos is None and self._head_pos_w is not None and self._head_fwd_w is not None:
-            hx, hy, hz = self._head_pos_w
-            fx, fy, fz = self._head_fwd_w
-            panel_pos = np.array([hx + fx * 1.2, hy + fy * 1.2 - 0.3, hz + fz * 1.2], dtype='f8')
-            panel_fwd = np.array([-fx, -fy, -fz], dtype='f8')
-            panel_up  = np.array([0.0, 1.0, 0.0], dtype='f8')
+        model = T @ R @ T_right_edge @ Ry @ T_offset @ S_panel
 
-        # Head-facing mode: reorient panel toward user's head (keep position attached to controller)
-        if self._panel_mode == 0 and panel_pos is not None and self._head_pos_w is not None:
-            toward = np.array(self._head_pos_w, dtype='f8') - panel_pos
-            panel_fwd = toward / (np.linalg.norm(toward) + 1e-10)
-            panel_up  = np.array([0.0, 1.0, 0.0], dtype='f8')
-
-        if panel_pos is not None:
-
-            S = np.diag([PANEL_W/2.0, PANEL_H/2.0, 1.0, 1.0]).astype(np.float32)
-            panel_right = np.cross(panel_up, panel_fwd)
-            panel_right /= np.linalg.norm(panel_right) + 1e-10
-            panel_up2 = np.cross(panel_fwd, panel_right)
-            panel_up2 /= np.linalg.norm(panel_up2) + 1e-10
-            R = np.eye(4, dtype=np.float32)
-            R[:3, 0] = panel_right.astype(np.float32)
-            R[:3, 1] = panel_up2.astype(np.float32)
-            R[:3, 2] = panel_fwd.astype(np.float32)
-            T = np.eye(4, dtype=np.float32)
-            T[0, 3] = panel_pos[0]; T[1, 3] = panel_pos[1]; T[2, 3] = panel_pos[2]
-            mvp = vp_mat @ T @ R @ S
-        else:
-            return
-
+        mvp = vp_mat @ model
         mgl_fbo.use()
-        # depth_mask = False  # do not write semi-transparent pixels to depth
-        self.ctx.depth_mask = False
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         self._help_tex.use(location=2)
@@ -7172,8 +5435,68 @@ class OpenXRViewerCore:
         self._overlay_prog['u_alpha'].value = 0.75
         self._help_vao.render(moderngl.TRIANGLE_STRIP)
         self.ctx.disable(moderngl.BLEND)
-        self.ctx.depth_mask = True
 
+    def _render_border(self, mgl_fbo, vp_mat):
+        """Render a thin solid-color border slightly larger than the screen.
+
+        Flat mode: oversized quad rendered before the screen so it peeks at the edges.
+        Curved mode: oversized arc strip matching the curved screen geometry.
+        Color is cyan when the user is grabbing/resizing, light grey otherwise.
+        """
+        if self.screen_height is None:
+            return
+        alpha = self._border_alpha
+        if alpha <= 0.0:
+            return
+
+        if self._grabbed:
+            color = (0.3, 0.7, 1.0, alpha)
+        else:
+            color = (0.75, 0.75, 0.75, alpha * 0.9)
+
+        BORDER = self.screen_width / 300.0   # proportional to screen width
+
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+
+        if self._screen_curved and self._curved_border_vao is not None:
+            # Build a border arc: same arc geometry but screen_width+2B wide,
+            # screen_height+2B tall, and pushed 1 mm behind the screen surface.
+            bw = self.screen_width  + 2 * BORDER
+            bh = self.screen_height + 2 * BORDER
+            params = (bw, bh, self.screen_distance, self.screen_pan_x,
+                    self.screen_pan_y, self.screen_yaw, self.screen_pitch)
+            if self._curved_border_verts_params != params:
+                border_verts = self._build_curved_screen_verts(
+                    width_override=bw, height_override=bh, dist_offset=0.001,
+                )
+                self._curved_border_vbo.write(border_verts.tobytes())
+                self._curved_border_verts_params = params
+            self._curved_border_prog['u_mvp'].write(vp_mat.T.tobytes())
+            self._curved_border_prog['u_color'].value = color
+            n_verts = (48 + 1) * 2
+            self._curved_border_vao.render(moderngl.TRIANGLE_STRIP, vertices=n_verts)
+        else:
+            sx = self.screen_width  / 2.0 + BORDER
+            sy = self.screen_height / 2.0 + BORDER
+            cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+            cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+            rot_y = np.array([[ cy, 0, sy_, 0], [0, 1, 0, 0], [-sy_, 0, cy, 0], [0, 0, 0, 1]], dtype='f4')
+            rot_x = np.array([[1, 0, 0, 0], [0, cp, -sp, 0], [0, sp, cp, 0], [0, 0, 0, 1]], dtype='f4')
+            S = np.diag([sx, sy, 1.0, 1.0]).astype('f4')
+            R = rot_y @ rot_x
+            T = np.eye(4, dtype='f4')
+            T[0, 3] = self.screen_pan_x
+            T[1, 3] = self.screen_pan_y
+            T[2, 3] = -self.screen_distance - 0.001
+            border_model = T @ R @ S
+            mvp = vp_mat @ border_model
+            self._border_prog['u_mvp'].write(mvp.T.astype('f4').tobytes())
+            self._border_prog['u_color'].value = color
+            self._border_vao.render(moderngl.TRIANGLE_STRIP)
+
+        self.ctx.disable(moderngl.BLEND)
 
     def _render_eye(self, eye_index, mgl_fbo, view_mat, proj_mat, flip_y=False):
         """Render one eye's parallax view into the swapchain FBO using world-space MVP.
@@ -7186,7 +5509,7 @@ class OpenXRViewerCore:
         """
         if flip_y:
             proj_mat = proj_mat.copy()
-            proj_mat[1, :] = -proj_mat[1, :]  # flip clip-space Y ->GL renders upside-down
+            proj_mat[1, :] = -proj_mat[1, :]  # flip clip-space Y → GL renders upside-down
         sc_w, sc_h = self._swapchain_sizes[eye_index]
 
         # The swapchain is GL_SRGB8_ALPHA8, but the desktop capture texture is already
@@ -7196,13 +5519,15 @@ class OpenXRViewerCore:
         glDisable(GL_FRAMEBUFFER_SRGB)
 
         mgl_fbo.use()
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.depth_mask = True
-        self.ctx.disable(moderngl.BLEND)
         self.ctx.viewport = (0, 0, sc_w, sc_h)
         bg_a = 1.0
         bg_r, bg_g, bg_b = _BG_COLORS[self._bg_color_idx]
         mgl_fbo.clear(bg_r, bg_g, bg_b, bg_a, depth=1.0)
+
+        # Depth test for proper spatial occlusion: nearer opaque objects cover farther ones
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.depth_func = '<'
+        self.ctx.depth_mask = True  # opaque objects write depth
 
         if not self._screen_visible:
             self.ctx.screen.use()
@@ -7212,85 +5537,119 @@ class OpenXRViewerCore:
             self.ctx.screen.use()
             return
 
-        # Pre-compute view-projection once per eye -all quads multiply their model
+        # Pre-compute view-projection once per eye — all quads multiply their model
         # matrix against this rather than recomputing proj @ view each time.
         vp_mat = proj_mat @ view_mat
-        # -3. Environment model (glTF 3D scene, very back) -background layer only
-        if self._env_model_visible and self._env_model_prims:
-            self._render_env_model(mgl_fbo, vp_mat, view_mat)
-            mgl_fbo.use()
-            glClear(GL_DEPTH_BUFFER_BIT)
 
-        # Optional screen effects behind the desktop quad (normal viewer only).
-        self._render_screen_background_effects(mgl_fbo, vp_mat)
+        # 1. Border (behind the screen, slightly larger)
+        self._render_border(mgl_fbo, vp_mat)
+        self.ctx.viewport = (0, 0, sc_w, sc_h)
 
-        # Main screen
+        # 2. Main screen (flat quad or cylindrical curved arc)
         mgl_fbo.use()
         self.color_tex.use(location=0)
         self.depth_tex.use(location=1)
 
         eye_sign = -1.0 if eye_index == 0 else 1.0
-        model = self._build_model_mat4()
-        mvp = vp_mat @ model
-        self.prog['u_mvp'].write(mvp.T.tobytes())
-        self.prog['u_roll'].value = self.screen_roll
-        self.prog['u_eye_offset'].value = eye_sign * self.ipd_uv / 2.0
-        self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
-        self.prog['u_convergence'].value = float(self.convergence)
-        self.prog['u_corner_radius'].value = self._corner_radius
-        self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-        # Optional screen effects on/around the desktop quad (normal viewer only).
-        self._render_screen_foreground_effects(mgl_fbo, vp_mat)
+        if self._screen_curved and self._curved_prog is not None:
+            # Curved path: build world-space arc verts, upload, draw with vp_mat only
+            prog = self._curved_prog
+            params = (self.screen_width, self.screen_height, self.screen_distance,
+                    self.screen_pan_x, self.screen_pan_y, self.screen_yaw, self.screen_pitch)
+            if self._curved_verts_params != params:
+                arc_verts = self._build_curved_screen_verts()
+                self._curved_vbo.write(arc_verts.tobytes())
+                self._curved_verts_params = params
+            prog['u_mvp'].write(vp_mat.T.tobytes())
+            prog['u_eye_offset'].value     = eye_sign * self.ipd_uv / 2.0
+            prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+            prog['u_convergence'].value    = float(self.convergence)
+            prog['u_resolution'].value     = (float(sc_w), float(sc_h))
+            prog['u_sharpen'].value        = float(getattr(self, 'sharpen_strength', 0.6))
+            n_verts = (48 + 1) * 2
+            self._curved_vao.render(moderngl.TRIANGLE_STRIP, vertices=n_verts)
+        else:
+            # Flat path: standard MVP quad
+            model = self._build_model_mat4()
+            mvp   = vp_mat @ model
+            self.prog['u_mvp'].write(mvp.T.tobytes())
+            self.prog['u_eye_offset'].value     = eye_sign * self.ipd_uv / 2.0
+            self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+            # Keep convergence in sync — user-driven divergence input updates self.convergence
+            # at runtime; pushing it here ensures any external change is reflected per-frame.
+            self.prog['u_convergence'].value = float(self.convergence)
+            self.prog['u_resolution'].value  = (float(sc_w), float(sc_h))
+            self.prog['u_sharpen'].value     = float(getattr(self, 'sharpen_strength', 0.6))
+            # Render screen WITHOUT alpha blending so the shader's edge alpha is written
+            # directly into the swapchain framebuffer. The XR compositor composites those
+            # near-zero-alpha edge pixels against the VR background — producing a clean soft
+            # edge. With SRC_ALPHA blending the edge pixels would blend against the FBO's
+            # opaque black clear, creating a persistent dark halo visible at all times.
+            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-        # 3. Keyboard
+        # 3. Keyboard (opaque, rendered after screen)
         if self._keyboard_visible and self._keyboard_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_keyboard(mgl_fbo, vp_mat)
 
-        # 6b. Brand OSD (controller model indicator, attached to right controller)
+        # 4. Laser beam (opaque rainbow) — rendered behind controllers
+        self.ctx.viewport = (0, 0, sc_w, sc_h)
+        self._render_lasers(mgl_fbo, vp_mat, view_mat, blend=False)
+
+        # 5. VR Controller models — rendered on top of the opaque laser beam
+        if self._ctrl_prims_l or self._ctrl_prims_r:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_controllers(mgl_fbo, vp_mat, view_mat)
+
+        # Transparent overlays: depth test ON (occluded by opaque), depth write OFF
+        self.ctx.depth_mask = False
+
+        # 6. Transparent overlays (sorted back-to-front as a group)
+        # Depth OSD
+        if self._depth_osd_tex is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_depth_osd(eye_index, mgl_fbo, vp_mat)
+
+        # Screen-info OSD
+        if self._screen_osd_tex is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_screen_osd(eye_index, mgl_fbo, vp_mat)
+
+        # Preset OSD
+        if self._preset_osd_tex is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_preset_osd(eye_index, mgl_fbo, vp_mat)
+
+        # Brand OSD
         if self._brand_osd_tex is not None and self._grip_mat_r is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_brand_osd(eye_index, mgl_fbo, vp_mat)
 
-        # 7. Laser beam (opaque rainbow) -rendered behind controllers so the
-        # controller ring and body correctly occlude the beam near its origin.
+        # Laser hit circles (semi-transparent)
         self.ctx.viewport = (0, 0, sc_w, sc_h)
-        self._render_lasers(mgl_fbo, vp_mat, blend=False)
-
-        # 8. VR Controller models -rendered on top of the opaque laser beam.
-        if self._ctrl_prims_l or self._ctrl_prims_r:
-            self.ctx.viewport = (0, 0, sc_w, sc_h)
-            self.ctx.disable(moderngl.BLEND)
-            self.ctx.depth_mask = True
-            glFrontFace(GL_CCW)
-            self._render_controllers(mgl_fbo, vp_mat, view_mat)
-
-        # 9. Laser hit circles (semi-transparent) -rendered on top of controllers.
-        self.ctx.viewport = (0, 0, sc_w, sc_h)
-        # depth_mask = False  # do not write semi-transparent pixels to depth
-        self.ctx.depth_mask = False
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-        self._render_lasers(mgl_fbo, vp_mat, blend=True)
+        self._render_lasers(mgl_fbo, vp_mat, view_mat, blend=True)
         self.ctx.disable(moderngl.BLEND)
-        self.ctx.depth_mask = True
 
-        # 10. FPS overlay -topmost UI, occludes laser beams
+        # 10. FPS overlay — anchored bottom-left of screen, always visible when toggled
         if self._fps_overlay_visible and self._overlay_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_fps_overlay(eye_index, mgl_fbo, vp_mat)
 
-        # 11. Calibration panel (also topmost, shown when in calibration mode -occludes everything else)
+        # 11. Calibration panel (also topmost, shown when in calibration mode — occludes everything else)
         if self._calibration_mode:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_calibration_panel(mgl_fbo, vp_mat)
 
-        # 12. Help panel (linked with FPS panel)
-        if self._fps_overlay_visible and self._help_tex is not None:
+        # 12. Help/shortcut panel — anchored to left side of screen
+        if self._fps_overlay_visible and self._help_panel_visible and self._help_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_help_panel(mgl_fbo, vp_mat)
 
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.depth_mask = True
         self.ctx.screen.use()
     
     # OpenXR event loop
@@ -7312,14 +5671,6 @@ class OpenXRViewerCore:
                 ).contents
                 state = xr.SessionState(event.state)
                 if state == xr.SessionState.READY:
-                    now = time.perf_counter()
-                    self._debug_openxr_trace("event READY", now)
-                    if (
-                        now < self._openxr_retry_cooldown_until
-                        or self._xr_session is None
-                    ):
-                        self._debug_openxr_trace("event READY ignored", now)
-                        continue
                     xr.begin_session(
                         self._xr_session,
                         xr.SessionBeginInfo(
@@ -7327,84 +5678,27 @@ class OpenXRViewerCore:
                                 xr.ViewConfigurationType.PRIMARY_STEREO
                         ),
                     )
-                    self._source_resume_grace_until = (
-                        time.perf_counter() + self._source_resume_grace
-                    )
                     self._session_running = True
-                    self._session_ready_pending = True
-                    self._openxr_ready_since = now
-                    self._session_idle_since = 0.0
-                    self._session_idle_notice_emitted = False
-                    self._debug_openxr_trace("event READY begin_session", now)
-                    print("[OpenXRViewer] Session READY - awaiting render confirmation")
+                    print("[OpenXRViewer] Session READY — rendering started")
 
                 elif state in (
                     xr.SessionState.STOPPING,
                     xr.SessionState.LOSS_PENDING,
                     xr.SessionState.EXITING,
                 ):
-                    if state == xr.SessionState.STOPPING:
-                        stop_now = time.perf_counter()
-                        retry_delay = self._compute_standby_retry_delay(stop_now)
-                        self._debug_openxr_trace(
-                            f"event STOPPING retry={retry_delay:.1f}s count={self._openxr_standby_retry_count}",
-                            stop_now,
-                        )
-                        try:
-                            xr.end_session(self._xr_session)
-                        except Exception:
-                            pass
-                        self._cleanup_partial_openxr(destroy_instance=True)
-                        self._openxr_ready_since = 0.0
-                        self._session_idle_since = 0.0
-                        self._session_idle_notice_emitted = False
-                        self._defer_openxr_retry(retry_delay)
-                        self._enter_preview_only_wait()
-                        self._debug_openxr_trace("event STOPPING handled", time.perf_counter())
-                        print("[OpenXRViewer] Session STOPPING; waiting for headset wake")
-                        continue
-                    try:
-                        xr.end_session(self._xr_session)
-                    except Exception:
-                        pass
-                    print(f"[OpenXRViewer] Session state -> {state.name}; rendering paused")
-                    self._cleanup_partial_openxr(destroy_instance=True)
-                    self._openxr_ready_since = 0.0
-                    self._session_idle_since = 0.0
-                    self._session_idle_notice_emitted = False
-                    self._defer_openxr_retry(self._openxr_standby_retry_interval)
-                    self._enter_preview_only_wait()
+                    xr.end_session(self._xr_session)
+                    self._session_running = False
+                    print(f"[OpenXRViewer] Session state → {state.name}; rendering paused")
 
             elif event_type == xr.StructureType.EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING:
-                view = getattr(self, '_view_pose_profile', {}) or {}
-                if isinstance(view, dict) and view.get('auto_center_on_screen', False):
-                    if self._xr_session is not None and self._xr_ref_space_type is not None:
-                        try:
-                            old_space = self._xr_space
-                            self._xr_space = xr.create_reference_space(
-                                self._xr_session,
-                                xr.ReferenceSpaceCreateInfo(
-                                    reference_space_type=self._xr_ref_space_type,
-                                    pose_in_reference_space=xr.Posef(),
-                                ),
-                            )
-                            self._xr_space_pose_in_ref = np.eye(4, dtype=np.float32)
-                            if old_space is not None:
-                                xr.destroy_space(old_space)
-                        except Exception:
-                            pass
-                    self._xr_profile_space_applied = False
-                else:
-                    self._reset_screen_to_default(show_border=False)
+                # Long-pressing the Oculus/home button triggers a playspace recenter,
+                # which emits this event.  Reset the screen direction to face the user
+                # while preserving current distance and screen size.
+                self._reset_screen_direction()
 
             elif event_type == xr.StructureType.EVENT_DATA_INSTANCE_LOSS_PENDING:
-                print("[OpenXRViewer] Instance loss pending - waiting for runtime recovery")
-                self._cleanup_partial_openxr(destroy_instance=True)
-                self._openxr_ready_since = 0.0
-                self._session_idle_since = 0.0
-                self._session_idle_notice_emitted = False
-                self._defer_openxr_retry(self._openxr_standby_retry_interval)
-                self._enter_preview_only_wait()
+                print("[OpenXRViewer] Instance loss pending — shutting down")
+                shutdown_event.set()
                 break
 
     def _read_bool_action(self, action, hand_path_str="/user/hand/left"):
@@ -7454,7 +5748,7 @@ class OpenXRViewerCore:
                 # changed is at byte offset 8 (after two 4-byte fields).
                 try:
                     ptr = ctypes.cast(ctypes.byref(state), ctypes.POINTER(ctypes.c_int32))
-                    changed = bool(ptr[2])  # offset 2 x 4 bytes
+                    changed = bool(ptr[2])  # offset 2 × 4 bytes
                 except Exception:
                     pass
 
@@ -7488,18 +5782,112 @@ class OpenXRViewerCore:
         u, v are in [0, 1] (u=0 left, v=0 bottom). t is the along-ray distance.
         Returns None if the ray misses the screen rect or is parallel to it.
         """
-        sh, screen_pos, r_ax, u_ax, screen_n = self._screen_basis()
+        sh = self.screen_height
+        if sh is None:
+            fw, fh = self.frame_size
+            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
         safe_w = max(self.screen_width, 1e-6)
         safe_h = max(sh, 1e-6)
 
+        # Curved screen: solve ray <-> cylindrical arc intersection by transforming
+        # the world-space ray into the screen-local parametric frame used by
+        # _build_curved_screen_verts. In that local frame the surface satisfies
+        # sqrt(x^2+z^2) == R where R == screen_distance.
+        if self._screen_curved:
+            BEAM_MAX = 30.0
+            R = max(self.screen_distance, 1e-6)
+            half_w = self.screen_width / 2.0
+            half_h = sh / 2.0
+            half_ang = min(half_w / R, math.pi / 2)
+
+            # Rotation matrices (same convention as _build_curved_screen_verts)
+            cy = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+            cp = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+            yaw_rot = np.array([[cy, 0.0, sy_], [0.0, 1.0, 0.0], [-sy_, 0.0, cy]], dtype='f8')
+            pitch_rot = np.array([[1.0, 0.0, 0.0], [0.0, cp, -sp], [0.0, sp, cp]], dtype='f8')
+            # Inverse mapping: v_local = Yaw.T @ Pitch.T @ (W - T)
+            # New local frame has surface centre at origin and cylinder axis at (0,0,R)
+            M_inv = yaw_rot.T @ pitch_rot.T
+            T = np.array([self.screen_pan_x, self.screen_pan_y, -R], dtype='f8')
+
+            def f_dist(t):
+                P = ctrl_pos + fwd_w * t
+                vl = M_inv @ (P - T)
+                return math.hypot(float(vl[0]), float(vl[2]) - R) - R
+
+            t0 = 0.01
+            t1 = BEAM_MAX
+            f0 = f_dist(t0)
+            f1 = f_dist(t1)
+            bracket = None
+            if abs(f0) < 1e-6:
+                bracket = (t0, t0)
+            elif f0 * f1 < 0:
+                bracket = (t0, t1)
+            else:
+                # Try coarse sampling to find a sign change
+                N = 48
+                a = t0
+                fa = f0
+                for i in range(1, N + 1):
+                    b = t0 + (t1 - t0) * (i / N)
+                    fb = f_dist(b)
+                    if abs(fb) < 1e-6 or fa * fb < 0:
+                        bracket = (a, b)
+                        break
+                    a = b; fa = fb
+
+            if bracket is None:
+                return None
+
+            a, b = bracket
+            fa = f_dist(a)
+            fb = f_dist(b)
+            if fa * fb > 0:
+                return None
+
+            # Bisection refine
+            for _ in range(40):
+                m = 0.5 * (a + b)
+                fm = f_dist(m)
+                if abs(fm) < 1e-6:
+                    a = b = m
+                    break
+                if fa * fm <= 0:
+                    b = m; fb = fm
+                else:
+                    a = m; fa = fm
+            t_hit = 0.5 * (a + b)
+            if t_hit < 0.01 or t_hit > BEAM_MAX:
+                return None
+
+            P = ctrl_pos + fwd_w * t_hit
+            vl = M_inv @ (P - T)
+            lx = float(vl[0]); ly = float(vl[1]); lz = float(vl[2])
+            if abs(ly) > half_h + 1e-6:
+                return None
+            ang = math.atan2(lx, R - lz)
+            if ang < -half_ang - 1e-6 or ang > half_ang + 1e-6:
+                return None
+            u = (ang + half_ang) / (2.0 * half_ang) if half_ang > 1e-9 else 0.5
+            v = (ly + half_h) / (2.0 * half_h) if half_h > 1e-9 else 0.5
+            return float(u), float(v), float(t_hit)
+
+        # Flat-screen (plane) fallback
+        cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+        cy  = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+        screen_n   = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
+        screen_pos = self._screen_world_pos(cy, sy_, cp, sp)
         denom = float(np.dot(screen_n, fwd_w))
         if abs(denom) < 1e-6:
             return None
         t = float(np.dot(screen_n, screen_pos - ctrl_pos)) / denom
         if t < 0.01:
             return None
-        hit = ctrl_pos + fwd_w * t
+        hit  = ctrl_pos + fwd_w * t
         diff = hit - screen_pos
+        r_ax = np.array([cy, 0.0, -sy_],         dtype='f8')
+        u_ax = np.array([sp * sy_, cp, sp * cy],  dtype='f8')
         loc_x = float(np.dot(diff, r_ax))
         loc_y = float(np.dot(diff, u_ax))
         if abs(loc_x) <= safe_w / 2.0 and abs(loc_y) <= safe_h / 2.0:
@@ -7507,11 +5895,19 @@ class OpenXRViewerCore:
             v = 0.5 + loc_y / safe_h
             return u, v, t
         return None
+
     def _laser_plane_uv(self, ctrl_pos, fwd_w):
         """Return (u, v) where the aim ray hits the infinite plane of the screen, ignoring bounds."""
-        sh, screen_pos, r_ax, u_ax, screen_n = self._screen_basis()
+        sh = self.screen_height
+        if sh is None:
+            fw, fh = self.frame_size
+            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
         safe_w = max(self.screen_width, 1e-6)
         safe_h = max(sh, 1e-6)
+        cp = math.cos(self.screen_pitch); sp = math.sin(self.screen_pitch)
+        cy = math.cos(self.screen_yaw); sy_ = math.sin(self.screen_yaw)
+        screen_n = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
+        screen_pos = self._screen_world_pos(cy, sy_, cp, sp)
         denom = float(np.dot(screen_n, fwd_w))
         if abs(denom) < 1e-6:
             return None
@@ -7520,6 +5916,8 @@ class OpenXRViewerCore:
             return None
         hit = ctrl_pos + fwd_w * t
         diff = hit - screen_pos
+        r_ax = np.array([cy, 0.0, -sy_], dtype='f8')
+        u_ax = np.array([sp * sy_, cp, sp * cy], dtype='f8')
         loc_x = float(np.dot(diff, r_ax))
         loc_y = float(np.dot(diff, u_ax))
         u = 0.5 + loc_x / safe_w
@@ -7529,7 +5927,7 @@ class OpenXRViewerCore:
     def _keyboard_laser_hit(self, ctrl_pos, fwd_w):
         """Return (key_index, t) if the aim ray hits a key on the virtual keyboard, else (None, None).
 
-        Accounts for the keyboard's tilt (`_keyboard_pitch`) and yaw -the plane is no
+        Accounts for the keyboard's tilt (`_keyboard_pitch`) and yaw — the plane is no
         longer axis-aligned, so we project the world hit point back into the keyboard's
         local 2D frame using the rotated basis vectors before testing rect_local bounds.
         """
@@ -7537,10 +5935,10 @@ class OpenXRViewerCore:
             return None, None
         cp = math.cos(self._keyboard_pitch); sp = math.sin(self._keyboard_pitch)
         cy = math.cos(self._keyboard_yaw);   sy = math.sin(self._keyboard_yaw)
-        # Local axes in world (columns of rot_y(yaw) -rot_x(pitch)):
-        #   X_local ->( cy,        0,    -sy)
-        #   Y_local ->( sy*sp,    cp,     cy*sp)
-        #   Z_local ->( sy*cp,   -sp,     cy*cp)   ->surface normal
+        # Local axes in world (columns of rot_y(yaw) ∘ rot_x(pitch)):
+        #   X_local → ( cy,        0,    -sy)
+        #   Y_local → ( sy*sp,    cp,     cy*sp)
+        #   Z_local → ( sy*cp,   -sp,     cy*cp)   ← surface normal
         kb_x = np.array([ cy,          0.0,    -sy        ], dtype='f8')
         kb_y = np.array([ sy * sp,     cp,      cy * sp   ], dtype='f8')
         kb_n = np.array([ sy * cp,    -sp,      cy * cp   ], dtype='f8')
@@ -7566,7 +5964,7 @@ class OpenXRViewerCore:
     def _handle_cursor(self):
         """Move the Windows mouse cursor when a controller laser is pointing at the screen.
 
-        Cursor jitter at long laser distances comes from natural hand tremor: a 0.5 deg
+        Cursor jitter at long laser distances comes from natural hand tremor: a 0.5°
         wrist wobble at 2 m laser length is ~17 mm at the screen, which is hundreds
         of cursor pixels. We low-pass-filter the UV with an exponential moving average
         to take the high-frequency edge off without adding perceptible lag.
@@ -7626,13 +6024,13 @@ class OpenXRViewerCore:
         # suppress VR cursor control unconditionally so the user can use the
         # physical mouse without fighting the VR cursor.  VR resumes after a
         # quiet period with no physical mouse movement.
-        # Check FIRST -before expensive ray casting -to skip work when mouse is active.
+        # Check FIRST — before expensive ray casting — to skip work when mouse is active.
         if sys.platform == "win32":
             if (time.perf_counter() - self._phys_mouse_last_move) < PHYS_TIMEOUT:
                 self._cursor_ctrl = None
                 self._cursor_smooth_uv = None
                 return
-            # Throttle GetCursorPos to every ~50ms (3-4 frames at 72Hz) -
+            # Throttle GetCursorPos to every ~50ms (3-4 frames at 72Hz) —
             # per-frame polling is wasteful; physical mouse detection doesn't need sub-frame precision.
             _now = time.perf_counter()
             if _now - getattr(self, '_last_get_cursor_pos_time', 0.0) >= 0.05:
@@ -7673,23 +6071,36 @@ class OpenXRViewerCore:
                         kb_claim_r = True
 
         hit_l = hit_r = None
+        ov_hit_l = ov_hit_r = False
         if self._aim_mat_l is not None:
             cp, fw = _beam_origin_dir(self._aim_mat_l, self._grip_mat_l,
                                     "_smooth_ray_origin_l", "_smooth_ray_quat_l")
             if not kb_claim_l:
                 hit_l = self._laser_screen_hit_uv(cp, fw)
+            ov_cp_l, ov_fw_l = self._pre_snap_overlay_ray(True, self._aim_mat_l, self._grip_mat_l)
+            ov_dist_l = self._overlay_panel_hit_dist(ov_cp_l, ov_fw_l)
+            ov_hit_l = ov_dist_l < 5.0
+            if ov_hit_l and hit_l is not None and ov_dist_l < hit_l[2]:
+                hit_l = None  # suppress cursor when overlay is closer than screen
         if self._aim_mat_r is not None:
             cp, fw = _beam_origin_dir(self._aim_mat_r, self._grip_mat_r,
                                     "_smooth_ray_origin_r", "_smooth_ray_quat_r")
             if not kb_claim_r:
                 hit_r = self._laser_screen_hit_uv(cp, fw)
+            ov_cp_r, ov_fw_r = self._pre_snap_overlay_ray(False, self._aim_mat_r, self._grip_mat_r)
+            ov_dist_r = self._overlay_panel_hit_dist(ov_cp_r, ov_fw_r)
+            ov_hit_r = ov_dist_r < 5.0
+            if ov_hit_r and hit_r is not None and ov_dist_r < hit_r[2]:
+                hit_r = None  # suppress cursor when overlay is closer than screen
 
         self._cursor_uv_l = hit_l if hit_l else None   # (u, v, t) or None
         self._cursor_uv_r = hit_r if hit_r else None   # (u, v, t) or None
+        self._overlay_hit_l = ov_hit_l
+        self._overlay_hit_r = ov_hit_r
         self._ray_prev_uv_l = self._cursor_uv_l
         self._ray_prev_uv_r = self._cursor_uv_r
 
-        # Pick active controller -right always wins when both lasers hit screen.
+        # Pick active controller — right always wins when both lasers hit screen.
         # Avoids ping-ponging: once a controller takes over, the other can't steal.
         prev_ctrl = self._cursor_ctrl
         if hit_r:
@@ -7707,7 +6118,7 @@ class OpenXRViewerCore:
         if prev_ctrl != ctrl or self._cursor_smooth_uv is None:
             self._cursor_smooth_uv = (u, v)
         else:
-            ALPHA = 0.35   # EMA cursor smoothing -low lag, filters jitter
+            ALPHA = 0.35   # EMA cursor smoothing — low lag, filters jitter
             su, sv = self._cursor_smooth_uv
             su += ALPHA * (u - su)
             sv += ALPHA * (v - sv)
@@ -7720,51 +6131,22 @@ class OpenXRViewerCore:
         # Always track the VR cursor position so the physical-mouse detector
         # doesn't falsely fire when grip ends and the cursor resumes moving.
         self._vr_cursor_screen_pos = (px, py)
-        # Suppress cursor movement while gripping -user is manipulating the screen
+        # Suppress cursor movement while gripping — user is manipulating the screen
         if not self._grabbed:
             _set_cursor_pos(px, py)
-
-    def _send_arrow(self, value, neg_dir, pos_dir):
-        """Send arrow key hold/release based on stick value. Only fires on edge transitions."""
-        VK_MAP = {'up': 0x26, 'down': 0x28, 'left': 0x25, 'right': 0x27}
-        neg_attr = f'_arrow_{neg_dir}_held'
-        pos_attr = f'_arrow_{pos_dir}_held'
-        neg_vk = VK_MAP[neg_dir]
-        pos_vk = VK_MAP[pos_dir]
-
-        # Release any currently held key if stick returns to deadzone
-        if abs(value) <= DEAD:
-            for attr in (neg_attr, pos_attr):
-                if getattr(self, attr):
-                    vk = neg_vk if attr == neg_attr else pos_vk
-                    ctypes.windll.user32.keybd_event(vk, 0, _KEYEVENTF_KEYUP, 0)
-                    setattr(self, attr, False)
-            return
-
-        # Press new direction, release opposite if needed
-        if value < -DEAD:
-            if not getattr(self, neg_attr):
-                ctypes.windll.user32.keybd_event(neg_vk, 0, 0, 0)
-                setattr(self, neg_attr, True)
-            if getattr(self, pos_attr):
-                ctypes.windll.user32.keybd_event(pos_vk, 0, _KEYEVENTF_KEYUP, 0)
-                setattr(self, pos_attr, False)
-        elif value > DEAD:
-            if not getattr(self, pos_attr):
-                ctypes.windll.user32.keybd_event(pos_vk, 0, 0, 0)
-                setattr(self, pos_attr, True)
-            if getattr(self, neg_attr):
-                ctypes.windll.user32.keybd_event(neg_vk, 0, _KEYEVENTF_KEYUP, 0)
-                setattr(self, neg_attr, False)
 
     def _handle_triggers(self):
         """Map controller triggers to mouse clicks and drag.
 
         Three-state machine per trigger: idle -> pressed -> dragging.
-        Left trigger  ->RIGHT mouse button (click / hold)
-        Right trigger ->LEFT  mouse button (click / hold)
+        Rising edge: send LEFTDOWN+LEFTUP click pulse.
+        Held past HOLD_TIME: send LEFTDOWN for drag.
+        Released from dragging: send LEFTUP.
+
+        If a trigger fires while the laser hits the FPS overlay panel, toggle the
+        shortcuts/help panel instead of generating a mouse click.
         """
-        # Suppress mouse clicks while gripping -user is manipulating the screen
+        # Suppress mouse clicks while gripping — user is manipulating the screen
         if self._grabbed:
             return
         PRESS_THRESH   = 0.55   # rising edge
@@ -7775,74 +6157,80 @@ class OpenXRViewerCore:
         lt  = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
         rt  = self._read_float_action(self._act_right_trigger, "/user/hand/right")
 
+        # Trigger-click on FPS/status panel toggles shortcut help panel.
+        # Uses _overlay_hit_l/r (same hit test as cursor suppression) so the
+        # toggle and click-block are consistent with what the user sees.
+        ov_claim_l = False
+        ov_claim_r = False
+
+        if self._fps_overlay_visible:
+            for hit_overlay, trig_now, is_left in (
+                (self._overlay_hit_l, lt, True),
+                (self._overlay_hit_r, rt, False),
+            ):
+                trig_prev_held = self._ov_ltrig_held if is_left else self._ov_rtrig_held
+
+                if hit_overlay and trig_now >= PRESS_THRESH and not trig_prev_held:
+                    self._help_panel_visible = not self._help_panel_visible
+
+                if is_left:
+                    # Only track held state while the laser is on the overlay;
+                    # reset when the laser leaves so the next press fires cleanly.
+                    self._ov_ltrig_held = hit_overlay and trig_now >= PRESS_THRESH
+                    if hit_overlay:
+                        ov_claim_l = True
+                else:
+                    self._ov_rtrig_held = hit_overlay and trig_now >= PRESS_THRESH
+                    if hit_overlay:
+                        ov_claim_r = True
+
         left_on_kb  = self._kb_hover_l is not None
         right_on_kb = self._kb_hover_r is not None
 
-        left_laser_usable  = (not left_on_kb and
+        left_laser_usable  = (not left_on_kb and not ov_claim_l and
                             (self._cursor_uv_l is not None or
                             self._cursor_ctrl == 'left'))
-        right_laser_usable = (not right_on_kb and
+        right_laser_usable = (not right_on_kb and not ov_claim_r and
                             (self._cursor_uv_r is not None or
                             self._cursor_ctrl == 'right'))
 
-        any_l_drag = False
-        any_r_drag = False
+        any_drag = False
 
-        # -- Right trigger ->LEFT mouse button --
-        if right_laser_usable:
-            if self._rtrig_state == 'idle':
-                if rt >= PRESS_THRESH:
+        for trig, usable, state_attr, press_t_attr in (
+            (lt, left_laser_usable,  '_ltrig_state', '_ltrig_press_t'),
+            (rt, right_laser_usable, '_rtrig_state', '_rtrig_press_t'),
+        ):
+            state = getattr(self, state_attr)
+
+            if state == 'idle':
+                if trig >= PRESS_THRESH and usable:
+                    # Rising edge: fire an immediate click pulse so the OS can
+                    # accumulate it toward double-click detection, then start timer.
                     _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
                     _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
-                    self._rtrig_state = 'pressed'
-                    self._rtrig_press_t = now
-            elif self._rtrig_state == 'pressed':
-                if rt <= RELEASE_THRESH:
-                    self._rtrig_state = 'idle'
-                elif (now - self._rtrig_press_t) >= HOLD_TIME:
+                    setattr(self, state_attr,   'pressed')
+                    setattr(self, press_t_attr, now)
+
+            elif state == 'pressed':
+                if not usable or trig <= RELEASE_THRESH:
+                    # Released quickly — click already delivered, return to idle.
+                    setattr(self, state_attr, 'idle')
+                elif (now - getattr(self, press_t_attr)) >= HOLD_TIME:
+                    # Held long enough → begin drag (send LEFTDOWN if not already down).
                     if not self._left_btn_down:
                         _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
                         self._left_btn_down = True
-                    self._rtrig_state = 'dragging'
-                    any_r_drag = True
-            elif self._rtrig_state == 'dragging':
-                if rt <= RELEASE_THRESH:
-                    self._rtrig_state = 'idle'
-                else:
-                    any_r_drag = True
-        else:
-            self._rtrig_state = 'idle'
+                    setattr(self, state_attr, 'dragging')
+                    any_drag = True
 
-        # -- Left trigger ->RIGHT mouse button --
-        if left_laser_usable:
-            if self._ltrig_state == 'idle':
-                if lt >= PRESS_THRESH:
-                    _send_mouse_flags(_MOUSEEVENTF_RIGHTDOWN)
-                    _send_mouse_flags(_MOUSEEVENTF_RIGHTUP)
-                    self._ltrig_state = 'pressed'
-                    self._ltrig_press_t = now
-            elif self._ltrig_state == 'pressed':
-                if lt <= RELEASE_THRESH:
-                    self._ltrig_state = 'idle'
-                elif (now - self._ltrig_press_t) >= HOLD_TIME:
-                    if not self._right_btn_down:
-                        _send_mouse_flags(_MOUSEEVENTF_RIGHTDOWN)
-                        self._right_btn_down = True
-                    self._ltrig_state = 'dragging'
-                    any_l_drag = True
-            elif self._ltrig_state == 'dragging':
-                if lt <= RELEASE_THRESH:
-                    self._ltrig_state = 'idle'
+            elif state == 'dragging':
+                if not usable or trig <= RELEASE_THRESH:
+                    setattr(self, state_attr, 'idle')
                 else:
-                    any_l_drag = True
-        else:
-            self._ltrig_state = 'idle'
+                    any_drag = True
 
-        # Release mouse buttons when triggers leave drag state
-        if not any_l_drag and self._right_btn_down:
-            _send_mouse_flags(_MOUSEEVENTF_RIGHTUP)
-            self._right_btn_down = False
-        if not any_r_drag and self._left_btn_down:
+        # Send LEFTUP once both triggers leave drag state.
+        if not any_drag and self._left_btn_down:
             _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
             self._left_btn_down = False
 
@@ -7888,7 +6276,7 @@ class OpenXRViewerCore:
         VK_WIN        = 0x5B
         kbd           = ctypes.windll.user32.keybd_event
 
-        # Suppress keystrokes while any grip is held -the user is repositioning
+        # Suppress keystrokes while any grip is held — the user is repositioning
         # the keyboard, not typing.  Still update hover for the laser cursor /
         # grip-to-move logic, but force trigger inputs to "released" so no
         # rising-edge fires and any held key is released cleanly.
@@ -7926,7 +6314,7 @@ class OpenXRViewerCore:
                 idx = None
             setattr(self, hover_attr, idx)
 
-            # --Release held regular key when trigger drops or laser leaves the key --
+            # —— Release held regular key when trigger drops or laser leaves the key ——
             if held_key is not None:
                 release = False
                 if trig_now < RELEASE_THRESH:
@@ -7948,7 +6336,7 @@ class OpenXRViewerCore:
                     held_key  = None
                     held_mods = None
 
-            # --Rising edge: modifier / caps toggles, or start holding a regular key --
+            # —— Rising edge: modifier / caps toggles, or start holding a regular key ——
             if trig_now >= CLICK_THRESH and trig_prev < CLICK_THRESH and idx is not None:
                 key = self._keyboard_keys[idx]
                 mod_name = {VK_SHIFT: 'shift', VK_CTRL: 'ctrl',
@@ -7974,7 +6362,7 @@ class OpenXRViewerCore:
                 else:
                     self._press_key(key, idx, held_key_attr, held_mods_attr)
 
-            # --Slide to new key: trigger already held, laser moved to another regular key --
+            # —— Slide to new key: trigger already held, laser moved to another regular key ——
             if (held_key is None and trig_now >= CLICK_THRESH
                     and idx is not None and trig_prev >= CLICK_THRESH):
                 key = self._keyboard_keys[idx]
@@ -7995,7 +6383,7 @@ class OpenXRViewerCore:
         """Accumulate thumbstick deflection into accelerated mouse wheel events.
 
         Uses a cubic acceleration curve so small deflections are precise while
-        full push is dramatically faster -eliminates the \"stuck\" feeling.
+        full push is dramatically faster — eliminates the \"stuck\" feeling.
 
         Fires WHEEL_DELTA-granular (120) scroll so every event is a full
         hardware notch that applications process reliably.
@@ -8012,7 +6400,7 @@ class OpenXRViewerCore:
             mag = abs(axis_val)
             if mag <= DEAD:
                 continue
-            # Normalise [DEAD .. 1.0] ->[0 .. 1]
+            # Normalise [DEAD .. 1.0] → [0 .. 1]
             t = (mag - DEAD) / (1.0 - DEAD)
             # Cubic acceleration + base offset ensures fine control near centre
             speed = SCROLL_BASE_NOTCH + (SCROLL_MAX_NOTCH - SCROLL_BASE_NOTCH) * (t ** ACCEL_EXPONENT)
@@ -8026,19 +6414,19 @@ class OpenXRViewerCore:
 
     def _poll_controller_input(self, dt):
         """Controller interaction mapping:
-        Left grip (no stick)       ->Screen pan along world X/Y (parallel to ground)
-        Left grip + Left stick X/Y ->Screen yaw/pitch rotation (local axes, independent)
-        Right grip (no stick)      ->Screen sphere-orbit drag
-        Right grip + Right stick X ->Screen width adjustment
-        Right grip + Right stick Y ->Screen distance (with acceleration curve)
-        Left stick (no grip)       ->Mouse wheel scroll
-        Right stick (no grip)      ->Mouse wheel scroll
-        Right grip + Left stick Y  ->Depth intensity
-        Left grip + Left stick (keyboard visible) ->Keyboard pan
-        Left stick press hold 1s    ->Toggle background color
-        Right stick press hold 1s   ->Toggle curved/flat (when no grip)
-        Both sticks press 0.5s       ->Toggle FPS/help panel
-        A/B/X/Y/Menu/Triggers      ->Original functions unchanged
+        Left stick (no grip)       → Mouse wheel
+        Left grip + Left stick X/Y → Screen pan horizontally/vertically (always parallel to ground)
+        Left grip + Right stick X  → Screen yaw rotation around its center
+        Left grip + Right stick Y  → Screen pitch tilt forward/backward
+        Right grip + Left stick Y  → Depth intensity
+        Right stick (no grip)      → Mouse wheel
+        Right grip + Right stick X → Screen width adjustment
+        Right grip + Right stick Y → Screen distance (with acceleration curve)
+        Left grip + Left stick (when keyboard visible) → Keyboard pan (preserved)
+        Left stick press hold 1s    → Toggle background color
+        Right stick press hold 1s   → Toggle curved/flat (when no grip)
+        Both sticks press 0.5s       → Toggle FPS/help panel
+        A/B/X/Y/Menu/Triggers      → Original functions unchanged
         """
         if self._action_set is None:
             return
@@ -8065,6 +6453,22 @@ class OpenXRViewerCore:
         a_now = self._read_bool_action(self._act_a_btn, "/user/hand/right")
         b_now = self._read_bool_action(self._act_b_btn, "/user/hand/right")
 
+        # Calibration combo: Left Menu + Right A + Right B held for 1 second
+        calib_combo = menu_now and a_now and b_now
+        if calib_combo and not self._calib_combo_fired:
+            if self._calib_combo_start == 0.0:
+                self._calib_combo_start = time.perf_counter()
+            elif time.perf_counter() - self._calib_combo_start >= 1.0:
+                if self._calibration_mode:
+                    self._exit_calibration_mode(save=False)
+                else:
+                    self._enter_calibration_mode()
+                self._calib_combo_fired = True
+                self._menu_long_fired = True  # suppress status-panel toggle on menu release
+        if not calib_combo:
+            self._calib_combo_start = 0.0
+            self._calib_combo_fired = False
+
         # calibration mode: use sticks to adjust screen position/rotation with visual feedback, no cursor control
         if self._calibration_mode:
             CALIB_STEP = 0.005   # step size in meters for position adjustment
@@ -8082,77 +6486,31 @@ class OpenXRViewerCore:
             # calibration mode: disable normal stick operations
             lx, ly, rx, ry = 0.0, 0.0, 0.0, 0.0
 
-        # A+B held: 0.5s ->brand switch, 5s ->calibration mode
+        # Brand switching: Right A+B held for 1 second. Ensure ab_held is always defined for later A/B handling
         ab_held = False
         if not self._calibration_mode and self._available_brands:
             a_now2 = self._read_bool_action(self._act_a_btn, "/user/hand/right")
             b_now2 = self._read_bool_action(self._act_b_btn, "/user/hand/right")
             ab_held = a_now2 and b_now2
-            if ab_held:
-                self._ab_was_held = True
-                _t = getattr(self, '_ab_hold_start', 0.0)
+            if ab_held and not getattr(self, '_brand_sw_fired', False):
+                _t = getattr(self, '_brand_sw_start', 0.0)
                 if _t == 0.0:
-                    self._ab_hold_start = time.perf_counter()
-                    _t = self._ab_hold_start
-                elapsed = time.perf_counter() - _t
-                if elapsed >= 5.0 and not getattr(self, '_calib_ab_fired', False):
-                    if self._calibration_mode:
-                        self._exit_calibration_mode(save=False)
-                    else:
-                        self._enter_calibration_mode()
-                    self._calib_ab_fired = True
-                    self._brand_sw_fired = True  # suppress brand switch
-                elif elapsed >= 0.5 and not getattr(self, '_brand_sw_fired', False) \
-                        and not getattr(self, '_calib_ab_fired', False):
+                    self._brand_sw_start = time.perf_counter()
+                elif time.perf_counter() - _t >= 0.5:
                     _idx = self._available_brands.index(self._current_brand) if self._current_brand in self._available_brands else 0
                     _next = self._available_brands[(_idx + 1) % len(self._available_brands)]
                     self._switch_brand(_next)
                     self._brand_sw_fired = True
             if not ab_held:
-                self._ab_hold_start = 0.0
+                self._brand_sw_start = 0.0
                 self._brand_sw_fired = False
-                self._calib_ab_fired = False
 
         grip_l = self._read_bool_action(self._act_left_grip,  "/user/hand/left")
         grip_r = self._read_bool_action(self._act_right_grip, "/user/hand/right")
-        screen_locked = self._environment_screen_locked()
-        # Stash for _handle_keyboard_input -used to suppress typing while
+        # Stash for _handle_keyboard_input — used to suppress typing while
         # the user is repositioning the keyboard with a grip press.
         self._grip_l_now = grip_l
         self._grip_r_now = grip_r
-
-        # -- Left grip: record rotation for wrist-roll tracking on press --
-        grip_l_was = self._grip_l_prev
-        self._grip_l_prev = grip_l
-        if grip_l and not grip_l_was and self._grip_mat_l is not None and not screen_locked:
-            self._screen_grab_local_l = None
-            self._grip_l_ref_mat = self._grip_mat_l[:3, :3].copy()
-            # Snap screen_roll to nearest 0 or +/-90 on grip press
-            _norm = ((self.screen_roll + math.pi) % (2 * math.pi)) - math.pi
-            _th45 = math.radians(45)
-            _th135 = math.radians(135)
-            if abs(_norm) < _th45:
-                _snapped = 0.0
-            elif _norm >= _th45 and _norm < _th135:
-                _snapped = math.pi / 2
-            elif _norm <= -_th45 and _norm > -_th135:
-                _snapped = -math.pi / 2
-            else:
-                _snapped = 0.0
-            self.screen_roll = _snapped
-            self._grip_l_base_roll = _snapped
-        elif not grip_l and grip_l_was:
-            self._grip_l_ref_mat = None
-            self._grip_l_snapped = False
-
-        # -- Right grip: record rotation for wrist-roll tracking on press --
-        grip_r_was = self._grip_r_prev
-        self._grip_r_prev = grip_r
-        if grip_r and not grip_r_was and self._grip_mat_r is not None and not screen_locked:
-            self._grip_r_ref_mat = self._grip_mat_r[:3, :3].copy()
-            self._grip_r_base_roll = self.screen_roll
-        elif not grip_r and grip_r_was:
-            self._grip_r_ref_mat = None
 
         # Compute fresh cursor UVs + keyboard hits before grip-to-move
         # so laser-on-screen checks use current-frame data (no 1-frame lag).
@@ -8161,11 +6519,11 @@ class OpenXRViewerCore:
         laser_l_on_screen = self._cursor_uv_l is not None
         laser_r_on_screen = self._cursor_uv_r is not None
         laser_on_screen = laser_l_on_screen or laser_r_on_screen
-        active = (not screen_locked) and (grip_l or grip_r) and laser_on_screen
+        active = (grip_l or grip_r) and laser_on_screen
         self._grabbed  = active
         self._resizing = False
 
-        # Grip-to-move: screen follows laser beam origin 1:1, Skip while stick is actively used (outside deadzone) -stick takes priority.
+        # Grip-to-move: screen follows laser beam origin 1:1, Skip while stick is actively used (outside deadzone) — stick takes priority.
         stick_active_l = abs(lx) > DEAD or abs(ly) > DEAD
         stick_active_r = abs(rx) > DEAD or abs(ry) > DEAD
         # Laser-anchored grip dragging
@@ -8186,16 +6544,13 @@ class OpenXRViewerCore:
             elif getattr(self, target_attr) is None:
                 if self._keyboard_visible and kb_hover is not None:
                     setattr(self, target_attr, 'keyboard')
-                elif (not screen_locked) and (
-                    (target_attr == '_grip_target_l' and laser_l_on_screen)
-                    or (target_attr == '_grip_target_r' and laser_r_on_screen)
-                ):
+                elif (target_attr == '_grip_target_l' and laser_l_on_screen) \
+                        or (target_attr == '_grip_target_r' and laser_r_on_screen):
                     setattr(self, target_attr, 'screen')
-                # else: laser on nothing -leave unlatched; next frame may catch it
+                # else: laser on nothing — leave unlatched; next frame may catch it
 
         # Per-controller laser requirement: grip only moves screen when
         # its corresponding laser hits the screen.
-        # Right grip ->sphere-orbit drag; Left grip ->world-axis translation.
         for grip_now, aim_mat, grab_attr, local_attr, stick_active, laser_on, grip_target in [
             (grip_l, self._aim_mat_l,
             '_screen_grab_grip_l', '_screen_grab_local_l', stick_active_l,
@@ -8205,127 +6560,131 @@ class OpenXRViewerCore:
             '_screen_grab_grip_r', '_screen_grab_local_r', stick_active_r,
              laser_r_on_screen, self._grip_target_r),
         ]:
-            is_left = (grab_attr == '_screen_grab_grip_l')
-
             if grip_now and not stick_active and not both_grips and laser_on \
                     and grip_target == 'screen':
 
                 if aim_mat is None:
                     continue
+
+                # Use pre-smoothed controller pose (shared with laser/cursor).
+                # One Euro Filter applied once per frame — no double-filtering.
+                is_left = (grab_attr == '_screen_grab_grip_l')
                 grip_mat = self._grip_mat_l if is_left else self._grip_mat_r
+                # Raw grip position for responsive drag (no smoothing lag)
                 if grip_mat is not None:
                     ray_origin = (grip_mat[:3, 3] + grip_mat[:3, 1] * 0.020).astype('f8')
                 else:
                     ray_origin = aim_mat[:3, 3].astype(np.float64)
+                # Smoothed forward direction for jitter-free pointing
                 _, ray_dir = self._get_smoothed_ray(is_left)
                 if ray_dir is None:
                     ray_dir = -aim_mat[:3, 2].astype(np.float64)
                 ray_dir /= np.linalg.norm(ray_dir) + 1e-10
 
+                # Screen orientation
                 cp = math.cos(self.screen_pitch)
                 sp = math.sin(self.screen_pitch)
+
                 cy = math.cos(self.screen_yaw)
                 sy = math.sin(self.screen_yaw)
-                screen_normal = np.array([cp * sy, -sp, cp * cy], dtype=np.float64)
+
+                screen_normal = np.array([
+                    cp * sy,
+                    -sp,
+                    cp * cy
+                ], dtype=np.float64)
+
                 screen_center = self._screen_world_pos(cy, sy, cp, sp).astype(np.float64)
+
                 denom = np.dot(screen_normal, ray_dir)
+
                 if abs(denom) < 1e-6:
                     continue
+
                 t = np.dot(screen_normal, screen_center - ray_origin) / denom
+
                 if t < 0.0:
                     continue
+
                 hit_world = ray_origin + ray_dir * t
 
-                if is_left:
-                    # -- Left grip: XY plane pan --
-                    # Drag the screen vertically/horizontally (keep distance/orientation fixed).
-                    right_axis = np.array([cy, 0.0, -sy], dtype=np.float64)
-                    up_axis = np.array([sp * sy, cp, sp * cy], dtype=np.float64)
-                    local_x = np.dot(hit_world - screen_center, right_axis)
-                    local_y = np.dot(hit_world - screen_center, up_axis)
-                    saved_local = getattr(self, local_attr)
-                    if saved_local is None:
-                        setattr(self, local_attr, np.array([local_x, local_y], dtype=np.float64))
-                    else:
-                        # Anchor stays fixed on screen surface; move screen so anchor
-                        # follows the laser.  The delta in screen X/Y ->pan_x/pan_y.
-                        anchor_world = screen_center + right_axis * saved_local[0] + up_axis * saved_local[1]
-                        delta = hit_world - anchor_world
-                        self.screen_pan_x += float(np.dot(delta, right_axis))
-                        self.screen_pan_y += float(np.dot(delta, up_axis))
-                        # Left grip: snap 90 deg when wrist roll exceeds 45 deg threshold
-                        if self._grip_l_ref_mat is not None and not self._grip_l_snapped:
-                            R_cur = self._grip_mat_l[:3, :3].astype(np.float64)
-                            Rd = R_cur @ self._grip_l_ref_mat.T
-                            droll = math.atan2(Rd[1, 0], Rd[1, 1])
-                            SNAP_TH = math.radians(45)
-                            if droll > SNAP_TH:
-                                self.screen_roll = self._grip_l_base_roll + math.pi / 2
-                                self._grip_l_snapped = True
-                            elif droll < -SNAP_TH:
-                                self.screen_roll = self._grip_l_base_roll - math.pi / 2
-                                self._grip_l_snapped = True
+                # Screen local axes
+                right_axis = np.array([cy, 0.0, -sy], dtype=np.float64)
+                up_axis = np.array([sp * sy, cp, sp * cy], dtype=np.float64)
+
+                local_x = np.dot(hit_world - screen_center, right_axis)
+                local_y = np.dot(hit_world - screen_center, up_axis)
+
+                saved_local = getattr(self, local_attr)
+
+                # Initial grab
+                if saved_local is None:
+
+                    setattr(self, local_attr, np.array([local_x, local_y], dtype=np.float64))
+
                 else:
-                    # -- Right grip: sphere-orbit drag --
-                    right_axis = np.array([cy, 0.0, -sy], dtype=np.float64)
-                    up_axis = np.array([sp * sy, cp, sp * cy], dtype=np.float64)
-                    local_x = np.dot(hit_world - screen_center, right_axis)
-                    local_y = np.dot(hit_world - screen_center, up_axis)
-                    saved_local = getattr(self, local_attr)
-                    if saved_local is None:
-                        setattr(self, local_attr, np.array([local_x, local_y], dtype=np.float64))
-                    else:
-                        target_local = saved_local
-                        desired_center = (
-                            hit_world
-                            - right_axis * target_local[0]
-                            - up_axis * target_local[1]
-                        )
-                        if self._head_pos_w is not None:
-                            hx, hy, hz = self._head_pos_w
-                            dx = desired_center[0] - hx
-                            dy = desired_center[1] - hy
-                            dz = desired_center[2] - hz
-                            csx = self.screen_pan_x - hx
-                            csy = self.screen_pan_y - hy
-                            csz = -self.screen_distance - hz
-                            R3 = math.sqrt(csx * csx + csy * csy + csz * csz)
-                            if R3 > 0.01:
-                                d_len = math.sqrt(dx * dx + dy * dy + dz * dz)
-                                if d_len > 0.001:
-                                    dx /= d_len; dy /= d_len; dz /= d_len
-                                self.screen_pan_x    = float(hx + dx * R3)
-                                self.screen_pan_y    = float(hy + dy * R3)
-                                self.screen_distance = float(-(hz + dz * R3))
-                                base_yaw   = math.atan2(-dx, -dz)
-                                base_pitch = math.asin(max(-1.0, min(1.0, dy)))
-                                self.screen_yaw   = base_yaw   + self._yaw_offset
-                                self.screen_pitch = base_pitch + self._pitch_offset
-                                # Wrist roll ->screen_roll
-                                if self._grip_r_ref_mat is not None:
-                                    R_cur = self._grip_mat_r[:3, :3].astype(np.float64)
-                                    Rd = R_cur @ self._grip_r_ref_mat.T
-                                    droll = math.atan2(Rd[1, 0], Rd[1, 1])
-                                    self.screen_roll = self._grip_r_base_roll + droll
+
+                    target_local = saved_local
+
+                    # Move screen center so laser continues hitting same local point
+                    desired_center = (
+                        hit_world
+                        - right_axis * target_local[0]
+                        - up_axis * target_local[1]
+                    )
+
+                    # Project onto sphere around head — preserves 3D Euclidean
+                    # distance so movement in any direction doesn't change
+                    # apparent screen size.
+                    if self._head_pos_w is not None:
+                        hx, hy, hz = self._head_pos_w
+
+                        # 3D vector from head to desired center
+                        dx = desired_center[0] - hx
+                        dy = desired_center[1] - hy
+                        dz = desired_center[2] - hz
+
+                        # Current 3D Euclidean distance from head to screen
+                        csx = self.screen_pan_x - hx
+                        csy = self.screen_pan_y - hy
+                        csz = -self.screen_distance - hz
+                        R3 = math.sqrt(csx * csx + csy * csy + csz * csz)
+
+                        if R3 > 0.01:
+                            d_len = math.sqrt(dx * dx + dy * dy + dz * dz)
+                            if d_len > 0.001:
+                                dx /= d_len
+                                dy /= d_len
+                                dz /= d_len
+
+                            self.screen_pan_x    = float(hx + dx * R3)
+                            self.screen_pan_y    = float(hy + dy * R3)
+                            self.screen_distance = float(-(hz + dz * R3))
+
+                            # Baseline orientation faces head; manual offset on top
+                            base_yaw   = math.atan2(-dx, -dz)
+                            base_pitch = math.asin(max(-1.0, min(1.0, dy)))
+                            self.screen_yaw   = base_yaw   + self._yaw_offset
+                            self.screen_pitch = base_pitch + self._pitch_offset
 
             elif both_grips and not grip_now:
-                # One grip released while both were held -clear grab state
+                # One grip released while both were held — clear grab state
                 setattr(self, local_attr, None)
             elif not grip_now:
-                # Grip released -clear grab state so next press starts fresh
+                # Grip released — clear grab state so next press starts fresh
                 setattr(self, local_attr, None)
             elif stick_active:
-                # Stick fine-tuning is moving the screen -old anchor is stale.
+                # Stick fine-tuning is moving the screen — old anchor is stale.
                 # Clear it so grip-to-move re-acquires at the current pose
                 # when the stick returns to neutral (avoids snap-back).
                 setattr(self, local_attr, None)
-            # else: grip held but laser transiently off screen -keep anchor so
+            # else: grip held but laser transiently off screen — keep anchor so
             # the grab resumes as soon as the laser re-enters the screen quad.
 
-        # Keyboard grip-to-move: panel follows laser hit on head-sphere --
+        # Keyboard grip-to-move: panel follows laser hit on head-sphere ──
         # Mirrors the screen grip-to-move loop: laser stays anchored on the
         # same local key point while the panel slides along the sphere
-        # centred on the head.  Preserves Euclidean head->panel distance so
+        # centred on the head.  Preserves Euclidean head→panel distance so
         # apparent size doesn't change, and auto-orients the panel toward
         # the head with standalone yaw/pitch offsets applied on top.
         if self._keyboard_visible:
@@ -8376,7 +6735,7 @@ class OpenXRViewerCore:
 
                     saved_local = getattr(self, kb_local_attr)
                     if saved_local is None:
-                        # First frame of grab -anchor the local hit point
+                        # First frame of grab — anchor the local hit point
                         setattr(self, kb_local_attr,
                                 np.array([local_x, local_y], dtype=np.float64))
                     else:
@@ -8389,8 +6748,8 @@ class OpenXRViewerCore:
                             - kb_y_ax * target_local[1]
                         )
 
-                        # Sphere projection around the head -preserves the
-                        # Euclidean head->keyboard distance so the panel doesn't
+                        # Sphere projection around the head — preserves the
+                        # Euclidean head→keyboard distance so the panel doesn't
                         # grow/shrink as the user drags it through space.
                         if self._head_pos_w is not None:
                             hx, hy, hz = self._head_pos_w
@@ -8415,7 +6774,7 @@ class OpenXRViewerCore:
                                 self._keyboard_yaw   = base_yaw   + self._kb_yaw_offset
                                 self._keyboard_pitch = base_pitch + self._kb_pitch_offset
                         else:
-                            # No head pose yet -fall back to direct translation
+                            # No head pose yet — fall back to direct translation
                             self._keyboard_pan_x    = float(desired_center[0])
                             self._keyboard_pan_y    = float(desired_center[1])
                             self._keyboard_distance = float(max(0.2, -desired_center[2]))
@@ -8424,21 +6783,21 @@ class OpenXRViewerCore:
                 elif not grip_now:
                     setattr(self, kb_local_attr, None)
                 elif stick_active:
-                    # Stick fine-tuning the keyboard -clear stale anchor so
+                    # Stick fine-tuning the keyboard — clear stale anchor so
                     # grip-to-move re-acquires at current pose on neutral.
                     setattr(self, kb_local_attr, None)
-                # else: grip held but laser transiently off keyboard -keep
+                # else: grip held but laser transiently off keyboard — keep
                 # anchor so the grab resumes when laser re-enters the panel.
         else:
-            # Keyboard hidden -clear any stale anchors
+            # Keyboard hidden — clear any stale anchors
             self._kb_grab_local_l = None
             self._kb_grab_local_r = None
 
-        # Both grips held: system move-----
+        # Both grips held: system move─────
         # Average the two laser hit positions, project onto sphere around
         # head, and move the screen as a single rigid system.  This allows
         # two-handed repositioning without individual grip fighting.
-        if (not screen_locked) and both_grips and not stick_active_l and not stick_active_r \
+        if both_grips and not stick_active_l and not stick_active_r \
                 and laser_l_on_screen and laser_r_on_screen:
             mats = []
             for aim_mat, grab_attr, local_attr in [
@@ -8505,8 +6864,7 @@ class OpenXRViewerCore:
                     self.screen_yaw   = base_yaw   + self._yaw_offset
                     self.screen_pitch = base_pitch + self._pitch_offset
 
-
-        # Grip + stick fine-tuning (pan, resize, rotate, depth) ----------
+        # Grip + stick fine-tuning (pan, resize, rotate, depth) ──────────
         KB_MOVE_SPEED = 0.4    # m/s at full deflection
         DEPTH_SPEED  = 0.08    # depth_strength units/s at full deflection
         # Depth-ratio stick control: replaces A/B + right-grip mapping
@@ -8515,7 +6873,7 @@ class OpenXRViewerCore:
         DEPTH_RATIO_MAX   = 10.0
         if grip_l:
             if self._keyboard_visible and self._grip_target_l == 'keyboard':
-                # Left grip latched to keyboard + left stick ->standalone
+                # Left grip latched to keyboard + left stick → standalone
                 # translation: orbit the keyboard around the head on a sphere
                 # of preserved Euclidean radius, then re-aim at the head with
                 # the user yaw/pitch offsets layered on top (mirrors the
@@ -8547,55 +6905,68 @@ class OpenXRViewerCore:
                         self._keyboard_yaw   = base_yaw   + self._kb_yaw_offset
                         self._keyboard_pitch = base_pitch + self._kb_pitch_offset
             else:
-                # Left grip + left stick ->screen yaw/pitch rotation around
-                # its own local axes.  Only the stronger axis is processed to
-                # avoid diagonal tilt (Euler-angle coupling).
-                if (not screen_locked) and (abs(lx) > DEAD or abs(ly) > DEAD):
-                    rot_speed = self._rot_speed * dt
-                    if abs(lx) > abs(ly):
-                        self._yaw_offset -= lx * rot_speed
-                        self.screen_yaw  -= lx * rot_speed
-                    else:
-                        self._pitch_offset += ly * rot_speed
-                        self.screen_pitch  += ly * rot_speed
+                # Left grip + left stick → standalone screen translation:
+                # orbit the screen around the head on a sphere of preserved
+                # Euclidean radius, then re-aim at the head with the user
+                # yaw/pitch offsets layered on top.
+                if laser_on_screen and (abs(lx) > DEAD or abs(ly) > DEAD) \
+                        and self._head_pos_w is not None:
+                    hx, hy, hz = self._head_pos_w
+                    csx = self.screen_pan_x - hx
+                    csy = self.screen_pan_y - hy
+                    csz = -self.screen_distance - hz
+                    R3 = math.sqrt(csx * csx + csy * csy + csz * csz)
+                    if R3 > 0.01:
+                        az = math.atan2(csx, -csz)
+                        el = math.asin(max(-1.0, min(1.0, csy / R3)))
+                        ang = self._pan_speed * dt / max(R3, 0.3)
+                        if abs(lx) > DEAD:
+                            az += lx * ang
+                        if abs(ly) > DEAD:
+                            el = max(-1.4, min(1.4, el + ly * ang))
+                        cel = math.cos(el)
+                        ux = cel * math.sin(az)
+                        uy = math.sin(el)
+                        uz = -cel * math.cos(az)
+                        self.screen_pan_x    = float(hx + ux * R3)
+                        self.screen_pan_y    = float(hy + uy * R3)
+                        self.screen_distance = float(-(hz + uz * R3))
+                        base_yaw   = math.atan2(-ux, -uz)
+                        base_pitch = math.asin(max(-1.0, min(1.0, uy)))
+                        self.screen_yaw   = base_yaw   + self._yaw_offset
+                        self.screen_pitch = base_pitch + self._pitch_offset
         elif grip_r:
-            # Right grip + left stick Y ->depth strength
-            DEPTH_STR_SPEED = 0.5
-            DEPTH_STR_MIN   = 0.0
-            DEPTH_STR_MAX   = 10.0
+            # Right grip + left stick Y → depth_ratio (no laser required)
             if abs(ly) > DEAD:
-                old_val = self.depth_strength
-                self.depth_strength = max(DEPTH_STR_MIN,
-                                    min(DEPTH_STR_MAX,
-                                        self.depth_strength + ly * DEPTH_STR_SPEED * dt))
+                old_val = self.depth_ratio
+                self.depth_ratio = max(DEPTH_RATIO_MIN,
+                                    min(DEPTH_RATIO_MAX,
+                                        self.depth_ratio + ly * DEPTH_RATIO_SPEED * dt))
+                if self.depth_ratio != old_val:
+                    self._depth_osd_show_t = time.perf_counter()
             # Don't send desktop scroll events while keyboard visible or the screen is being
-            # grabbed/manipulated -avoid accidental scrolls while adjusting UI.
+            # grabbed/manipulated — avoid accidental scrolls while adjusting UI.
             if not (self._keyboard_visible or self._grabbed or grip_l or grip_r):
                 self._accum_scroll(lx, 0.0, dt)
         else:
-            # No grip: left stick ->arrow keys
-            if not (self._keyboard_visible or self._grabbed):
-                self._send_arrow(lx, 'left', 'right')
-                self._send_arrow(ly, 'up', 'down')
-            elif not (self._grabbed or grip_l or grip_r):
+            if not (self._keyboard_visible or self._grabbed or grip_l or grip_r):
                 self._accum_scroll(lx, ly, dt)
 
-        # Right grip + right stick X: resize screen width ----------------------
-        # Right grip + right stick Y: screen distance (acceleration curve) -----
-        # Left grip + right stick X: rotate screen yaw around its centre -------
-        # Left grip + right stick Y: depth strength (unchanged) ----------------
-        # Right stick (no grip): mouse scroll-----
+        # Right grip + right stick X: resize screen width ──────────────────────
+        # Right grip + right stick Y: screen distance (acceleration curve) ─────
+        # Left grip + right stick X: rotate screen yaw around its centre ───────
+        # Left grip + right stick Y: depth strength (unchanged) ────────────────
+        # Right stick (no grip): mouse scroll─────
         RESIZE_SPEED = 1.2    # m/s of width change at full deflection
         if grip_r and not grip_l:
             if self._keyboard_visible and self._grip_target_r == 'keyboard':
-                # Keyboard controls via LEFT stick (right grip held)
-                if abs(lx) > abs(ly) and abs(lx) > DEAD:
+                if abs(rx) > abs(ry) and abs(rx) > DEAD:
                     self._keyboard_width = max(0.3,
-                        self._keyboard_width + lx * RESIZE_SPEED * dt)
+                        self._keyboard_width + rx * RESIZE_SPEED * dt)
                     self._keyboard_height = None  # recalc from aspect
-                elif abs(ly) > abs(lx) and abs(ly) > DEAD:
-                    # Right-grip + left-stick Y ->radial distance along head->keyboard ray
-                    _t = (abs(ly) - DEAD) / (1.0 - DEAD)
+                elif abs(ry) > abs(rx) and abs(ry) > DEAD:
+                    # Right-grip + right-stick Y → radial distance along head→keyboard ray
+                    _t = (abs(ry) - DEAD) / (1.0 - DEAD)
                     _speed = (self._dist_speed_base
                             + (self._dist_speed_max - self._dist_speed_base) * (_t ** self._dist_speed_exp))
                     if self._head_pos_w is not None:
@@ -8623,17 +6994,18 @@ class OpenXRViewerCore:
                         self._keyboard_distance = max(0.2,
                             self._keyboard_distance + ry * self._dist_speed_base * dt)
             else:
-                if (not screen_locked) and abs(rx) > abs(ry) and abs(rx) > DEAD:
-                    self._screen_ref_size = max(0.8,
-                                                self._screen_ref_size + rx * RESIZE_SPEED * dt)
+                if laser_on_screen and abs(rx) > abs(ry) and abs(rx) > DEAD:
+                    self.screen_width = max(0.3,
+                                            self.screen_width + rx * RESIZE_SPEED * dt)
                     self.screen_height = None
                     self._resizing = True
-                elif (not screen_locked) and abs(ry) > abs(rx) and abs(ry) > DEAD:
-                    # Right-grip + right-stick Y ->radial distance along head->screen ray
+                    self._screen_osd_show_t = time.perf_counter()
+                elif laser_on_screen and abs(ry) > abs(rx) and abs(ry) > DEAD:
+                    # Right-grip + right-stick Y → radial distance along head→screen ray
                     _t = (abs(ry) - DEAD) / (1.0 - DEAD)
                     _speed = (self._dist_speed_base
                             + (self._dist_speed_max - self._dist_speed_base) * (_t ** self._dist_speed_exp))
-                    # Move screen along the head->screen radial direction
+                    # Move screen along the head→screen radial direction
                     if self._head_pos_w is not None:
                         hx, hy, hz = self._head_pos_w
                         csx = self.screen_pan_x - hx
@@ -8649,9 +7021,10 @@ class OpenXRViewerCore:
                             self.screen_pan_x    = float(hx + ux * R3_new)
                             self.screen_pan_y    = float(hy + uy * R3_new)
                             self.screen_distance = float(-(hz + uz * R3_new))
+                    self._screen_osd_show_t = time.perf_counter()
         elif grip_l and not grip_r:
             if self._keyboard_visible and self._grip_target_l == 'keyboard':
-                # Left grip latched onto keyboard + right stick ->standalone
+                # Left grip latched onto keyboard + right stick → standalone
                 # keyboard yaw / pitch offsets (auto-orientation still aims at
                 # head, these offsets are layered on top).
                 if abs(rx) > DEAD:
@@ -8661,14 +7034,15 @@ class OpenXRViewerCore:
                     self._kb_pitch_offset += ry * self._rot_speed * dt
                     self._keyboard_pitch  += ry * self._rot_speed * dt
             else:
-                # Left grip + right stick X ->screen yaw rotation
-                if (not screen_locked) and laser_on_screen and abs(rx) > DEAD:
+                # Left grip + right stick X → screen yaw rotation
+                if laser_on_screen and abs(rx) > DEAD:
                     self._yaw_offset -= rx * self._rot_speed * dt
                     self.screen_yaw  -= rx * self._rot_speed * dt
-                # Left grip + right stick Y ->screen pitch rotation
-                if (not screen_locked) and laser_on_screen and abs(ry) > DEAD:
+                # Left grip + right stick Y → screen pitch rotation
+                if laser_on_screen and abs(ry) > DEAD:
                     self._pitch_offset += ry * self._rot_speed * dt
                     self.screen_pitch  += ry * self._rot_speed * dt
+        self._grip_r_prev = grip_r
         # Re-sync grab offsets after stick fine-tuning.  Grip-to-move is paused
         # while the stick is active, so full XYZ re-sync is safe here.
         for grip_now, grip_mat, grab_attr in [
@@ -8684,7 +7058,7 @@ class OpenXRViewerCore:
                         -self.screen_distance], dtype='f8')
                     setattr(self, grab_attr, screen_center - grip_pos)
         if not grip_r:
-            # Accelerated scroll: higher stick deflection ->disproportionately faster scroll
+            # Accelerated scroll: higher stick deflection → disproportionately faster scroll
             if not (self._keyboard_visible or self._grabbed or grip_l):
                 self._accum_scroll(rx, ry, dt)
 
@@ -8696,16 +7070,15 @@ class OpenXRViewerCore:
             self._build_keyboard_texture()
             self._kb_last_build_width = self._keyboard_width
 
-        # Menu (left): short press ->toggle status/FPS panel
+        # Menu (left): short press → toggle status/FPS panel
         menu_now = self._read_bool_action(self._act_menu_btn, "/user/hand/left")
-        MENU_LONG = 0.6  # seconds -long press reserved for calibration combo
+        MENU_LONG = 0.6  # seconds — long press reserved for calibration combo
         if menu_now and not self._menu_pressed_last:
             self._menu_press_t = time.perf_counter()
             self._menu_long_fired = False
         if not menu_now and self._menu_pressed_last:
             if not self._menu_long_fired and (time.perf_counter() - self._menu_press_t) < MENU_LONG:
-                self._panel_mode = (self._panel_mode + 1) % 3
-                self._fps_overlay_visible = self._panel_mode != 2
+                self._fps_overlay_visible = not self._fps_overlay_visible
         self._menu_pressed_last = menu_now
 
         # A / B (right):
@@ -8720,99 +7093,137 @@ class OpenXRViewerCore:
             # If right-grip is held we intentionally do not perform A/B immediate
             # actions here (depth_ratio is adjusted via right-stick Y below).
             if not grip_r:
-                # Use XR runtime's `changed` flag when available -more reliable than
+                # Use XR runtime's `changed` flag when available — more reliable than
                 # manual frame-to-frame tracking when a button sits under a resting thumb.
-                # A: long press 1s ->toggle FPS/status panel
-                A_LONG = 1.0
-                if a_now and not self._a_last:
-                    self._a_press_t = time.perf_counter()
-                    self._a_long_fired = False
-                if a_now and not self._a_long_fired:
-                    if time.perf_counter() - self._a_press_t >= A_LONG:
-                        self._panel_mode = (self._panel_mode + 1) % 3
-                        self._fps_overlay_visible = self._panel_mode != 2
-                        self._a_long_fired = True
-                if not a_now and self._a_last and not self._a_long_fired:
-                    self._ab_was_held = False
+                # Fall back to manual edge detection if pyopenxr doesn't expose it.
+                a_edge = self._read_bool_edge(self._act_a_btn, "/user/hand/right", self._a_last)
+                b_edge = self._read_bool_edge(self._act_b_btn, "/user/hand/right", self._b_last)
+                # Only send OS mouse clicks if the right controller laser is
+                # currently intersecting the virtual screen. This prevents A/B
+                # from clicking when pointing off-screen or at the overlay panel.
+                is_gripping = self._grabbed
+                if a_edge and laser_r_on_screen and not is_gripping:
+                    _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
+                    _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
+                if b_edge and laser_r_on_screen and not is_gripping:
+                    _send_mouse_flags(_MOUSEEVENTF_RIGHTDOWN)
+                    _send_mouse_flags(_MOUSEEVENTF_RIGHTUP)
 
-                B_LONG = 1.0
-                if b_now and not self._b_last:
-                    self._b_press_t = time.perf_counter()
-                    self._b_long_fired = False
-                if b_now and not self._b_long_fired:
-                    if time.perf_counter() - self._b_press_t >= B_LONG:
-                        self._b_long_fired = True
         self._a_last = a_now
         self._b_last = b_now
 
-        # Y (left): short press recenters profile view pose; long press switches rooms.
-        Y_LONG = 1.0   # seconds to trigger room switch
+        # Y (left):
+        #   short press  → reset screen to upright default (same as session start)
+        #   long press   → reset screen to face current head gaze (same as home long-press)
+        Y_LONG = 0.6   # seconds to trigger long-press action
         y_now = self._read_bool_action(self._act_y_btn, "/user/hand/left")
         if y_now and not self._y_last:
             self._y_press_t    = time.perf_counter()
             self._y_long_fired = False
         if y_now and not self._y_long_fired:
             if time.perf_counter() - self._y_press_t >= Y_LONG:
-                self._switch_environment_model()
+                nxt = (self._preset_index + 1) % len(self._screen_presets)
+                self._apply_preset(nxt)
                 self._y_long_fired = True
         if not y_now and self._y_last and not self._y_long_fired:
-            if not self._recenter_profile_view_pose():
-                self._reset_screen_to_default(show_border=True)
+            self._apply_preset(3)  # short press = default preset
         self._y_last = y_now
 
-        # X (left): short press -> toggle virtual keyboard.
+        # X (left): short press → toggle virtual keyboard.
+        #          long press  → toggle VDXR green ↔ previous background.
+        X_LONG = 0.6   # seconds
         x_now = self._read_bool_action(self._act_x_btn, "/user/hand/left")
 
-        if not x_now and self._x_last:
-            self._keyboard_visible = not self._keyboard_visible
-            if self._keyboard_visible:
-                if self._keyboard_tex is None:
-                    self._init_keyboard()
-                self._anchor_keyboard_below_screen()
+        if x_now and not self._x_last:                     # rising edge
+            self._x_press_t = time.perf_counter()
+            self._x_long_fired = False
+
+        if x_now and not self._x_long_fired:               # still held, not yet fired
+            if time.perf_counter() - self._x_press_t >= X_LONG:
+                # Toggle between green and previous background
+                if self._bg_color_idx == 5 and self._prev_bg_color_idx is not None:
+                    # Restore previous background
+                    self._bg_color_idx = self._prev_bg_color_idx
+                    self._prev_bg_color_idx = None
+                else:
+                    # Save current background (if not already saved) and switch to green
+                    if self._prev_bg_color_idx is None:
+                        self._prev_bg_color_idx = self._bg_color_idx
+                    self._bg_color_idx = 5    # VDXR green
+                self._x_long_fired = True
+
+        if not x_now and self._x_last:                     # falling edge
+            if not self._x_long_fired:                     # short press
+                self._keyboard_visible = not self._keyboard_visible
+                if self._keyboard_visible:
+                    if self._keyboard_tex is None:
+                        self._init_keyboard()
+                    self._anchor_keyboard_below_screen()
 
         self._x_last = x_now
 
-        # Thumbstick clicks: grip held ->depth/visual, no grip ->keyboard shortcuts
+        # Thumbstick buttons: distinguish between single and double thumbstick presses
         lsc_now = self._read_bool_action(self._act_left_stick_click, "/user/hand/left")
         rsc_now = self._read_bool_action(self._act_right_stick_click, "/user/hand/right")
-        STICK_LONG = 1.0
+        BOTH_LONG  = 0.5   # Duration to trigger FPS/help panel toggle with both sticks
+        SINGLE_LONG = 1.0  # Duration for single thumbstick long press to switch shortcut panels
 
-        now = self._frame_now
+        # Both thumbsticks pressed → toggle FPS/help panel after 0.5 seconds (unchanged)
+        both_clicked = lsc_now and rsc_now
+        if both_clicked and not self._both_stick_fired:
+            if self._both_stick_start == 0.0:
+                self._both_stick_start = time.perf_counter()
+            elif time.perf_counter() - self._both_stick_start >= BOTH_LONG:
+                self._fps_overlay_visible = not self._fps_overlay_visible
+                self._both_stick_fired = True
+                # Mark single-stick long-fired to suppress their short actions
+                self._lsc_long_fired = True
+                self._rsc_long_fired = True
+        if not both_clicked:
+            self._both_stick_start = 0.0
+            self._both_stick_fired = False
 
-        # Left stick + left grip ->toggle 2D / 3D
-        if grip_l:
-            if lsc_now and not self._left_stick_click_prev:
-                self._stereo_enabled = not self._stereo_enabled
-                if self._stereo_enabled:
-                    self.depth_ratio = self._saved_depth_ratio
-                else:
-                    self._saved_depth_ratio = self.depth_ratio
-                    self.depth_ratio = 0.0
-        else:
+        # Non-double-press case: handle each thumbstick separately
+        # - Long press (>= SINGLE_LONG) triggers shortcut panel (same as double press);
+        # - Short press (released when < SINGLE_LONG) performs background/curved surface switching or grip modifier actions;
+        if not both_clicked:
+            now = self._frame_now
+
+            # Left thumbstick: long-press → toggle status/shortcut panel; short-press cycles background
             if lsc_now and not self._left_stick_click_prev:
                 self._lsc_press_t = now
                 self._lsc_long_fired = False
             if lsc_now and not self._lsc_long_fired:
-                if now - self._lsc_press_t >= STICK_LONG:
-                    _send_key(0x58, ctrl=True)  # Ctrl+X
+                if now - getattr(self, '_lsc_press_t', 0.0) >= SINGLE_LONG:
+                    self._fps_overlay_visible = not self._fps_overlay_visible
                     self._lsc_long_fired = True
-            if not lsc_now and self._left_stick_click_prev and not self._lsc_long_fired:
-                _send_key(0x43, ctrl=True)  # Ctrl+C
+            if not lsc_now and self._left_stick_click_prev:
+                # Released — if long-press wasn't fired, treat as short press
+                if not self._lsc_long_fired:
+                    if grip_r:
+                        if self.depth_strength > 0.0:
+                            self._depth_strength_saved = self.depth_strength
+                            self.depth_strength = 0.0
+                        else:
+                            self.depth_strength = getattr(self, '_depth_strength_saved', 0.1)
+                    else:
+                        self._bg_color_idx = (self._bg_color_idx + 1) % len(_BG_COLORS)
 
-        # Right stick + right grip ->reset depth strength
-        if grip_r:
-            if rsc_now and not self._right_stick_click_prev:
-                self.depth_strength = 2.0  # reset depth strength to default
-        else:
+            # Right thumbstick: long-press → reset screen direction (keep distance + size);
+            #          short-press → toggle curved/flat
             if rsc_now and not self._right_stick_click_prev:
                 self._rsc_press_t = now
                 self._rsc_long_fired = False
             if rsc_now and not self._rsc_long_fired:
-                if now - self._rsc_press_t >= STICK_LONG:
-                    _send_key(0x0D)  # Enter
+                if now - getattr(self, '_rsc_press_t', 0.0) >= SINGLE_LONG:
+                    self._reset_screen_direction()
                     self._rsc_long_fired = True
-            if not rsc_now and self._right_stick_click_prev and not self._rsc_long_fired:
-                _send_key(0x56, ctrl=True)  # Ctrl+V
+            if not rsc_now and self._right_stick_click_prev:
+                if not self._rsc_long_fired:
+                    if not grip_r and not grip_l:
+                        self._screen_curved = not self._screen_curved
+                    elif grip_r:
+                        self.depth_ratio = 2.0
 
         self._left_stick_click_prev = lsc_now
         self._right_stick_click_prev = rsc_now
@@ -8829,8 +7240,9 @@ class OpenXRViewerCore:
             if idle > FADE_DELAY:
                 self._border_alpha = max(0.0, 1.0 - (idle - FADE_DELAY) / FADE_DUR)
 
-        # Keyboard border fade: show while gripping keyboard (but not when adjusting screen)
-        kb_active = self._keyboard_visible and (grip_l or grip_r) and not laser_on_screen
+        # Keyboard border fade: show while gripping AND laser on keyboard (not just off-screen)
+        kb_hit = self._kb_hover_l is not None or self._kb_hover_r is not None
+        kb_active = self._keyboard_visible and (grip_l or grip_r) and kb_hit
         if kb_active:
             self._kb_border_alpha  = 1.0
             self._kb_border_idle_t = time.perf_counter()
@@ -8839,7 +7251,7 @@ class OpenXRViewerCore:
             if idle > FADE_DELAY:
                 self._kb_border_alpha = max(0.0, 1.0 - (idle - FADE_DELAY) / FADE_DUR)
 
-        # Trigger input -fires mouse clicks (skips keys claimed by keyboard)
+        # Trigger input — fires mouse clicks (skips keys claimed by keyboard)
         self._handle_triggers()
 
     # Main blocking loop
@@ -8859,30 +7271,15 @@ class OpenXRViewerCore:
         self._init_glfw()
         self._init_moderngl()
 
-        self._preview_only_mode = False
         try:
             self._init_openxr()
         except Exception as e:
-            print("[OpenXRViewer] OpenXR init failed")
-            self._cleanup_partial_openxr(destroy_instance=False)
-            self._enter_preview_only_wait()
-
-        # Set up desktop preview window (mirror of left eye)
-        try:
-            glfw.set_window_size(self.window, 960, 540)
-            glfw.set_window_pos(self.window, 100, 100)
-            if self._show_preview_window:
-                glfw.show_window(self.window)
-                self._preview_active = True
-                print("[OpenXRViewer] Desktop preview window opened")
-            else:
-                self._preview_active = False
-                print("[OpenXRViewer] Desktop preview window disabled")
-        except Exception as e:
-            print(f"[OpenXRViewer] Preview window setup failed: {e}")
+            print(f"[OpenXRViewer] OpenXR init failed: {e}")
+            self.cleanup()
+            raise
 
         # Widen the system double-click window so VR trigger taps have more time.
-        # Default Windows value is 500 ms -too tight for controller triggers.
+        # Default Windows value is 500 ms — too tight for controller triggers.
         # We restore the original value in cleanup() so no permanent side-effects.
         if sys.platform == "win32" and self._saved_dclick_time is None:
             self._saved_dclick_time = _U32.GetDoubleClickTime()
@@ -8890,7 +7287,6 @@ class OpenXRViewerCore:
 
         # Upload the first frame supplied by main.py
         if first_rgb is not None and first_depth is not None:
-            self._mark_source_frame_received()
             self._update_frame(first_rgb, first_depth)
 
         # Default fallback projection (used before first locate_views succeeds)
@@ -8899,7 +7295,6 @@ class OpenXRViewerCore:
             angle_up=0.785,   angle_down=-0.785,
         )
         _default_proj = _fov_to_proj_mat4(_default_fov)
-        _default_proj_d3d = _fov_to_proj_mat4_d3d(_default_fov)
 
         last_input_t = time.perf_counter()
 
@@ -8915,33 +7310,13 @@ class OpenXRViewerCore:
             self._frame_count += 1
 
             glfw.poll_events()
-            if self._preview_only_mode:
-                self._refresh_headset_wait_inference_timeout(now)
-                if not self._env_model_init_done:
-                    self._env_model_init_done = True
-                    self._init_env_model()
-                    print(f"[OpenXRViewer] Preview-only env model: {len(self._env_model_prims)} prims")
-                if self._waiting_retry_notice_pending:
-                    print(
-                        f"[OpenXRViewer] Waiting for VR headset connect... "
-                        f"(retry in {self._openxr_no_headset_retry_interval:.1f}s)"
-                    )
-                    self._waiting_retry_notice_pending = False
-                self._try_restore_openxr(now)
-                time.sleep(self._headset_wait_idle_sleep if self._hard_idle_active else 0.1)
-                continue
             self._poll_xr_events()
 
             if not self._session_running:
                 time.sleep(0.01)
                 continue
 
-            # Keep source freshness updated even while the runtime is not yet
-            # asking us to render. Otherwise a READY session that delays
-            # should_render can be misclassified as a source stall.
-            self._poll_source_frame(upload=False)
-
-            # Wait for the runtime to signal frame timing.
+            # — Wait for the runtime to signal frame timing —
             frame_state = xr.wait_frame(self._xr_session, self._xr_frame_wait_info)
             xr.begin_frame(self._xr_session, self._xr_frame_begin_info)
 
@@ -8959,7 +7334,7 @@ class OpenXRViewerCore:
 
             # Skip smoothing + input polling when no controllers are tracked,
             # but keep locating poses so we detect reconnection immediately.
-            # Wait 30 frames (~0.4s at 72Hz) before throttling -avoids
+            # Wait 30 frames (~0.4s at 72Hz) before throttling — avoids
             # toggling on transient tracking loss.
             both_missing = (self._aim_mat_l is None and self._aim_mat_r is None)
             if both_missing:
@@ -8971,7 +7346,7 @@ class OpenXRViewerCore:
                 self._smooth_controller_poses()
                 self._poll_controller_input(dt)
             else:
-                # No controllers -clear cursor/grab state so downstream code
+                # No controllers — clear cursor/grab state so downstream code
                 # (grip-to-move, trigger handling) sees no laser on screen.
                 self._cursor_uv_l = None
                 self._cursor_uv_r = None
@@ -8980,63 +7355,29 @@ class OpenXRViewerCore:
                 self._grabbed = False
 
             composition_layers = []
-            session_idle_timeout = self._track_session_idle_render(frame_state.should_render, now)
-
-            if self._session_ready_pending:
-                if frame_state.should_render:
-                    self._session_ready_pending = False
-                    self._preview_only_mode = False
-                    self._waiting_for_headset = False
-                    self._resume_source_inference()
-                    self._set_render_active(True)
-                    self._source_resume_grace_until = (
-                        time.perf_counter() + self._source_resume_grace
-                    )
-                    print("[OpenXRViewer] Headset detected, render confirmed")
-                else:
-                    xr.end_frame(
-                        self._xr_session,
-                        xr.FrameEndInfo(
-                            display_time=frame_state.predicted_display_time,
-                            environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE,
-                            layers=composition_layers,
-                        ),
-                    )
-                    if session_idle_timeout:
-                        if not self._hard_idle_active:
-                            print(
-                                f"[OpenXRViewer] Session idle for {self._session_idle_render_timeout:.0f}s; "
-                                "source/render paused, keeping OpenXR session"
-                            )
-                            self._headset_wait_inference_deadline = 0.0
-                            self._headset_wait_inference_paused = True
-                            self._set_source_active(False)
-                            self._enter_hard_idle_wait()
-                    continue
-
-            if not self._has_fresh_source_frame(now):
-                self._pause_xr_output_for_source_stall()
-                if self.color_tex is None or self.depth_tex is None:
-                    xr.end_frame(
-                        self._xr_session,
-                        xr.FrameEndInfo(
-                            display_time=frame_state.predicted_display_time,
-                            environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE,
-                            layers=composition_layers,
-                        ),
-                    )
-                    time.sleep(0.01)
-                    continue
-
-            # Lazy init: load environment model after OpenXR session is running
-            if not self._env_model_init_done:
-                self._env_model_init_done = True
-                self._init_env_model()
-                print(f"[OpenXRViewer] Lazy env model: {len(self._env_model_prims)} prims")
 
             if frame_state.should_render:
-                # Drain depth_q non-blocking -keep only the newest frame
-                self._poll_source_frame(upload=True)
+                # Drain depth_q non-blocking — keep only the newest frame
+                latest = None
+                try:
+                    while True:
+                        latest = self.depth_q.get_nowait()
+                except _queue.Empty:
+                    pass
+
+                if latest is not None:
+                    rgb, depth, frame_ts = latest
+                    self._update_frame(rgb, depth)
+                    if frame_ts is not None:
+                        self.total_latency = (time.perf_counter() - frame_ts) * 1000.0
+                    # SBS source rate: time of arrival of each unique frame from depth_q
+                    sbs_now = time.perf_counter()
+                    self._sbs_ts_ring.append(sbs_now)
+                    m = len(self._sbs_ts_ring)
+                    if m >= 2:
+                        sbs_span = sbs_now - self._sbs_ts_ring[0]
+                        if sbs_span > 0:
+                            self.sbs_fps = (m - 1) / sbs_span
 
                 # Head-tracking pose for this frame
                 try:
@@ -9051,48 +7392,34 @@ class OpenXRViewerCore:
                 except Exception:
                     views = [None, None]
 
-                if self._apply_profile_view_pose_to_xr_space(views):
-                    try:
-                        _view_state, views = xr.locate_views(
-                            self._xr_session,
-                            xr.ViewLocateInfo(
-                                view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
-                                display_time=frame_state.predicted_display_time,
-                                space=self._xr_space,
-                            ),
-                        )
-                    except Exception:
-                        views = [None, None]
-                    self._update_aim_poses(frame_state.predicted_display_time)
-                    self._update_grip_poses(frame_state.predicted_display_time)
-
                 # Cache head pose for the next frame's input handlers (left-stick
                 # orbit pivot + keyboard anchoring). One-frame stale is imperceptible
                 # at 90 Hz and avoids needing a second xr.locate_views call.
                 if views and views[0] is not None and views[1] is not None:
                     try:
-                        self._last_located_views = views
-                        head_mat = self._head_model_mat4_from_views(views)
+                        p0 = views[0].pose.position
+                        p1 = views[1].pose.position
                         self._head_pos_w = (
-                            float(head_mat[0, 3]),
-                            float(head_mat[1, 3]),
-                            float(head_mat[2, 3]),
+                            (p0.x + p1.x) / 2.0,
+                            (p0.y + p1.y) / 2.0,
+                            (p0.z + p1.z) / 2.0,
                         )
+                        qm = _xr_quat_to_mat4(views[0].pose.orientation)
                         # Forward = -Z column of the head rotation matrix.
                         self._head_fwd_w = (
-                            float(-head_mat[0, 2]),
-                            float(-head_mat[1, 2]),
-                            float(-head_mat[2, 2]),
+                            float(-qm[0, 2]),
+                            float(-qm[1, 2]),
+                            float(-qm[2, 2]),
                         )
                     except Exception:
                         pass
 
                 # On the first valid frame, place the screen in front of the user's
-                # current gaze -identical to pressing Y -so startup matches reset.
+                # current gaze — identical to pressing Y — so startup matches reset.
                 if not self._screen_eye_init and views and views[0] is not None:
                     try:
-                        if self._head_pos_w is not None:
-                            self._initial_head_y = float(self._head_pos_w[1])
+                        ey = (views[0].pose.position.y + views[1].pose.position.y) / 2.0
+                        self._initial_head_y = float(ey)
                     except Exception:
                         pass
                     self._reset_screen_to_default(show_border=False)
@@ -9101,122 +7428,14 @@ class OpenXRViewerCore:
                 eye_layer_views = []
 
                 if self._use_d3d11:
-                    # D3D11 rendering-----
+                    # D3D11 rendering─────
                     #
-                    # Prefer native D3D11 rendering directly into OpenXR
-                    # swapchain images. Legacy interop/PBO paths remain
-                    # fallback-only.
+                    # Prefer GPU interop (NV_DX_interop2 or EXT_memory_object)
+                    # which avoids the CPU round-trip entirely.
+                    # Fall back to the optimized PBO readback path otherwise.
 
-                    if (
-                        self._d3d11_native_renderer is not None
-                        and self._d3d11_native_renderer.has_frame
-                    ):
-                        # Native D3D11 renderer: draw directly into OpenXR D3D11 swapchain images.
-                        for eye_index in range(2):
-                            swapchain = self._xr_swapchains[eye_index]
-                            img_index = xr.acquire_swapchain_image(swapchain, self._xr_sc_acquire_info)
-                            xr.wait_swapchain_image(swapchain, self._xr_sc_wait_info)
-                            released = False
-                            try:
-                                sc_image = self._swapchain_images[eye_index][img_index]
-                                sc_w, sc_h = self._swapchain_sizes[eye_index]
-                                view = views[eye_index] if views and views[eye_index] else None
-                                view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
-                                proj_mat = _fov_to_proj_mat4_d3d(view.fov) if view else _default_proj_d3d
-                                mvp = proj_mat @ view_mat @ self._build_model_mat4()
-                                self._d3d11_native_renderer.render_eye(
-                                    sc_image.texture,
-                                    sc_w,
-                                    sc_h,
-                                    eye_index,
-                                    self.ipd_uv,
-                                    self.depth_strength * self.depth_ratio,
-                                    float(self.convergence),
-                                    mvp,
-                                )
-                                xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
-                                released = True
-                                eye_layer_views.append(xr.CompositionLayerProjectionView(
-                                    pose=view.pose if view else xr.Posef(),
-                                    fov=view.fov   if view else _default_fov,
-                                    sub_image=xr.SwapchainSubImage(
-                                        swapchain=swapchain,
-                                        image_rect=xr.Rect2Di(
-                                            offset=xr.Offset2Di(x=0, y=0),
-                                            extent=xr.Extent2Di(width=sc_w, height=sc_h),
-                                        ),
-                                    ),
-                                ))
-                            except Exception as e:
-                                if not released:
-                                    try:
-                                        xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
-                                    except Exception:
-                                        pass
-                                print(f"[OpenXRViewer] D3D11 native render failed: {e}")
-                                try:
-                                    self._d3d11_native_renderer.cleanup()
-                                except Exception:
-                                    pass
-                                self._d3d11_native_renderer = None
-                                self._texture_size = None
-                                eye_layer_views = []
-                                break
-
-                    elif self._interop_mode == 'nv_dx':
+                    if self._interop_mode == 'nv_dx':
                         # NV_DX_interop2: render directly into swapchain textures
-                        nv_interop_failed = False
-                        for eye_index in range(2):
-                            swapchain = self._xr_swapchains[eye_index]
-                            img_index = xr.acquire_swapchain_image(swapchain, self._xr_sc_acquire_info)
-                            xr.wait_swapchain_image(swapchain, self._xr_sc_wait_info)
-                            released = False
-                            try:
-                                sc_image = self._swapchain_images[eye_index][img_index]
-                                sc_w, sc_h = self._swapchain_sizes[eye_index]
-                                view = views[eye_index] if views and views[eye_index] else None
-                                view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
-                                proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
-
-                                mgl_fbo, raw_fbo = self._get_or_create_nv_interop_fbo(
-                                    eye_index, img_index, sc_image.texture, sc_w, sc_h,
-                                )
-                                # Lock the registered D3D11 texture for GL access
-                                _, _, dx_obj = self._nv_dx_objects[(eye_index, img_index)]
-                                _wglDXLockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
-                                try:
-                                    self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
-                                finally:
-                                    _wglDXUnlockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
-
-                                xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
-                                released = True
-                                eye_layer_views.append(xr.CompositionLayerProjectionView(
-                                    pose=view.pose if view else xr.Posef(),
-                                    fov=view.fov   if view else _default_fov,
-                                    sub_image=xr.SwapchainSubImage(
-                                        swapchain=swapchain,
-                                        image_rect=xr.Rect2Di(
-                                            offset=xr.Offset2Di(x=0, y=0),
-                                            extent=xr.Extent2Di(width=sc_w, height=sc_h),
-                                        ),
-                                    ),
-                                ))
-                            except Exception as e:
-                                if not released:
-                                    try:
-                                        xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
-                                    except Exception:
-                                        pass
-                                self._disable_nv_interop_after_failure(e)
-                                eye_layer_views = []
-                                nv_interop_failed = True
-                                break
-                        if nv_interop_failed:
-                            pass
-
-                    elif self._interop_mode == 'ext_mem':
-                        # EXT_memory_object: render to shared GL FBO, GPU-side blit to swapchain
                         for eye_index in range(2):
                             swapchain = self._xr_swapchains[eye_index]
                             img_index = xr.acquire_swapchain_image(swapchain, self._xr_sc_acquire_info)
@@ -9227,10 +7446,62 @@ class OpenXRViewerCore:
                             view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
                             proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
 
-                            mgl_fbo = self._ext_shared_tex[eye_index][3]
-                            self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
-                            self._blit_ext_to_swapchain(eye_index, sc_image.texture)
+                            mgl_fbo, raw_fbo = self._get_or_create_nv_interop_fbo(
+                                eye_index, img_index, sc_image.texture, sc_w, sc_h,
+                            )
+                            # Lock the registered D3D11 texture for GL access
+                            _, _, dx_obj, _ = self._nv_dx_objects[(eye_index, img_index)]
+                            _wglDXLockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
+                            try:
+                                self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
+                            finally:
+                                _wglDXUnlockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
 
+                            xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
+                            eye_layer_views.append(xr.CompositionLayerProjectionView(
+                                pose=view.pose if view else xr.Posef(),
+                                fov=view.fov   if view else _default_fov,
+                                sub_image=xr.SwapchainSubImage(
+                                    swapchain=swapchain,
+                                    image_rect=xr.Rect2Di(
+                                        offset=xr.Offset2Di(x=0, y=0),
+                                        extent=xr.Extent2Di(width=sc_w, height=sc_h),
+                                    ),
+                                ),
+                            ))
+
+                    elif self._interop_mode == 'ext_mem':
+                        # EXT_memory_object two-phase loop:
+                        #   Phase 1 (per eye): render to RGBA offscreen FBO,
+                        #     blit (with R/B swizzle if BGRA) into the EXT-shared
+                        #     GL texture, insert a per-eye GL fence.
+                        #   Phase 2 (per eye): wait on the fence, CopyResource
+                        #     shared → swapchain image, release.
+                        # Rendering to the offscreen first lets every shader keep
+                        # its normal RGBA output; only the final blit swizzles.
+                        ext_pending = []  # (eye_index, fence, d3d11_tex, sc_w, sc_h, swapchain, view)
+                        for eye_index in range(2):
+                            swapchain = self._xr_swapchains[eye_index]
+                            img_index = xr.acquire_swapchain_image(swapchain, self._xr_sc_acquire_info)
+                            xr.wait_swapchain_image(swapchain, self._xr_sc_wait_info)
+                            sc_image = self._swapchain_images[eye_index][img_index]
+                            sc_w, sc_h = self._swapchain_sizes[eye_index]
+                            view = views[eye_index] if views and views[eye_index] else None
+                            view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
+                            proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
+
+                            offs_mgl_fbo, _ = self._get_or_create_offscreen_fbo(eye_index, img_index, sc_w, sc_h)
+                            self._render_eye(eye_index, offs_mgl_fbo, view_mat, proj_mat, flip_y=True)
+                            # Look up the offscreen texture we just rendered into
+                            offs_tex = self._offscreen_fbo_cache[(eye_index, img_index)][2]
+                            self._swizzle_blit_to_shared(eye_index, offs_tex)
+                            fence = self._make_gl_fence()
+                            ext_pending.append((eye_index, fence, sc_image.texture,
+                                                sc_w, sc_h, swapchain, view))
+
+                        # Phase 2: wait fence → D3D11 CopyResource → release swapchain image.
+                        for eye_index, fence, d3d11_tex, sc_w, sc_h, swapchain, view in ext_pending:
+                            self._wait_and_blit_ext(eye_index, d3d11_tex, fence)
                             xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
                             eye_layer_views.append(xr.CompositionLayerProjectionView(
                                 pose=view.pose if view else xr.Posef(),
@@ -9297,19 +7568,8 @@ class OpenXRViewerCore:
                         view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
                         proj_mat = _fov_to_proj_mat4(view.fov)   if view else _default_proj
 
-                        raw_fbo, mgl_fbo = self._get_or_create_fbo(eye_index, img_index, sc_image.image, sc_w, sc_h)
+                        _, mgl_fbo, _ = self._get_or_create_fbo(eye_index, img_index, sc_image.image)
                         self._render_eye(eye_index, mgl_fbo, view_mat, proj_mat)
-
-                        # Desktop preview: blit left eye to GLFW window
-                        if self._preview_active and eye_index == 0:
-                            pw, ph = glfw.get_window_size(self.window)
-                            if pw > 0 and ph > 0:
-                                glBindFramebuffer(GL_READ_FRAMEBUFFER, raw_fbo)
-                                glReadBuffer(GL_COLOR_ATTACHMENT0)
-                                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0)
-                                glBlitFramebuffer(0, 0, sc_w, sc_h, 0, 0, pw, ph,
-                                                  GL_COLOR_BUFFER_BIT, GL_LINEAR)
-                                glfw.swap_buffers(self.window)
 
                         xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
 
@@ -9325,15 +7585,44 @@ class OpenXRViewerCore:
                             ),
                         ))
 
-                if eye_layer_views:
-                    proj_layer = xr.CompositionLayerProjection(
-                        space=self._xr_space,
-                        views=eye_layer_views,
-                    )
-                    composition_layers.append(
-                        ctypes.cast(ctypes.pointer(proj_layer),
-                                    ctypes.POINTER(xr.CompositionLayerBaseHeader))
-                    )
+                # UNPREMULTIPLIED_ALPHA_BIT: tell the compositor our alpha channel
+                # is straight (not premultiplied).  Our swapchain writes alpha=1 for
+                # opaque content and soft-fade values at screen edges, none of which
+                # are premultiplied, so this flag gives the compositor correct blending.
+                _proj_flags = xr.CompositionLayerFlags.UNPREMULTIPLIED_ALPHA_BIT
+
+                # FB runtime sharpening — only attach when extension was successfully
+                # enabled at instance creation.  Fallback: quality → normal → off.
+                _sharp_next = None
+                if getattr(self, '_fb_layer_settings_enabled', False):
+                    try:
+                        _Flags = xr.CompositionLayerSettingsFlagsFB
+                        if hasattr(_Flags, 'QUALITY_SHARPENING_BIT_FB'):
+                            _sharp_flag = _Flags.QUALITY_SHARPENING_BIT_FB
+                        elif hasattr(_Flags, 'NORMAL_SHARPENING_BIT_FB'):
+                            _sharp_flag = _Flags.NORMAL_SHARPENING_BIT_FB
+                        else:
+                            _sharp_flag = None
+                        if _sharp_flag is not None:
+                            _sharp_settings = xr.CompositionLayerSettingsFB(
+                                layer_flags=_sharp_flag,
+                            )
+                            _sharp_next = ctypes.cast(
+                                ctypes.pointer(_sharp_settings), ctypes.c_void_p
+                            )
+                    except Exception:
+                        pass
+
+                proj_layer = xr.CompositionLayerProjection(
+                    layer_flags=_proj_flags,
+                    space=self._xr_space,
+                    views=eye_layer_views,
+                    next=_sharp_next,
+                )
+                composition_layers.append(
+                    ctypes.cast(ctypes.pointer(proj_layer),
+                                ctypes.POINTER(xr.CompositionLayerBaseHeader))
+                )
 
             xr.end_frame(
                 self._xr_session,
@@ -9344,19 +7633,7 @@ class OpenXRViewerCore:
                 ),
             )
 
-            if session_idle_timeout:
-                if not self._hard_idle_active:
-                    print(
-                        f"[OpenXRViewer] Session idle for {self._session_idle_render_timeout:.0f}s; "
-                        "source/render paused, keeping OpenXR session"
-                    )
-                    self._headset_wait_inference_deadline = 0.0
-                    self._headset_wait_inference_paused = True
-                    self._set_source_active(False)
-                    self._enter_hard_idle_wait()
-                continue
-
-            # Timestamp-ring FPS: (N-1) frames / (last_ts - first_ts) -exact, O(1)
+            # Timestamp-ring FPS: (N-1) frames / (last_ts - first_ts) — exact, O(1)
             t_now = time.perf_counter()
             self._frame_ts_ring.append(t_now)
             n = len(self._frame_ts_ring)
@@ -9370,34 +7647,25 @@ class OpenXRViewerCore:
     # Cleanup
     def cleanup(self):
         """Release all OpenXR and OpenGL resources."""
-        self._set_render_active(False)
-        self._set_idle_active(False)
         if sys.platform == "win32" and self._saved_dclick_time is not None:
             _U32.SystemParametersInfoW(0x0020, self._saved_dclick_time, None, 0)
             self._saved_dclick_time = None
 
         self._cleanup_interop()
 
-        for _, mgl_fbo in self._fbo_cache.values():
-            try:
-                mgl_fbo.release()
-            except Exception:
-                pass
-        raw_ids = [raw_id for raw_id, _ in self._fbo_cache.values()]
+        raw_ids = [v[0] for v in self._fbo_cache.values()]
         if raw_ids:
             try:
                 glDeleteFramebuffers(len(raw_ids), raw_ids)
             except Exception:
                 pass
-        self._fbo_cache.clear()
-
-        depth_rbs = list(self._depth_rb_cache.values())
-        if depth_rbs:
+        # Also delete depth renderbuffers attached to swapchain FBOs
+        for v in self._fbo_cache.values():
             try:
-                glDeleteRenderbuffers(len(depth_rbs), depth_rbs)
+                glDeleteRenderbuffers(1, [v[2]])
             except Exception:
                 pass
-        self._depth_rb_cache.clear()
+        self._fbo_cache.clear()
 
         # Release D3D11-path PBOs used for async pixel readback
         if self._d3d11_pbo_cache:
@@ -9416,20 +7684,16 @@ class OpenXRViewerCore:
                 pass
         for entry in self._offscreen_fbo_cache.values():
             try:
-                entry[0].release()   # mgl Framebuffer
-            except Exception:
-                pass
-            try:
                 entry[2].release()   # mgl Texture
             except Exception:
                 pass
             try:
-                glDeleteRenderbuffers(1, [entry[5]])  # depth_rb
+                glDeleteRenderbuffers(1, [entry[3]])  # depth renderbuffer
             except Exception:
                 pass
         self._offscreen_fbo_cache.clear()
 
-        # Release D3D11 device/context (COM objects -call Release via vtable)
+        # Release D3D11 device/context (COM objects — call Release via vtable)
         for d3d_obj in (self._d3d11_context, self._d3d11_device):
             if d3d_obj is not None:
                 try:
@@ -9454,13 +7718,15 @@ class OpenXRViewerCore:
                 pass
         self._pbo_color = self._pbo_depth = None
 
-        for tex in (self._overlay_tex, self._brand_osd_tex, self.color_tex, self.depth_tex):
+        for tex in (self._overlay_tex, self._depth_osd_tex, self._screen_osd_tex,
+                    self._preset_osd_tex, self._brand_osd_tex,
+                    self.color_tex, self.depth_tex):
             if tex:
                 try:
                     tex.release()
                 except Exception:
                     pass
-        self._overlay_tex = self._brand_osd_tex = None
+        self._overlay_tex = self._depth_osd_tex = self._screen_osd_tex = self._preset_osd_tex = self._brand_osd_tex = None
         if self._calib_tex:
             try:
                 self._calib_tex.release()
@@ -9474,8 +7740,6 @@ class OpenXRViewerCore:
                 pass
             self._help_tex = None
         self.color_tex = self.depth_tex = None
-
-        self._release_env_model_resources()
 
         # Release controller model GL resources
         for prims in (self._ctrl_prims_l, self._ctrl_prims_r):
@@ -9543,253 +7807,13 @@ class OpenXRViewerCore:
 
         print("[OpenXRViewer] Cleanup complete")
 
-
-class ScreenEffectsMixin:
-    """Screen effect layer for the normal no-room viewer.
-
-    The environment viewer does not inherit this mixin, so room mode keeps a
-    plain screen and does not pay the maintenance cost of no-room visual effects.
-    """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._screen_effects_enabled = bool(kwargs.get('screen_effects_enabled', True))
-        self._metallic_border_enabled = bool(kwargs.get('metallic_border_enabled', True))
-        self._glow_enabled = bool(kwargs.get('glow_enabled', True))
-        self._shadow_enabled = bool(kwargs.get('shadow_enabled', True))
-        self._ground_light_enabled = bool(kwargs.get('ground_light_enabled', False))
-
-        self._border_alpha = max(float(getattr(self, '_border_alpha', 0.0)), 0.0)
-        self._glow_intensity = float(kwargs.get('glow_intensity', 0.22))
-        self._glow_width_m = float(kwargs.get('glow_width_m', 0.035))
-        self._glow_ref_screen = float(kwargs.get('glow_ref_screen', 2.4))
-        self._glow_color = tuple(kwargs.get('glow_color', (0.30, 0.55, 1.0)))
-        self._glow_target_color = self._glow_color
-        self._shadow_opacity = float(kwargs.get('shadow_opacity', 0.22))
-        self._ground_light_color = tuple(kwargs.get('ground_light_color', (0.25, 0.45, 1.0)))
-        self._ground_light_intensity = float(kwargs.get('ground_light_intensity', 0.10))
-        self._breath_dx = self._breath_dy = self._breath_dz = 0.0
-
-    def _make_key_callback(self):
-        base_cb = super()._make_key_callback()
-        viewer = self
-
-        def _cb(window, key, scancode, action, mods):
-            base_cb(window, key, scancode, action, mods)
-            if action not in (glfw.PRESS, glfw.REPEAT):
-                return
-            # Normal-mode visual effect shortcuts. These do not exist in env mode.
-            if key == glfw.KEY_B:
-                viewer._metallic_border_enabled = not viewer._metallic_border_enabled
-                viewer._border_alpha = 1.0
-                viewer._border_idle_t = time.perf_counter()
-            elif key == glfw.KEY_V:
-                viewer._glow_enabled = not viewer._glow_enabled
-            elif key == glfw.KEY_H:
-                viewer._shadow_enabled = not viewer._shadow_enabled
-            elif key == glfw.KEY_J:
-                viewer._ground_light_enabled = not viewer._ground_light_enabled
-        return _cb
-
-    def _screen_effect_model(self, width, height, z_offset=0.0, y_offset=0.0):
-        sx = width / 2.0
-        sy = height / 2.0
-        cy = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
-        cp = math.cos(self.screen_pitch); sp = math.sin(self.screen_pitch)
-        cr = math.cos(self.screen_roll);  sr = math.sin(self.screen_roll)
-        rot_y = np.array([[ cy, 0, sy_, 0], [0, 1, 0, 0], [-sy_, 0, cy, 0], [0, 0, 0, 1]], dtype='f4')
-        rot_x = np.array([[1, 0, 0, 0], [0, cp, -sp, 0], [0, sp, cp, 0], [0, 0, 0, 1]], dtype='f4')
-        rot_z = np.array([[cr, -sr, 0, 0], [sr,  cr, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], dtype='f4')
-        R = rot_y @ rot_x @ rot_z
-        S = np.diag([sx, sy, 1.0, 1.0]).astype('f4')
-        T = np.eye(4, dtype='f4')
-        T[0, 3] = self.screen_pan_x + getattr(self, '_breath_dx', 0.0)
-        T[1, 3] = self.screen_pan_y + y_offset + getattr(self, '_breath_dy', 0.0)
-        T[2, 3] = -self.screen_distance + z_offset + getattr(self, '_breath_dz', 0.0)
-        return T @ R @ S
-
-    def _render_screen_background_effects(self, mgl_fbo, vp_mat):
-        if not getattr(self, '_screen_effects_enabled', True):
-            return
-        if self.screen_height is None:
-            return
-        self._render_shadow(mgl_fbo, vp_mat)
-        self._render_ground_light(mgl_fbo, vp_mat)
-        self._render_glow(mgl_fbo, vp_mat)
-
-    def _render_screen_foreground_effects(self, mgl_fbo, vp_mat):
-        if not getattr(self, '_screen_effects_enabled', True):
-            return
-        if self.screen_height is None:
-            return
-        self._render_metallic_border(mgl_fbo, vp_mat)
-
-    def _render_glow(self, mgl_fbo, vp_mat):
-        if not getattr(self, '_glow_enabled', True):
-            return
-        if getattr(self, '_glow_prog', None) is None or getattr(self, '_glow_vao', None) is None:
-            return
-        intensity = float(getattr(self, '_glow_intensity', 0.0))
-        if intensity <= 0.0:
-            return
-
-        screen_long = max(self.screen_width, self.screen_height)
-        glow_scale = screen_long / max(float(getattr(self, '_glow_ref_screen', 2.4)), 1e-6)
-        glow_width = float(getattr(self, '_glow_width_m', 0.035)) * glow_scale
-        glow_margin = glow_width * 6.0
-        glow_w = self.screen_width + 2.0 * glow_margin
-        glow_h = self.screen_height + 2.0 * glow_margin
-        uv_glow_width = glow_width / max(glow_w, glow_h, 1e-6)
-
-        self.ctx.depth_mask = False
-        self.ctx.enable(moderngl.BLEND)
-        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-        model = self._screen_effect_model(glow_w, glow_h, z_offset=-0.002)
-        mvp = vp_mat @ model
-        self._glow_prog['u_mvp'].write(mvp.T.astype('f4').tobytes())
-        self._glow_prog['u_screen_half'].value = (self.screen_width / glow_w / 2.0, self.screen_height / glow_h / 2.0)
-        self._glow_prog['u_glow_color'].value = tuple(getattr(self, '_glow_color', (0.30, 0.55, 1.0)))
-        self._glow_prog['u_glow_width'].value = uv_glow_width
-        self._glow_prog['u_glow_intensity'].value = intensity
-        self._glow_vao.render(moderngl.TRIANGLE_STRIP)
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.depth_mask = True
-
-    def _render_shadow(self, mgl_fbo, vp_mat):
-        if not getattr(self, '_shadow_enabled', True):
-            return
-        if getattr(self, '_shadow_prog', None) is None or getattr(self, '_shadow_vao', None) is None:
-            return
-        opacity = float(getattr(self, '_shadow_opacity', 0.0))
-        if opacity <= 0.0:
-            return
-        shadow_w = self.screen_width * 1.4
-        shadow_h = self.screen_height * 0.35
-        y_off = -(self.screen_height / 2.0 + shadow_h / 2.0)
-        self.ctx.depth_mask = False
-        self.ctx.enable(moderngl.BLEND)
-        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-        model = self._screen_effect_model(shadow_w, shadow_h, z_offset=-0.004, y_offset=y_off)
-        mvp = vp_mat @ model
-        self._shadow_prog['u_mvp'].write(mvp.T.astype('f4').tobytes())
-        self._shadow_prog['u_opacity'].value = opacity
-        self._shadow_vao.render(moderngl.TRIANGLE_STRIP)
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.depth_mask = True
-
-    def _render_ground_light(self, mgl_fbo, vp_mat):
-        if not getattr(self, '_ground_light_enabled', False):
-            return
-        if getattr(self, '_ground_prog', None) is None or getattr(self, '_ground_vao', None) is None:
-            return
-        intensity = float(getattr(self, '_ground_light_intensity', 0.0))
-        if intensity <= 0.0:
-            return
-        ground_w = self.screen_width * 1.5
-        ground_h = self.screen_height * 0.45
-        y_off = -(self.screen_height / 2.0 + ground_h / 2.0)
-        self.ctx.depth_mask = False
-        self.ctx.enable(moderngl.BLEND)
-        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-        model = self._screen_effect_model(ground_w, ground_h, z_offset=-0.006, y_offset=y_off)
-        mvp = vp_mat @ model
-        self._ground_prog['u_mvp'].write(mvp.T.astype('f4').tobytes())
-        self._ground_prog['u_color'].value = tuple(getattr(self, '_ground_light_color', (0.25, 0.45, 1.0)))
-        self._ground_prog['u_intensity'].value = intensity
-        self._ground_vao.render(moderngl.TRIANGLE_STRIP)
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.depth_mask = True
-
-    def _render_metallic_border(self, mgl_fbo, vp_mat):
-        if not getattr(self, '_metallic_border_enabled', True):
-            return
-        prog = getattr(self, '_metallic_border_prog', None)
-        vao = getattr(self, '_metallic_border_vao', None)
-        if prog is None or vao is None:
-            return
-        alpha = max(float(getattr(self, '_border_alpha', 1.0)), 0.35)
-        self.ctx.depth_mask = False
-        self.ctx.enable(moderngl.BLEND)
-        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-        border_w = self.screen_width * 1.012
-        border_h = self.screen_height * 1.018
-        model = self._screen_effect_model(border_w, border_h, z_offset=-0.001)
-        mvp = vp_mat @ model
-        prog['u_mvp'].write(mvp.T.astype('f4').tobytes())
-        prog['u_color'].value = (0.65, 0.68, 0.72)
-        prog['u_alpha'].value = alpha
-        prog['u_border_uv'].value = (0.015, 0.022)
-        vao.render(moderngl.TRIANGLE_STRIP)
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.depth_mask = True
-
-class OpenXRViewer(ScreenEffectsMixin, OpenXRViewerCore):
-    """No-room viewer.
-
-    Keeps normal viewing policy and screen effects separate from room/environment
-    code. Environment hooks are explicitly disabled here.
-    """
-
-    ENVIRONMENT_MODE = False
-    DEFAULT_ENVIRONMENT_MODEL = 'None'
-
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault('environment_model', self.DEFAULT_ENVIRONMENT_MODEL)
-        super().__init__(*args, **kwargs)
-
-    def _discover_environment_models(self):
-        return []
-
-    def _reset_environment_profile_defaults(self):
-        return None
-
-    def _configure_environment_profile(self):
-        self._environment_enabled = False
-        self._environment_model = 'None'
-        self._env_profile = {}
-        self._env_model_path = None
-        self._env_model_visible = False
-        self._env_current_name = 'None'
-
-    def _configure_profile_view_layout(self):
-        return None
-
-    def _screen_profile_value(self, key, default=None):
-        return default
-
-    def _environment_screen_locked(self):
-        return False
-
-    def _apply_profile_view_pose_to_xr_space(self, views=None):
-        return None
-
-    def _recenter_profile_view_pose(self, views=None):
-        return None
-
-    def _auto_view_position_from_screen(self):
-        return None
-
-    def _apply_profile_screen_layout(self, *args, **kwargs):
-        return None
-
-    def _init_env_model(self):
-        self._env_model_visible = False
-        self._env_model_prims = []
-        self._env_model_textures = []
-        self._env_model_lights = []
-        self._env_available_models = []
-        self._env_current_name = 'None'
-
-    def _switch_environment_model(self, direction=1):
-        return None
-
-    def _render_env_model(self, mgl_fbo, vp_mat, view_mat):
-        return None
-
-
-def _smoke_test(viewer_cls):
+if __name__ == "__main__":
+    # Standalone smoke test: feed the viewer a single blank-white RGB frame
+    # (with a zero depth map) so you can put on the headset and verify rendering,
+    # controller input, keyboard, etc. — without needing the
+    # full main.py capture pipeline running.
     if not OPENXR_AVAILABLE:
-        print("[TEST] pyopenxr not available - cannot run standalone test")
+        print("[TEST] pyopenxr not available — cannot run standalone test")
         sys.exit(1)
 
     import queue as _q
@@ -9798,16 +7822,19 @@ def _smoke_test(viewer_cls):
     zero_depth = np.zeros((H, W), dtype=np.float32)
 
     depth_q = _q.Queue(maxsize=2)
+    # Pre-seed with one frame so the run loop has something to display immediately.
     depth_q.put((white_rgb, zero_depth, time.perf_counter()))
 
-    viewer = viewer_cls(frame_size=(W, H), fps=60, depth_q=depth_q, show_fps=True)
+    viewer = OpenXRViewer(
+        frame_size=(W, H),
+        fps=60,
+        depth_q=depth_q,
+        show_fps=True,
+    )
+
     try:
         viewer.run(first_rgb=white_rgb, first_depth=zero_depth)
     except KeyboardInterrupt:
         print("[TEST] Interrupted")
     finally:
         viewer.cleanup()
-
-if __name__ == "__main__":
-    
-    _smoke_test(OpenXRViewer)
