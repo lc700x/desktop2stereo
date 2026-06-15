@@ -332,6 +332,7 @@ Computing Device: 0
 Language: EN
 Run Mode: OpenXR Link
 XR Preview Window: false
+Local VSync: false
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
@@ -340,7 +341,7 @@ Stereo Mix: null
 CRF: 20
 Audio Delay: -0.15
 Controller Model: PICO
-Active Environment: Default
+Environment Model: Default
 Lossless Scaling Support: false
 Capture Tool: none
 Fill 16:9: true

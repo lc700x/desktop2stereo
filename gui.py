@@ -271,6 +271,7 @@ UI_TEXTS = {
         "3D Monitor": "3D Monitor",
         "OpenXR Link": "OpenXR Link",
         "XR Preview Window": "XR Preview Window",
+        "Local VSync": "Local VSync",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
         "Preview":"Preview",
@@ -309,6 +310,7 @@ UI_TEXTS = {
         "tooltip_capture_tool": "Capture backend",
         "tooltip_run_mode": "Output mode",
         "tooltip_display_mode": "Stereo display format",
+        "tooltip_local_vsync": "Synchronize the local viewer to the display refresh rate",
         "tooltip_ctrl_model": "Controller model",
         "tooltip_env_model": "Background environment: Default (black), Default with Glow (black + 1.5x cinema glow), Dark Room (procedural room), or a 3D scene from environment/",
         "Default": "Default",
@@ -398,6 +400,7 @@ UI_TEXTS = {
         "3D Monitor": "3D显示器",
         "OpenXR Link": "OpenXR串流",
         "XR Preview Window": "XR预览窗口",
+        "Local VSync": "本地垂直同步",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
         "Preview": "预览",
@@ -436,6 +439,7 @@ UI_TEXTS = {
         "tooltip_capture_tool": "捕获后端",
         "tooltip_run_mode": "输出模式",
         "tooltip_display_mode": "立体显示格式",
+        "tooltip_local_vsync": "将本地查看窗口同步到显示器刷新率，关闭可用于帧率对比测试",
         "tooltip_ctrl_model": "手柄型号",
         "tooltip_env_model": "背景环境：默认（黑色）、默认+辉光（黑色 + 1.5倍影院辉光）、暗室（程序化房间），或 environment/ 中的 3D 场景",
         "Default": "默认",
@@ -500,6 +504,7 @@ DEFAULTS = {
     "Language": "EN",
     "Run Mode": "OpenXR Link",
     "XR Preview Window": False,
+    "Local VSync": False,
     "Stream Protocol": "HLS",
     "Streamer Port": DEFAULT_PORT,
     "Stream Quality": 100,
@@ -508,7 +513,7 @@ DEFAULTS = {
     "CRF": 20,
     "Audio Delay": -0.15,
     "Controller Model": "PICO",
-    "Active Environment": "Default",
+    "Environment Model": "Default",
     "Lossless Scaling Support": False,
     "Capture Tool": "none",
     "Fill 16:9": True,
@@ -991,7 +996,7 @@ class Desktop2StereoGUI:
         # Canonical environment key (English) — kept separate from the
         # dropdown's display value so Chinese labels in the UI don't leak
         # into settings.yaml or xrviewer's _init_env_model matcher.
-        self.env_key = DEFAULTS.get("Active Environment", "Default")
+        self.env_key = DEFAULTS.get("Environment Model", "Default")
         self.selected_window_name = ""
         self.selected_window_handle = None
         self.selected_window_rect = None
@@ -1279,6 +1284,12 @@ class Desktop2StereoGUI:
             on_select=self.on_device_change,
             min_width=S(180))
         self.showfps_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Show FPS")
+        self.local_vsync_cb = ft.Checkbox(
+            scale=SCALE,
+            visual_density=ft.VisualDensity.COMPACT,
+            label="Local VSync",
+            value=DEFAULTS.get("Local VSync", False),
+        )
         row5 = ft.Row([
             self.r5_label,
             self.device_dd
@@ -1291,7 +1302,7 @@ class Desktop2StereoGUI:
             options=[o for o in ct_options],
             on_select=self.on_capture_tool_change,
             min_width=S(160))
-        row6 = ft.Row([self.r6_label, self.capture_tool_dd, ft.Container(width=S(15)), self.showfps_cb], spacing=1)
+        row6 = ft.Row([self.r6_label, self.capture_tool_dd, ft.Container(width=S(15)), self.showfps_cb, self.local_vsync_cb], spacing=1)
         if OS_NAME == "Linux":
             self.r6_label.visible = False
             self.capture_tool_dd.visible = False
@@ -1656,6 +1667,7 @@ class Desktop2StereoGUI:
         self.depth_strength_dd.value = str(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
         self.display_mode_dd.value = cfg.get("Display Mode", DEFAULTS["Display Mode"])
         self.xr_preview_cb.value = cfg.get("XR Preview Window", DEFAULTS["XR Preview Window"])
+        self.local_vsync_cb.value = cfg.get("Local VSync", DEFAULTS["Local VSync"])
         self.antialiasing_dd.value = str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"]))
         self.foreground_scale_dd.value = str(cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"]))
         self.convergence_dd.value = str(cfg.get("Convergence", DEFAULTS["Convergence"]))
@@ -1672,7 +1684,7 @@ class Desktop2StereoGUI:
         
         saved_ctrl = cfg.get("Controller Model", DEFAULTS.get("Controller Model", "PICO"))
         self.ctrl_model_dd.value = saved_ctrl if saved_ctrl in self.ctrl_model_dd.options else "PICO"
-        saved_env = cfg.get("Active Environment", DEFAULTS.get("Active Environment", "Default"))
+        saved_env = cfg.get("Environment Model", DEFAULTS.get("Environment Model", "Default"))
         # Case-insensitive match against canonical English keys (built-ins
         # plus user folder names). Hand-edited settings.yaml entries like
         # "monitor" / "dark room" still bind to the exact key.
@@ -2051,7 +2063,7 @@ class Desktop2StereoGUI:
             # even when the GUI is currently displaying CN).
             match = next((k for k in canonical if str(k).lower() == str(label).lower()), None)
             self.env_key = match if match is not None else "Default"
-        self._config["Active Environment"] = self.env_key
+        self._config["Environment Model"] = self.env_key
 
     def on_window_selected(self, e):
         label = e.control.value if e else self.window_dd.value
@@ -2107,6 +2119,7 @@ class Desktop2StereoGUI:
         self.run_mode_dd.value = mode_reverse.get(mode, texts["Local Viewer"])
         is_openxr = mode == "OpenXR Link"
         self.xr_preview_cb.visible = is_openxr
+        self.local_vsync_cb.visible = mode in ["Local Viewer", "3D Monitor"]
         self._xr_preview_spacer.visible = is_openxr
         self.r7b_label.visible = not is_openxr
         self.display_mode_dd.visible = not is_openxr
@@ -2219,6 +2232,7 @@ class Desktop2StereoGUI:
         self.recompile_openvino_cb.label = t["Recompile OpenVINO"]
         self.r5_label.value = t["Computing Device:"]
         self.showfps_cb.label = t["Show FPS"]
+        self.local_vsync_cb.label = t.get("Local VSync", "Local VSync")
         self.r6_label.value = t["Capture Tool:"]
         self.r7a_label.value = t["Run Mode:"]
         self.r7b_label.value = t["Display Mode:"]
@@ -2312,6 +2326,7 @@ class Desktop2StereoGUI:
             (self.audio_delay_tf, "tooltip_audio_delay"),
         ]:
             ctrl.set_tooltip(t[key])
+        self.local_vsync_cb.tooltip = t.get("tooltip_local_vsync", "")
         self._auto_align_labels()
 
     def _safe_update(self, *controls):
@@ -2650,6 +2665,7 @@ class Desktop2StereoGUI:
             "Language": self.language,
             "Run Mode": self.run_mode_key,
             "XR Preview Window": self.xr_preview_cb.value,
+            "Local VSync": self.local_vsync_cb.value,
             "Stream Protocol": self.stream_proto_dd.value,
             "Streamer Port": self._parse_int(self.stream_port_tf.value, DEFAULTS["Streamer Port"]),
             "Stream Quality": self._parse_int(self.stream_quality_dd.value, DEFAULTS["Stream Quality"]),
@@ -2674,7 +2690,7 @@ class Desktop2StereoGUI:
             # Dark Room / <folder>) so xrviewer's _init_env_model matcher
             # and a hand-edited settings.yaml stay language-agnostic, even
             # when the GUI is currently displaying CN labels (默认/透视/暗室).
-            "Active Environment": self.env_key,
+            "Environment Model": self.env_key,
         })
         self.recompile_trt_cb.value = False
         self.recompile_coreml_cb.value = False
@@ -2876,7 +2892,7 @@ class Desktop2StereoGUI:
             self._config["Controller Model"] = saved_ctrl
             self._safe_update(self.ctrl_model_dd)
 
-        saved_env = cfg.get("Active Environment")
+        saved_env = cfg.get("Environment Model")
         if saved_env:
             if str(saved_env).strip().lower() == "black":
                 saved_env = "Default"
@@ -2887,7 +2903,7 @@ class Desktop2StereoGUI:
             )
             if env_key_match is not None:
                 self.env_key = env_key_match
-                self._config["Active Environment"] = self.env_key
+                self._config["Environment Model"] = self.env_key
                 self.env_dd.value = self._env_display_label(self.env_key, self.language)
                 self._safe_update(self.env_dd)
 

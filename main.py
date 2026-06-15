@@ -5,15 +5,11 @@ import glfw
 import time
 import signal
 import sys
-import os
 import subprocess
+import os
 from collections import deque
 
-# Force UTF-8 stdout/stderr on Windows so messages containing
-# em-dashes, arrows, or other non-ASCII characters do not get
-# mangled by the legacy cp1252/cp936 code page when this script
-# runs as a child process under gui.py (which reads our pipe
-# using utf-8 decode in _pump_child_output).
+# Force UTF-8 stdout/stderr on Windows
 try:
     if sys.stdout and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -22,7 +18,7 @@ try:
 except Exception:
     pass
 
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, XR_PREVIEW_WINDOW, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, CONTROLLER_MODEL, ACTIVE_ENVIRONMENT
+from utils import (OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, XR_PREVIEW_WINDOW, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, CONTROLLER_MODEL, ENVIRONMENT_MODEL, LOCAL_VSYNC)
 from depth import process, predict_depth
 
 if "CUDA" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO:
@@ -178,7 +174,8 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
 
         @cap.event
         def on_closed():
-            print("[capture_loop] Capture session closed")
+            if not shutdown_event.is_set():
+                    print("[capture_loop] Capture session closed")
 
         cap.start()
 else:
@@ -1098,7 +1095,8 @@ def main(mode="Viewer"):
                 stereo_display_index=STEREO_DISPLAY_INDEX, 
                 frame_size=(w,h),
                 use_cuda=USE_CUDART,
-                cuda_device_id=DEVICE_ID)
+                cuda_device_id=DEVICE_ID,
+                local_vsync=LOCAL_VSYNC)
 
             if STREAM_MODE == "RTMP":
                 if OS_NAME == "Windows":
@@ -1263,7 +1261,7 @@ def main(mode="Viewer"):
                     controller_model=CONTROLLER_MODEL,
                     capture_mode=CAPTURE_MODE,
                     monitor_index=MONITOR_INDEX,
-                    environment_name=ACTIVE_ENVIRONMENT,
+                    environment_name=ENVIRONMENT_MODEL,
                     show_preview_window=XR_PREVIEW_WINDOW,
                 )
                 viewer.run(first_rgb=rgb, first_depth=depth)
@@ -1358,16 +1356,7 @@ if __name__ == "__main__":
     threading.Thread(target=_watch_stop_request_file,
                      name="StopRequestWatcher", daemon=True).start()
     main(mode=RUN_MODE)
-    # main() has returned, so cleanup_all_resources() already ran in its finally
-    # block.  Force-terminate now instead of falling off the end of the script:
-    # OpenXR runtimes, GLFW and the GPU driver spin up native (C-level) threads
-    # that frequently fail to join, which would leave this process hung in the
-    # background as an orphan.  That orphan keeps the GPU context + model caches
-    # (e.g. ~/.miopen) locked, so the next run of *any* mode — which loads the
-    # depth model onto the GPU at import time — crashes within ~1s (rc=1) until a
-    # reboot clears it.  os._exit() skips the stuck-thread shutdown and guarantees
-    # a clean, immediate exit.  Init/import failures raise *before* reaching here,
-    # so they still propagate as a non-zero exit code (this never masks them).
+    # main() has returned, so cleanup_all_resources() already ran in its finally block.  
     try:
         sys.stdout.flush(); sys.stderr.flush()
     except Exception:

@@ -138,6 +138,49 @@ def get_fps(window_title="", monitor_index=None):
         return 60
 
 
+def get_monitor_size(monitor_index=None):
+    """Return (width, height) for an mss monitor index, falling back to primary."""
+    try:
+        import mss
+        with mss.mss() as sct:
+            if monitor_index is None or monitor_index <= 0 or monitor_index >= len(sct.monitors):
+                monitor_index = 1
+            mon = sct.monitors[monitor_index]
+            return int(mon["width"]), int(mon["height"])
+    except Exception:
+        return 3840, 2160
+
+
+def compute_output_resolution(setting_value, display_mode, input_monitor_index,
+                              stereo_monitor_index=None, run_mode=None):
+    """Compute the source processing height used before depth inference."""
+    try:
+        if isinstance(setting_value, str):
+            value = setting_value.strip()
+            if value and value.lower() != "auto":
+                parsed = int(value)
+                if parsed > 0:
+                    return parsed
+        elif setting_value:
+            parsed = int(setting_value)
+            if parsed > 0:
+                return parsed
+    except (TypeError, ValueError):
+        pass
+
+    # Only output modes that own an actual desktop/stereo viewer window should
+    # derive Auto from monitor geometry. OpenXR uses the native captured frame.
+    auto_compute_modes = {"Local Viewer", "3D Monitor", "RTMP Streamer"}
+    if run_mode not in auto_compute_modes:
+        return 8640  # high no-resize sentinel for process()
+
+    monitor_index = stereo_monitor_index or input_monitor_index
+    _, out_h = get_monitor_size(monitor_index)
+    if display_mode == "Full-TAB":
+        out_h = max(1, out_h // 2)
+    return max(2, (int(out_h) // 2) * 2)
+
+
 def _get_device_name_from_mss_monitor(monitor_index):
     """Map mss monitor index (1-based) to win32api device name by matching rects."""
     import win32api
@@ -627,9 +670,16 @@ DEPTH_RESOLUTION = settings["Depth Resolution"]
 DEVICE_ID = settings["Computing Device"]
 FP16 = settings["FP16"]
 MONITOR_INDEX,  DISPLAY_MODE = settings["Monitor Index"], settings["Display Mode"]
-OUTPUT_RESOLUTION = 8640
+STEREO_DISPLAY_INDEX = settings.get("Stereo Output")
+STEREO_DISPLAY_SELECTION = False if not STEREO_DISPLAY_INDEX else True
+OUTPUT_RESOLUTION = compute_output_resolution(
+    settings.get("Processing Resolution", "Auto"),
+    DISPLAY_MODE,
+    MONITOR_INDEX,
+    STEREO_DISPLAY_INDEX,
+    RUN_MODE,
+)
 SHOW_FPS, DEPTH_STRENGTH = settings["Show FPS"], settings["Depth Strength"]
-XR_PREVIEW_WINDOW = settings.get("XR Preview Window", True)
 IPD = settings["IPD"]
 CONVERGENCE = settings["Convergence"]
 CAPTURE_MODE = settings["Capture Mode"]
@@ -677,6 +727,7 @@ def _resolve_capture_tool(raw_value):
 
 CAPTURE_TOOL = _resolve_capture_tool(settings["Capture Tool"])
 FILL_16_9 = settings["Fill 16:9"]
+LOCAL_VSYNC = settings.get("Local VSync", False)
 FIX_VIEWER_ASPECT = True if RUN_MODE == "RTMP Streamer" else settings["Fix Viewer Aspect"] # Keep Viewer Aspect for RTMP with LOSSLESS_SCALING_SUPPORT
 STEREOMIX_DEVICE = settings["Stereo Mix"] # RTMP StereoMix Device
 STREAM_KEY = settings["Stream Key"]
@@ -835,17 +886,8 @@ else:
 STEREO_DISPLAY_INDEX = settings["Stereo Output"]
 STEREO_DISPLAY_SELECTION = False if not STEREO_DISPLAY_INDEX else True
 CONTROLLER_MODEL = settings["Controller Model"]
-# Active environment (GUI dropdown).  String values (Title Case in YAML,
-# but xrviewer normalises with .strip().lower() so legacy lowercase
-# entries from older settings.yaml files keep working):
-#   "Default"            -> opaque black backdrop, no env model (alias: legacy "Black")
-#   "Default with Glow"  -> black backdrop + 1.5x cinema glow
-#   "Dark Room"          -> built-in procedural room (walls/floor/ceiling) so the
-#                           cinema bias light has real surfaces to bounce off
-#   "<folder>"           -> name of a subfolder under environment/ containing
-#                           environment.glb (and optional profile.json)
-# Passthrough green is a runtime toggle (long-press X), not a dropdown option.
-ACTIVE_ENVIRONMENT = settings.get("Active Environment", "Default")
+ENVIRONMENT_MODEL = settings.get("Environment Model", "Default")
+XR_PREVIEW_WINDOW = settings.get("XR Preview Window", True)
 
 # Initialize Device
 import torch

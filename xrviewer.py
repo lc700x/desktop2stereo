@@ -556,11 +556,14 @@ def _build_node_matrices(gltf):
         S_mat = np.diag([s[0], s[1], s[2], 1.0]).astype(np.float64)
         local_mats.append(T @ R @ S_mat)
 
-    # Build child -> parent mapping
+    # Build child -> parent mapping.
+    # Some third-party exports contain stray child indices; ignore them so
+    # the rest of the scene can still load.
     parent = [-1] * n
     for pi, node in enumerate(nodes):
         for ci in node.get('children', []):
-            parent[ci] = pi
+            if isinstance(ci, int) and 0 <= ci < n:
+                parent[ci] = pi
 
     # Topological order (BFS from roots) to compute world matrices
     world_mats = [None] * n
@@ -573,6 +576,8 @@ def _build_node_matrices(gltf):
         pi = queue[head]
         head += 1
         for ci in nodes[pi].get('children', []):
+            if not isinstance(ci, int) or ci < 0 or ci >= n:
+                continue
             if world_mats[ci] is None:
                 world_mats[ci] = world_mats[pi] @ local_mats[ci]
                 queue.append(ci)
@@ -613,14 +618,21 @@ def load_glb_model(path):
     world_mats = _build_node_matrices(gltf)
     nodes = gltf.get('nodes', [])
 
-    # Map mesh index to world matrix (first node referencing the mesh)
+    # Map mesh index to world matrices for all node instances that reference it.
+    # glTF permits mesh reuse from many nodes; keeping only the first node
+    # loses valid scene instances and produces wrong room coordinates.
     mesh_world_mat = {}
+    mesh_world_mats = {}
     mesh_node_index = {}
+    mesh_node_indices = {}
     for ni, node in enumerate(nodes):
         mi = node.get('mesh')
-        if mi is not None and mi not in mesh_world_mat:
-            mesh_world_mat[mi] = world_mats[ni]
-            mesh_node_index[mi] = ni
+        if mi is not None:
+            mesh_world_mats.setdefault(mi, []).append(world_mats[ni])
+            mesh_node_indices.setdefault(mi, []).append(ni)
+            if mi not in mesh_world_mat:
+                mesh_world_mat[mi] = world_mats[ni]
+                mesh_node_index[mi] = ni
 
     # Extract textures
     all_textures = []
@@ -708,6 +720,7 @@ def load_glb_model(path):
             # Texture ID, base color, and roughness from material
             tex_id = -1
             base_color = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+            base_alpha = 1.0
             roughness_factor = 1.0
             metallic_factor = 1.0
             normal_tex_id = -1
@@ -759,6 +772,8 @@ def load_glb_model(path):
                 bcf = pbr.get('baseColorFactor')
                 if bcf is not None:
                     base_color = np.array(bcf[:3], dtype=np.float32)
+                    if len(bcf) > 3:
+                        base_alpha = float(bcf[3])
                 rf = pbr.get('roughnessFactor')
                 if rf is not None:
                     roughness_factor = float(rf)
@@ -777,6 +792,8 @@ def load_glb_model(path):
                 if sg and 'diffuseFactor' in sg:
                     if bcf is None:
                         base_color = np.array(sg['diffuseFactor'][:3], dtype=np.float32)
+                        if len(sg['diffuseFactor']) > 3:
+                            base_alpha = float(sg['diffuseFactor'][3])
 
                 # Normal texture
                 normal_tex_id = -1
@@ -850,6 +867,7 @@ def load_glb_model(path):
 
             primitives.append({'vertices': vertices, 'indices': indices,
                             'tex_id': tex_id, 'base_color': base_color,
+                            'base_alpha': base_alpha,
                             'roughness_factor': roughness_factor,
                             'metallic_factor': metallic_factor,
                             'emissive_factor': emissive_factor,
@@ -866,7 +884,64 @@ def load_glb_model(path):
                             'tex_offset': tex_offset,
                             'tex_scale': tex_scale,
                             'tangent': tangent,
-                            'node_index': node_index})
+                            'node_index': node_index,
+                            '_mesh_index': mi,
+                            '_world_matrix': world_mat})
+
+    extra_instances = []
+    for primitive in primitives:
+        mi = primitive.get('_mesh_index')
+        instances = mesh_world_mats.get(mi, [])
+        if len(instances) <= 1:
+            continue
+
+        first_world = primitive.get('_world_matrix', np.eye(4, dtype=np.float64)).astype(np.float64)
+        try:
+            inv_first_world = np.linalg.inv(first_world)
+        except Exception:
+            continue
+
+        local_positions = _apply_transform(primitive['vertices'][:, :3], inv_first_world)
+        first_rot = first_world[:3, :3].astype(np.float64)
+        local_normals = (first_rot.T @ primitive['vertices'][:, 3:6].astype(np.float64).T).T
+        local_normals /= np.maximum(np.linalg.norm(local_normals, axis=1, keepdims=True), 1e-8)
+
+        tangent = primitive.get('tangent')
+        if tangent is not None:
+            local_tangent = tangent.copy()
+            local_tangent[:, :3] = (
+                first_rot.T @ tangent[:, :3].astype(np.float64).T
+            ).T.astype(np.float32)
+        else:
+            local_tangent = None
+
+        node_indices = mesh_node_indices.get(mi, [])
+        for inst_i, inst_world in enumerate(instances[1:], start=1):
+            inst_world = inst_world.astype(np.float64)
+            clone = dict(primitive)
+            clone_vertices = primitive['vertices'].copy()
+            clone_vertices[:, :3] = _apply_transform(local_positions, inst_world)
+            rot3 = inst_world[:3, :3].astype(np.float64)
+            normal_mat = np.linalg.inv(rot3.T)
+            clone_vertices[:, 3:6] = (
+                normal_mat @ local_normals.T
+            ).T.astype(np.float32)
+            clone['vertices'] = clone_vertices
+            clone['indices'] = primitive['indices'].copy()
+            if local_tangent is not None:
+                inst_tangent = local_tangent.copy()
+                inst_tangent[:, :3] = (
+                    rot3 @ local_tangent[:, :3].astype(np.float64).T
+                ).T.astype(np.float32)
+                clone['tangent'] = inst_tangent
+            if inst_i < len(node_indices):
+                clone['node_index'] = node_indices[inst_i]
+            clone['_world_matrix'] = inst_world
+            extra_instances.append(clone)
+
+    if extra_instances:
+        primitives.extend(extra_instances)
+        _mat_log.write(f"[INSTANCE] Added {len(extra_instances)} mesh node instances\n")
 
     # Extract KHR_lights_punctual
     lights = []
@@ -882,7 +957,7 @@ def load_glb_model(path):
                 li = lext['light']
                 if li < len(gltf_lights):
                     ldef = gltf_lights[li]
-                    world_mat = world_mats.get(ni, np.eye(4, dtype=np.float64))
+                    world_mat = world_mats[ni] if ni < len(world_mats) else np.eye(4, dtype=np.float64)
                     direction = -world_mat[:3, 2].astype(np.float32)
                     direction = direction / (np.linalg.norm(direction) + 1e-8)
                     lights.append({
@@ -2250,7 +2325,7 @@ class OpenXRViewer:
         self._capture_mode = capture_mode
         self._input_monitor_index = monitor_index
         # Initial environment selection passed in from the launcher (settings.yaml
-        # "Active Environment" field).  May be:
+        # "Environment Model" field).  May be:
         #   None / "" / "black" / "default" -> opaque black backdrop, no env model
         #   "<folder name>"      -> subfolder under environment/ containing
         #                            environment.glb (and optional profile.json)
@@ -2292,7 +2367,7 @@ class OpenXRViewer:
         self._x_press_t = 0.0          # timestamp when X was pressed
         self._x_long_fired = False     # whether long憄ress action already fired
         self._prev_bg_color_idx = None # stores bg color idx before switching to green
-        self._prev_active_env = None   # stores active environment before switching to green
+        self._prev_active_env = None   # stores Environment Model before switching to green
 
         # FPS display timestamp ring: (len-1)/(last-first) is exact over the window
         self.actual_fps      = 0.0   # XR composition rate (this loop)
@@ -3307,6 +3382,7 @@ class OpenXRViewer:
                     'positions': pd['vertices'][:, :3].copy(),
                     'node_index': pd.get('node_index', -1),
                     'base_color': pd.get('base_color', np.array([1.0, 1.0, 1.0], dtype=np.float32)),
+                    'base_alpha': float(pd.get('base_alpha', 1.0)),
                     'roughness_factor': pd.get('roughness_factor', 1.0),
                     'metallic_factor': pd.get('metallic_factor', 1.0),
                     'emissive_factor': pd.get('emissive_factor', np.array([0.0, 0.0, 0.0], dtype=np.float32)),
@@ -4140,7 +4216,7 @@ class OpenXRViewer:
     # Environment activation
     # ------------------------------------------------------------------
     def _switch_environment(self, name, *, save_outgoing=True, apply_profile=True):
-        """Swap the active environment to ``name`` (or None for colour-only).
+        """Swap the Environment Model to ``name`` (or None for colour-only).
 
         ``save_outgoing``  when True, snapshot the current screen 6-DOF
         into the OUTGOING environment's profile.json before swapping.  This
@@ -4204,7 +4280,7 @@ class OpenXRViewer:
         if apply_profile:
             self._apply_environment_profile(name)
         self._persist_active_environment()
-        print(f"[OpenXRViewer] Active environment: {name}")
+        print(f"[OpenXRViewer] Environment Model: {name}")
 
     # ------------------------------------------------------------------
     # settings.yaml persistence (live updates from OpenXR side)
@@ -4233,7 +4309,7 @@ class OpenXRViewer:
             val = self._active_environment
         else:
             val = 'Default'
-        self._persist_setting('Active Environment', val)
+        self._persist_setting('Environment Model', val)
 
     def _cycle_environment(self):
         """Advance the environment one slot (left-stick short press).
@@ -7921,7 +7997,7 @@ class OpenXRViewer:
         self.ctx.disable(moderngl.BLEND)
 
     def _env_model_mat4(self):
-        """Return model->world transform for the active environment."""
+        """Return model->world transform for the Environment Model."""
         yaw, pitch, roll = self._env_model_rot
         cy, sy = math.cos(yaw), math.sin(yaw)
         cp, sp = math.cos(pitch), math.sin(pitch)
@@ -8040,6 +8116,7 @@ class OpenXRViewer:
             mf = prim.get('metallic_factor', 0.0)
             ef = prim.get('emissive_factor', np.array([0.0, 0.0, 0.0], dtype=np.float32))
             self._env_prog['u_base_color_factor'].value = (float(bc[0]), float(bc[1]), float(bc[2]))
+            self._env_prog['u_base_alpha'].value = float(prim.get('base_alpha', 1.0))
             self._env_prog['u_roughness'].value = float(rf)
             self._env_prog['u_metallic'].value = float(mf)
             self._env_prog['u_emissive_factor'].value = (float(ef[0]), float(ef[1]), float(ef[2]))
@@ -8048,6 +8125,13 @@ class OpenXRViewer:
             self._env_prog['u_unlit'].value = 1 if unlit else 0
             self._env_prog['u_alpha_mode'].value = 0 if am == 'OPAQUE' else (1 if am == 'MASK' else 2)
             self._env_prog['u_alpha_cutoff'].value = float(prim.get('alpha_cutoff', 0.5))
+            if am == 'BLEND':
+                self.ctx.enable(moderngl.BLEND)
+                self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+                self.ctx.depth_mask = False
+            else:
+                self.ctx.disable(moderngl.BLEND)
+                self.ctx.depth_mask = True
             to = prim.get('tex_offset', np.array([0.0, 0.0], dtype=np.float32))
             ts = prim.get('tex_scale', np.array([1.0, 1.0], dtype=np.float32))
             self._env_prog['u_tex_offset'].value = (float(to[0]), float(to[1]))
@@ -8110,8 +8194,11 @@ class OpenXRViewer:
                 _f.write(f"[TOTAL] env_model_prims count = {len(self._env_model_prims)}\n")
 
         # Reset state for subsequent rendering
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.depth_mask = True
         self._env_prog['u_use_texture'].value = 1
         self._env_prog['u_base_color_factor'].value = (1.0, 1.0, 1.0)
+        self._env_prog['u_base_alpha'].value = 1.0
 
     def _apply_cinema_light_uniforms(self):
         """Push current cinema bias-light uniforms to ``self._env_prog``.

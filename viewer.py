@@ -1221,7 +1221,7 @@ class OverlayTextureRenderer:
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
 
-    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, feather_enabled=False, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, local_vsync=True, **kwargs):
+    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, feather_enabled=False, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, local_vsync=False, **kwargs):
         # Initialize with default values
         self._has_real_frame = False
         self.use_3d = use_3d

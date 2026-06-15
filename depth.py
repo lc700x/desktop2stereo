@@ -302,25 +302,10 @@ if IS_CUDA:
                 size=(new_height, new_width),
                 mode='bilinear',
                 align_corners=False,
-                antialias=True
+                antialias=new_height < H0
             ).squeeze(0)
         return result
     
-    def compute_model_input_hw(h, w, target=DEPTH_RESOLUTION, patch=None):
-        """Model-input (H,W); must match _resize_patch_aligned_t.
-        patch=None => square. Single source of truth for the TensorRT engine shape."""
-        if patch is None:
-            return target, target
-        longest = max(h, w)
-        if longest != target:
-            scale = target / float(longest)
-            h = max(1, int(round(h * scale)))
-            w = max(1, int(round(w * scale)))
-        def nm(x, p):
-            down = (x // p) * p
-            up = down + p
-            return up if abs(up - x) <= abs(x - down) else down
-        return max(1, nm(h, patch)), max(1, nm(w, patch))
 
 else:
     def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
@@ -352,7 +337,8 @@ else:
             return img_rgb
 
         # Resize using CPU
-        resized = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_LINEAR)
+        interpolation = cv2.INTER_AREA if height < h0 else cv2.INTER_CUBIC
+        resized = cv2.resize(img_rgb, (width, height), interpolation=interpolation)
 
         return resized
 
@@ -1029,12 +1015,25 @@ class TensorRTEngine:
             outputs[name] = out
             self.context.set_tensor_address(name, out.data_ptr())
 
-        # Execute on the current CUDA stream. Downstream same-stream torch ops
-        # consume the output in order, so an explicit per-frame sync just costs FPS.
+        # Execute on the current CUDA stream and wait for completion
         stream = torch.cuda.current_stream(self.device)
         self.context.execute_async_v3(stream_handle=stream.cuda_stream)
+        stream.synchronize()
 
         return outputs['predicted_depth']
+
+    def close(self):
+        for attr in ("context", "engine"):
+            try:
+                obj = getattr(self, attr, None)
+                if obj is not None:
+                    del obj
+            except Exception:
+                pass
+            try:
+                setattr(self, attr, None)
+            except Exception:
+                pass
 
 # Model Wrapper Class
 class DepthModelWrapper:

@@ -6,12 +6,12 @@
   "displayName": "Bedroom",
   "glb": "environment.glb",
   "model_position": [
-    0.0,
-    0.0,
-    0.5
+    0.11856393686579048,
+    0.20500099658966064,
+    0.6774092926721472
   ],
   "model_rotation_deg": [
-    90.0,
+    98.36436075378334,
     0.0,
     0.0
   ],
@@ -20,8 +20,16 @@
     1.0,
     1.0
   ],
-  "head_light_color": [0.45, 0.42, 0.38],
-  "ambient_color": [0.06, 0.05, 0.05],
+  "head_light_color": [
+    0.45,
+    0.42,
+    0.38
+  ],
+  "ambient_color": [
+    0.06,
+    0.05,
+    0.05
+  ],
   "env_exposure": 1.12,
   "env_gamma": 2.2,
   "env_emissive_strength": 0.85,
@@ -46,16 +54,15 @@
     "vertical_offset": 0.1
   },
   "screen": {
-    "name": "Bedroom Monitor",
     "width": 0.76,
     "position": [
-      -0.0305,
-      0.9872,
-      -0.9534
+      -0.12695975455106306,
+      1.151254390439161,
+      -0.7827926009564856
     ],
     "rotation_deg": [
-      0.0,
-      -4.0,
+      8.364360666934457,
+      -5.599244495153033,
       0.0
     ],
     "curved": false,
@@ -65,17 +72,19 @@
       0.0,
       0.0,
       0.0
-    ]
+    ],
+    "screen_node_index": null,
+    "screen_node_indices": []
   },
   "env_fill_lights": [],
   "environment": {
-    "yaw": 1.5707963267948966,
+    "yaw": 1.7167819617730107,
     "pitch": 0.0,
     "roll": 0.0,
     "pos": [
-      0.0,
-      0.0,
-      0.5
+      0.11856393686579048,
+      0.20500099658966064,
+      0.6774092926721472
     ],
     "scale": [
       1.0,

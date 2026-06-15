@@ -1,0 +1,55 @@
+{
+  "model_position": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "model_rotation_deg": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "model_scale": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "screen": {
+    "width": 2.4,
+    "position": [
+      -1.1595194424243649,
+      3.314517918872089,
+      -0.5937420913454127
+    ],
+    "rotation_deg": [
+      60.54387127709588,
+      53.83297671566343,
+      0.0
+    ],
+    "curved": false,
+    "allow_curve": false,
+    "ref_size": 2.4,
+    "offset": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "screen_node_index": null,
+    "screen_node_indices": []
+  },
+  "head_light_color": [
+    0.45,
+    0.45,
+    0.48
+  ],
+  "ambient_color": [
+    0.08,
+    0.08,
+    0.09
+  ],
+  "env_exposure": 1.0,
+  "env_gamma": 2.2,
+  "env_emissive_strength": 1.0,
+  "env_khr_light_scale": 1.0,
+  "env_fill_lights": []
+}

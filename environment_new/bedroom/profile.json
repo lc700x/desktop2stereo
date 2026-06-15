@@ -1,0 +1,74 @@
+{
+  "displayName": "bedroom",
+  "glb": "environment.glb",
+  "baked_lightmap": false,
+  "model_position": [
+    0.0,
+    -1.0,
+    -3.0
+  ],
+  "model_rotation_deg": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "model_scale": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "env_exposure": 0.86,
+  "env_gamma": 2.2,
+  "env_emissive_strength": 0.75,
+  "env_khr_light_scale": 0.72,
+  "env_render_quality": "quality",
+  "env_shading_mode": "pbr",
+  "env_ambient_color": [
+    0.085,
+    0.085,
+    0.1
+  ],
+  "env_head_light_color": [
+    0.38,
+    0.38,
+    0.4
+  ],
+  "env_perf_log": true,
+  "env_texture_anisotropy": 2.0,
+  "xr_render_scale": 1.0,
+  "view_pose": {
+    "auto_center_on_screen": true,
+    "position": [
+      1.0,
+      0.0734,
+      -3.0235
+    ],
+    "rotation_deg": [
+      -90.0,
+      0.0,
+      0.0
+    ],
+    "distance": 0.6,
+    "vertical_offset": 0.1
+  },
+  "screen": {
+    "name": "Default Projector",
+    "width": 0.765,
+    "position": [
+      1.4523,
+      -0.0185,
+      -3.03
+    ],
+    "rotation_deg": [
+      -90.0,
+      -3.8,
+      0.0
+    ],
+    "curved": false,
+    "breath_enabled": false
+  },
+  "env_fill_lights": [],
+  "glb_variants": {
+    "baked": "environment_bake_night.glb"
+  }
+}

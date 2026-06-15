@@ -832,7 +832,7 @@ else:
 STEREO_DISPLAY_INDEX = settings["Stereo Output"]
 STEREO_DISPLAY_SELECTION = False if not STEREO_DISPLAY_INDEX else True
 CONTROLLER_MODEL = settings["Controller Model"]
-# Active environment (GUI dropdown).  String values (Title Case in YAML,
+# Environment Model (GUI dropdown).  String values (Title Case in YAML,
 # but xrviewer normalises with .strip().lower() so legacy lowercase
 # entries from older settings.yaml files keep working):
 #   "Default"      -> opaque black backdrop, no env model (alias: legacy "Black")
@@ -841,7 +841,7 @@ CONTROLLER_MODEL = settings["Controller Model"]
 #                     cinema bias light has real surfaces to bounce off
 #   "<folder>"     -> name of a subfolder under environment/ containing
 #                     environment.glb (and optional profile.json)
-ACTIVE_ENVIRONMENT = settings.get("Active Environment", "Default")
+ENVIRONMENT_MODEL = settings.get("Environment Model", "Default")
 
 # Initialize Device
 import torch
