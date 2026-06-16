@@ -1,0 +1,113 @@
+{
+  "display_name": {
+    "EN": "Theater",
+    "CN": "剧院"
+  },
+  "glb": "environment.glb",
+  "model_position": [
+    -0.0027,
+    -1.4844,
+    -5.9553
+  ],
+  "model_rotation_deg": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "model_scale": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "env_exposure": 0.5,
+  "env_gamma": 2.2,
+  "env_emissive_strength": 1.0,
+  "env_khr_light_scale": 1.0,
+  "env_ambient_color": [
+    0.06,
+    0.05,
+    0.05
+  ],
+  "env_head_light_color": [
+    0.45,
+    0.45,
+    0.48
+  ],
+  "screen_light_intensity": 4.0,
+  "env_fill_lights": [],
+  "lighting_presets": [
+    {
+      "name": "Day",
+      "env_exposure": 0.3,
+      "env_ambient_color": [
+        0.06,
+        0.05,
+        0.05
+      ],
+      "env_head_light_color": [
+        0.45,
+        0.45,
+        0.48
+      ]
+    },
+    {
+      "name": "Night",
+      "env_exposure": 0.5,
+      "env_ambient_color": [
+        0.02,
+        0.02,
+        0.012
+      ],
+      "env_head_light_color": [
+        0.03,
+        0.03,
+        0.035
+      ]
+    }
+  ],
+  "view_pose": {
+    "x": 0.0,
+    "y": 12.9505,
+    "z": -0.8436,
+    "angle": 0.0
+  },
+  "view_pose_index": 0,
+  "view_poses": [
+    {
+      "name": "Center",
+      "x": 0.0,
+      "y": 10.9446,
+      "z": -1.5039,
+      "angle": 0.0
+    },
+    {
+      "name": "Closer",
+      "x": -0.003,
+      "y": 7.3489,
+      "z": -1.9172,
+      "angle": 0.0
+    },
+    {
+      "name": "Back",
+      "x": 0.0,
+      "y": 14.0638,
+      "z": -0.5888,
+      "angle": 0.0
+    }
+  ],
+  "screen": {
+    "width": 9.6,
+    "position": [
+      0.0,
+      2.0932,
+      -6.15
+    ],
+    "rotation_deg": [
+      180.0,
+      0.0,
+      0.0
+    ],
+    "curved": false,
+    "allow_curve": true
+  }
+}

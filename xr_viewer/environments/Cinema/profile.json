@@ -1,0 +1,113 @@
+{
+  "display_name": {
+    "EN": "Cinema",
+    "CN": "影院"
+  },
+  "glb": "environment.glb",
+  "model_position": [
+    -68.6506,
+    -0.2492,
+    -30.588
+  ],
+  "model_rotation_deg": [
+    178.15,
+    0.0,
+    0.0
+  ],
+  "model_scale": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "env_exposure": 0.5,
+  "env_gamma": 2.2,
+  "env_emissive_strength": 10.0,
+  "env_khr_light_scale": 1.0,
+  "env_ambient_color": [
+    0.06,
+    0.05,
+    0.05
+  ],
+  "env_head_light_color": [
+    0.45,
+    0.45,
+    0.48
+  ],
+  "screen_light_intensity": 3.5,
+  "env_fill_lights": [],
+  "lighting_presets": [
+    {
+      "name": "Day",
+      "env_exposure": 0.5,
+      "env_ambient_color": [
+        0.06,
+        0.05,
+        0.05
+      ],
+      "env_head_light_color": [
+        0.45,
+        0.45,
+        0.48
+      ]
+    },
+    {
+      "name": "Night",
+      "env_exposure": 0.5,
+      "env_ambient_color": [
+        0.01,
+        0.01,
+        0.012
+      ],
+      "env_head_light_color": [
+        0.03,
+        0.03,
+        0.05
+      ]
+    }
+  ],
+  "view_pose": {
+    "x": 0.1203,
+    "y": 5.8948,
+    "z": -0.4771,
+    "angle": 0.0
+  },
+  "view_pose_index": 2,
+  "view_poses": [
+    {
+      "name": "Center",
+      "x": 0.1203,
+      "y": 5.8948,
+      "z": -0.4771,
+      "angle": 0.0
+    },
+    {
+      "name": "Front Row",
+      "x": 0.1203,
+      "y": 4.067,
+      "z": -1.0339,
+      "angle": 0.0
+    },
+    {
+      "name": "Back Row",
+      "x": 0.1238,
+      "y": 7.4712,
+      "z": 0.1714,
+      "angle": 0.0
+    }
+  ],
+  "screen": {
+    "width": 5.0,
+    "position": [
+      0.0795,
+      1.5424,
+      -5.8942
+    ],
+    "rotation_deg": [
+      -1.85,
+      0.0,
+      0.0
+    ],
+    "curved": false,
+    "allow_curve": true
+  }
+}

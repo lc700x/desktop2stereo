@@ -1249,6 +1249,12 @@ def main(mode="Viewer"):
                 w, h = rgb.shape[2], rgb.shape[1]
             else:
                 w, h = rgb.shape[1], rgb.shape[0]
+            print(f"[Main] Capture source: {CAPTURE_MODE}")
+            if CAPTURE_MODE == 'Monitor':
+                print(f"[Main] Input monitor: {MONITOR_INDEX}")
+            print(f"[Main] Desktop resolution: {w}x{h}")
+            print(f"[Main] Depth strength: {DEPTH_STRENGTH}, IPD: {IPD}")
+            print(f"[Main] Environment: {ENVIRONMENT_MODEL}")
             try:
                 viewer = OpenXRViewer(
                     ipd=IPD,
@@ -1266,7 +1272,9 @@ def main(mode="Viewer"):
                 )
                 viewer.run(first_rgb=rgb, first_depth=depth)
             except Exception as e:
+                import traceback
                 print(f"[Main] OpenXR Link error: {e}")
+                print(traceback.format_exc())
 
         else:
             from depth import make_sbs, DEVICE_INFO

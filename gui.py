@@ -312,10 +312,8 @@ UI_TEXTS = {
         "tooltip_display_mode": "Stereo display format",
         "tooltip_local_vsync": "Synchronize the local viewer to the display refresh rate",
         "tooltip_ctrl_model": "Controller model",
-        "tooltip_env_model": "Background environment: Default (black), Default with Glow (black + 1.5x cinema glow), Dark Room (procedural room), or a 3D scene from environment/",
+        "tooltip_env_model": "Background environment: Default (black), or a 3D scene from xr_viewer/environments/. Cinema glow can be toggled via long-press X in VR.",
         "Default": "Default",
-        "Default with Glow": "Default with Glow",
-        "Dark Room": "Dark Room",
         "tooltip_capture_mode": "Source: monitor or window",
         "tooltip_monitor": "Input monitor",
         "tooltip_stereo_monitor": "Stereo output monitor",
@@ -441,10 +439,8 @@ UI_TEXTS = {
         "tooltip_display_mode": "立体显示格式",
         "tooltip_local_vsync": "将本地查看窗口同步到显示器刷新率，关闭可用于帧率对比测试",
         "tooltip_ctrl_model": "手柄型号",
-        "tooltip_env_model": "背景环境：默认（黑色）、默认+辉光（黑色 + 1.5倍影院辉光）、暗室（程序化房间），或 environment/ 中的 3D 场景",
+        "tooltip_env_model": "背景环境：默认（黑色），或 xr_viewer/environments/ 中的 3D 场景。影院辉光可在 VR 中长按 X 键切换。",
         "Default": "默认",
-        "Default with Glow": "默认+辉光",
-        "Dark Room": "暗室",
         "tooltip_capture_mode": "捕获源：屏幕或窗口",
         "tooltip_monitor": "输入显示器",
         "tooltip_stereo_monitor": "立体输出显示器",
@@ -1069,7 +1065,10 @@ class Desktop2StereoGUI:
         # Calculate window size without triggering update
         self._fit_window_to_content(update=False)
 
-        # Show window once
+        # Position window centered on screen before showing it.
+        # Per Flet docs: resize, update, center (async), then show.
+        self.page.update()
+        await self.page.window.center()
         self.page.window.visible = True
         self.page.update()
         await asyncio.sleep(0)
@@ -1320,7 +1319,7 @@ class Desktop2StereoGUI:
         )
         self.r10_label = ft.Text("Controller:", size=FONT_SIZE, width=S(130))
         try:
-            ctrl_base = os.path.join(os.path.dirname(__file__), "controllers")
+            ctrl_base = os.path.join(os.path.dirname(__file__), "xr_viewer", "controllers")
             ctrl_dirs = [d for d in os.listdir(ctrl_base) if os.path.isdir(os.path.join(ctrl_base, d))]
         except (FileNotFoundError, OSError):
             ctrl_dirs = []
@@ -1330,23 +1329,21 @@ class Desktop2StereoGUI:
             options=[c for c in ctrl_dirs],
             value="PICO", width=S(130))
 
-        # Environment dropdown — sits to the right of the controller picker.
-        # Options are the built-in backdrops ("Default", "Default with Glow",
-        # "Dark Room") plus every subfolder under environment/ that contains
-        # an environment.glb, matching the runtime cycle in xrviewer's
+        # Environment dropdown sits to the right of the controller picker.
+        # Options are the built-in "Default" (black backdrop) plus every
+        # subfolder under xr_viewer/environments/ that contains an
+        # environment.glb, matching the runtime cycle in xrviewer's
         # _cycle_environment.
-        #   * Default           -> plain opaque-black backdrop (no env model)
-        #   * Default with Glow -> black backdrop + 1.5x cinema glow
-        #   * Dark Room         -> built-in procedural room (walls/floor/ceiling)
-        #                          so the cinema bias light has surfaces to bounce off
-        # Built-in names are localized for display (e.g. CN: 默认 / 透视 / 暗室)
+        #   * Default -> plain opaque-black backdrop (no env model)
+        #      Glow can be toggled via long-press X in VR.
+        # Built-in names are localized for display (e.g. CN: 默认)
         # while the canonical English key is stored in self.env_key and used
         # for settings.yaml + the xrviewer matcher. User folder names under
-        # environment/ may carry a localized label in their profile.json:
+        # xr_viewer/environment/ may carry a localized label in their profile.json:
         #   {"display_name": {"EN": "Bedroom", "CN": "卧室"}, ...}
         # If absent or unreadable the folder name itself is shown.
         self.r11_label = ft.Text(UI_TEXTS[self.language]["Environment:"], size=FONT_SIZE, width=S(130))
-        env_base = os.path.join(os.path.dirname(__file__), "environment")
+        env_base = os.path.join(os.path.dirname(__file__), "xr_viewer", "environments")
         try:
             env_dirs = [d for d in os.listdir(env_base)
                         if os.path.isdir(os.path.join(env_base, d))
@@ -1354,7 +1351,7 @@ class Desktop2StereoGUI:
         except (FileNotFoundError, OSError):
             env_dirs = []
         self._env_base = env_base
-        self._env_builtin_keys = ["Default", "Default with Glow", "Dark Room"]
+        self._env_builtin_keys = ["Default"]
         self._env_folder_keys = sorted(env_dirs)
         # Cache per-folder display_name dicts so we don't hit the disk on
         # every language toggle. Populated lazily by _load_env_display_names.
@@ -2686,10 +2683,9 @@ class Desktop2StereoGUI:
             "Audio Delay": self._parse_float(self.audio_delay_tf.value, DEFAULTS["Audio Delay"]),
             "Stereo Output": stereo_idx,
             "Controller Model": self.ctrl_model_dd.value,
-            # Persist the canonical English key (Default / Default with Glow /
-            # Dark Room / <folder>) so xrviewer's _init_env_model matcher
-            # and a hand-edited settings.yaml stay language-agnostic, even
-            # when the GUI is currently displaying CN labels (默认/透视/暗室).
+            # Persist the canonical English key (Default / <folder>) so
+            # xrviewer's _init_env_model matcher and a hand-edited
+            # settings.yaml stay language-agnostic.
             "Environment Model": self.env_key,
         })
         self.recompile_trt_cb.value = False
@@ -2763,10 +2759,15 @@ class Desktop2StereoGUI:
                 if self.process and self.process.returncode is not None:
                     self._diag(f"process exited during wait, code={self.process.returncode}")
                     break
-            self._config["Recompile TensorRT"] = False
-            self._config["Recompile CoreML"] = False
-            self._config["Recompile OpenVINO"] = False
-            save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
+            for key in ("Recompile TensorRT", "Recompile CoreML", "Recompile OpenVINO"):
+                self._config[key] = False
+            settings_path = os.path.join(BASE_DIR, "settings.yaml")
+            disk_cfg = read_yaml(settings_path) if os.path.exists(settings_path) else {}
+            if not disk_cfg:
+                disk_cfg = self._config.copy()
+            for key in ("Recompile TensorRT", "Recompile CoreML", "Recompile OpenVINO"):
+                disk_cfg[key] = False
+            save_yaml(settings_path, disk_cfg)
         except Exception as e:
             self.set_status(UI_TEXTS[self.language]["err_start_failed"].format(e))
             self.page.update()
@@ -2869,10 +2870,10 @@ class Desktop2StereoGUI:
             self._diag("monitor_task done, status updated")
 
     def _reload_settings_from_disk(self):
-        """Re-read settings.yaml and sync env/controller dropdowns.
+        """Re-read settings.yaml and sync runtime-edited dropdowns.
 
         Called after the xrviewer process exits so that runtime changes
-        (environment cycling, controller brand switching) are reflected
+        (depth, environment cycling, controller brand switching) are reflected
         back in the GUI without requiring a restart.
         """
         path = os.path.join(BASE_DIR, "settings.yaml")
@@ -2885,6 +2886,48 @@ class Desktop2StereoGUI:
         except Exception as exc:
             self._diag(f"_reload_settings_from_disk: {exc}", error=True)
             return
+
+        try:
+            ctrl_base = os.path.join(BASE_DIR, "xr_viewer", "controllers")
+            ctrl_dirs = sorted(d for d in os.listdir(ctrl_base)
+                               if os.path.isdir(os.path.join(ctrl_base, d)))
+        except (FileNotFoundError, OSError):
+            ctrl_dirs = []
+        if not ctrl_dirs:
+            ctrl_dirs = ["PICO"]
+        if list(self.ctrl_model_dd.options) != ctrl_dirs:
+            self.ctrl_model_dd.options = ctrl_dirs
+
+        try:
+            env_dirs = [d for d in os.listdir(self._env_base)
+                        if os.path.isdir(os.path.join(self._env_base, d))
+                        and os.path.isfile(os.path.join(self._env_base, d, "environment.glb"))]
+        except (FileNotFoundError, OSError):
+            env_dirs = []
+        self._env_folder_keys = sorted(env_dirs)
+        self._load_env_folder_display_names()
+        self.env_dd.options = self._build_env_dd_options(self.language)
+
+        saved_depth = cfg.get("Depth Strength")
+        if saved_depth is not None:
+            try:
+                depth_val = float(saved_depth)
+                depth_label = f"{depth_val:.4f}".rstrip("0").rstrip(".")
+                if "." not in depth_label:
+                    depth_label += ".0"
+                self._config["Depth Strength"] = depth_val
+            except (TypeError, ValueError):
+                depth_label = str(saved_depth)
+                self._config["Depth Strength"] = saved_depth
+            if depth_label not in self.depth_strength_dd.options:
+                try:
+                    opts = list(self.depth_strength_dd.options) + [depth_label]
+                    opts.sort(key=lambda x: float(x))
+                    self.depth_strength_dd.options = opts
+                except (TypeError, ValueError):
+                    self.depth_strength_dd.options = list(self.depth_strength_dd.options) + [depth_label]
+            self.depth_strength_dd.value = depth_label
+            self._safe_update(self.depth_strength_dd)
 
         saved_ctrl = cfg.get("Controller Model")
         if saved_ctrl and saved_ctrl in self.ctrl_model_dd.options:
@@ -3000,6 +3043,7 @@ class Desktop2StereoGUI:
         self.set_status(UI_TEXTS[self.language]["Stopped"], key="Stopped")
         if not self._closed:
             self._set_running_ui(False)
+            self._reload_settings_from_disk()
 
     def reset_defaults(self, e):
         """Reset to defaults, preserve language & device."""

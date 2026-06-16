@@ -1,0 +1,113 @@
+{
+  "display_name": {
+    "EN": "Living Room",
+    "CN": "客厅"
+  },
+  "glb": "environment.glb",
+  "model_position": [
+    0.0,
+    -1.0,
+    -3.0
+  ],
+  "model_rotation_deg": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "model_scale": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "env_exposure": 0.5,
+  "env_gamma": 2.2,
+  "env_emissive_strength": 10.0,
+  "env_khr_light_scale": 1.0,
+  "env_ambient_color": [
+    0.06,
+    0.05,
+    0.05
+  ],
+  "env_head_light_color": [
+    0.45,
+    0.45,
+    0.48
+  ],
+  "screen_light_intensity": 3.5,
+  "env_fill_lights": [],
+  "lighting_presets": [
+    {
+      "name": "Day",
+      "env_exposure": 0.5,
+      "env_ambient_color": [
+        0.06,
+        0.05,
+        0.05
+      ],
+      "env_head_light_color": [
+        0.45,
+        0.45,
+        0.48
+      ]
+    },
+    {
+      "name": "Night",
+      "env_exposure": 0.5,
+      "env_ambient_color": [
+        0.01,
+        0.01,
+        0.012
+      ],
+      "env_head_light_color": [
+        0.03,
+        0.03,
+        0.035
+      ]
+    }
+  ],
+  "view_pose": {
+    "x": 0.0,
+    "y": 8.4286,
+    "z": -1.6129,
+    "angle": 0.0
+  },
+  "view_pose_index": 0,
+  "view_poses": [
+    {
+      "name": "Sofa Center",
+      "x": 0.0,
+      "y": 8.4286,
+      "z": -1.6129,
+      "angle": 0.0
+    },
+    {
+      "name": "Sofa Left",
+      "x": -1.2,
+      "y": 8.4286,
+      "z": -1.6129,
+      "angle": 8.0
+    },
+    {
+      "name": "Sofa Right",
+      "x": 1.2,
+      "y": 8.4286,
+      "z": -1.6129,
+      "angle": -8.0
+    }
+  ],
+  "screen": {
+    "width": 10.0,
+    "position": [
+      0.4875,
+      1.5282,
+      -18.1929
+    ],
+    "rotation_deg": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "curved": false,
+    "allow_curve": true
+  }
+}

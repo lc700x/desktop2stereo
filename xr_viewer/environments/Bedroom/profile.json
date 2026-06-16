@@ -1,0 +1,89 @@
+{
+  "display_name": {
+    "EN": "Bedroom",
+    "CN": "卧室"
+  },
+  "glb": "environment.glb",
+  "model_position": [
+    -0.0,
+    -1.0,
+    -3.0
+  ],
+  "model_rotation_deg": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "model_scale": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "env_exposure": 0.86,
+  "env_gamma": 2.2,
+  "env_emissive_strength": 0.75,
+  "env_khr_light_scale": 0.72,
+  "env_ambient_color": [
+    0.085,
+    0.085,
+    0.1
+  ],
+  "env_head_light_color": [
+    0.38,
+    0.38,
+    0.4
+  ],
+  "screen_light_intensity": 5.0,
+  "env_fill_lights": [],
+  "lighting_presets": [
+    {
+      "name": "Day",
+      "env_exposure": 0.86,
+      "env_ambient_color": [
+        0.085,
+        0.085,
+        0.1
+      ],
+      "env_head_light_color": [
+        0.38,
+        0.38,
+        0.4
+      ]
+    },
+    {
+      "name": "Night",
+      "env_exposure": 0.16,
+      "env_ambient_color": [
+        0.045,
+        0.045,
+        0.058
+      ],
+      "env_head_light_color": [
+        0.19,
+        0.19,
+        0.23
+      ]
+    }
+  ],
+  "view_pose": {
+    "x": 0.0018,
+    "y": 0.7381,
+    "z": 0.0202,
+    "angle": 0.0
+  },
+  "screen": {
+    "width": 0.765,
+    "position": [
+      1.4523,
+      -0.0185,
+      -3.03
+    ],
+    "rotation_deg": [
+      -90.0,
+      -3.8,
+      0.0
+    ],
+    "curved": false,
+    "allow_curve": false
+  }
+}
