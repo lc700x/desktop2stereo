@@ -3074,20 +3074,19 @@ class Desktop2StereoGUI:
                 # Give the child time to run its own cleanup and exit on its own.
                 exited_cleanly = False
                 try:
-                    await asyncio.wait_for(proc.wait(), timeout=8)
+                    await asyncio.wait_for(proc.wait(), timeout=1)
                     exited_cleanly = True
                 except asyncio.TimeoutError:
                     exited_cleanly = False
                 except Exception:
                     self._diag(f"proc.wait() exception:\n{traceback.format_exc()}", error=True)
-                    exited_cleanly = True  # already gone
+                    exited_cleanly = True
                 if not exited_cleanly:
-                    # Graceful shutdown didn't finish in time — hard-kill the whole
-                    # process tree as a fallback so nothing is left orphaned.
+                    # Hard-kill the entire process tree immediately.
                     try:
                         proc.kill()
                     except Exception:
-                        self._diag(f"proc.kill() failed:\n{traceback.format_exc()}", error=True)
+                        pass
                     try:
                         if OS_NAME == "Windows":
                             p = await asyncio.create_subprocess_exec(
@@ -3098,9 +3097,9 @@ class Desktop2StereoGUI:
                             try:
                                 os.killpg(os.getpgid(saved_pid), _sig.SIGKILL)
                             except Exception:
-                                self._diag(f"SIGKILL failed:\n{traceback.format_exc()}", error=True)
+                                pass
                     except Exception:
-                        self._diag(f"hard kill failed:\n{traceback.format_exc()}", error=True)
+                        pass
         print("[Main] Stopped")
         self._starting = False
         self.set_status(UI_TEXTS[self.language]["Stopped"], key="Stopped")
