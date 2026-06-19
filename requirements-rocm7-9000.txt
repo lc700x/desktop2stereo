@@ -1,6 +1,7 @@
 ﻿# AMD Radeon RX 9000 Series Graphics Cards (GFX120X)
---index-url https://rocm.nightlies.amd.com/v2/gfx120X-all/
-torch==2.10.0+rocm7.13.0a20260313
-torchvision==0.25.0+rocm7.13.0a20260313
-# torchaudio==2.10.0+rocm7.13.0a20260313
-rocm_sdk_devel==7.13.0a20260313
+--index-url https://rocm.nightlies.amd.com/whl-multi-arch/
+# torchaudio
+rocm[libraries,device-gfx1201,device-gfx1200]==7.14.0a20260615
+torch[device-gfx1201,device-gfx1200]==2.10.0+rocm7.14.0a20260615
+torchvision[device-gfx1201,device-gfx1200]==0.25.0+rocm7.14.0a20260615
+rocm_sdk_devel==7.14.0a20260615

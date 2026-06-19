@@ -113,10 +113,11 @@ out vec2 v_uv;
 out vec3 v_normal;
 out vec3 v_position;
 uniform mat4 u_mvp;
-uniform mat4 u_model; // Used for normal transformation
+uniform mat4 u_model;
+uniform mat3 u_normal_mat;
 void main() {
     v_uv = in_uv;
-    v_normal = mat3(transpose(inverse(u_model))) * in_normal; // Normal transformation
+    v_normal = u_normal_mat * in_normal;
     vec4 world_pos = u_model * vec4(in_position, 1.0);
     v_position = world_pos.xyz;
     gl_Position = u_mvp * world_pos;
@@ -177,10 +178,11 @@ out vec3 v_tangent;
 out float v_bitangent_sign;
 uniform mat4 u_mvp;
 uniform mat4 u_model;
+uniform mat3 u_normal_mat;
 void main() {
     v_uv = in_uv;
-    v_normal = mat3(transpose(inverse(u_model))) * in_normal;
-    v_tangent = normalize(mat3(transpose(inverse(u_model))) * in_tangent.xyz);
+    v_normal = u_normal_mat * in_normal;
+    v_tangent = normalize(u_normal_mat * in_tangent.xyz);
     v_bitangent_sign = in_tangent.w;
     vec4 world_pos = u_model * vec4(in_position, 1.0);
     v_position = world_pos.xyz;
@@ -523,43 +525,40 @@ void main() {
 }
 """
 
-# Glow fragment shader: renders a soft glow outside a centered rectangle
 _GLOW_FRAG = """
 #version 330
 in vec2 uv;
 out vec4 frag_color;
+
 uniform vec2 u_screen_half;   // screen half-size in UV space
 uniform vec3 u_glow_color;
 uniform float u_glow_inv_range;
-uniform float u_glow_inv_density_range;
 uniform float u_glow_intensity;
+
 void main() {
-    vec2 d = abs(uv - 0.5) - u_screen_half;
-    // Exterior distance to the screen rectangle (0 inside).
-    vec2 edge = max(d, vec2(0.0));
-    float hi = max(edge.x, edge.y);
-    float lo = min(edge.x, edge.y);
-    float dist = hi + lo * 0.375;  // cheap length approximation for soft glow
-    if (dist <= 0.001) {
+    // Rectangle SDF in UV space: negative inside, positive outside.
+    vec2 p = abs(uv - 0.5) - u_screen_half;
+    float dist = length(max(p, vec2(0.0)));
+
+    if (dist <= 0.0) {
         discard;
     }
-    // Finite cubic falloff avoids the old full-quad exp() + dither cost while
-    // keeping the visible bias-light shoulder close to the previous glow.
-    float x = clamp(1.0 - dist * u_glow_inv_range, 0.0, 1.0);
-    float glow = x * x * x * u_glow_intensity;
-    // Pixel density decays from 100% at the screen edge to 0% at
-    // 0.75 * glow_width. This creates a sparse sunshine-like tail and avoids
-    // blending lots of nearly invisible pixels.
-    float density = clamp(1.0 - dist * u_glow_inv_density_range, 0.0, 1.0);
-    vec2 p = fract(gl_FragCoord.xy * vec2(0.1031, 0.1030));
-    p += vec2(dot(p, p.yx + 33.33));
-    float grain = fract((p.x + p.y) * p.x);
-    if (grain > density) {
-        discard;
-    }
+
+    float inv_range = max(u_glow_inv_range, 0.001);
+
+    // 2x wider soft transition.
+    float feather = max(0.003, 1.20 / inv_range);
+    float shoulder = 1.0 - smoothstep(0.0, feather, dist);
+
+    // 2x more spread than before (~8x wider than the original shader).
+    float nd = max(dist - feather, 0.0) * inv_range * 0.125;
+
+    float glow = shoulder * exp(-0.5 * nd * nd) * u_glow_intensity * 0.75;
+
     if (glow <= 0.001) {
         discard;
     }
+
     glow = min(glow, 1.0);
     frag_color = vec4(u_glow_color * glow, glow);
 }

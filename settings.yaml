@@ -347,12 +347,5 @@ Capture Tool: none
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stereo Output: null
-Screen State:
-  width: 2.4
-  distance: 2.0589
-  pan_x: 0.0925
-  pan_y: 1.2334
-  yaw: 0.039159
-  pitch: 0.0
-  curved: false
-  preset_index: 4
+MIGraphX: null
+Recompile MIGraphX: false

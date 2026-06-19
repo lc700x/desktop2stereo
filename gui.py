@@ -41,6 +41,8 @@ import time
 import asyncio
 import ctypes
 import re
+import atexit
+import traceback
 
 # Force UTF-8 stdout/stderr on Windows so the console (and downstream
 # TeeStream that mirrors writes to it) does not mangle messages
@@ -69,6 +71,28 @@ STOP_REQUEST_FILE = os.path.join(LOG_DIR, "stop.request")
 # Kept as an alias for backward compatibility with any external tooling
 # that referenced the old diag log path.
 DIAG_LOG = LOG_FILE
+
+_CHILD_PID = None  # set when child starts, cleared on clean stop
+
+@atexit.register
+def _atexit_kill_child():
+    pid = _CHILD_PID
+    if pid is None:
+        return
+    try:
+        if OS_NAME == "Windows":
+            subprocess.run(
+                ['taskkill', '/f', '/t', '/pid', str(pid)],
+                capture_output=True, timeout=5,
+            )
+        else:
+            import signal
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _setup_console_logging():
@@ -237,6 +261,7 @@ UI_TEXTS = {
         "Recompile TensorRT": "Recompile TensorRT",
         "Recompile CoreML": "Recompile CoreML",
         "Recompile OpenVINO": "Recompile OpenVINO",
+        "Recompile MIGraphX": "Recompile MIGraphX",
         "Stop": "Stop",
         "Computing Device:": "Computing Device:",
         "Reset": "Reset",
@@ -298,6 +323,7 @@ UI_TEXTS = {
         "TensorRT": "TensorRT",
         "CoreML": "CoreML",
         "OpenVINO": "OpenVINO",
+        "MIGraphX": "MIGraphX",
         "tooltip_window": "Select a window to capture",
         "tooltip_depth_model": "Depth estimation model",
         "tooltip_depth_res": "Depth map resolution",
@@ -355,6 +381,7 @@ UI_TEXTS = {
         "Recompile TensorRT": "重译TensorRT",
         "Recompile CoreML": "重译CoreML",
         "Recompile OpenVINO": "重译OpenVINO",
+        "Recompile MIGraphX": "重译MIGraphX",
         "Stop": "停止",
         "Computing Device:": "计算设备:",
         "Reset": "重置",
@@ -425,6 +452,7 @@ UI_TEXTS = {
         "TensorRT": "TensorRT",
         "CoreML": "CoreML",
         "OpenVINO": "OpenVINO",
+        "MIGraphX": "MIGraphX",
         "tooltip_window": "选择要捕获的窗口",
         "tooltip_depth_model": "选择深度估计模型",
         "tooltip_depth_res": "深度图分辨率",
@@ -496,6 +524,8 @@ DEFAULTS = {
     "Recompile CoreML": False,
     "OpenVINO": None,
     "Recompile OpenVINO": False,
+    "MIGraphX": None,
+    "Recompile MIGraphX": False,
     "Computing Device": 0,
     "Language": "EN",
     "Run Mode": "OpenXR Link",
@@ -1263,8 +1293,10 @@ class Desktop2StereoGUI:
         self.recompile_trt_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile TensorRT")
         self.recompile_coreml_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile CoreML")
         self.recompile_openvino_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile OpenVINO")
+        self.migraphx_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="MIGraphX", on_change=self._on_migraphx_toggle)
+        self.recompile_migraphx_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile MIGraphX")
         accel_row1 = ft.Row([self.fp16_cb, self.torch_compile_cb, self.coreml_cb, self.recompile_coreml_cb], spacing=S(20))
-        accel_row2 = ft.Row([self.tensorrt_cb, self.recompile_trt_cb, self.openvino_cb, self.recompile_openvino_cb], spacing=S(20))
+        accel_row2 = ft.Row([self.tensorrt_cb, self.migraphx_cb, self.recompile_trt_cb, self.recompile_migraphx_cb, self.openvino_cb, self.recompile_openvino_cb], spacing=S(20))
         self._accel_spacer = ft.Container(width=0)
         self.row4a = ft.Row([
             self.r4_label,
@@ -1439,7 +1471,7 @@ class Desktop2StereoGUI:
 
         self.status_text = ft.Text("", italic=True, size=FONT_SIZE)
 
-        # ========== Assembly ==========
+        # Assembly
         depth_group = ft.Container(
             ft.Column([row0, row1, row2, row3, self.row4a, self.row4b], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),
@@ -1715,6 +1747,11 @@ class Desktop2StereoGUI:
         self.recompile_trt_cb.visible = self.tensorrt_cb.value and self.tensorrt_cb.visible
         self.recompile_coreml_cb.visible = self.coreml_cb.value and self.coreml_cb.visible
         self.recompile_openvino_cb.visible = self.openvino_cb.value and self.openvino_cb.visible
+        mgx_val = cfg.get("MIGraphX")
+        if mgx_val is not None:
+            self.migraphx_cb.value = mgx_val
+        self.recompile_migraphx_cb.value = cfg.get("Recompile MIGraphX", DEFAULTS["Recompile MIGraphX"])
+        self.recompile_migraphx_cb.visible = self.migraphx_cb.value and self.migraphx_cb.visible
                 # Capture tool
         ct = cfg.get("Capture Tool", DEFAULTS["Capture Tool"])
         self.capture_tool_dd.value = ct if ct in self.capture_tool_dd.options else (self.capture_tool_dd.options[0] if self.capture_tool_dd.options else '')
@@ -1865,6 +1902,10 @@ class Desktop2StereoGUI:
         self.openvino_cb.visible = xpu
         self.openvino_cb.disabled = False
         self.recompile_openvino_cb.visible = self.openvino_cb.value if self.openvino_cb.visible else False
+        rocm = cuda and IS_ROCM
+        self.migraphx_cb.visible = rocm
+        self.migraphx_cb.disabled = False
+        self.recompile_migraphx_cb.visible = self.migraphx_cb.value if self.migraphx_cb.visible else False
         self.fp16_cb.visible = not (dml or mps)
         self.r4_label.visible = not (dml or other)
         is_windows_or_mac = OS_NAME in ("Windows", "Darwin")
@@ -1878,6 +1919,8 @@ class Desktop2StereoGUI:
             self.recompile_coreml_cb.visible = False
             self.openvino_cb.visible = False
             self.recompile_openvino_cb.visible = False
+            self.migraphx_cb.visible = False
+            self.recompile_migraphx_cb.visible = False
         current_model = self.current_model_name
         if cuda and not IS_ROCM:
             self.update_tensorrt_visibility_based_on_model(current_model)
@@ -1898,6 +1941,10 @@ class Desktop2StereoGUI:
         self.recompile_openvino_cb.visible = self.openvino_cb.value
         self._fit_window_to_content()
 
+    def _on_migraphx_toggle(self, e):
+        self.recompile_migraphx_cb.visible = self.migraphx_cb.value
+        self._fit_window_to_content()
+
     def auto_enable_optimizers_based_on_device(self):
         device_label = self.device_dd.value
         model_lower = (self.current_model_name or "").lower()
@@ -1915,9 +1962,13 @@ class Desktop2StereoGUI:
             if self._config.get("OpenVINO") is None:
                 should = not any(kw in model_lower for kw in DISABLE_OPENVINO_KEYWORDS)
                 self.openvino_cb.value = should
+        elif "CUDA" in device_label and IS_ROCM:
+            if self._config.get("MIGraphX") is None:
+                self.migraphx_cb.value = True
         self._on_trt_toggle(None)
         self._on_coreml_toggle(None)
         self._on_openvino_toggle(None)
+        self._on_migraphx_toggle(None)
 
     def update_tensorrt_visibility_based_on_model(self, model_name):
         if not model_name:
@@ -2227,6 +2278,8 @@ class Desktop2StereoGUI:
         self.recompile_trt_cb.label = t["Recompile TensorRT"]
         self.recompile_coreml_cb.label = t["Recompile CoreML"]
         self.recompile_openvino_cb.label = t["Recompile OpenVINO"]
+        self.migraphx_cb.label = t["MIGraphX"]
+        self.recompile_migraphx_cb.label = t["Recompile MIGraphX"]
         self.r5_label.value = t["Computing Device:"]
         self.showfps_cb.label = t["Show FPS"]
         self.local_vsync_cb.label = t.get("Local VSync", "Local VSync")
@@ -2673,6 +2726,8 @@ class Desktop2StereoGUI:
             "Recompile CoreML": self.recompile_coreml_cb.value,
             "OpenVINO": self.openvino_cb.value,
             "Recompile OpenVINO": self.recompile_openvino_cb.value,
+            "MIGraphX": self.migraphx_cb.value,
+            "Recompile MIGraphX": self.recompile_migraphx_cb.value,
             "Capture Tool": self.capture_tool_dd.value,
             "Fill 16:9": self.fill_16_9_cb.value,
             "Fix Viewer Aspect": self.fix_aspect_cb.value,
@@ -2691,6 +2746,7 @@ class Desktop2StereoGUI:
         self.recompile_trt_cb.value = False
         self.recompile_coreml_cb.value = False
         self.recompile_openvino_cb.value = False
+        self.recompile_migraphx_cb.value = False
 
     async def _countdown_and_run(self, seconds):
         self._diag("_countdown_and_run scheduled")
@@ -2744,6 +2800,8 @@ class Desktop2StereoGUI:
                     start_new_session=True,
                     env=child_env,
                 )
+            global _CHILD_PID
+            _CHILD_PID = self.process.pid
             self._diag(f"process started, pid={self.process.pid}, log={LOG_FILE}")
             # Background task that drains the child pipe and forwards each
             # line to print() — print() writes through the _TeeStream wrapper
@@ -2759,16 +2817,17 @@ class Desktop2StereoGUI:
                 if self.process and self.process.returncode is not None:
                     self._diag(f"process exited during wait, code={self.process.returncode}")
                     break
-            for key in ("Recompile TensorRT", "Recompile CoreML", "Recompile OpenVINO"):
+            for key in ("Recompile TensorRT", "Recompile CoreML", "Recompile OpenVINO", "Recompile MIGraphX"):
                 self._config[key] = False
             settings_path = os.path.join(BASE_DIR, "settings.yaml")
             disk_cfg = read_yaml(settings_path) if os.path.exists(settings_path) else {}
             if not disk_cfg:
                 disk_cfg = self._config.copy()
-            for key in ("Recompile TensorRT", "Recompile CoreML", "Recompile OpenVINO"):
+            for key in ("Recompile TensorRT", "Recompile CoreML", "Recompile OpenVINO", "Recompile MIGraphX"):
                 disk_cfg[key] = False
             save_yaml(settings_path, disk_cfg)
         except Exception as e:
+            self._diag(f"_countdown_and_run failed:\n{traceback.format_exc()}", error=True)
             self.set_status(UI_TEXTS[self.language]["err_start_failed"].format(e))
             self.page.update()
         finally:
@@ -2799,7 +2858,7 @@ class Desktop2StereoGUI:
                     print(text)
         except Exception as e:
             try:
-                self._diag(f"_pump_child_output exception: {e}", error=True)
+                self._diag(f"_pump_child_output exception: {e}\n{traceback.format_exc()}", error=True)
             except Exception:
                 pass
 
@@ -3002,11 +3061,14 @@ class Desktop2StereoGUI:
                         else:
                             os.killpg(os.getpgid(saved_pid), _sig.SIGINT)
                     except Exception:
+                        self._diag(f"graceful stop failed:\n{traceback.format_exc()}", error=True)
                         try:
                             proc.terminate()
                         except Exception:
-                            pass
+                            self._diag(f"proc.terminate() failed:\n{traceback.format_exc()}", error=True)
                 self.process = None
+                global _CHILD_PID
+                _CHILD_PID = None
 
             if saved_pid and proc:
                 # Give the child time to run its own cleanup and exit on its own.
@@ -3017,6 +3079,7 @@ class Desktop2StereoGUI:
                 except asyncio.TimeoutError:
                     exited_cleanly = False
                 except Exception:
+                    self._diag(f"proc.wait() exception:\n{traceback.format_exc()}", error=True)
                     exited_cleanly = True  # already gone
                 if not exited_cleanly:
                     # Graceful shutdown didn't finish in time — hard-kill the whole
@@ -3024,7 +3087,7 @@ class Desktop2StereoGUI:
                     try:
                         proc.kill()
                     except Exception:
-                        pass
+                        self._diag(f"proc.kill() failed:\n{traceback.format_exc()}", error=True)
                     try:
                         if OS_NAME == "Windows":
                             p = await asyncio.create_subprocess_exec(
@@ -3035,9 +3098,9 @@ class Desktop2StereoGUI:
                             try:
                                 os.killpg(os.getpgid(saved_pid), _sig.SIGKILL)
                             except Exception:
-                                pass
+                                self._diag(f"SIGKILL failed:\n{traceback.format_exc()}", error=True)
                     except Exception:
-                        pass
+                        self._diag(f"hard kill failed:\n{traceback.format_exc()}", error=True)
         print("[Main] Stopped")
         self._starting = False
         self.set_status(UI_TEXTS[self.language]["Stopped"], key="Stopped")

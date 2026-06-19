@@ -40,6 +40,7 @@ if %errorlevel% neq 0 (
 %PYTHON_EXE% -m pip install wincam==1.0.14 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install windows-capture==2.0.0 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+%PYTHON_EXE% -m pip install onnx==1.20.1 onnxscript==0.6.0 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 %PYTHON_EXE% -m pip install wc-rocm==0.1.3.post1 --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
 if %errorlevel% neq 0 (
     echo Failed to install requirements

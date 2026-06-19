@@ -1,6 +1,7 @@
-import sys, requests
+import requests
 import yaml, threading, time
 import os, platform, socket
+import platform
 
 # Debug Mode
 DEBUG = False
@@ -30,6 +31,15 @@ STEREO_MIX_NAMES = [
 
 # Models with Disabled TRT 
 DISABLE_TRT_KEYWORDS = [
+    "dpt-hybrid-midas",
+    "depthpro",
+    "da3-giant",
+    "da3nested-giant",
+    "video-depth-anything",
+]
+
+# Models with Disabled TRT 
+DISABLE_MIGRAPHX_KEYWORDS = [
     "dpt-hybrid-midas",
     "depthpro",
     "da3-giant",
@@ -100,10 +110,17 @@ DISABLE_OPENVINO_KEYWORDS = [
 ]
 
 # Disable CuDNN for RX 6000 and 5000 series GPUs
-DISABLE_CUDNN_KEYWORDS = ["6950", "6900", "6850", "6800", "6750", "6700", "6650", "6600", "6550", "6500", "6400", "6300", "680", "6100", "5700", "5600", "5500", "5400", "5300", "520", "160", "AMD Radeon(TM) Graphics"]
-# Disable Triton for RX 5000 series
-DISABLE_TRITON_KEYWORDS = ["520", "160"]
-# DISABLE_TRITON_KEYWORDS = ["5700", "5600", "5500", "5400", "5300", "520", "160"]
+DISABLE_CUDNN_GFX = [
+    "gfx1030",  # RX 6950, 6900, 6850, 6800 (Navi 21)
+    "gfx1031",  # RX 6750, 6700 (Navi 22)
+    "gfx1032",  # RX 6650, 6600 (Navi 23)
+    "gfx1033",  # Van Goh (Navi 23)
+    "gfx1034",  # RX 6550, 6500, 6400, 6300 (Navi 24)
+    "gfx1010",  # RX 5700, 5600 (Navi 10)
+    "gfx1012",  # RX 5500, 5400, 5300 (Navi 14)
+    "gfx1011",  # BC160, Radeon Pro V520 (Navi 12)
+]
+DISABLE_TRITON_GFX = []
 
 # Global shutdown event
 shutdown_event = threading.Event()
@@ -700,6 +717,9 @@ RECOMPILE_COREML = settings["Recompile CoreML"] # recompile CoreML mlpackage
 
 USE_OPENVINO = settings["OpenVINO"]  # use OpenVINO for Intel
 RECOMPILE_OPENVINO = settings["Recompile OpenVINO"] # recompile OpenVINO IR
+
+USE_MIGRAPHX = settings["MIGraphX"] # use MIGraphX for ROCm7 AMD GPUs
+RECOMPILE_MIGRAPHX = settings["Recompile MIGraphX"] # recompile MIGraphX graph
 
 def _resolve_capture_tool(raw_value):
     """If Capture Tool is 'none', pick the OS- and device-specific default."""

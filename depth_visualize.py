@@ -10,7 +10,7 @@ import contextlib
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, FORCE_FP32_KEYWORDS
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, USE_MIGRAPHX, RECOMPILE_MIGRAPHX, DISABLE_TRT_KEYWORDS, DISABLE_MIGRAPHX_KEYWORDS,  DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_GFX, DISABLE_TRITON_GFX, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, FORCE_FP32_KEYWORDS, CAPTURE_MODE
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -25,6 +25,7 @@ USE_TORCH_COMPILE = False if not IS_CUDA else USE_TORCH_COMPILE
 USE_TENSORRT = False if not IS_NVIDIA else USE_TENSORRT
 USE_COREML = False if not IS_MPS else USE_COREML
 USE_OPENVINO = False if not IS_XPU else USE_OPENVINO
+USE_MIGRAPHX = False if not IS_AMD_ROCM else USE_MIGRAPHX
 
 
 import torch.nn.functional as F
@@ -44,7 +45,7 @@ image_rgb = np.array(img).astype(np.float32)
 # MODEL_ID = "depth-anything/DA3METRIC-LARGE"
 # MODEL_ID = "LiheYoung/depth-anything-small-hf"
 # MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf"
-MODEL_ID = "lc700x/depth-anything-indoor-large-hf"
+# MODEL_ID = "lc700x/depth-anything-indoor-large-hf"
 # MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
 # MODEL_ID = "depth-anything/DA3-SMALL"
@@ -58,19 +59,23 @@ MODEL_ID = "lc700x/depth-anything-indoor-large-hf"
 # MODEL_ID = "lc700x/dpt-large-redesign-hf"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 # MODEL_ID = "Intel/dpt-beit-base-384"
-# MODEL_ID = "lc700x/InfiniDepth-Base"
+MODEL_ID = "lc700x/InfiniDepth-Small"
+# MODEL_ID = "xingyang1/Distill-Any-Depth-Small-hf"
 
 DEBUG = True
 AA_STRENGTH = 0
 FP16 = True
 FILL_16_9 = True
-DEPTH_RESOLUTION = 512
+DEPTH_RESOLUTION = 336
 FOREGROUND_SCALE = 0
 
 USE_TORCH_COMPILE = False
 
-USE_TENSORRT = True
-RECOMPILE_TRT = True
+USE_TENSORRT = False
+RECOMPILE_TRT = False
+
+USE_MIGRAPHX = True
+RECOMPILE_MIGRAPHX = False
 
 USE_COREML = False
 RECOMPILE_COREML = True
@@ -81,11 +86,12 @@ RECOMPILE_OPENVINO = True
 print(f"{DEVICE_INFO}")
 print(f"Model: {MODEL_ID.split('/')[-1]}")
 
-
 if not DEBUG:
     warnings.filterwarnings('ignore') # disable for debug
 
 warnings.filterwarnings("ignore", message=".*ONNX export mode is set to TrainingMode.EVAL.*instance_norm.*")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Try import OpenVINO runtime
 if IS_XPU:
@@ -167,7 +173,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or IS_MPS or ((USE_TENSORRT or USE_COREML or USE_OPENVINO) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS) or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or (MODEL_ID in FORCE_FP32_KEYWORDS):
+if IS_DIRECTML or IS_MPS or ((USE_TENSORRT or USE_COREML or USE_OPENVINO or USE_MIGRAPHX) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS) or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or (MODEL_ID in FORCE_FP32_KEYWORDS):
     FP16 = False
 
 # Disable CoreML for models whose architecture can't be traced (implicit heads, etc.)
@@ -227,11 +233,66 @@ if IS_NVIDIA:
         USE_TENSORRT = False
 
 if IS_AMD_ROCM:
+    import platform, re, subprocess
+    
+    def get_gfx_arch():
+        """
+        Detect the current GPU's GFX architecture code (e.g., 'gfx1200', 'gfx1030').
+
+        - On **Linux**, it parses `rocminfo` output (looking for `Name: gfx...`).
+        - On **Windows**, it parses `hipinfo` output (looking for `gcnArchName: ...`).
+        - On other OSes, it tries `rocm_agent_enumerator` as a last resort.
+
+        Returns:
+            str: The GFX code, or None if not found / command unavailable.
+        """
+        system = platform.system()
+
+        try:
+            if system == "Linux":
+                # Use rocminfo
+                result = subprocess.run(['rocminfo'], capture_output=True, text=True, check=True)
+                output = result.stdout
+
+                # Most reliable: find a line like "Name: gfx1030"
+                match = re.search(r'Name:\s*(gfx[0-9a-f]+)', output, re.IGNORECASE)
+                if match:
+                    return match.group(1)
+
+                # Fallback: search for any "gfxXXXX" string
+                fallback = re.search(r'gfx[0-9a-f]+', output)
+                if fallback:
+                    return fallback.group(0)
+
+            elif system == "Windows":
+                # Use hipinfo (available with ROCm on Windows)
+                result = subprocess.run(['hipinfo'], capture_output=True, text=True, check=True)
+                output = result.stdout
+                match = re.search(r'gcnArchName:\s*(\S+)', output)
+                if match:
+                    return match.group(1)
+
+            # For other OSes (macOS, etc.) or if the above fail, try rocm_agent_enumerator
+            result = subprocess.run(['rocm_agent_enumerator'], capture_output=True, text=True, check=True)
+            lines = result.stdout.strip().split()
+            if lines:
+                return lines[0]   # usually the first GPU
+
+        except (subprocess.SubprocessError, FileNotFoundError):
+            # Command not found or execution failed
+            pass
+
+        return None
+    GPU_ARCH = get_gfx_arch()
+    
     # Set up ROCm7 Path
     torch_dir = os.path.dirname(torch.__file__)
     site_packages = os.path.dirname(torch_dir)
     ROCM_PATH = os.path.join(site_packages, "_rocm_sdk_devel")
 
+    os.environ['MIOPEN_ENABLE_LOGGING'] = '0'
+    warnings.filterwarnings("ignore", message="bgemm_internal_cublaslt error")
+    warnings.filterwarnings("ignore", message="gemm_and_bias error")
     os.environ["HIP_PLATFORM"] = "amd"
     os.environ["HIP_PATH"] = ROCM_PATH
     os.environ["HIP_CLANG_PATH"] = os.path.join(ROCM_PATH, "llvm", "bin")
@@ -250,13 +311,12 @@ if IS_AMD_ROCM:
         os.environ.get("LIBRARY_PATH", "")
     ])
     os.environ["PKG_CONFIG_PATH"] = os.path.join(ROCM_PATH, "lib", "pkgconfig") + os.pathsep + os.environ.get("PKG_CONFIG_PATH", "")
-    for gpu_id in DISABLE_CUDNN_KEYWORDS:
-        if gpu_id in DEVICE_INFO:
-            torch.backends.cudnn.enabled = False  # Disable cuDNN for known problematic AMD RX6000 GPUs
-            print(f"[Main] Disabled cuDNN for {DEVICE_INFO}. ")
-            break
+    if GPU_ARCH in DISABLE_CUDNN_GFX:
+        torch.backends.cudnn.enabled = False  # Disable cuDNN for known problematic AMD RX6000 GPUs
+        print(f"[Main] Disabled cuDNN for {DEVICE_INFO}. ")
+        
     # disable trition for RX5000 series and older AMD GPUs
-    is_legacy_amd = any(gpu_id in DEVICE_INFO for gpu_id in DISABLE_TRITON_KEYWORDS)   
+    is_legacy_amd = GPU_ARCH in DISABLE_TRITON_GFX   
     if is_legacy_amd:
         USE_TORCH_COMPILE = False  # Disable Triton for known problematic AMD GPUs
         print(f"[Main] Disabled torch.compile for {DEVICE_INFO}. ")
@@ -264,6 +324,10 @@ if IS_AMD_ROCM:
         os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
         os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "TRUE" # Enable flash attention autotune for AMD ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Enable AOTriton for ROCm
+
+    # Disable TRT for unsupported models
+    if any(x in MODEL_ID.lower() for x in DISABLE_MIGRAPHX_KEYWORDS):
+        USE_MIGRAPHX = False
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -302,15 +366,15 @@ def get_model_path(model_id, cache_dir):
         f"No supported model file found in {model_id}"
     )
 
-
-# Resize-alignment factor: 14 for DINOv2-based, 16 for InfiniDepth, None => square.
+# Resize-alignment factor for model families that need or benefit from
+# aspect-preserving patch-aligned input. Legacy HF/DPT-style models stay on the
+# fixed-square path used by depth0.py so their steady-state FPS does not regress.
 def get_patch_size():
-    mid = MODEL_ID.lower()
-    if "depthpro" in mid:
+    if CAPTURE_MODE == "Window":
         return None
-    if "infinidepth" in mid:
+    if "infinidepth" in MODEL_ID.lower():
         return 16
-    if "da3" in mid or "any" in mid or "dinov2" in mid:
+    if "da3" in MODEL_ID.lower() or "any" in MODEL_ID.lower() or "dinov2" in MODEL_ID.lower():
         return 14
     return None
 
@@ -348,25 +412,10 @@ if IS_CUDA:
                 size=(new_height, new_width),
                 mode='bilinear',
                 align_corners=False,
-                antialias=True
+                antialias=new_height < H0
             ).squeeze(0)
         return result
     
-    def compute_model_input_hw(h, w, target=DEPTH_RESOLUTION, patch=None):
-        """Model-input (H,W); must match _resize_patch_aligned_t.
-        patch=None => square. Single source of truth for the TensorRT engine shape."""
-        if patch is None:
-            return target, target
-        longest = max(h, w)
-        if longest != target:
-            scale = target / float(longest)
-            h = max(1, int(round(h * scale)))
-            w = max(1, int(round(w * scale)))
-        def nm(x, p):
-            down = (x // p) * p
-            up = down + p
-            return up if abs(up - x) <= abs(x - down) else down
-        return max(1, nm(h, patch)), max(1, nm(w, patch))
 
 else:
     def process(img_rgb: np.ndarray | cv2.UMat, height: int) -> np.ndarray:
@@ -398,7 +447,8 @@ else:
             return img_rgb
 
         # Resize using CPU
-        resized = cv2.resize(img_rgb, (width, height), interpolation=cv2.INTER_LINEAR)
+        interpolation = cv2.INTER_AREA if height < h0 else cv2.INTER_CUBIC
+        resized = cv2.resize(img_rgb, (width, height), interpolation=interpolation)
 
         return resized
 
@@ -410,6 +460,7 @@ DTYPE_INFO = "fp16" if FP16 else "fp32"
 ONNX_PATH = None
 TRT_PATH = None
 COREML_PATH = None
+MIGRAPHX_PATH = None
 # Single character digits and letters for "FPS: XX.X"
 font_dict = {
     "0": ["111","101","101","101","111"],
@@ -432,13 +483,11 @@ font_dict = {
 
 # Model casting helper
 def maybe_autocast(device, enabled=True):
-    stack = contextlib.ExitStack()
-    if device.type == "privateuseone":
-        stack.enter_context(torch.no_grad())
-    else:
-        stack.enter_context(torch.inference_mode())
-        stack.enter_context(torch.autocast(device_type=device.type, enabled=enabled))
-    return stack
+    return (
+        torch.autocast(device_type=device.type, enabled=enabled)
+        if device.type != "privateuseone"
+        else contextlib.nullcontext()
+    )
 
 # check if it is metric model
 def is_metric():
@@ -544,7 +593,7 @@ def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
 
 def chw_tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
     hwc_tensor = tensor.permute(1, 2, 0).contiguous()
-    return hwc_tensor.detach().cpu().numpy()
+    return hwc_tensor.detach().cpu().float().numpy()
 
 def apply_gamma(depth, gamma=1.2):
     return torch.pow(depth, gamma)
@@ -587,7 +636,7 @@ def post_process_depth(depth):
     depth = anti_alias(depth, strength=AA_STRENGTH)
     return depth
 
-def normalize(depth, percentile=2.0, subsample_cap=1_048_576):
+def normalize(depth, percentile=2.0, subsample_cap=6_144):
     """GPU-tensor version of the official DA3 visualize_depth normalization.
 
     Mirrors models/depth_anything_3/utils/visualize.py: invert (1/depth) on the
@@ -599,10 +648,10 @@ def normalize(depth, percentile=2.0, subsample_cap=1_048_576):
     if is_metric():
         valid = d > 0
         inv = torch.where(valid, 1.0 / d.clamp(min=1e-12), d)
+        v = inv[valid]
     else:
-        valid = torch.isfinite(d)
         inv = d
-    v = inv[valid]
+        v = inv.flatten()
     if v.numel() <= 10:
         dmin = torch.zeros((), device=d.device)
         dmax = torch.zeros((), device=d.device)
@@ -657,10 +706,8 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 # Load InfiniDepth Model
 def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
     """ Load InfiniDepth model from HuggingFace hub. """
-    
     # Load depth model without network warning when local cache exists
     model_path = get_model_path(model_id, cache_dir=CACHE_PATH)
-    model_path = r"D:\base.ckpt"
     # Preparation for video depth anything models
     encoder_dict = {'lc700x/InfiniDepth-SmallPlus': 'vits16plus',
                     'lc700x/InfiniDepth-Small': 'vits16',
@@ -682,6 +729,91 @@ def get_da3_model(model_id=MODEL_ID, dtype=DTYPE):
     except:
         model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH, dtype=dtype)
     return model.to(DEVICE)
+
+# MIGraphX Optimization and Engine (ROCm7)
+def _ensure_migraphx_available():
+    """Check if migraphx is available."""
+    try:
+        import migraphx  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+MIGRAPHX_AVAILABLE = _ensure_migraphx_available()
+
+def optimize_with_migraphx(onnx_path, migraphx_path):
+    """
+    Parse ONNX and compile with MIGraphX for AMD GPU.
+    Saves compiled graph to disk for persistent caching.
+
+    Returns path to compiled graph, or None on failure.
+    """
+    if not MIGRAPHX_AVAILABLE:
+        raise ImportError("migraphx is not installed")
+
+    if os.path.exists(migraphx_path) and not RECOMPILE_MIGRAPHX:
+        print(f"[MIGraphX] Using cached graph: {migraphx_path}")
+        return migraphx_path
+
+    try:
+        import migraphx as mx
+
+        print("[MIGraphX] Compiling ONNX model, this may take a while...")
+        prog = mx.parse_onnx(onnx_path)
+        prog.compile(mx.get_target("gpu"), offload_copy=False, exhaustive_tune=True)
+        mx.save(prog, migraphx_path)
+
+        print(f"[MIGraphX] Graph saved to {migraphx_path}")
+        return migraphx_path
+
+    except Exception as e:
+        print(f"[Error] MIGraphX optimization failed: {e}")
+        return None
+
+
+class MIGraphXEngine:
+    """
+    Wrapper around a compiled MIGraphX program (offload_copy=False).
+    Zero-copy GPU path: argument_from_pointer for both input and output.
+    offload_copy=False requires caller to supply GPU buffers for all params,
+    including output params named '#output_N'.
+    """
+    def __init__(self, graph_path, device, dtype):
+        import migraphx as mx
+        self.mx = mx
+        self.device = device
+        self.dtype = dtype
+        self.prog = mx.load(graph_path)
+        param_shapes = self.prog.get_parameter_shapes()
+        self.input_name = None
+        self._out_params = {}
+        for name, shape in param_shapes.items():
+            if '#output_' in name:
+                self._out_params[name] = shape
+            else:
+                self.input_name = name
+                self._in_shape = shape
+        self._out_name = list(self._out_params.keys())[0]
+        self._out_lens = list(self._out_params[self._out_name].lens())
+        # Map MIGraphX type enum to torch dtype (half_type=1, float_type=2)
+        _MX_TO_TORCH = {1: torch.float16, 2: torch.float32, 3: torch.float64}
+        self._mgx_in_dtype = _MX_TO_TORCH.get(int(self._in_shape.type()), torch.float32)
+        self._mgx_out_dtype = _MX_TO_TORCH.get(int(self._out_params[self._out_name].type()), torch.float32)
+
+    def __call__(self, tensor: torch.Tensor):
+        if tensor.dtype != self._mgx_in_dtype or not tensor.is_contiguous():
+            tensor = tensor.contiguous().to(dtype=self._mgx_in_dtype)
+        in_arg = self.mx.argument_from_pointer(self._in_shape, tensor.data_ptr())
+        out = torch.empty(self._out_lens, dtype=self._mgx_out_dtype, device=self.device)
+        out_arg = self.mx.argument_from_pointer(self._out_params[self._out_name], out.data_ptr())
+        # Run on PyTorch's current stream so input writes, inference, and output
+        # reads stay stream-ordered. Avoids blocking syncs and the FP16
+        # cross-stream race in one shot.
+        stream = torch.cuda.current_stream(self.device)
+        self.prog.run_async({self.input_name: in_arg, self._out_name: out_arg},
+                            stream.cuda_stream, "ihipStream_t")
+        return out
+
 
 # TensorRT Optimization
 def optimize_with_tensorrt(onnx_path, trt_path):
@@ -782,11 +914,14 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
             training=torch.onnx.TrainingMode.EVAL,
         )
     
-    engine_name = None
     if USE_TENSORRT:
         engine_name = "TensorRT"
     elif USE_OPENVINO:
         engine_name = "OpenVINO"
+    elif USE_MIGRAPHX:
+        engine_name = "MIGraphX"
+    else:
+        engine_name = "unknown"
     print(f"ONNX model generated, {engine_name} engine compiling may take a while...")
 
 class ModelForCoreML(torch.nn.Module):
@@ -1086,12 +1221,25 @@ class TensorRTEngine:
 
         return outputs['predicted_depth']
 
+    def close(self):
+        for attr in ("context", "engine"):
+            try:
+                obj = getattr(self, attr, None)
+                if obj is not None:
+                    del obj
+            except Exception:
+                pass
+            try:
+                setattr(self, attr, None)
+            except Exception:
+                pass
+
 # Model Wrapper Class
 class DepthModelWrapper:
     def __init__(self, model_path, device, device_info, dtype, size=None,
-                 onnx_path=None, trt_path=None):
+                 onnx_path=None, trt_path=None, migraphx_path=None):
         """
-        Wrapper class that handles both PyTorch and TensorRT backends.
+        Wrapper class that handles both PyTorch and TensorRT/MIGraphX backends.
         """
         self.device = device
         self.device_info = device_info
@@ -1099,11 +1247,13 @@ class DepthModelWrapper:
         self.model_path = model_path
         self.onnx_path = onnx_path
         self.trt_path = trt_path
+        self.migraphx_path = migraphx_path
         self.size = size
         self.use_torch_compile = USE_TORCH_COMPILE
-        
+
         # Determine backend based on device
-        self.is_cuda = IS_CUDA
+        self.is_nvidia = IS_NVIDIA
+        self.is_rocm = IS_AMD_ROCM
         self.is_mps = IS_MPS
         self.is_xpu = IS_XPU
         self.is_cpu = IS_CPU
@@ -1117,7 +1267,9 @@ class DepthModelWrapper:
             self._pending_backend = "CoreML"
         elif USE_OPENVINO and OPENVINO_AVAILABLE and OPENVINO_DEVICE is not None:
             self._pending_backend = "OpenVINO"
-        elif self.is_cuda and USE_TENSORRT:
+        elif self.is_rocm and USE_MIGRAPHX and MIGRAPHX_AVAILABLE:
+            self._pending_backend = "MIGraphX"
+        elif self.is_nvidia and USE_TENSORRT:
             warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
             self._pending_backend = "TensorRT"
         else:
@@ -1131,7 +1283,7 @@ class DepthModelWrapper:
         if self._pending_backend is None:
             print(f"Using backend: {self.backend}")
 
-    def build_accelerated_backend(self, engine_h, engine_w, onnx_path, trt_path, coreml_path):
+    def build_accelerated_backend(self, engine_h, engine_w, onnx_path, trt_path, coreml_path, migraphx_path=None):
         """Compile the deferred accelerated backend for the known engine shape;
         falls back to PyTorch on failure. Runs at most once."""
         if self._built or self._pending_backend is None:
@@ -1140,6 +1292,7 @@ class DepthModelWrapper:
 
         self.onnx_path = onnx_path
         self.trt_path = trt_path
+        self.migraphx_path = migraphx_path
         try:
             if self._pending_backend == "TensorRT":
                 engine = self._load_tensorrt_engine()
@@ -1148,6 +1301,13 @@ class DepthModelWrapper:
                     self.backend = "TensorRT"
                 else:
                     print("[Error] TensorRT failed, keeping PyTorch")
+            elif self._pending_backend == "MIGraphX":
+                engine = self._load_migraphx_engine()
+                if engine is not None:
+                    self.model = engine
+                    self.backend = "MIGraphX"
+                else:
+                    print("[Error] MIGraphX failed, keeping PyTorch")
             elif self._pending_backend == "OpenVINO":
                 self.model = self._load_openvino_engine()
                 self.backend = "OpenVINO"
@@ -1163,7 +1323,7 @@ class DepthModelWrapper:
         print(f"Using backend: {self.backend}")
         self._built = True
 
-    def _load_pytorch_model(self, enable_trt=USE_TENSORRT):
+    def _load_pytorch_model(self, enable_trt=USE_TENSORRT, enable_migraphx=USE_MIGRAPHX):
         """Load the original PyTorch model."""
         global DTYPE
         DTYPE = self.dtype
@@ -1199,12 +1359,15 @@ class DepthModelWrapper:
         if self.dtype == torch.float16 and not any(kw in MODEL_ID.lower() for kw in ("da3", "video-depth-anything")):
             model.half()
 
-        # Special setup precision for DA3
-        if self.is_cuda and self.use_torch_compile and not enable_trt:
+        model = model.eval()
+        if self.is_nvidia and self.use_torch_compile and not enable_trt:
             model = torch.compile(model)
             print("Processing torch.compile with Triton, it may take a while...")
-        
-        return model.eval()
+        elif self.is_rocm and self.use_torch_compile and not enable_migraphx:
+            model = torch.compile(model)
+            print("Processing torch.compile with Triton, it may take a while...")
+
+        return model
     
     def _load_coreml_model(self, engine_h, engine_w):
         pytorch_model = self._load_pytorch_model()
@@ -1251,25 +1414,45 @@ class DepthModelWrapper:
         except Exception as e:
             print(f"[Error] TensorRT engine loading failed: {str(e)}")
             return None
-    
+
+    def _load_migraphx_engine(self):
+        """Load or create MIGraphX engine for AMD ROCm7."""
+        # First, load PyTorch model to export ONNX
+        pytorch_model = self._load_pytorch_model()
+
+        # Export to ONNX if not exists
+        if RECOMPILE_MIGRAPHX or not os.path.exists(self.onnx_path):
+            export_to_onnx(pytorch_model, self.onnx_path, self.device, self.dtype)
+
+        # Build or load MIGraphX graph
+        migraphx_graph_path = optimize_with_migraphx(self.onnx_path, self.migraphx_path)
+        if migraphx_graph_path is None:
+            return None
+        try:
+            return MIGraphXEngine(migraphx_graph_path, self.device, self.dtype)
+        except Exception as e:
+            print(f"[Error] MIGraphX engine loading failed: {str(e)}")
+            return None
+
     def __call__(self, tensor):
         """Run inference using the active backend."""
-        # Fast path for OpenVINO backend
-        if getattr(self, "backend", None) == "OpenVINO":
+        # Fast path for OpenVINO / MIGraphX backends (they handle their own device/dtype)
+        if getattr(self, "backend", None) in ("OpenVINO", "MIGraphX"):
             return self.model(tensor)
 
         """Run inference using the active backend."""
-        with maybe_autocast(self.device, enabled=FP16):
-            if self.backend == "PyTorch":
-                if "video-depth-anything" in MODEL_ID.lower():
-                    return self.model(pixel_values=tensor, fp32=not FP16)
-                elif "da3" in MODEL_ID.lower() or "infinidepth" in MODEL_ID.lower():
-                    return self.model.predict_depth(tensor, fp32=not FP16)
+        with torch.no_grad():
+            with maybe_autocast(self.device, enabled=FP16):
+                if self.backend == "PyTorch":
+                    if "video-depth-anything" in MODEL_ID.lower():
+                        return self.model(pixel_values=tensor, fp32=not FP16)
+                    elif "da3" in MODEL_ID.lower() or "infinidepth" in MODEL_ID.lower():
+                        return self.model.predict_depth(tensor, fp32=not FP16)
+                    else:
+                        return self.model(pixel_values=tensor).predicted_depth
                 else:
-                    return self.model(pixel_values=tensor).predicted_depth
-            else:
-                # TensorRT, CoreML
-                return self.model(tensor)
+                    # TensorRT, CoreML
+                    return self.model(tensor)
 
 # Initialize model wrapper
 model_wraper = DepthModelWrapper(
@@ -1312,17 +1495,24 @@ lock = Lock()
 # Build the accelerated engine + warmup on the first frame, once the shape is known.
 _engine_ready = False
 def _ensure_engine_built(engine_h, engine_w):
-    global _engine_ready, ENGINE_H, ENGINE_W, ONNX_PATH, TRT_PATH, COREML_PATH
+    global _engine_ready, ENGINE_H, ENGINE_W, ONNX_PATH, TRT_PATH, COREML_PATH, MIGRAPHX_PATH
     if _engine_ready:
         return
     with lock:
         if _engine_ready:
             return
         ENGINE_H, ENGINE_W = engine_h, engine_w
-        ONNX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.onnx")
-        TRT_PATH    = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.trt")
-        COREML_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.mlpackage")
-        model_wraper.build_accelerated_backend(engine_h, engine_w, ONNX_PATH, TRT_PATH, COREML_PATH)
+        if engine_h == DEPTH_RESOLUTION and engine_w == DEPTH_RESOLUTION:
+            ONNX_PATH       = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.onnx")
+            TRT_PATH        = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
+            COREML_PATH     = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.mlpackage")
+            MIGRAPHX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}_gpu.mgx")
+        else:
+            ONNX_PATH       = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.onnx")
+            TRT_PATH        = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.trt")
+            COREML_PATH     = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.mlpackage")
+            MIGRAPHX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}_gpu.mgx")
+        model_wraper.build_accelerated_backend(engine_h, engine_w, ONNX_PATH, TRT_PATH, COREML_PATH, MIGRAPHX_PATH)
         warmup_model(model_wraper, engine_h, engine_w, steps=3)
         _engine_ready = True
 
@@ -1394,12 +1584,12 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
     tensor = tensor.contiguous()
 
     # Tensor now has the final model-input shape; build engine + warmup once.
-    _, _, eh, ew = tensor.shape
-    _ensure_engine_built(eh, ew)
+    if not _engine_ready:
+        _, _, eh, ew = tensor.shape
+        _ensure_engine_built(eh, ew)
 
     # Model inference with appropriate autocast context
-    with maybe_autocast(DEVICE, enabled=FP16):
-        depth = model_wraper(tensor)
+    depth = model_wraper(tensor)
             
     # POST-PROCESSING
     with torch.no_grad():
@@ -1623,6 +1813,7 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=0.0, fill_
 if USE_TORCH_COMPILE and IS_CUDA:
     make_sbs_core = torch.compile(make_sbs_core)
 
+
 if __name__ == "__main__":
     import os
     import matplotlib.pyplot as plt
@@ -1633,10 +1824,21 @@ if __name__ == "__main__":
     out_dir = "output"
     os.makedirs(out_dir, exist_ok=True)
 
-    # predict_depth now does the GPU aspect-preserve + patch-align preprocessing
-    # and the official normalize() post-processing for metric models, so it is the
-    # single source for both SBS and the inspection PNG (near~1, far~0).
+    import time
+    # Trigger engine build on first call
     depth = predict_depth(image_rgb, dtype=DTYPE)
+
+    # FPS benchmark: 5 warmup + 30 timed iterations
+    BENCH_N = 30
+    for _ in range(5):
+        predict_depth(image_rgb, dtype=DTYPE)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    for _ in range(BENCH_N):
+        predict_depth(image_rgb, dtype=DTYPE)
+    torch.cuda.synchronize()
+    elapsed = time.perf_counter() - t0
+    print(f"[Benchmark] backend={model_wraper.backend} | {BENCH_N} iters | {elapsed:.2f}s | {BENCH_N/elapsed:.1f} FPS")
 
     sbs = make_sbs(image_rgb, depth, ipd_uv=0.064, depth_ratio=2.0,
                    convergence=-0.5, display_mode="Half-SBS", fps=None, fill_16_9=False)

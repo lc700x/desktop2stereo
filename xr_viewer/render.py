@@ -979,20 +979,36 @@ def _xr_quat_to_mat4(q):
 
 
 def _pose_to_view_mat4(pose):
-    """XrPosef standard 4×4 view matrix (numpy, math row/col convention).
-
-    The view matrix is the inverse of the head-pose model matrix:
-    V = [ R^T | -R^T @ pos ]
-        [  0  |      1     ]
-    Caller must transpose before writing to OpenGL.
-    """
-    R  = _xr_quat_to_mat4(pose.orientation)[:3, :3]
-    Rt = R.T                                              # inverse rotation
-    t  = np.array([pose.position.x, pose.position.y, pose.position.z], dtype=np.float32)
-    V  = np.eye(4, dtype=np.float32)
-    V[:3, :3] = Rt
-    V[:3, 3]  = -Rt @ t                                  # translation in last column
+    """XrPosef -> 4x4 view matrix (fused quat->R^T, no intermediate 4x4)."""
+    q = pose.orientation
+    x, y, z, w = q.x, q.y, q.z, q.w
+    xx, yy, zz = x*x, y*y, z*z
+    xy, xz, yz = x*y, x*z, y*z
+    wx, wy, wz = w*x, w*y, w*z
+    tx = pose.position.x
+    ty = pose.position.y
+    tz = pose.position.z
+    r00 = 1-2*(yy+zz); r01 = 2*(xy-wz);   r02 = 2*(xz+wy)
+    r10 = 2*(xy+wz);   r11 = 1-2*(xx+zz); r12 = 2*(yz-wx)
+    r20 = 2*(xz-wy);   r21 = 2*(yz+wx);   r22 = 1-2*(xx+yy)
+    V = np.array([
+        [r00, r10, r20, -(r00*tx + r10*ty + r20*tz)],
+        [r01, r11, r21, -(r01*tx + r11*ty + r21*tz)],
+        [r02, r12, r22, -(r02*tx + r12*ty + r22*tz)],
+        [0,   0,   0,   1],
+    ], dtype=np.float32)
     return V
+
+
+def _view_mat_inv(view_mat):
+    """Fast inverse of a rigid-body view matrix (R^T trick, no linalg.inv)."""
+    R = view_mat[:3, :3]
+    t = view_mat[:3, 3]
+    Rt = R.T
+    inv = np.eye(4, dtype=np.float32)
+    inv[:3, :3] = Rt
+    inv[:3, 3] = -(Rt @ t)
+    return inv
 
 
 def _fov_to_proj_mat4(fov, near=0.05, far=100.0):
@@ -1029,10 +1045,11 @@ def _fov_to_proj_mat4_cached(fov, near=0.05, far=100.0):
     key = (fov.angle_left, fov.angle_right, fov.angle_up, fov.angle_down)
     cached = _proj_cache.get(key)
     if cached is not None:
-        return cached.copy()
+        return cached
     p = _fov_to_proj_mat4(fov, near, far)
+    p.flags.writeable = False
     _proj_cache[key] = p
-    return p.copy()
+    return p
 
 
 def _xr_pose_to_model_mat4(pose):
@@ -1043,23 +1060,16 @@ def _xr_pose_to_model_mat4(pose):
 
 
 def _euler_to_mat4(yaw, pitch, roll):
-    """Yaw/pitch/roll radians -> 4x4 rotation matrix (Y * X * Z)."""
+    """Yaw/pitch/roll radians -> 4x4 rotation matrix (Y * X * Z), fused."""
     cy, sy = math.cos(yaw), math.sin(yaw)
     cp, sp = math.cos(pitch), math.sin(pitch)
     cr, sr = math.cos(roll), math.sin(roll)
-    ry = np.array([[cy, 0.0, sy, 0.0],
-                   [0.0, 1.0, 0.0, 0.0],
-                   [-sy, 0.0, cy, 0.0],
-                   [0.0, 0.0, 0.0, 1.0]], dtype=np.float32)
-    rx = np.array([[1.0, 0.0, 0.0, 0.0],
-                   [0.0, cp, -sp, 0.0],
-                   [0.0, sp, cp, 0.0],
-                   [0.0, 0.0, 0.0, 1.0]], dtype=np.float32)
-    rz = np.array([[cr, -sr, 0.0, 0.0],
-                   [sr, cr, 0.0, 0.0],
-                   [0.0, 0.0, 1.0, 0.0],
-                   [0.0, 0.0, 0.0, 1.0]], dtype=np.float32)
-    return ry @ rx @ rz
+    return np.array([
+        [cy*cr + sy*sp*sr, -cy*sr + sy*sp*cr, sy*cp, 0.0],
+        [cp*sr,             cp*cr,            -sp,    0.0],
+        [-sy*cr + cy*sp*sr, sy*sr + cy*sp*cr,  cy*cp, 0.0],
+        [0.0,               0.0,               0.0,   1.0],
+    ], dtype=np.float32)
 
 
 def _mat3_to_quat_xyzw(m33):

@@ -2,5 +2,31 @@
   "display_name": {
     "EN": "Default",
     "CN": "默认"
+  },
+  "glow_intensity": 0.175,
+  "glow_width": 0.5,
+  "glow_intensity_multiplier": 1.5,
+  "screen_light_intensity": 3.5,
+  "lighting_presets": [
+    {
+      "name": "Glow Off",
+      "glow_intensity_multiplier": 0.0
+    },
+    {
+      "name": "Glow On",
+      "glow_intensity_multiplier": 1.5,
+      "glow_intensity": 0.175,
+      "glow_width": 0.5
+    }
+  ],
+  "screen_state": {
+    "width": 2.4,
+    "distance": 2.0,
+    "pan_x": 0.0,
+    "pan_y": 1.32,
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "curved": false,
+    "preset_index": 4
   }
 }

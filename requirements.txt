@@ -27,3 +27,4 @@ e3nn==0.5.9
 
 # gui
 flet==0.85.2
+flet-desktop==0.85.2

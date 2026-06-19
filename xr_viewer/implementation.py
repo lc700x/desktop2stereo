@@ -81,7 +81,7 @@ from .render import (
     _create_d3d11_shared_texture, _d3d11_update_subresource, _euler_to_mat4,
     _fov_to_proj_mat4, _fov_to_proj_mat4_cached, _get_accessor, _mat3_to_quat_xyzw,
     _mat4_to_xr_posef, _pose_to_view_mat4, _quat_to_mat4, _read_glb_chunks,
-    _xr_pose_to_model_mat4, _xr_quat_to_mat4, load_glb_model,
+    _view_mat_inv, _xr_pose_to_model_mat4, _xr_quat_to_mat4, load_glb_model,
 )
 
 
@@ -171,6 +171,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
 
         self._x_press_t = 0.0          # timestamp when X was pressed
         self._x_long_fired = False     # whether long-ress action already fired
+        self._x_glow_fired = False     # glow action fired during this hold (blocks light on release)
         self._prev_bg_color_idx = None # stores bg color idx before switching to green
         self._prev_active_env = None   # stores Environment Model before switching to green
 
@@ -258,7 +259,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         # Screen glow effect (cinema light)
         self._glow_color = (0.3, 0.6, 1.0)        # light blue, dynamically updated
         self._glow_width_m = 0.50                  # glow decay distance (larger volume)
-        self._glow_intensity = 0.35                # softer glow
+        self._glow_intensity = 0.175               # softer glow (0.5x)
         self._glow_intensity_multiplier = 0.0     # 0 = no glow (Default), 1.5 = "Default with Glow"
         self._glow_ref_screen = 2.4               # reference screen long edge (meters)
         self._glow_target_color = (0.3, 0.6, 1.0)  # latest sampled frame average
@@ -288,6 +289,9 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             'emissive_strength': self._env_emissive_strength,
             'khr_light_scale': self._env_khr_light_scale,
             'screen_light_intensity': self._screen_light_intensity,
+            'glow_intensity': self._glow_intensity,
+            'glow_width': self._glow_width_m,
+            'glow_intensity_multiplier': self._glow_intensity_multiplier,
         }
 
         self._yaw_offset     = 0.0    # manual yaw offset (relative to face-head baseline)
@@ -1705,19 +1709,20 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             bt = max(1, int(min(h, w) * 0.08))
             top_h = min(bt, h)
             bot_h = min(bt, h)
+            step = 4
 
-            total = rgb_np[:top_h, :, :].sum(axis=(0, 1), dtype=np.float64)
-            total += rgb_np[max(0, h - bot_h):, :, :].sum(axis=(0, 1), dtype=np.float64)
-            count = (top_h * w) + (bot_h * w)
+            total = rgb_np[:top_h:step, ::step, :].sum(axis=(0, 1), dtype=np.float64)
+            total += rgb_np[max(0, h - bot_h)::step, ::step, :].sum(axis=(0, 1), dtype=np.float64)
+            count = (len(range(0, top_h, step)) + len(range(0, bot_h, step))) * len(range(0, w, step))
 
             mid_h = max(0, h - top_h - bot_h)
             side_w = min(bt, w)
             if mid_h > 0 and side_w > 0:
                 y0 = top_h
                 y1 = h - bot_h
-                total += rgb_np[y0:y1, :side_w, :].sum(axis=(0, 1), dtype=np.float64)
-                total += rgb_np[y0:y1, max(0, w - side_w):, :].sum(axis=(0, 1), dtype=np.float64)
-                count += mid_h * side_w * 2
+                total += rgb_np[y0:y1:step, :side_w:step, :].sum(axis=(0, 1), dtype=np.float64)
+                total += rgb_np[y0:y1:step, max(0, w - side_w)::step, :].sum(axis=(0, 1), dtype=np.float64)
+                count += len(range(y0, y1, step)) * len(range(0, side_w, step)) * 2
 
             avg = total / max(1, count)
             self._glow_target_color = (
@@ -1851,12 +1856,13 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         """
         if self.screen_height is None:
             fw, fh = self.frame_size
+            ar = fh / fw if fw > 0 else 9.0 / 16.0
             if fh > fw:
                 self.screen_height = self._screen_ref_size
-                self.screen_width = self.screen_height * 9.0 / 16.0
+                self.screen_width = self.screen_height / ar
             else:
                 self.screen_width = self._screen_ref_size
-                self.screen_height = self.screen_width * 9.0 / 16.0
+                self.screen_height = self.screen_width * ar
 
         _key = (self.screen_yaw, self.screen_pitch, self.screen_roll,
                 self.screen_pan_x, self.screen_pan_y, self.screen_distance,
@@ -1912,70 +1918,56 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         """
         if self.screen_height is None:
             fw, fh = self.frame_size
-            if fh > fw:  # portrait: ref -> long dim, derive short from 16:9
+            ar = fh / fw if fw > 0 else 9.0 / 16.0
+            if fh > fw:
                 self.screen_height = self._screen_ref_size
-                self.screen_width = self.screen_height * 9.0 / 16.0
+                self.screen_width = self.screen_height / ar
             else:
                 self.screen_width = self._screen_ref_size
-                self.screen_height = self.screen_width * 9.0 / 16.0
+                self.screen_height = self.screen_width * ar
 
         half_w   = (width_override  if width_override  is not None else self.screen_width)  / 2.0
         half_h   = (height_override if height_override is not None else self.screen_height) / 2.0
         half_ang = min(_CURVED_HALF_ANGLE_RAD, math.pi / 2)
-        R        = half_w / max(half_ang, 1e-6)  # cylinder radius
+        R        = half_w / max(half_ang, 1e-6)
 
         yaw   = self.screen_yaw
         pitch = self.screen_pitch
-        cy, sy_ = math.cos(yaw),   math.sin(yaw)
-        cp, sp  = math.cos(pitch), math.sin(pitch)
-        normal_w = np.array([sy_ * cp, -sp, cy * cp], dtype='f8')
+        c_yaw, s_yaw = math.cos(yaw), math.sin(yaw)
+        c_pitch, s_pitch = math.cos(pitch), math.sin(pitch)
+        c_roll, s_roll = math.cos(self.screen_roll), math.sin(self.screen_roll)
 
-        cx = self.screen_pan_x
-        cy_pan = self.screen_pan_y
+        n_cols = N + 1
+        angles = np.linspace(-half_ang, half_ang, n_cols)
+        us = np.linspace(0.0, 1.0, n_cols)
+        lx = R * np.sin(angles)
+        lz = R * (1.0 - np.cos(angles))
 
-        verts = []
-        for i in range(N + 1):
-            t    = i / N                         # [0, 1]
-            ang  = -half_ang + 2.0 * half_ang * t   # angle from left to right
-            u    = t
+        rx = lx * c_yaw + lz * s_yaw
+        rz = -lx * s_yaw + lz * c_yaw
 
-            # Local arc point: x along arc, z = depth into screen.
-            # Surface centre (ang=0) is at local origin so that yaw/pitch
-            # rotate around the surface centre matching flat-screen behaviour.
-            lx   = R * math.sin(ang)
-            lz   = R * (1.0 - math.cos(ang))
+        out = np.empty((n_cols * 2, 5), dtype=np.float32)
+        for row_idx, (ly, v) in enumerate(((-half_h, 0.0), (half_h, 1.0))):
+            wy = ly * c_pitch - rz * s_pitch
+            wz = ly * s_pitch + rz * c_pitch
+            wx = rx
+            wx_r = wx * c_roll - wy * s_roll
+            wy_r = wx * s_roll + wy * c_roll
+            wx_r += self.screen_pan_x
+            wy_r += self.screen_pan_y
+            wz_f = wz - (self.screen_distance + dist_offset)
+            if normal_offset:
+                nw = np.array([s_yaw * c_pitch, -s_pitch, c_yaw * c_pitch], dtype=np.float64)
+                wx_r += float(nw[0]) * normal_offset
+                wy_r += float(nw[1]) * normal_offset
+                wz_f += float(nw[2]) * normal_offset
+            out[row_idx::2, 0] = wx_r
+            out[row_idx::2, 1] = wy_r
+            out[row_idx::2, 2] = wz_f
+            out[row_idx::2, 3] = us
+            out[row_idx::2, 4] = v
 
-            # Apply yaw around Y, then pitch around X, then translate
-            # Yaw: (lx, 0, lz) (lx*cy + lz*sy_, 0, -lx*sy_ + lz*cy)
-            rx   =  lx * cy  + lz * sy_
-            rz   = -lx * sy_ + lz * cy
-
-            # Two rows: bottom (v=0) and top (v=1)
-            for row, v in ((0, 0.0), (1, 1.0)):
-                ly = (-half_h if row == 0 else half_h)
-                # Pitch: rotate (rx, ly, rz) around X by pitch
-                wy =  ly * cp - rz * sp
-                wz =  ly * sp + rz * cp
-                wx = rx
-
-                # Roll around Z (screen normal)
-                cr, sr = math.cos(self.screen_roll), math.sin(self.screen_roll)
-                wx_roll = wx * cr - wy * sr
-                wy_roll = wx * sr + wy * cr
-                wx, wy = wx_roll, wy_roll
-
-                # Translate to world position
-                wx += cx
-                wy += cy_pan
-                wz += -(self.screen_distance + dist_offset)
-                if normal_offset:
-                    wx += float(normal_w[0]) * normal_offset
-                    wy += float(normal_w[1]) * normal_offset
-                    wz += float(normal_w[2]) * normal_offset
-
-                verts.extend([wx, wy, wz, u, v])
-
-        return np.array(verts, dtype='f4')
+        return out.ravel()
 
     def _get_or_create_fbo(self, eye_index, image_index, texture_id, w, h):
         """Lazily create and cache a ModernGL Framebuffer wrapping the swapchain texture.
@@ -2574,10 +2566,10 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             print(f"[OpenXRViewer] Failed to save profile: {exc}")
 
     def _reset_screen_to_default(self, show_border=False):
-        """Reset screen to upright default: 2 m ahead horizontally, perpendicular to floor.
+        """Reset screen to upright default: 2 m ahead, perpendicular to floor.
 
-        Screen is always vertical (pitch=0) and faces the user's current horizontal
-        forward direction. Centre height matches the headset eye height recorded at
+        Screen is always vertical (pitch=0) and faces the user's current gaze
+        direction. Centre height matches the headset eye height recorded at
         session start so the screen sits comfortably in front of the user.
         Called at session start and by the Y button.
         """
@@ -2585,48 +2577,54 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             return
         old_screen_mat = self._screen_pose_mat4() if self._environment_screen_locked() else None
         RESET_DIST = 2.0
+        DEFAULT_PRESET = 3
         self._reset_orientation_offsets()
         self._clear_screen_grab_anchors()
+        # Cancel any in-flight glide animation so it does not fight the reset.
+        self._anim_target_pan_x    = None
+        self._anim_target_pan_y    = None
+        self._anim_target_distance = None
+        self._anim_target_yaw      = None
+        self._anim_target_pitch    = None
+        self._anim_target_roll     = None
         if not self._environment_screen_locked():
             self.screen_width    = 2.4
             self._screen_ref_size = 2.4
             self.screen_height   = None
+            self._screen_curved  = False
+            self._preset_index   = DEFAULT_PRESET
         self.screen_pitch    = 0.0   # always vertical perpendicular to floor
         self.screen_roll     = 0.0   # always level no tilt
-        if not self._environment_screen_locked():
-            self._screen_curved  = False
         if self._head_pos_w is not None and self._head_fwd_w is not None:
             hx, hy, hz = self._head_pos_w
-            fx, _, fz = self._head_fwd_w
-            # Project forward onto the horizontal plane so the screen stands vertical
-            horiz = math.sqrt(fx * fx + fz * fz)
-            if horiz > 1e-4:
-                fx /= horiz; fz /= horiz
+            fx, fy, fz = self._head_fwd_w
+            # Normalize full 3D forward vector so screen distance follows the
+            # user's actual gaze direction, matching _apply_preset behavior.
+            flen = math.sqrt(fx * fx + fy * fy + fz * fz)
+            if flen > 1e-4:
+                fx /= flen; fy /= flen; fz /= flen
             else:
-                fx, fz = 0.0, -1.0
-            # screen_pan_x / screen_distance live in the screen's LOCAL frame (the
-            # model matrix applies rot_y(yaw) before the translation).  Inverting
-            # _screen_world_pos at pitch=0 gives the correct local-frame values so
-            # the world-space centre lands exactly RESET_DIST m in front of the head:
-            #   world_x = pan_x·cos(yaw) −distance·sin(yaw)   = hx + fx·RESET_DIST
-            #   world_z =−pan_x·sin(yaw) −distance·cos(yaw)   = hz + fz·RESET_DIST
-            # Solving (with cy=−fz, sy_=−fx from yaw=atan2(−fx,−fz)):
-            #   screen_distance = hx·fx + hz·fz + RESET_DIST
-            #   screen_pan_x    = hz·fx −hx·fz
+                fx, fy, fz = 0.0, 0.0, -1.0
+            # Place screen centre RESET_DIST metres in front of the head along
+            # the gaze direction.  The model matrix is T @ R @ S (translate then
+            # rotate), so the world-space centre is simply (pan_x, pan_y, -distance).
             if self._environment_screen_locked():
                 dx = self.screen_pan_x - hx
                 dy = self.screen_pan_y - hy
                 dz = -self.screen_distance - hz
-                dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                dist = math.sqrt(dx * dx + dy * dy + dz * dz)
                 tx = hx + fx * dist
                 tz = hz + fz * dist
                 self.screen_distance = -tz
                 self.screen_pan_x    = tx
             else:
-                self.screen_distance = hx * fx + hz * fz + RESET_DIST
-                self.screen_pan_x    = hz * fx - hx * fz
+                self.screen_pan_x    = hx + fx * RESET_DIST
+                self.screen_distance = -(hz + fz * RESET_DIST)
                 self.screen_pan_y    = float(self._initial_head_y)
-            self.screen_yaw      = math.atan2(-fx, -fz)   # face the user horizontally
+            # Compute yaw from the horizontal projection so the screen faces the
+            # user horizontally while staying vertical (pitch=0).
+            horiz = math.sqrt(fx * fx + fz * fz)
+            self.screen_yaw = math.atan2(-fx, -fz) if horiz > 1e-4 else 0.0
         else:
             if not self._environment_screen_locked():
                 self.screen_distance = RESET_DIST
@@ -3184,18 +3182,21 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                 else:
                     hit_dist = min(sc_dist, kb_dist, ov_dist)
             draw_len = min(BEAM_MAX_LEN, max(0.01, hit_dist))
-            BEAM_R = 0.006  # Radius of the beam cylinder (matches cursor stroke size for a consistent look)
-            S = np.diag([BEAM_R, draw_len, BEAM_R, 1.0]).astype('f4')
-            R = np.eye(4, dtype='f4'); R[:3, 0] = right2; R[:3, 1] = fwd; R[:3, 2] = up
-            T = np.eye(4, dtype='f4'); T[:3, 3] = ctrl_pos.astype('f4')
-            beam_mvp = vp_mat @ T @ R @ S
+            BEAM_R = 0.006
+            M = np.zeros((4, 4), dtype='f4')
+            M[:3, 0] = right2 * BEAM_R
+            M[:3, 1] = fwd * draw_len
+            M[:3, 2] = up * BEAM_R
+            M[:3, 3] = ctrl_pos.astype('f4')
+            M[3, 3] = 1.0
+            beam_mvp = vp_mat @ M
             self._beam_prog['u_mvp'].write(beam_mvp.T.tobytes())
             self._beam_prog['u_time'].value = float(now)
             self._beam_vao.render(moderngl.TRIANGLE_STRIP)
     def _render_laser_hit_circles(self, mgl_fbo, vp_mat, view_mat, beams, view_inv=None):
         mgl_fbo.use()
         if view_inv is None:
-            view_inv = np.linalg.inv(view_mat)
+            view_inv = _view_mat_inv(view_mat)
         cam_r = view_inv[:3, 0].astype('f4')
         cam_u = view_inv[:3, 1].astype('f4')
         cam_pos = view_inv[:3, 3].astype('f4')
@@ -3234,27 +3235,24 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             HIT_OFFSET = 0.0
             hit_pos = hit_ray_cp + hit_ray_fwd * (beam_len - HIT_OFFSET)
 
-            # Direction toward camera for fill offset (GL_LESS depth test)
             to_cam = cam_pos - hit_pos.astype('f4')
-            to_cam_dir = to_cam / (np.linalg.norm(to_cam) + 1e-10)
+            _eye_dist_sq = float(to_cam[0]*to_cam[0] + to_cam[1]*to_cam[1] + to_cam[2]*to_cam[2])
+            _eye_dist = math.sqrt(_eye_dist_sq) if _eye_dist_sq > 0 else 0.0
+            to_cam_dir = to_cam / (_eye_dist + 1e-10)
 
-            # Mild distance compensation: between pure world-space (grows on
-            # screen when close) and pure angular (constant). sqrt scaling
-            # keeps the cursor close to constant but slightly larger when near.
-            import math
-            _eye_dist = float(np.linalg.norm(to_cam))
             _scale = math.sqrt(max(_eye_dist, 0.2))
             STROKE_R = 0.0096 * _scale
             FILL_R   = 0.0064 * _scale
+            M = np.zeros((4, 4), dtype='f4')
+            M[3, 3] = 1.0
             for radius, color, z_bias in [
                 (STROKE_R, (0.2, 0.6, 1.0, 0.75), 0.0),
                 (FILL_R,   (1.0, 1.0, 1.0, 0.75), 0.0001),
             ]:
-                model = np.eye(4, dtype='f4')
-                model[:3, 0] = cam_r * radius
-                model[:3, 1] = cam_u * radius
-                model[:3, 3] = (hit_pos + to_cam_dir * z_bias).astype('f4')
-                circle_mvp = vp_mat @ model
+                M[:3, 0] = cam_r * radius
+                M[:3, 1] = cam_u * radius
+                M[:3, 3] = (hit_pos + to_cam_dir * z_bias).astype('f4')
+                circle_mvp = vp_mat @ M
                 self._border_prog['u_mvp'].write(circle_mvp.T.tobytes())
                 self._border_prog['u_color'].value = color
                 self._circle_vao.render(moderngl.TRIANGLE_FAN)
@@ -3262,6 +3260,9 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
     def _render_controllers(self, mgl_fbo, vp_mat, view_mat, view_inv=None):
         """Render PICO 4 Ultra 3D controller models with Blinn-Phong lighting."""
         now = self._frame_now
+        if view_inv is None:
+            view_inv = _view_mat_inv(view_mat)
+        cam_pos = view_inv[:3, 3].astype(np.float32)
         controllers = []
         for grip_mat, prims, last_move_attr in [
             (self._grip_mat_l, self._ctrl_prims_l, "_laser_last_move_l"),
@@ -3271,10 +3272,8 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                 continue
             if grip_mat is None or not prims:
                 continue
-            R_t = view_mat[:3, :3].T
-            eye_pos = -R_t @ view_mat[:3, 3]
-            dist = float(np.linalg.norm(
-                grip_mat[:3, 3].astype(np.float64) - eye_pos.astype(np.float64)))
+            diff = grip_mat[:3, 3] - cam_pos
+            dist = float(math.sqrt(diff[0]*diff[0] + diff[1]*diff[1] + diff[2]*diff[2]))
             controllers.append((dist, grip_mat, prims))
 
         if not controllers:
@@ -3283,47 +3282,49 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         controllers.sort(key=lambda x: x[0], reverse=True)
         mgl_fbo.use()
 
-        if view_inv is None:
-            view_inv = np.linalg.inv(view_mat)
-        cam_pos = view_inv[:3, 3].astype(np.float32)
-
         # light_color (diffuse) is slightly bluish to look more like the PICO 4's built-in light;
         # ambient_color is dim to avoid washing out the dark controller textures.
         light_color = np.array([0.60, 0.60, 0.65], dtype=np.float32)
         ambient_color = np.array([0.15, 0.15, 0.17], dtype=np.float32)
 
-        for _dist, grip_mat, prims in controllers:
-            # Apply per-profile model offset + X-axis rotation correction
+        _off = (self._calibration_temp_offset if self._calibration_mode
+                else self._ctrl_model_offset)
+        _rot = (self._calibration_temp_rot if self._calibration_mode
+                else self._ctrl_model_rot_deg)
+        _corr_key = (tuple(_off), _rot)
+        if getattr(self, '_ctrl_corr_key', None) != _corr_key:
             T_mat = np.eye(4, dtype=np.float32)
-            # Calibration mode: use temporary offset/rotation values that can be interactively adjusted with the thumbsticks, without affecting the saved profile until the user confirms the changes. Regular mode: use the saved offset/rotation from the profile.
-            _off = (self._calibration_temp_offset if self._calibration_mode
-                    else self._ctrl_model_offset)
-            _rot = (self._calibration_temp_rot if self._calibration_mode
-                    else self._ctrl_model_rot_deg)
             T_mat[0, 3] = _off[0]
             T_mat[1, 3] = _off[1]
             T_mat[2, 3] = _off[2]
-
             _ang = math.radians(_rot)
             _ca, _sa = math.cos(_ang), math.sin(_ang)
             R_mat = np.eye(4, dtype=np.float32)
             R_mat[1, 1] = _ca; R_mat[1, 2] = -_sa
             R_mat[2, 1] = _sa; R_mat[2, 2] = _ca
+            self._ctrl_corr_mat = (R_mat @ T_mat).astype(np.float32)
+            self._ctrl_corr_key = _corr_key
+        _corr = self._ctrl_corr_mat
 
-            _corr = (R_mat @ T_mat).astype(np.float32)
+        vp_bytes = vp_mat.astype(np.float32).T.tobytes()
+        light_bytes = light_color.tobytes()
+        ambient_bytes = ambient_color.tobytes()
+        cam_bytes = cam_pos.tobytes()
+
+        for _dist, grip_mat, prims in controllers:
             model_mat = (grip_mat @ _corr).astype(np.float32)
 
             # Set common uniforms for the current controller
             # u_model: model world (grip @ _corr)
             # u_mvp: world clip (VP only, no model, because shader computes world_pos = u_model * v)
-            self._controller_prog['u_mvp'].write(vp_mat.astype(np.float32).T.tobytes())
+            self._controller_prog['u_mvp'].write(vp_bytes)
             self._controller_prog['u_model'].write(model_mat.T.tobytes())
-            self._controller_prog['u_light_color'].write((light_color).tobytes())
-            self._controller_prog['u_ambient_color'].write((ambient_color).tobytes())
-            self._controller_prog['u_camera_pos'].write((cam_pos).tobytes())
+            self._controller_prog['u_normal_mat'].write(model_mat[:3, :3].T.tobytes())
+            self._controller_prog['u_light_color'].write(light_bytes)
+            self._controller_prog['u_ambient_color'].write(ambient_bytes)
+            self._controller_prog['u_camera_pos'].write(cam_bytes)
 
-            # Sort primitives by triangle count (descending): larger items rendered first (bottom), smaller ones later (top)
-            sorted_prims = sorted(prims, key=lambda p: p['tri_count'], reverse=True)
+            sorted_prims = prims
 
             if self._use_d3d11:
                 glFrontFace(GL_CW)
@@ -3489,7 +3490,6 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._glow_prog['u_screen_half'].value = (inner_w * 0.5, inner_h * 0.5)
         self._glow_prog['u_glow_color'].value  = self._glow_color
         self._glow_prog['u_glow_inv_range'].value  = 1.0 / max(uv_glow_range, 1e-6)
-        self._glow_prog['u_glow_inv_density_range'].value = 1.0 / max(uv_glow_range, 1e-6)
         self._glow_prog['u_glow_intensity'].value = glow_intensity
         self._glow_vao.render(moderngl.TRIANGLES, vertices=24)
 
@@ -3571,6 +3571,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         top-down rows for D3D11, eliminating the CPU row-reversal copy.
         """
         if flip_y:
+            proj_mat = proj_mat.copy()
             proj_mat[1, :] = -proj_mat[1, :]
         sc_w, sc_h = self._swapchain_sizes[eye_index]
 
@@ -3611,7 +3612,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         )
         env_depth_occlusion = bool(env_model_active and self._environment_screen_locked())
         if env_model_active:
-            view_inv = np.linalg.inv(view_mat)
+            view_inv = _view_mat_inv(view_mat)
             self._render_env_model(mgl_fbo, vp_mat, view_mat, view_inv)
             mgl_fbo.use()
             if not env_depth_occlusion:
@@ -3710,7 +3711,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         needs_view_inv = bool(self._ctrl_prims_l or self._ctrl_prims_r)
         needs_view_inv = needs_view_inv or bool(getattr(self, '_cached_beams', None))
         if needs_view_inv and view_inv is None:
-            view_inv = np.linalg.inv(view_mat)
+            view_inv = _view_mat_inv(view_mat)
 
         # 8. VR Controller models
         if self._ctrl_prims_l or self._ctrl_prims_r:
@@ -5726,11 +5727,11 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._y_last = y_now
 
         # X (left):
-        #   tap                    toggle virtual keyboard
-        #   hold 3s                toggle cinema glow
-        #   hold 5s                toggle VDXR green passthrough backdrop
-        X_GLOW_HOLD = 3.0
-        X_PASSTHROUGH_HOLD = 5.0
+        #   release <1s              toggle virtual keyboard
+        #   release 1~4s             toggle cinema glow / lighting preset
+        #   hold >4s (release)       toggle VDXR green passthrough backdrop
+        X_GLOW_HOLD = 1.0
+        X_PASSTHROUGH_HOLD = 4.0
         x_now = self._read_bool_action(self._act_x_btn, "/user/hand/left") or self._emu_x
 
         if x_now and not self._x_last:                     # rising edge
@@ -5742,21 +5743,29 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             if held >= X_PASSTHROUGH_HOLD:
                 self._toggle_passthrough_backdrop()
                 self._x_long_fired = True
-            elif held >= X_GLOW_HOLD:
-                self._cycle_light_from_x()
-                self._x_long_fired = True
+                # Prevent the glow action from also firing on release
+                self._x_glow_fired = True
 
         if not x_now and self._x_last:                     # falling edge
-            if not self._x_long_fired:                     # short press
-                self._keyboard_visible = not self._keyboard_visible
-                if self._keyboard_visible:
-                    if self._keyboard_tex is None:
-                        self._init_keyboard()
-                    cached = getattr(self, '_kb_cached_position', None)
-                    if cached is not None:
-                        self._kb_restore_cached_position(cached)
+            held = time.perf_counter() - self._x_press_t
+            if not self._x_long_fired:                     # passthrough was already triggered
+                if not getattr(self, '_x_glow_fired', False):
+                    # 1s <= release < 4s: toggle light
+                    if held >= X_GLOW_HOLD:
+                        self._cycle_light_from_x()
                     else:
-                        self._kb_cached_position = self._anchor_keyboard_below_screen()
+                        # <1s: toggle keyboard
+                        self._keyboard_visible = not self._keyboard_visible
+                        if self._keyboard_visible:
+                            if self._keyboard_tex is None:
+                                self._init_keyboard()
+                            cached = getattr(self, '_kb_cached_position', None)
+                            if cached is not None:
+                                self._kb_restore_cached_position(cached)
+                            else:
+                                self._kb_cached_position = self._anchor_keyboard_below_screen()
+        elif not x_now:
+            self._x_glow_fired = False  # reset when button wasn't pressed
 
         self._x_last = x_now
 

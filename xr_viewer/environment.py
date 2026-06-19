@@ -33,8 +33,8 @@ from . import render as _render
 from .glsl import _ENV_VERT, _ENV_FRAG
 from .render import (
     _apply_transform, _euler_to_mat4, _mat4_to_xr_posef,
-    _pose_to_view_mat4, _xr_pose_to_model_mat4, _xr_quat_to_mat4,
-    load_glb_model,
+    _pose_to_view_mat4, _view_mat_inv, _xr_pose_to_model_mat4,
+    _xr_quat_to_mat4, load_glb_model,
 )
 from .constants import (
     _BG_COLORS, _DEFAULT_BC, _DEFAULT_EF, _DEFAULT_TO, _DEFAULT_TS,
@@ -195,6 +195,7 @@ class EnvironmentMixin:
                     '_tex_prefix': _prefix,   # used by the render loop to resolve normal/occlusion keys
                 })
                 self._prebake_prim_render_state(target['prims'][-1])
+            target['prims'].sort(key=lambda p: p.get('_rs', {}).get('blend', False))
         except Exception as exc:
             print(f"[OpenXRViewer] Failed to create environment model resources: {exc}")
             # Clean up partial resources
@@ -426,6 +427,12 @@ class EnvironmentMixin:
         self._env_emissive_strength = float(base['emissive_strength'])
         self._env_khr_light_scale = float(base['khr_light_scale'])
         self._screen_light_intensity = float(base['screen_light_intensity'])
+        if 'glow_intensity' in base:
+            self._glow_intensity = float(base['glow_intensity'])
+        if 'glow_width' in base:
+            self._glow_width_m = float(base['glow_width'])
+        if 'glow_intensity_multiplier' in base:
+            self._glow_intensity_multiplier = float(base['glow_intensity_multiplier'])
 
     def _configure_environment_profile(self):
         """Resolve the selected room folder and apply optional profile settings."""
@@ -443,13 +450,35 @@ class EnvironmentMixin:
         default_key = selected.lower()
         is_default = (default_key == 'default')
         if is_default:
-            self._env_profile = {}
             self._env_model_path = None
             self._env_model_visible = False
             self._active_environment = None
-            self._lighting_presets = []
-            self._lighting_preset_index = 0
             self._environment_model = 'Default'
+            builtin_path = os.path.join(root, '.builtin_default.json')
+            builtin_profile = {}
+            if os.path.isfile(builtin_path):
+                try:
+                    with open(builtin_path, 'r', encoding='utf-8-sig') as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        builtin_profile = loaded
+                except Exception:
+                    pass
+            self._env_profile = builtin_profile
+            for key, attr in (
+                ('glow_intensity', '_glow_intensity'),
+                ('glow_width', '_glow_width_m'),
+                ('glow_intensity_multiplier', '_glow_intensity_multiplier'),
+                ('screen_light_intensity', '_screen_light_intensity'),
+            ):
+                if key in builtin_profile:
+                    try:
+                        setattr(self, attr, float(builtin_profile[key]))
+                    except (TypeError, ValueError):
+                        pass
+            lp = builtin_profile.get('lighting_presets')
+            self._lighting_presets = lp if isinstance(lp, list) and lp else []
+            self._lighting_preset_index = 0
             print(f"[OpenXRViewer] Environment: Default (blank)")
             return
         room_dir = root if is_default else os.path.join(root, selected)
@@ -512,6 +541,16 @@ class EnvironmentMixin:
                 self._screen_light_intensity = float(profile['screen_light_intensity'])
             except (TypeError, ValueError):
                 pass
+        for key, attr in (
+            ('glow_intensity', '_glow_intensity'),
+            ('glow_width', '_glow_width_m'),
+            ('glow_intensity_multiplier', '_glow_intensity_multiplier'),
+        ):
+            if key in profile:
+                try:
+                    setattr(self, attr, float(profile[key]))
+                except (TypeError, ValueError):
+                    pass
         lp = profile.get('lighting_presets')
         self._lighting_presets = lp if isinstance(lp, list) and lp else []
         self._lighting_preset_index = 0
@@ -953,9 +992,14 @@ class EnvironmentMixin:
         if time.perf_counter() - self._settings_sync_save_t >= delay:
             self._persist_runtime_settings()
 
+    def _builtin_profile_path(self):
+        return os.path.join(self._environment_root, '.builtin_default.json')
+
     def _persist_screen_state(self):
-        """Save current screen layout to settings.yaml for next launch."""
+        """Save Default-environment screen layout to .builtin_default.json."""
         if self._environment_screen_locked():
+            return
+        if self._active_environment is not None:
             return
         state = {
             'width': round(float(self.screen_width), 4),
@@ -967,20 +1011,45 @@ class EnvironmentMixin:
             'curved': bool(self._screen_curved),
             'preset_index': int(self._preset_index),
         }
-        self._persist_setting('Screen State', state)
+        builtin_path = self._builtin_profile_path()
+        try:
+            profile = {}
+            if os.path.isfile(builtin_path):
+                with open(builtin_path, 'r', encoding='utf-8-sig') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    profile = loaded
+            profile['screen_state'] = state
+            with open(builtin_path, 'w', encoding='utf-8') as f:
+                json.dump(profile, f, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            print(f"[OpenXRViewer] _persist_screen_state failed: {exc}")
 
     def _restore_screen_state(self):
-        """Load saved screen layout from settings.yaml (default/non-env mode only)."""
+        """Load Default-environment screen layout from .builtin_default.json."""
         if self._environment_screen_locked():
             return False
+        if self._active_environment is not None:
+            return False
+        state = None
+        builtin_path = self._builtin_profile_path()
         try:
-            from utils import read_yaml as _ry
-            path = os.path.join(_PROJECT_ROOT, 'settings.yaml')
-            cfg = _ry(path)
-            state = cfg.get('Screen State')
-            if not isinstance(state, dict):
-                return False
+            if os.path.isfile(builtin_path):
+                with open(builtin_path, 'r', encoding='utf-8-sig') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    state = loaded.get('screen_state')
         except Exception:
+            pass
+        if not isinstance(state, dict):
+            # Migration: fall back to settings.yaml for first run after update.
+            try:
+                from utils import read_yaml as _ry
+                cfg = _ry(os.path.join(_PROJECT_ROOT, 'settings.yaml'))
+                state = cfg.get('Screen State')
+            except Exception:
+                pass
+        if not isinstance(state, dict):
             return False
         self.screen_width = float(state.get('width', self.screen_width))
         self._screen_ref_size = self.screen_width
@@ -1035,6 +1104,16 @@ class EnvironmentMixin:
                 self._screen_light_intensity = float(p['screen_light_intensity'])
             except (TypeError, ValueError):
                 pass
+        for key, attr in (
+            ('glow_intensity', '_glow_intensity'),
+            ('glow_width', '_glow_width_m'),
+            ('glow_intensity_multiplier', '_glow_intensity_multiplier'),
+        ):
+            if key in p:
+                try:
+                    setattr(self, attr, float(p[key]))
+                except (TypeError, ValueError):
+                    pass
         name = p.get('name', f'Preset {self._lighting_preset_index}')
         print(f"[OpenXRViewer] Lighting preset: {name}")
 
@@ -1087,13 +1166,17 @@ class EnvironmentMixin:
             print("[OpenXRViewer] Passthrough backdrop: on")
 
     def _cycle_light_from_x(self):
-        """Toggle cinema glow on/off via long-press X."""
-        if self._environment_screen_locked():
-            if not self._lighting_presets:
-                print("[OpenXRViewer] Light toggle unavailable for this environment")
-                return False
+        """Toggle lighting preset (glow on/off for Default, Day/Night for rooms)."""
+        if self._lighting_presets:
             self._cycle_lighting_preset()
+            if self._active_environment is None:
+                self._save_glow_to_builtin_profile()
+            else:
+                self._persist_runtime_settings()
             return True
+        if self._environment_screen_locked():
+            print("[OpenXRViewer] Light toggle unavailable for this environment")
+            return False
         current = getattr(self, '_glow_intensity_multiplier', 0.0)
         if current > 0.0:
             self._glow_intensity_multiplier = 0.0
@@ -1101,8 +1184,26 @@ class EnvironmentMixin:
         else:
             self._glow_intensity_multiplier = 1.5
             print("[OpenXRViewer] Glow: on")
-        self._persist_runtime_settings()
+        self._save_glow_to_builtin_profile()
         return True
+
+    def _save_glow_to_builtin_profile(self):
+        """Write glow settings into .builtin_default.json for the Default env."""
+        builtin_path = os.path.join(self._environment_root, '.builtin_default.json')
+        try:
+            profile = {}
+            if os.path.isfile(builtin_path):
+                with open(builtin_path, 'r', encoding='utf-8-sig') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    profile = loaded
+            profile['glow_intensity'] = self._glow_intensity
+            profile['glow_width'] = self._glow_width_m
+            profile['glow_intensity_multiplier'] = self._glow_intensity_multiplier
+            with open(builtin_path, 'w', encoding='utf-8') as f:
+                json.dump(profile, f, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            print(f"[OpenXRViewer] _save_glow_to_builtin_profile failed: {exc}")
 
     # ------------------------------------------------------------------
     # Dead stub: kept for backward compatibility with callers that still
@@ -1172,6 +1273,8 @@ class EnvironmentMixin:
         try:
             _create_prims(os.path.join(base_dir, 'right.glb'), result['prims_r'])
             _create_prims(os.path.join(base_dir, 'left.glb'),  result['prims_l'])
+            result['prims_r'].sort(key=lambda p: p['tri_count'], reverse=True)
+            result['prims_l'].sort(key=lambda p: p['tri_count'], reverse=True)
         except Exception as e:
             print(f"[OpenXRViewer] {brand_name} model load failed: {e}")
             result['prims_l'], result['prims_r'] = [], []
@@ -1250,12 +1353,17 @@ class EnvironmentMixin:
         model_mat = self._env_model_mat4()
 
         if view_inv is None:
-            view_inv = np.linalg.inv(view_mat)
+            view_inv = _view_mat_inv(view_mat)
         cam_pos = view_inv[:3, 3]
 
-        vpf4 = vp_mat
-        self._env_prog['u_mvp'].write(vpf4.T.tobytes())
+        self._env_prog['u_mvp'].write(vp_mat.T.tobytes())
         self._env_prog['u_model'].write(model_mat.T.tobytes())
+        _env_nm_key = id(model_mat)
+        if getattr(self, '_env_normal_mat_key', None) != _env_nm_key:
+            normal_mat3 = np.linalg.inv(model_mat[:3, :3].astype(np.float32).T)
+            self._env_normal_mat_bytes = normal_mat3.T.tobytes()
+            self._env_normal_mat_key = _env_nm_key
+        self._env_prog['u_normal_mat'].write(self._env_normal_mat_bytes)
         self._env_prog['u_camera_pos'].write((cam_pos).tobytes())
         # Light colors: Dark Room / Cinema use near-zero head-lamp (they rely
         # on cinema bias light / screen spill).  All other environments read
