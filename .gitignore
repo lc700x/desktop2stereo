@@ -34,3 +34,4 @@ output
 *.*pt
 *.log
 .diff_output.txt
+.serena
