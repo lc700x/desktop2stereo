@@ -13,9 +13,6 @@ if OS_NAME == "Windows":
     from utils import hide_window_from_capture, show_window_in_capture
 elif OS_NAME == "Darwin":
     from utils import send_ctrl_cmd_f
-    import objc
-    from AppKit import NSScreen, NSColorSpace
-    from Quartz import CGDisplayCopyColorSpace
 BACKEND = None
 # NVIDIA CUDA Version
 if "NVIDIA" in DEVICE_INFO:
@@ -1106,57 +1103,6 @@ def add_logo(window):
         glfw.set_window_icon(window, 1, [glfw_img])
 
 
-if OS_NAME == "Darwin":
-    def _get_cocoa_window(glfw_window):
-        """Return the Cocoa NSWindow backing a GLFW window."""
-        try:
-            raw = glfw.get_cocoa_window(glfw_window)
-            if not raw:
-                return None
-            return objc.objc_object(c_void_p=ctypes.c_void_p(raw))
-        except Exception:
-            return None
-
-    def _get_source_screen_color_space(monitor_index):
-        """Return the color space for the source display."""
-        try:
-            screens = list(NSScreen.screens())
-            if not screens:
-                return None
-
-            # The settings use a 1-based monitor index on macOS.
-            screen_index = max(0, min(int(monitor_index) - 1, len(screens) - 1))
-            screen = screens[screen_index]
-
-            color_space = screen.colorSpace()
-            if color_space is not None:
-                return color_space
-
-            desc = screen.deviceDescription() or {}
-            display_id = desc.get("NSScreenNumber")
-            if display_id is None:
-                return None
-
-            cg_space = CGDisplayCopyColorSpace(int(display_id))
-            if cg_space is None:
-                return None
-            return NSColorSpace.alloc().initWithCGColorSpace_(cg_space)
-        except Exception:
-            return None
-
-    def apply_window_color_space(glfw_window, monitor_index):
-        """Tag the Cocoa window with the source display's color space."""
-        try:
-            nswindow = _get_cocoa_window(glfw_window)
-            color_space = _get_source_screen_color_space(monitor_index)
-            if nswindow is None or color_space is None:
-                return False
-            nswindow.setColorSpace_(color_space)
-            return True
-        except Exception:
-            return False
-
-
 class OverlayTextureRenderer:
     """Small RGBA overlay rendered as a separate GL texture."""
 
@@ -1413,11 +1359,6 @@ class StereoWindow:
         glfw.make_context_current(self.window)
         self.ctx = moderngl.create_context()
         glfw.swap_interval(1 if self.local_vsync else 0)
-        if OS_NAME == "Darwin":
-            if apply_window_color_space(self.window, self.input_monitor_index):
-                print(f"[MacColor] Applied source display color space for monitor {self.input_monitor_index}.")
-            else:
-                print("[MacColor] Could not apply source display color space to the viewer window.")
         
         # Precompile shaders and create VAO
         self.prog = self.ctx.program(

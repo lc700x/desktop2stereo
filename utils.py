@@ -520,6 +520,7 @@ if OS_NAME == "Darwin":
         
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 
 def is_cn_ip():
     try:

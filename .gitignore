@@ -35,3 +35,4 @@ output
 *.log
 .diff_output.txt
 .serena
+flet_client

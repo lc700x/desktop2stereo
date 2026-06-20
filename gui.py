@@ -35,6 +35,8 @@ CompactDropdown (L615)
   Properties: .value (r/w), .options (r/w, triggers menu rebuild), .set_tooltip(text)
 """
 import os
+FLET_STORAGE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "flet_client"))
+os.environ["FLET_VIEW_PATH"] = FLET_STORAGE_PATH
 import sys
 import subprocess
 import time
