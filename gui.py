@@ -299,7 +299,7 @@ UI_TEXTS = {
         "3D Monitor": "3D Monitor",
         "OpenXR Link": "OpenXR Link",
         "XR Preview Window": "XR Preview Window",
-        "Local VSync": "Local VSync",
+        "VSync": "VSync",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
         "Preview":"Preview",
@@ -329,6 +329,7 @@ UI_TEXTS = {
         "MIGraphX": "MIGraphX",
         "tooltip_window": "Select a window to capture",
         "tooltip_depth_model": "Depth estimation model",
+        "tooltip_model_size":"Model backbone size",
         "tooltip_depth_res": "Depth map resolution",
         "tooltip_convergence": "Stereo convergence",
         "tooltip_depth_strength": "Depth effect intensity",
@@ -339,7 +340,7 @@ UI_TEXTS = {
         "tooltip_capture_tool": "Capture backend",
         "tooltip_run_mode": "Output mode",
         "tooltip_display_mode": "Stereo display format",
-        "tooltip_local_vsync": "Synchronize the local viewer to the display refresh rate",
+        "tooltip_vsync": "Synchronize the local viewer to the display refresh rate",
         "tooltip_ctrl_model": "Controller model",
         "tooltip_env_model": "Background environment: Default (black), or a 3D scene from xr_viewer/environments/. Cinema glow can be toggled via long-press X in VR.",
         "Default": "Default",
@@ -428,7 +429,7 @@ UI_TEXTS = {
         "3D Monitor": "3D显示器",
         "OpenXR Link": "OpenXR串流",
         "XR Preview Window": "XR预览窗口",
-        "Local VSync": "本地垂直同步",
+        "VSync": "垂直同步",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
         "Preview": "预览",
@@ -458,6 +459,7 @@ UI_TEXTS = {
         "MIGraphX": "MIGraphX",
         "tooltip_window": "选择要捕获的窗口",
         "tooltip_depth_model": "选择深度估计模型",
+        "tooltip_model_size":"模型骨架大小",
         "tooltip_depth_res": "深度图分辨率",
         "tooltip_convergence": "立体会聚点",
         "tooltip_depth_strength": "深度效果强度",
@@ -468,7 +470,7 @@ UI_TEXTS = {
         "tooltip_capture_tool": "捕获后端",
         "tooltip_run_mode": "输出模式",
         "tooltip_display_mode": "立体显示格式",
-        "tooltip_local_vsync": "将本地查看窗口同步到显示器刷新率，关闭可用于帧率对比测试",
+        "tooltip_vsync": "将本地查看窗口同步到显示器刷新率，关闭可用于帧率对比测试",
         "tooltip_ctrl_model": "手柄型号",
         "tooltip_env_model": "背景环境：默认（黑色），或 xr_viewer/environments/ 中的 3D 场景。影院辉光可在 VR 中长按 X 键切换。",
         "Default": "默认",
@@ -533,7 +535,7 @@ DEFAULTS = {
     "Language": "EN",
     "Run Mode": "OpenXR Link",
     "XR Preview Window": False,
-    "Local VSync": False,
+    "VSync": False,
     "Stream Protocol": "HLS",
     "Streamer Port": DEFAULT_PORT,
     "Stream Quality": 100,
@@ -1318,11 +1320,11 @@ class Desktop2StereoGUI:
             on_select=self.on_device_change,
             min_width=S(180))
         self.showfps_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Show FPS")
-        self.local_vsync_cb = ft.Checkbox(
+        self.vsync_cb = ft.Checkbox(
             scale=SCALE,
             visual_density=ft.VisualDensity.COMPACT,
-            label="Local VSync",
-            value=DEFAULTS.get("Local VSync", False),
+            label="VSync",
+            value=DEFAULTS.get("VSync", False),
         )
         row5 = ft.Row([
             self.r5_label,
@@ -1336,7 +1338,7 @@ class Desktop2StereoGUI:
             options=[o for o in ct_options],
             on_select=self.on_capture_tool_change,
             min_width=S(160))
-        row6 = ft.Row([self.r6_label, self.capture_tool_dd, ft.Container(width=S(15)), self.showfps_cb, self.local_vsync_cb], spacing=1)
+        row6 = ft.Row([self.r6_label, self.capture_tool_dd, ft.Container(width=S(15)), self.showfps_cb, self.vsync_cb], spacing=1)
         if OS_NAME == "Linux":
             self.r6_label.visible = False
             self.capture_tool_dd.visible = False
@@ -1699,7 +1701,7 @@ class Desktop2StereoGUI:
         self.depth_strength_dd.value = str(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
         self.display_mode_dd.value = cfg.get("Display Mode", DEFAULTS["Display Mode"])
         self.xr_preview_cb.value = cfg.get("XR Preview Window", DEFAULTS["XR Preview Window"])
-        self.local_vsync_cb.value = cfg.get("Local VSync", DEFAULTS["Local VSync"])
+        self.vsync_cb.value = cfg.get("VSync", DEFAULTS["VSync"])
         self.antialiasing_dd.value = str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"]))
         self.foreground_scale_dd.value = str(cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"]))
         self.convergence_dd.value = str(cfg.get("Convergence", DEFAULTS["Convergence"]))
@@ -2275,7 +2277,7 @@ class Desktop2StereoGUI:
         self.run_mode_dd.value = mode_reverse.get(mode, texts["Local Viewer"])
         is_openxr = mode == "OpenXR Link"
         self.xr_preview_cb.visible = is_openxr
-        self.local_vsync_cb.visible = mode in ["Local Viewer", "3D Monitor"]
+        self.vsync_cb.visible = mode in ["Local Viewer", "3D Monitor"]
         self._xr_preview_spacer.visible = is_openxr
         self.r7b_label.visible = not is_openxr
         self.display_mode_dd.visible = not is_openxr
@@ -2390,7 +2392,7 @@ class Desktop2StereoGUI:
         self.recompile_migraphx_cb.label = t["Recompile MIGraphX"]
         self.r5_label.value = t["Computing Device:"]
         self.showfps_cb.label = t["Show FPS"]
-        self.local_vsync_cb.label = t.get("Local VSync", "Local VSync")
+        self.vsync_cb.label = t.get("VSync", "VSync")
         self.r6_label.value = t["Capture Tool:"]
         self.r7a_label.value = t["Run Mode:"]
         self.r7b_label.value = t["Display Mode:"]
@@ -2457,7 +2459,7 @@ class Desktop2StereoGUI:
         self.window_dd.set_tooltip(t["tooltip_window"])
         for ctrl, key in [
             (self.depth_model_dd, "tooltip_depth_model"),
-            (self.model_size_dd, "tooltip_depth_model"),
+            (self.model_size_dd, "tooltip_model_size"),
             (self.depth_res_dd, "tooltip_depth_res"),
             (self.convergence_dd, "tooltip_convergence"),
             (self.depth_strength_dd, "tooltip_depth_strength"),
@@ -2484,7 +2486,7 @@ class Desktop2StereoGUI:
             (self.audio_delay_tf, "tooltip_audio_delay"),
         ]:
             ctrl.set_tooltip(t[key])
-        self.local_vsync_cb.tooltip = t.get("tooltip_local_vsync", "")
+        self.vsync_cb.tooltip = t.get("tooltip_vsync", "")
         self._auto_align_labels()
 
     def _safe_update(self, *controls):
@@ -2825,7 +2827,7 @@ class Desktop2StereoGUI:
             "Language": self.language,
             "Run Mode": self.run_mode_key,
             "XR Preview Window": self.xr_preview_cb.value,
-            "Local VSync": self.local_vsync_cb.value,
+            "VSync": self.vsync_cb.value,
             "Stream Protocol": self.stream_proto_dd.value,
             "Streamer Port": self._parse_int(self.stream_port_tf.value, DEFAULTS["Streamer Port"]),
             "Stream Quality": self._parse_int(self.stream_quality_dd.value, DEFAULTS["Stream Quality"]),

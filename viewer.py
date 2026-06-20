@@ -1221,7 +1221,7 @@ class OverlayTextureRenderer:
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
 
-    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, feather_enabled=False, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, local_vsync=False, **kwargs):
+    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, feather_enabled=False, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, vsync=False, **kwargs):
         # Initialize with default values
         self._has_real_frame = False
         self.use_3d = use_3d
@@ -1246,7 +1246,7 @@ class StereoWindow:
         self.aspect = self.frame_size[0] / self.frame_size[1]
         self.fix_aspect = fix_aspect
         self.show_fps = show_fps
-        self.local_vsync = local_vsync
+        self.vsync = vsync
         self.stream_mode = stream_mode
         self.window_size = self.frame_size
         self.convergence = convergence
@@ -1358,7 +1358,7 @@ class StereoWindow:
         # Set up OpenGL context
         glfw.make_context_current(self.window)
         self.ctx = moderngl.create_context()
-        glfw.swap_interval(1 if self.local_vsync else 0)
+        glfw.swap_interval(1 if self.vsync else 0)
         
         # Precompile shaders and create VAO
         self.prog = self.ctx.program(

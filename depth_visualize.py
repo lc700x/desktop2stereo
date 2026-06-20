@@ -48,7 +48,7 @@ image_rgb = np.array(img).astype(np.float32)
 # MODEL_ID = "lc700x/depth-anything-indoor-large-hf"
 # MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
-MODEL_ID = "depth-anything/DA3-SMALL"
+# MODEL_ID = "depth-anything/DA3-SMALL"
 # MODEL_ID = "depth-anything/DA3MONO-LARGE"
 # MODEL_ID = "depth-anything/DA3METRIC-LARGE"
 # MODEL_ID = "Intel/dpt-large"
@@ -60,7 +60,7 @@ MODEL_ID = "depth-anything/DA3-SMALL"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 # MODEL_ID = "Intel/dpt-beit-base-384"
 # MODEL_ID = "lc700x/InfiniDepth-Large"
-# MODEL_ID = "xingyang1/Distill-Any-Depth-Small-hf"
+MODEL_ID = "xingyang1/Distill-Any-Depth-Small-hf"
 
 DEBUG = True
 AA_STRENGTH = 0

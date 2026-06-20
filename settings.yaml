@@ -328,11 +328,13 @@ CoreML: null
 Recompile CoreML: false
 OpenVINO: null
 Recompile OpenVINO: false
+MIGraphX: null
+Recompile MIGraphX: false
 Computing Device: 0
 Language: EN
 Run Mode: OpenXR Link
 XR Preview Window: false
-Local VSync: false
+VSync: false
 Stream Protocol: HLS
 Streamer Port: 1122
 Stream Quality: 100
@@ -347,5 +349,3 @@ Capture Tool: none
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stereo Output: null
-MIGraphX: null
-Recompile MIGraphX: false

@@ -748,7 +748,7 @@ def _resolve_capture_tool(raw_value):
 
 CAPTURE_TOOL = _resolve_capture_tool(settings["Capture Tool"])
 FILL_16_9 = settings["Fill 16:9"]
-LOCAL_VSYNC = settings.get("Local VSync", False)
+VSYNC = settings.get("VSync", False)
 FIX_VIEWER_ASPECT = True if RUN_MODE == "RTMP Streamer" else settings["Fix Viewer Aspect"] # Keep Viewer Aspect for RTMP with LOSSLESS_SCALING_SUPPORT
 STEREOMIX_DEVICE = settings["Stereo Mix"] # RTMP StereoMix Device
 STREAM_KEY = settings["Stream Key"]
