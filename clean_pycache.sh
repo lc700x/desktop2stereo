@@ -1,0 +1,1 @@
+find . \( -type d -name "__pycache__" -o -type f -name "*.pyc" -o -type f -name "*Zone.Identifier" \) -delete

@@ -61,6 +61,7 @@ import yaml
 from utils import (
     VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES,
     DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_OPENVINO_KEYWORDS,
+    DISABLE_MIGRAPHX_KEYWORDS,
     get_local_ip, shutdown_event, read_yaml
 )
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1286,7 +1287,7 @@ class Desktop2StereoGUI:
 
         # Row 5: Acceleration group (two rows, 4 columns each)
         self.r4_label = ft.Text("Acceleration:", size=FONT_SIZE, width=S(130))
-        self.torch_compile_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="torch.compile")
+        self.torch_compile_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="torch.compile", on_change=self._on_torch_compile_toggle)
         self.tensorrt_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="TensorRT", on_change=self._on_trt_toggle)
         self.coreml_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="CoreML", on_change=self._on_coreml_toggle)
         self.openvino_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="OpenVINO", on_change=self._on_openvino_toggle)
@@ -1884,7 +1885,90 @@ class Desktop2StereoGUI:
                 self.capture_tool_dd.value = new_opts[0]
             self.capture_tool_dd.update()
         self._update_accelerator_visibility(device_label)
+        self.auto_enable_optimizers_based_on_device()
         self._fit_window_to_content()
+
+    def _platform_accelerator_values(self, device_label=None, use_control_values=True):
+        device_label = device_label or self.device_dd.value or ""
+        model_lower = (self.current_model_name or "").lower()
+        values = {
+            "TensorRT": None,
+            "CoreML": None,
+            "OpenVINO": None,
+            "MIGraphX": None,
+        }
+        recompile_values = {
+            "Recompile TensorRT": False,
+            "Recompile CoreML": False,
+            "Recompile OpenVINO": False,
+            "Recompile MIGraphX": False,
+        }
+
+        active_key = None
+        recompile_key = None
+        active_cb = None
+        recompile_cb = None
+        disabled_by_model = False
+
+        if "CUDA" in device_label and IS_ROCM:
+            active_key = "MIGraphX"
+            recompile_key = "Recompile MIGraphX"
+            active_cb = self.migraphx_cb
+            recompile_cb = self.recompile_migraphx_cb
+            disabled_by_model = any(kw in model_lower for kw in DISABLE_MIGRAPHX_KEYWORDS)
+        elif "CUDA" in device_label:
+            active_key = "TensorRT"
+            recompile_key = "Recompile TensorRT"
+            active_cb = self.tensorrt_cb
+            recompile_cb = self.recompile_trt_cb
+            disabled_by_model = any(kw in model_lower for kw in DISABLE_TRT_KEYWORDS)
+        elif "MPS" in device_label:
+            active_key = "CoreML"
+            recompile_key = "Recompile CoreML"
+            active_cb = self.coreml_cb
+            recompile_cb = self.recompile_coreml_cb
+            disabled_by_model = any(kw in model_lower for kw in DISABLE_COREML_KEYWORDS)
+        elif "XPU" in device_label:
+            active_key = "OpenVINO"
+            recompile_key = "Recompile OpenVINO"
+            active_cb = self.openvino_cb
+            recompile_cb = self.recompile_openvino_cb
+            disabled_by_model = any(kw in model_lower for kw in DISABLE_OPENVINO_KEYWORDS)
+
+        if active_key is not None:
+            if disabled_by_model:
+                enabled = False
+            elif use_control_values:
+                enabled = bool(active_cb.value)
+            else:
+                saved_value = self._config.get(active_key)
+                enabled = (saved_value is None) or bool(saved_value)
+
+            values[active_key] = enabled
+            if enabled:
+                recompile_values[recompile_key] = bool(recompile_cb.value)
+
+        return values, recompile_values
+
+    def _apply_platform_accelerator_policy(self, update_controls=True):
+        values, recompile_values = self._platform_accelerator_values(use_control_values=False)
+        self._config.update(values)
+        self._config.update(recompile_values)
+
+        if update_controls:
+            self.tensorrt_cb.value = bool(values["TensorRT"])
+            self.coreml_cb.value = bool(values["CoreML"])
+            self.openvino_cb.value = bool(values["OpenVINO"])
+            self.migraphx_cb.value = bool(values["MIGraphX"])
+            self.recompile_trt_cb.value = recompile_values["Recompile TensorRT"]
+            self.recompile_coreml_cb.value = recompile_values["Recompile CoreML"]
+            self.recompile_openvino_cb.value = recompile_values["Recompile OpenVINO"]
+            self.recompile_migraphx_cb.value = recompile_values["Recompile MIGraphX"]
+
+        self._on_trt_toggle(None)
+        self._on_coreml_toggle(None)
+        self._on_openvino_toggle(None)
+        self._on_migraphx_toggle(None)
 
     def _update_accelerator_visibility(self, device_label):
         cuda = "CUDA" in device_label
@@ -1930,45 +2014,67 @@ class Desktop2StereoGUI:
             self.update_openvino_visibility_based_on_model(current_model)
 
     def _on_trt_toggle(self, e):
+        if e is not None:
+            self._config["TensorRT"] = bool(self.tensorrt_cb.value)
         self.recompile_trt_cb.visible = self.tensorrt_cb.value
         self._fit_window_to_content()
 
     def _on_coreml_toggle(self, e):
+        if e is not None:
+            self._config["CoreML"] = bool(self.coreml_cb.value)
         self.recompile_coreml_cb.visible = self.coreml_cb.value
         self._fit_window_to_content()
 
     def _on_openvino_toggle(self, e):
+        if e is not None:
+            self._config["OpenVINO"] = bool(self.openvino_cb.value)
         self.recompile_openvino_cb.visible = self.openvino_cb.value
         self._fit_window_to_content()
 
     def _on_migraphx_toggle(self, e):
+        if e is not None:
+            self._config["MIGraphX"] = bool(self.migraphx_cb.value)
         self.recompile_migraphx_cb.visible = self.migraphx_cb.value
         self._fit_window_to_content()
 
+    def _on_torch_compile_toggle(self, e):
+        if e is not None:
+            self._config["torch.compile"] = bool(self.torch_compile_cb.value)
+
+    def _reset_recompile_flags(self):
+        for cb in (
+            self.recompile_trt_cb,
+            self.recompile_coreml_cb,
+            self.recompile_openvino_cb,
+            self.recompile_migraphx_cb,
+        ):
+            cb.value = False
+
+        for key in ("Recompile TensorRT", "Recompile CoreML", "Recompile OpenVINO", "Recompile MIGraphX"):
+            self._config[key] = False
+
+        settings_path = os.path.join(BASE_DIR, "settings.yaml")
+        disk_cfg = read_yaml(settings_path) if os.path.exists(settings_path) else {}
+        if not disk_cfg:
+            disk_cfg = self._config.copy()
+        for key in ("Recompile TensorRT", "Recompile CoreML", "Recompile OpenVINO", "Recompile MIGraphX"):
+            disk_cfg[key] = False
+        save_yaml(settings_path, disk_cfg)
+        self._safe_update(
+            self.recompile_trt_cb,
+            self.recompile_coreml_cb,
+            self.recompile_openvino_cb,
+            self.recompile_migraphx_cb,
+        )
+
+    async def _reset_recompile_flags_after(self, seconds=3.0):
+        await asyncio.sleep(seconds)
+        self._reset_recompile_flags()
+
     def auto_enable_optimizers_based_on_device(self):
-        device_label = self.device_dd.value
-        model_lower = (self.current_model_name or "").lower()
-        if "CUDA" in device_label and not IS_ROCM:
-            if self._config.get("TensorRT") is None:
-                should = not any(kw in model_lower for kw in DISABLE_TRT_KEYWORDS)
-                self.tensorrt_cb.value = should
-            if self._config.get("torch.compile") is None:
-                self.torch_compile_cb.value = True
-        elif "MPS" in device_label:
-            if self._config.get("CoreML") is None:
-                should = not any(kw in model_lower for kw in DISABLE_COREML_KEYWORDS)
-                self.coreml_cb.value = should
-        elif "XPU" in device_label:
-            if self._config.get("OpenVINO") is None:
-                should = not any(kw in model_lower for kw in DISABLE_OPENVINO_KEYWORDS)
-                self.openvino_cb.value = should
-        elif "CUDA" in device_label and IS_ROCM:
-            if self._config.get("MIGraphX") is None:
-                self.migraphx_cb.value = True
-        self._on_trt_toggle(None)
-        self._on_coreml_toggle(None)
-        self._on_openvino_toggle(None)
-        self._on_migraphx_toggle(None)
+        if "CUDA" in (self.device_dd.value or "") and not IS_ROCM and self._config.get("torch.compile") is None:
+            self.torch_compile_cb.value = True
+        self._apply_platform_accelerator_policy()
 
     def update_tensorrt_visibility_based_on_model(self, model_name):
         if not model_name:
@@ -2696,6 +2802,8 @@ class Desktop2StereoGUI:
         else:
             stereo_idx = self.monitor_label_to_index.get(stereo_val, None)
 
+        accelerator_values, recompile_values = self._platform_accelerator_values()
+
         self._config.update({
             "Capture Mode": self.capture_mode_key,
             "Monitor Index": monitor_idx,
@@ -2720,14 +2828,8 @@ class Desktop2StereoGUI:
             "Streamer Port": self._parse_int(self.stream_port_tf.value, DEFAULTS["Streamer Port"]),
             "Stream Quality": self._parse_int(self.stream_quality_dd.value, DEFAULTS["Stream Quality"]),
             "torch.compile": self.torch_compile_cb.value,
-            "TensorRT": self.tensorrt_cb.value,
-            "Recompile TensorRT": self.recompile_trt_cb.value,
-            "CoreML": self.coreml_cb.value,
-            "Recompile CoreML": self.recompile_coreml_cb.value,
-            "OpenVINO": self.openvino_cb.value,
-            "Recompile OpenVINO": self.recompile_openvino_cb.value,
-            "MIGraphX": self.migraphx_cb.value,
-            "Recompile MIGraphX": self.recompile_migraphx_cb.value,
+            **accelerator_values,
+            **recompile_values,
             "Capture Tool": self.capture_tool_dd.value,
             "Fill 16:9": self.fill_16_9_cb.value,
             "Fix Viewer Aspect": self.fix_aspect_cb.value,
@@ -2811,21 +2913,7 @@ class Desktop2StereoGUI:
             self.page.update()
             asyncio.create_task(self._monitor_process_task())
             self._diag("monitor_task created")
-            # Reset recompile flags after 8s
-            for _ in range(8):
-                await asyncio.sleep(1)
-                if self.process and self.process.returncode is not None:
-                    self._diag(f"process exited during wait, code={self.process.returncode}")
-                    break
-            for key in ("Recompile TensorRT", "Recompile CoreML", "Recompile OpenVINO", "Recompile MIGraphX"):
-                self._config[key] = False
-            settings_path = os.path.join(BASE_DIR, "settings.yaml")
-            disk_cfg = read_yaml(settings_path) if os.path.exists(settings_path) else {}
-            if not disk_cfg:
-                disk_cfg = self._config.copy()
-            for key in ("Recompile TensorRT", "Recompile CoreML", "Recompile OpenVINO", "Recompile MIGraphX"):
-                disk_cfg[key] = False
-            save_yaml(settings_path, disk_cfg)
+            asyncio.create_task(self._reset_recompile_flags_after(3.0))
         except Exception as e:
             self._diag(f"_countdown_and_run failed:\n{traceback.format_exc()}", error=True)
             self.set_status(UI_TEXTS[self.language]["err_start_failed"].format(e))
@@ -3173,12 +3261,16 @@ class Desktop2StereoGUI:
 
     def _on_key(self, e: ft.KeyboardEvent):
         """Flet keyboard event (auxiliary, only used on macOS/Linux when window is focused)."""
-        if e.key != "Esc" or self._esc_stopped or OS_NAME == "Windows":
+        key = str(getattr(e, "key", "") or "").lower()
+        if key not in ("esc", "escape") or self._esc_stopped or OS_NAME == "Windows":
+            return
+        if not (self._starting or (self.process and self.process.returncode is None)):
             return
         # macOS/Linux fallback: start a short-lived monitor task on first press
         now = time.time()
         if self._esc_down is None:
             self._esc_down = now
+            self._diag(f"ESC long-press started via Flet key={getattr(e, 'key', '')!r}")
             # Create a short-lived monitor task, not dependent on key repeat events
             asyncio.create_task(self._esc_watch_task())
         elif now - self._esc_down >= 3.0:

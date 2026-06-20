@@ -1,5 +1,5 @@
 # depth.py
-import os, warnings, logging
+import os, warnings
 import torch
 import contextlib
 # Support for old AMD GPU with ZLUDA support (hide)
@@ -185,6 +185,7 @@ if IS_NVIDIA:
 
 if IS_AMD_ROCM:
     import platform, re, subprocess
+    
     def get_gfx_arch():
         """
         Detect the current GPU's GFX architecture code (e.g., 'gfx1200', 'gfx1030').
@@ -542,8 +543,12 @@ def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
     return depth.squeeze()
 
 def chw_tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
-    hwc_tensor = tensor.permute(1, 2, 0).contiguous()
-    return hwc_tensor.detach().cpu().float().numpy()
+    hwc_tensor = tensor.permute(1, 2, 0).contiguous().detach().cpu().float()
+    # torch.compile can return tensor subclasses on recent PyTorch builds.
+    # NumPy export only supports plain Tensor instances, so unwrap last.
+    if type(hwc_tensor) is not torch.Tensor and hasattr(hwc_tensor, "as_subclass"):
+        hwc_tensor = hwc_tensor.as_subclass(torch.Tensor)
+    return hwc_tensor.numpy()
 
 def apply_gamma(depth, gamma=1.2):
     return torch.pow(depth, gamma)
@@ -710,7 +715,10 @@ def optimize_with_migraphx(onnx_path, migraphx_path):
 
         print("[MIGraphX] Compiling ONNX model, this may take a while...")
         prog = mx.parse_onnx(onnx_path)
-        prog.compile(mx.get_target("gpu"), offload_copy=False, exhaustive_tune=True)
+        target = mx.get_target("gpu")
+        if not(MODEL_ID in FORCE_FP32_KEYWORDS or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or 'infinidepth' in MODEL_ID.lower() or 'da3' in MODEL_ID.lower()):
+            mx.quantize_fp16(prog)
+        prog.compile(target, offload_copy=False)
         mx.save(prog, migraphx_path)
 
         print(f"[MIGraphX] Graph saved to {migraphx_path}")
@@ -734,6 +742,7 @@ class MIGraphXEngine:
         self.device = device
         self.dtype = dtype
         self.prog = mx.load(graph_path)
+        self._logged_zero_copy = False
         param_shapes = self.prog.get_parameter_shapes()
         self.input_name = None
         self._out_params = {}
@@ -743,6 +752,13 @@ class MIGraphXEngine:
             else:
                 self.input_name = name
                 self._in_shape = shape
+        if self.input_name is None:
+            raise RuntimeError("MIGraphX graph has no input parameter")
+        if not self._out_params:
+            raise RuntimeError(
+                "MIGraphX graph has no output parameter buffers. "
+                "Recompile it with offload_copy=False or delete the cached .mgx file."
+            )
         self._out_name = list(self._out_params.keys())[0]
         self._out_lens = list(self._out_params[self._out_name].lens())
         # Map MIGraphX type enum to torch dtype (half_type=1, float_type=2)
@@ -754,7 +770,7 @@ class MIGraphXEngine:
         if tensor.dtype != self._mgx_in_dtype or not tensor.is_contiguous():
             tensor = tensor.contiguous().to(dtype=self._mgx_in_dtype)
         in_arg = self.mx.argument_from_pointer(self._in_shape, tensor.data_ptr())
-        out = torch.empty(self._out_lens, dtype=self._mgx_out_dtype, device=self.device)
+        out = torch.empty(tuple(self._out_lens), dtype=self._mgx_out_dtype, device=self.device)
         out_arg = self.mx.argument_from_pointer(self._out_params[self._out_name], out.data_ptr())
         # Run on PyTorch's current stream so input writes, inference, and output
         # reads stay stream-ordered. Avoids blocking syncs and the FP16
@@ -762,6 +778,9 @@ class MIGraphXEngine:
         stream = torch.cuda.current_stream(self.device)
         self.prog.run_async({self.input_name: in_arg, self._out_name: out_arg},
                             stream.cuda_stream, "ihipStream_t")
+        if not self._logged_zero_copy:
+            print(f"[MIGraphX] Zero-copy GPU path active | input={tuple(tensor.shape)} {tensor.dtype} -> output={tuple(out.shape)} {out.dtype}")
+            self._logged_zero_copy = True
         return out
 
 
@@ -795,9 +814,7 @@ def optimize_with_tensorrt(onnx_path, trt_path):
         config = builder.create_builder_config()
 
         if MODEL_ID in FORCE_FP32_KEYWORDS or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or 'infinidepth-large' in MODEL_ID.lower():
-            # Transformer-based model: use TF32 only. Enabling FP16/FP8 with
-            # PREFER_PRECISION_CONSTRAINTS causes attention layers to underflow
-            # and produce all-zero depth maps.
+            # Transformer-based model: use TF32 only. 
             config.set_flag(trt.BuilderFlag.TF32)
         else:
             # FP4, FP8, FP16 ENABLED
@@ -840,6 +857,32 @@ def optimize_with_tensorrt(onnx_path, trt_path):
         return None
  
 # Export to ONNX
+class ModelForONNX(torch.nn.Module):
+    """Return a single depth tensor for accelerator exports."""
+    def __init__(self, model, force_fp32_predict: bool = False):
+        super().__init__()
+        self.model = model
+        self.force_fp32_predict = force_fp32_predict
+
+    def forward(self, x):
+        if hasattr(self.model, "predict_depth"):
+            return self.model.predict_depth(x, fp32=self.force_fp32_predict)
+
+        try:
+            out = self.model(pixel_values=x)
+        except TypeError:
+            out = self.model(x)
+
+        if hasattr(out, "predicted_depth"):
+            return out.predicted_depth
+        if isinstance(out, dict) and "predicted_depth" in out:
+            return out["predicted_depth"]
+        if isinstance(out, torch.Tensor):
+            return out
+        if isinstance(out, (tuple, list)) and out and isinstance(out[0], torch.Tensor):
+            return out[0]
+        raise RuntimeError("Unsupported model output type for ONNX export")
+
 def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=DTYPE):
     """
     Export the depth estimation model to ONNX format with fixed square input.
@@ -851,9 +894,13 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
     output_names = ["predicted_depth"]
     
     model.eval()
+    export_model = ModelForONNX(
+        model,
+        force_fp32_predict=("da3" in MODEL_ID.lower() or "infinidepth" in MODEL_ID.lower()),
+    ).eval()
     with torch.no_grad():
         torch.onnx.export(
-            model,
+            export_model,
             dummy_input,
             output_path,
             input_names=input_names,
@@ -862,6 +909,7 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
             export_params=True,
             verbose=False,
             training=torch.onnx.TrainingMode.EVAL,
+            dynamo=False,
         )
     
     if USE_TENSORRT:
@@ -1367,11 +1415,11 @@ class DepthModelWrapper:
 
     def _load_migraphx_engine(self):
         """Load or create MIGraphX engine for AMD ROCm7."""
-        # First, load PyTorch model to export ONNX
-        pytorch_model = self._load_pytorch_model()
-
         # Export to ONNX if not exists
         if RECOMPILE_MIGRAPHX or not os.path.exists(self.onnx_path):
+            # Only load PyTorch for export. Cached ONNX/MGX runs avoid the extra
+            # model load and stay on the compiled zero-copy path sooner.
+            pytorch_model = self._load_pytorch_model()
             export_to_onnx(pytorch_model, self.onnx_path, self.device, self.dtype)
 
         # Build or load MIGraphX graph
