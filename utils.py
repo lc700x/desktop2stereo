@@ -523,27 +523,34 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 
 def is_cn_ip():
+    # Try connecting to Google and Hugging Face
+    google_ok = False
+    hf_ok = False
+
     try:
-        # Get your public IP
-        ip = requests.get("https://api.ipify.org").text.strip()
-        
-        # Query geolocation info from ip-api.com
-        response = requests.get(f"http://ip-api.com/json/{ip}", timeout=10)
-        response.raise_for_status()
-        
-        data = response.json()
-        country = data.get("country", "")
-        
-        # print(f"Your IP: {ip}, Country: {country}")
-        return country == "China"
-    except Exception as e:
-        # print(f"Error checking IP location: {e}")
+        requests.get("https://www.google.com", timeout=5)
+        google_ok = True
+    except Exception:
+        google_ok = False
+
+    try:
+        requests.get("https://huggingface.co", timeout=5)
+        hf_ok = True
+    except Exception:
+        hf_ok = False
+
+    # If both are reachable, return False immediately
+    if google_ok and hf_ok:
         return False
+    else:
+        return True
 
 if is_cn_ip():
     os.environ['HF_ENDPOINT'] = "https://hf-mirror.com"
 else:
     os.environ['HF_ENDPOINT'] = "https://huggingface.co"
+
+print(f"[Main] Using HF Endpoint: {os.environ.get('HF_ENDPOINT')}")
 
 if OS_NAME == "Windows":
     import ctypes, win32gui, win32con
