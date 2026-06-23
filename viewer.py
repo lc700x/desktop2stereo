@@ -838,12 +838,11 @@ INTERLEAVED_FRAGMENT = """
         vec4 best_color = vec4(0.0);
         float best_weight = 0.0;
         int search_range = int(u_search_radius);
-        int search_dir = eye_dir > 0.0 ? -1 : 1;
+        vec2 sweep = vec2(cos(u_roll), sin(u_roll)) * eye_dir;
 
+        // Phase 1: Directional sweep (most samples here)
         for (int i = 1; i <= search_range; i++) {
-            float c = cos(u_roll);
-            float s = sin(u_roll);
-            vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+            vec2 sample_uv = uv_coord + sweep * pixel_size.x * float(i);
             if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
             float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
             if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
@@ -857,12 +856,10 @@ INTERLEAVED_FRAGMENT = """
             }
         }
 
+        // Phase 2: opposite sweep fallback if not enough background found
         if (best_weight < 2.0) {
-            int opposite_range = search_range;
-            for (int i = 1; i <= opposite_range; i++) {
-                float c = cos(u_roll);
-                float s = sin(u_roll);
-                vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+            for (int i = 1; i <= search_range; i++) {
+                vec2 sample_uv = uv_coord - sweep * pixel_size.x * float(i);
                 if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
                 float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
                 if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
@@ -874,10 +871,12 @@ INTERLEAVED_FRAGMENT = """
             }
         }
 
+        // Phase 3: Small vertical blur for smoothness (3 taps)
         if (best_weight > 0.01) {
             vec4 blurred = best_color / best_weight;
             vec4 vert_accum = blurred * 0.5;
             float vert_weight = 0.5;
+
             for (int dy = -1; dy <= 1; dy += 2) {
                 vec2 vert_uv = uv_coord + vec2(0.0, dy * pixel_size.y * u_blur_radius);
                 if (vert_uv.y >= 0.0 && vert_uv.y <= 1.0) {
@@ -889,8 +888,11 @@ INTERLEAVED_FRAGMENT = """
                     }
                 }
             }
+
             return vert_accum / vert_weight;
         }
+
+        // Fallback: return original pixel if no background found
         return texture(tex_color, uv_coord);
     }
 
@@ -899,36 +901,65 @@ INTERLEAVED_FRAGMENT = """
         float my_offset = eye_dir * u_eye_offset;
 
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
+
+        // Precompute parallax direction once (perf win: was recomputed per-loop)
         float c = cos(u_roll);
         float s = sin(u_roll);
-        // DIBR asymmetric depth smoothing along parallax direction
-        vec2 ds_dir = vec2(c, s) * pixel_size * 1.5;
+        vec2 parallax_dir = vec2(c, s) * eye_dir;
+
+        // DIBR asymmetric depth smoothing: 3-tap Gaussian along parallax dir
+        // Per Fehn 2004, smooths sharp depth edges to narrow disocclusion width
+        vec2 ds_dir = parallax_dir * pixel_size * 1.5;
         float d0 = texture(tex_depth, flipped_uv).r;
         float dm = texture(tex_depth, flipped_uv - ds_dir).r;
         float dp = texture(tex_depth, flipped_uv + ds_dir).r;
         float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
         float depth_inv = -depth;
-        float shift_amount = (depth_inv + u_convergence);
-        // Edge-aware border constraint for interleaved (pixels alternate eyes)
+
+        // Enhanced 3D: mild non-linear depth curve boosts perceived pop
+        // for nearer objects without pushing parallax into artifact-heavy ranges
+        float depth_shaped = depth_inv * (1.0 + 0.25 * (1.0 - depth));
+
+        // Calculate parallax shift with edge-aware border constraint
+        // Smoothly reduces parallax near left/right edges to prevent sampling
+        // beyond image boundaries (standard DIBR border handling)
+        float shift = (depth_shaped + u_convergence);
         float edge_margin = 0.05;
         float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
                            * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
-        vec2 shifted_uv = flipped_uv - vec2(my_offset * shift_amount * u_depth_strength * c * edge_falloff,
-                                              my_offset * shift_amount * u_depth_strength * s * edge_falloff);
+        float px = my_offset * shift * u_depth_strength * edge_falloff;
+        vec2 shifted_uv = flipped_uv - vec2(px * c, px * s);
+
+        // Soft disocclusion: blend inpaint in by confidence to hide hard seams
+        float conf = 0.0;
+        if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
+            shifted_uv.y < 0.0 || shifted_uv.y > 1.0) {
+            conf = 1.0;
+        } else {
+            vec2 step2 = parallax_dir * pixel_size * 2.0;
+            float d_left  = texture(tex_depth, flipped_uv - step2).r;
+            float d_right = texture(tex_depth, flipped_uv + step2).r;
+            float jump = abs(d_left - d_right);
+            conf = smoothstep(0.04, 0.10, jump);
+        }
 
         vec4 color;
-        if (is_disoccluded(flipped_uv, shifted_uv, depth))
+        if (conf > 0.001) {
             color = push_pull_inpaint(flipped_uv, depth_inv);
-        else
+        } else {
             color = texture(tex_color, shifted_uv);
+        }
 
-        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * smoothstep(1.0, 0.985, shifted_uv);
+        // Screen-edge alpha clip: keep the out-of-bounds safety net (alpha→0
+        // if parallax somehow over-shoots into negative UV) but use a
+        // sub-pixel fade band so the user does not see a visible soft border
+        vec2 border = smoothstep(-0.001, 0.001, shifted_uv) * smoothstep(1.001, 0.999, shifted_uv);
         color.a = min(border.x, border.y);
         frag_color = color;
 
-        vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
-
+        // Natural edge feathering
         if (u_feather_enabled == 1) {
+            vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
             float left   = fuv.x;
             float right  = 1.0 - fuv.x;
             float top    = fuv.y;
@@ -943,7 +974,9 @@ INTERLEAVED_FRAGMENT = """
             frag_color.rgb *= falloff;
         }
 
+        // Rounded corners via 2D SDF
         float corner_r = u_corner_radius;
+        vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
         vec2 d = abs(fuv - 0.5) - 0.5 + corner_r;
         float corner_sdf = length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - corner_r;
         float corner_alpha = 1.0 - smoothstep(0.0, 0.01, corner_sdf);
@@ -951,8 +984,8 @@ INTERLEAVED_FRAGMENT = """
     }
 """
 
-# Leia SR Weaving – column-interleaved for Leia lenticular displays
-LEIA_FRAGMENT = """
+# Interleaved-V – column-interleaved stereo (alternating columns per eye)
+VERTICAL_INTERLEAVED_FRAGMENT = """
     #version 330
     in vec2 uv;
     out vec4 frag_color;
@@ -1047,31 +1080,66 @@ LEIA_FRAGMENT = """
     }
 
     void main() {
+        // Interleaved-V: alternate columns by X coordinate (odd cols = left eye, even cols = right eye)
         eye_dir = (int(mod(gl_FragCoord.x, 2.0)) == 0) ? -1.0 : 1.0;
         float my_offset = eye_dir * u_eye_offset;
 
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
-        float depth = texture(tex_depth, flipped_uv).r;
-        float depth_inv = -depth;
-        float shift_amount = (depth_inv + u_convergence);
+
+        // DIBR asymmetric depth smoothing: 3-tap Gaussian along parallax dir
+        // Per Fehn 2004, smooths sharp depth edges to narrow disocclusion width
         float c = cos(u_roll);
         float s = sin(u_roll);
-        vec2 shifted_uv = flipped_uv - vec2(my_offset * shift_amount * u_depth_strength * c,
-                                              my_offset * shift_amount * u_depth_strength * s);
+        vec2 parallax_dir = vec2(c, s) * eye_dir;
+        vec2 ds_dir = parallax_dir * pixel_size * 1.5;
+        float d0 = texture(tex_depth, flipped_uv).r;
+        float dm = texture(tex_depth, flipped_uv - ds_dir).r;
+        float dp = texture(tex_depth, flipped_uv + ds_dir).r;
+        float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
+        float depth_inv = -depth;
+
+        // Enhanced 3D: mild non-linear depth curve boosts perceived pop
+        // for nearer objects without pushing parallax into artifact-heavy ranges
+        float depth_shaped = depth_inv * (1.0 + 0.25 * (1.0 - depth));
+
+        // Calculate parallax shift with edge-aware border constraint
+        // Smoothly reduces parallax near left/right edges to prevent sampling
+        // beyond image boundaries (standard DIBR border handling)
+        float shift = (depth_shaped + u_convergence);
+        float edge_margin = 0.05;
+        float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
+                           * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
+        float px = my_offset * shift * u_depth_strength * edge_falloff;
+        vec2 shifted_uv = flipped_uv - vec2(px * c, px * s);
+
+        // Soft disocclusion confidence (smooth ramp, hides hard seams)
+        float conf = 0.0;
+        if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
+            shifted_uv.y < 0.0 || shifted_uv.y > 1.0) {
+            conf = 1.0;
+        } else {
+            vec2 step2 = parallax_dir * pixel_size * 2.0;
+            float d_left  = texture(tex_depth, flipped_uv - step2).r;
+            float d_right = texture(tex_depth, flipped_uv + step2).r;
+            float jump = abs(d_left - d_right);
+            conf = smoothstep(0.04, 0.10, jump);
+        }
 
         vec4 color;
-        if (is_disoccluded(flipped_uv, shifted_uv, depth))
+        if (conf > 0.001) {
             color = push_pull_inpaint(flipped_uv, depth_inv);
-        else
+        } else {
             color = texture(tex_color, shifted_uv);
+        }
 
-        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * smoothstep(1.0, 0.985, shifted_uv);
+        // Screen-edge alpha clip
+        vec2 border = smoothstep(-0.001, 0.001, shifted_uv) * smoothstep(1.001, 0.999, shifted_uv);
         color.a = min(border.x, border.y);
         frag_color = color;
 
-        vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
-
+        // Natural edge feathering
         if (u_feather_enabled == 1) {
+            vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
             float left   = fuv.x;
             float right  = 1.0 - fuv.x;
             float top    = fuv.y;
@@ -1086,7 +1154,9 @@ LEIA_FRAGMENT = """
             frag_color.rgb *= falloff;
         }
 
+        // Rounded corners via 2D SDF
         float corner_r = u_corner_radius;
+        vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
         vec2 d = abs(fuv - 0.5) - 0.5 + corner_r;
         float corner_sdf = length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - corner_r;
         float corner_alpha = 1.0 - smoothstep(0.0, 0.01, corner_sdf);
@@ -1235,7 +1305,7 @@ class StereoWindow:
         self._fullscreen = False
         self.depth_ratio = depth_ratio
         self.depth_ratio_original = depth_ratio
-        self._modes = ["Full-SBS", "Half-SBS", "Half-TAB", "Depth Map", "Full-TAB", "Anaglyph", "Interleaved", "Mono", "Leia"]
+        self._modes = ["Full-SBS", "Half-SBS", "Half-TAB", "Depth Map", "Full-TAB", "Anaglyph", "Interleaved", "Interleaved-V"]
         # Edge feathering toggle
         self.feather_enabled = feather_enabled
         self.feather_width = 0.02       # 2% of view width
@@ -1404,14 +1474,14 @@ class StereoWindow:
             self.interleaved_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
         )
 
-        # Leia SR Weaving (column-interleaved) shader program
-        self.leia_prog = self.ctx.program(
+        # Interleaved-V shader program – columns alternate per eye
+        self.vertical_interleaved_prog = self.ctx.program(
             vertex_shader=VERTEX_SHADER,
-            fragment_shader=LEIA_FRAGMENT
+            fragment_shader=VERTICAL_INTERLEAVED_FRAGMENT
         )
-        self.leia_prog['u_convergence'].value = self.convergence
-        self.leia_vao = self.ctx.vertex_array(
-            self.leia_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
+        self.vertical_interleaved_prog['u_convergence'].value = self.convergence
+        self.vertical_interleaved_vao = self.ctx.vertex_array(
+            self.vertical_interleaved_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
         )
         self.overlay_renderer = OverlayTextureRenderer(self.ctx)
 
@@ -2469,8 +2539,8 @@ class StereoWindow:
                 glfw.poll_events()
             return
 
-        # Composite display modes (Mono, Anaglyph, Interleaved, Leia)
-        if self.display_mode in ["Mono", "Anaglyph", "Interleaved", "Leia"]:
+        # Composite display modes (Mono, Anaglyph, Interleaved, Interleaved-V)
+        if self.display_mode in ["Anaglyph", "Interleaved", "Interleaved-V"]:
             if self.fix_aspect:
                 glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
             else:
@@ -2501,16 +2571,7 @@ class StereoWindow:
             self.ctx.viewport = viewport
             half_ipd = self.ipd_uv / 2.0
 
-            if self.display_mode == "Mono":
-                self.color_tex.use(location=0)
-                self.depth_tex.use(location=1)
-                self.prog['u_eye_offset'].value = 0.0
-                self.prog['u_depth_strength'].value = 0.0
-                self.prog['u_feather_enabled'].value = self.feather_enabled
-                self.prog['u_feather_width'].value = self.feather_width
-                self.prog['u_viewport'].value = viewport
-                self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-            elif self.display_mode == "Anaglyph":
+            if self.display_mode == "Anaglyph":
                 self.color_tex.use(location=0)
                 self.depth_tex.use(location=1)
                 self.anaglyph_prog['u_eye_offset'].value = half_ipd
@@ -2528,15 +2589,15 @@ class StereoWindow:
                 self.interleaved_prog['u_feather_width'].value = self.feather_width
                 self.interleaved_prog['u_viewport'].value = viewport
                 self.interleaved_vao.render(moderngl.TRIANGLE_STRIP)
-            elif self.display_mode == "Leia":
+            elif self.display_mode == "Interleaved-V":
                 self.color_tex.use(location=0)
                 self.depth_tex.use(location=1)
-                self.leia_prog['u_eye_offset'].value = half_ipd
-                self.leia_prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
-                self.leia_prog['u_feather_enabled'].value = self.feather_enabled
-                self.leia_prog['u_feather_width'].value = self.feather_width
-                self.leia_prog['u_viewport'].value = viewport
-                self.leia_vao.render(moderngl.TRIANGLE_STRIP)
+                self.vertical_interleaved_prog['u_eye_offset'].value = half_ipd
+                self.vertical_interleaved_prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+                self.vertical_interleaved_prog['u_feather_enabled'].value = self.feather_enabled
+                self.vertical_interleaved_prog['u_feather_width'].value = self.feather_width
+                self.vertical_interleaved_prog['u_viewport'].value = viewport
+                self.vertical_interleaved_vao.render(moderngl.TRIANGLE_STRIP)
 
             self._render_overlay()
             if self.stream_mode is None:

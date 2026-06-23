@@ -1348,7 +1348,7 @@ class Desktop2StereoGUI:
         self.run_mode_dd = CompactDropdown(on_select=self.on_run_mode_change, width=S(130))
         self.r7b_label = ft.Text("Display Mode:", size=FONT_SIZE, width=S(130))
         self.display_mode_dd = CompactDropdown(
-            options=[m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Mono", "Leia"]],
+            options=[m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Interleaved-V"]],
             value="Half-SBS", width=S(130))
         self.xr_preview_cb = ft.Checkbox(
             label="XR Preview Window",
@@ -2293,7 +2293,7 @@ class Desktop2StereoGUI:
         if mode in ["Legacy Streamer", "3D Monitor"]:
             self.display_mode_dd.options = [m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB"]]
         else:
-            self.display_mode_dd.options = [m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Mono", "Leia"]]
+            self.display_mode_dd.options = [m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Interleaved", "Interleaved-V", "Anaglyph", "Depth Map"]]
         mon_count = self._get_monitor_count()
         stereo_full = mode in ["Local Viewer", "3D Monitor", "RTMP Streamer"] and mon_count > 1
         self.r9_label.visible = not is_openxr
