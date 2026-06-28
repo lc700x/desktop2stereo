@@ -21,6 +21,7 @@ def _acc_dtype(device: torch.device) -> torch.dtype:
 
     Returns the dtype that matches what TensorRT would use for this device:
       - CUDA Ampere+ (cap >= 8): bfloat16  (safe exponent range, TF32 on TRT)
+      - ROCm: float16  (more consistent InfiniDepth values than bf16 on RDNA)
       - CUDA older / ROCm older: float16
       - MPS (Apple Silicon): float16  (bf16 not yet supported by MPS backend)
       - XPU (Intel Arc/Xe): bfloat16
@@ -28,6 +29,8 @@ def _acc_dtype(device: torch.device) -> torch.dtype:
     """
     t = device.type
     if t == "cuda":
+        if getattr(torch.version, "hip", None) is not None:
+            return torch.float16
         cap = torch.cuda.get_device_capability(device)[0]
         return torch.bfloat16 if cap >= 8 else torch.float16
     if t == "mps":
@@ -114,12 +117,11 @@ class InfiniDepth(nn.Module):
 
         self.eval()
 
-    def forward(
+    def _prepare_backbone_features(
         self,
         x: torch.Tensor,
-        coords: torch.Tensor,
         force_fp32: bool = False,
-    ) -> torch.Tensor:
+    ):
         h, w = x.shape[-2:]
         x_dino = (x - self._mean) / self._std
 
@@ -150,14 +152,82 @@ class InfiniDepth(nn.Module):
         x_basic = 2.0 * x - 1.0
         basic_feat = self.basic_encoder(x_basic)  # fp32: InstanceNorm runs safely in fp32
 
-        # ImplicitHead contains only Linear + ReLU/ELU + grid_sample — no
-        # normalization — so bf16 is safe and uses tensor cores.
+        return features, basic_feat, patch_h, patch_w, h, w, use_ac, act, dtype
+
+    def forward_dense(
+        self,
+        x: torch.Tensor,
+        force_fp32: bool = False,
+    ) -> torch.Tensor:
+        (
+            features,
+            basic_feat,
+            patch_h,
+            patch_w,
+            h,
+            w,
+            use_ac,
+            act,
+            dtype,
+        ) = self._prepare_backbone_features(x, force_fp32=force_fp32)
+
+        # ImplicitHead contains only Linear + ReLU/ELU + dense interpolation —
+        # no normalization — so bf16 is safe and uses tensor cores.
         # Cast basic_feat to match dtype *before* the autocast block so that
-        # F.grid_sample sees uniform input dtypes inside the autocast context.
-        # (ROCm autocast::prioritize crashes on mixed fp32/bf16 grid_sample inputs.)
+        # feature fusion sees uniform input dtypes inside the autocast context.
         if use_ac:
             with torch.autocast(act, enabled=True, dtype=dtype):
-                depth = self.depth_implicit_head(features, basic_feat.to(dtype=dtype), patch_h, patch_w, coords)
+                depth = self.depth_implicit_head.forward_dense(
+                    features,
+                    basic_feat.to(dtype=dtype),
+                    patch_h,
+                    patch_w,
+                    h,
+                    w,
+                )
+        else:
+            depth = self.depth_implicit_head.forward_dense(
+                features,
+                basic_feat,
+                patch_h,
+                patch_w,
+                h,
+                w,
+            )
+
+        return depth
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        coords: Optional[torch.Tensor] = None,
+        force_fp32: bool = False,
+    ) -> torch.Tensor:
+        if coords is None:
+            return self.forward_dense(x=x, force_fp32=force_fp32).flatten(2).permute(0, 2, 1)
+
+        (
+            features,
+            basic_feat,
+            patch_h,
+            patch_w,
+            _h,
+            _w,
+            use_ac,
+            act,
+            dtype,
+        ) = self._prepare_backbone_features(x, force_fp32=force_fp32)
+
+        # Keep the arbitrary-coordinate query path for callers that need it.
+        if use_ac:
+            with torch.autocast(act, enabled=True, dtype=dtype):
+                depth = self.depth_implicit_head(
+                    features,
+                    basic_feat.to(dtype=dtype),
+                    patch_h,
+                    patch_w,
+                    coords,
+                )
         else:
             depth = self.depth_implicit_head(features, basic_feat, patch_h, patch_w, coords)
 

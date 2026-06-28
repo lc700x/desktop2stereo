@@ -10,7 +10,7 @@ if OS_NAME == "Windows":
         windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
         windll.user32.SetProcessDPIAware()  # Silently ignore failure to set DPI awareness
-    
+
     if CAPTURE_TOOL == "DXCamera":
         from wincam import DXCamera
         def get_window_client_bounds(hwnd):
@@ -252,7 +252,7 @@ if OS_NAME == "Windows":
             Desktop grabber using Windows DXGI Desktop Duplication API.
             Provides direct access to the desktop frame buffer with hardware acceleration.
             """
-            def __init__(self, output_resolution=1080, fps=60, window_title=None, 
+            def __init__(self, output_resolution=1080, fps=60, window_title=None,
                          capture_mode="Monitor", monitor_index=0):
                 """
                 Initialize the DXGI desktop grabber for either a window or monitor.
@@ -271,7 +271,7 @@ if OS_NAME == "Windows":
                         "windows_capture module not found. "
                         "Install it with: pip install windows-capture"
                     )
-                
+
                 self.scaled_height = output_resolution
                 self.fps = fps
                 self.monitor_index = monitor_index
@@ -283,7 +283,7 @@ if OS_NAME == "Windows":
                 self.prev_rect = None
                 self._mss = mss.mss()
                 self.hwnd = None
-                
+
                 # Initialize based on capture mode
                 if self.capture_mode == "Monitor":
                     # For monitor capture, use the specified monitor index
@@ -372,15 +372,15 @@ if OS_NAME == "Windows":
                     bounds = get_window_client_bounds(self.hwnd)
                     if bounds is None:
                         return 0
-                    
+
                     _, rect = self._choose_monitor_and_rect(bounds)
                     left, top, w, h = rect
-                    
+
                     # Find which monitor this rectangle is on
                     for idx, mon in enumerate(self._mss.monitors[1:], 1):
                         if self._monitor_contains(mon, rect):
                             return idx - 1  # Convert back to DXGI monitor index
-                    
+
                     return 0  # Default to primary monitor
                 except Exception:
                     return 0
@@ -391,7 +391,7 @@ if OS_NAME == "Windows":
                 """
                 if self.capture_mode == "Monitor":
                     return
-                
+
                 try:
                     bounds = get_window_client_bounds(self.hwnd)
                     if bounds is None:
@@ -402,10 +402,10 @@ if OS_NAME == "Windows":
                         return
 
                     self.prev_rect = bounds
-                    
+
                     # Determine which monitor the window is on
                     monitor_idx = self._get_monitor_for_window()
-                    
+
                     # Switch to that monitor if needed
                     if self.session and monitor_idx != self.monitor_index:
                         try:
@@ -429,20 +429,20 @@ if OS_NAME == "Windows":
                 """
                 if self.session is None:
                     raise RuntimeError("DXGI session is not initialized")
-                
+
                 # For window capture, ensure we're capturing from the right monitor
                 if self.capture_mode != "Monitor":
                     self._ensure_session_matches_window()
-                
+
                 try:
                     # Attempt to acquire a frame with timeout based on FPS
                     timeout_ms = max(16, int(1000 / self.fps))
                     frame = self.session.acquire_frame(timeout_ms=timeout_ms)
-                    
+
                     if frame is not None:
                         # Use to_bgr() method for proper color format handling
                         image_rgb = frame.to_numpy(copy=True)  # Returns BGR uint8 format
-                        
+
                         # Cache the frame
                         self.last_frame = image_rgb.copy()
                         self._frame_count += 1
@@ -454,7 +454,7 @@ if OS_NAME == "Windows":
                         else:
                             # Return a black frame as fallback
                             return np.zeros((self.scaled_height, int(self.scaled_height * 16/9), 3), dtype=np.uint8), self.scaled_height
-                
+
                 except RuntimeError as e:
                     # Handle DXGI access loss by recreating the session
                     error_str = str(e).lower()
@@ -483,7 +483,7 @@ if OS_NAME == "Windows":
                         pass
                     finally:
                         self.session = None
-                
+
                 self.last_frame = None
                 if self._mss:
                     try:
@@ -514,6 +514,7 @@ elif OS_NAME == "Darwin":
         _sck_content_cache = None
         _sck_content_cache_time = 0.0
         _SCK_CACHE_TTL = 2.0
+        _SCK_TORCH_DEVICE = None
 
         def _sck_get_shareable_content(force=False):
             global _sck_content_cache, _sck_content_cache_time
@@ -537,6 +538,52 @@ elif OS_NAME == "Darwin":
             _sck_content_cache = result['content']
             _sck_content_cache_time = now
             return _sck_content_cache
+
+        def _sck_get_torch_device(device=None):
+            global _SCK_TORCH_DEVICE
+            import torch
+
+            if device is not None:
+                return torch.device(device)
+
+            if _SCK_TORCH_DEVICE is None:
+                from utils import DEVICE
+                _SCK_TORCH_DEVICE = torch.device(DEVICE)
+            return _SCK_TORCH_DEVICE
+
+        def _sck_frame_to_tensor(frame, output_format, device=None):
+            """
+            Convert CPU-owned BGRA frame to channel-first torch tensor.
+            Color shuffle happens after upload so ScreenCaptureKit does one CPU->GPU hop.
+            """
+            import torch
+
+            tensor = torch.from_numpy(frame).to(
+                device=_sck_get_torch_device(device),
+                non_blocking=True,
+            )
+
+            if output_format == "bgra_tensor":
+                return tensor.permute(2, 0, 1).contiguous()
+            if output_format == "bgr_tensor":
+                return tensor[..., :3].permute(2, 0, 1).contiguous()
+            if output_format == "rgb_tensor":
+                return tensor[..., [2, 1, 0]].permute(2, 0, 1).contiguous()
+
+            raise ValueError(
+                "output_format must be 'bgr', 'bgra', 'rgb_tensor', "
+                "'bgr_tensor', or 'bgra_tensor'"
+            )
+
+        def _sck_blank_tensor(width, height, output_format, device=None):
+            import torch
+
+            channels = 4 if output_format == "bgra_tensor" else 3
+            return torch.zeros(
+                (channels, height, width),
+                dtype=torch.uint8,
+                device=_sck_get_torch_device(device),
+            )
 
         def _sck_find_window(title):
             content = _sck_get_shareable_content()
@@ -620,12 +667,14 @@ elif OS_NAME == "Darwin":
                 if error is not None:
                     print(f"[ScreenCaptureKit] Stream stopped with error: {error}")
 
-            def get_latest_frame(self, timeout=0.1):
+            def get_latest_frame(self, timeout=0.1, copy=True):
                 with self._condition:
                     if self._latest_frame is None and timeout > 0:
                         self._condition.wait(timeout=timeout)
                     if self._latest_frame is not None:
-                        return self._latest_frame.copy()
+                        if copy:
+                            return self._latest_frame.copy()
+                        return self._latest_frame
                     return None
 
             @property
@@ -643,6 +692,9 @@ elif OS_NAME == "Darwin":
                 self._stream = None
                 self._receiver = None
                 self._last_frame = None
+                self._last_tensor = None
+                self._last_tensor_format = None
+                self._last_tensor_device = None
                 self._display = None
                 self._window = None
                 self.left = 0
@@ -747,6 +799,8 @@ elif OS_NAME == "Darwin":
                 self.left, self.top = nl, nt
                 self.width, self.height = nw, nh
                 self._window = win
+                self._last_frame = None
+                self._last_tensor = None
 
                 fid = SCK.SCContentFilter.alloc().initWithDisplay_includingWindows_(
                     self._display, [win])
@@ -754,12 +808,24 @@ elif OS_NAME == "Darwin":
                 self._stream.updateContentFilter_completionHandler_(fid, lambda e: done.set())
                 done.wait(timeout=3.0)
 
-            def grab(self, output_format="bgr"):
+            def grab(self, output_format="bgr", tensor_device=None):
                 self._update_window_filter()
 
-                frame = self._receiver.get_latest_frame(timeout=1.0 / max(1, self.fps))
+                tensor_output = output_format.endswith("_tensor")
+                frame = self._receiver.get_latest_frame(
+                    timeout=1.0 / max(1, self.fps),
+                    copy=not tensor_output,
+                )
 
                 if frame is None:
+                    if tensor_output:
+                        if (self._last_tensor is not None and
+                            self._last_tensor_format == output_format and
+                            self._last_tensor_device == str(_sck_get_torch_device(tensor_device))):
+                            return self._last_tensor, self.scaled_height
+                        h = self.scaled_height
+                        w = int(h * self.width / max(1, self.height))
+                        return _sck_blank_tensor(w, h, output_format, tensor_device), self.scaled_height
                     if self._last_frame is not None:
                         return self._last_frame.copy(), self.scaled_height
                     h = self.scaled_height
@@ -769,23 +835,34 @@ elif OS_NAME == "Darwin":
 
                 self._last_frame = frame
 
-                if output_format == "bgra":
+                if tensor_output:
+                    tensor = _sck_frame_to_tensor(frame, output_format, tensor_device)
+                    self._last_tensor = tensor
+                    self._last_tensor_format = output_format
+                    self._last_tensor_device = str(tensor.device)
+                    return tensor, self.scaled_height
+                elif output_format == "bgra":
                     return frame, self.scaled_height
                 elif output_format == "bgr":
                     return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR), self.scaled_height
                 else:
-                    raise ValueError("output_format must be 'bgr' or 'bgra'")
+                    raise ValueError(
+                        "output_format must be 'bgr', 'bgra', 'rgb_tensor', "
+                        "'bgr_tensor', or 'bgra_tensor'"
+                    )
 
             def stop(self):
                 if self._stream is not None:
                     done = threading.Event()
                     self._stream.stopCaptureWithCompletionHandler_(lambda e: done.set())
                     done.wait(timeout=5.0)
-                    self._stream = None
+                self._stream = None
                 self._receiver = None
                 self._last_frame = None
+                self._last_tensor = None
     else:
         import io
+        import time
         from collections import OrderedDict
         import cv2
         import numpy as np
@@ -808,6 +885,54 @@ elif OS_NAME == "Darwin":
 
         # Small bounded cache for resized cursor variants
         _CURSOR_RESIZE_CACHE_MAX = 4
+        _CG_TORCH_DEVICE = None
+
+        def _cg_get_torch_device(device=None):
+            global _CG_TORCH_DEVICE
+            import torch
+
+            if device is not None:
+                return torch.device(device)
+
+            if _CG_TORCH_DEVICE is None:
+                from utils import DEVICE
+                _CG_TORCH_DEVICE = torch.device(DEVICE)
+            return _CG_TORCH_DEVICE
+
+        def _cg_frame_to_tensor(frame, output_format, device=None):
+            """
+            Convert CoreGraphics BGRA frame to channel-first torch tensor.
+            Upload once, then do channel shuffle on accelerator.
+            """
+            import torch
+
+            tensor = torch.from_numpy(frame).to(
+                device=_cg_get_torch_device(device),
+                non_blocking=True,
+            )
+
+            if output_format == "bgra_tensor":
+                return tensor.permute(2, 0, 1).contiguous()
+            if output_format == "bgr_tensor":
+                return tensor[..., :3].permute(2, 0, 1).contiguous()
+            if output_format == "rgb_tensor":
+                return tensor[..., [2, 1, 0]].permute(2, 0, 1).contiguous()
+
+            raise ValueError(
+                "output_format must be 'bgr', 'bgra', 'rgb_tensor', "
+                "'bgr_tensor', or 'bgra_tensor'"
+            )
+
+        def _cg_get_scale_for_rect(left, top, width, height):
+            cx = left + width * 0.5
+            cy = top + height * 0.5
+
+            for screen in NSScreen.screens():
+                frame = screen.frame()
+                if (frame.origin.x <= cx <= frame.origin.x + frame.size.width and
+                    frame.origin.y <= cy <= frame.origin.y + frame.size.height):
+                    return screen.backingScaleFactor()
+            return 1.0
 
         def _find_window(matcher):
             windows = QZ.CGWindowListCopyWindowInfo(
@@ -1047,6 +1172,9 @@ elif OS_NAME == "Darwin":
                 self.capture_mode = capture_mode
                 self.prev_rect = None
                 self.window_id = None
+                self._last_tensor = None
+                self._last_tensor_format = None
+                self._last_tensor_device = None
 
                 # bounded per-instance resize cache
                 self._cursor_cache = OrderedDict()
@@ -1064,6 +1192,8 @@ elif OS_NAME == "Darwin":
                     self.top = int(frame.origin.y)
                     self.width = int(frame.size.width)
                     self.height = int(frame.size.height)
+                    self._system_scale = screen.backingScaleFactor()
+                    self._system_scale_time = 0.0
                 else:
                     info = get_window_info_mac(self.window_title)
                     if info is None:
@@ -1074,6 +1204,10 @@ elif OS_NAME == "Darwin":
                     self.top = info["top"]
                     self.width = info["width"]
                     self.height = info["height"]
+                    self._system_scale = _cg_get_scale_for_rect(
+                        self.left, self.top, self.width, self.height
+                    )
+                    self._system_scale_time = 0.0
 
             def _ensure_rect(self):
                 if self.capture_mode != "Monitor":
@@ -1087,8 +1221,18 @@ elif OS_NAME == "Darwin":
                     self.prev_rect = current
                     self.window_id = info["window_id"]
                     self.left, self.top, self.width, self.height = current
+                    self._system_scale = _cg_get_scale_for_rect(
+                        self.left, self.top, self.width, self.height
+                    )
+                    self._system_scale_time = 0.0
+                    self._last_tensor = None
+                    self._cursor_cache.clear()
 
             def get_scale(self):
+                now = time.time()
+                if now - self._system_scale_time < 1.0:
+                    return self._system_scale
+
                 mouse_location = NSEvent.mouseLocation()
                 screens = NSScreen.screens()
 
@@ -1096,9 +1240,12 @@ elif OS_NAME == "Darwin":
                     frame = screen.frame()
                     if frame.origin.x <= mouse_location.x <= frame.origin.x + frame.size.width and \
                     frame.origin.y <= mouse_location.y <= frame.origin.y + frame.size.height:
-                        return screen.backingScaleFactor()
+                        self._system_scale = screen.backingScaleFactor()
+                        self._system_scale_time = now
+                        return self._system_scale
 
-                raise RuntimeError("No screen found under cursor")
+                self._system_scale_time = now
+                return self._system_scale
 
             def _get_resized_cursor(self, cursor_bgra, hotspot, system_scale):
                 """
@@ -1132,13 +1279,15 @@ elif OS_NAME == "Darwin":
 
                 return result
 
-            def grab(self, output_format="bgr"):
+            def grab(self, output_format="bgr", tensor_device=None):
                 """
                 output_format:
                     - "bgra": no full-frame color conversion
                     - "bgr" : convert once at the end
+                    - "*_tensor": return CHW torch tensor on configured device
                 """
                 self._ensure_rect()
+                tensor_output = output_format.endswith("_tensor")
 
                 if self.capture_mode == "Monitor":
                     frame = _cg_capture_region_as_bgra(
@@ -1174,8 +1323,17 @@ elif OS_NAME == "Darwin":
                     return frame, self.scaled_height
                 elif output_format == "bgr":
                     return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR), self.scaled_height
+                elif tensor_output:
+                    tensor = _cg_frame_to_tensor(frame, output_format, tensor_device)
+                    self._last_tensor = tensor
+                    self._last_tensor_format = output_format
+                    self._last_tensor_device = str(tensor.device)
+                    return tensor, self.scaled_height
                 else:
-                    raise ValueError("output_format must be 'bgr' or 'bgra'")
+                    raise ValueError(
+                        "output_format must be 'bgr', 'bgra', 'rgb_tensor', "
+                        "'bgr_tensor', or 'bgra_tensor'"
+                    )
 
             def stop(self):
                 if hasattr(self, "_cursor_cache"):
@@ -1185,24 +1343,24 @@ elif OS_NAME.startswith("Linux"):
     # linux must on Xorg mode
     from Xlib import display, X
     import cv2
-    
+
     def get_window_coords(title):
         d = display.Display()
         root = d.screen().root
-        
+
         # Get all windows
         window_ids = root.get_full_property(
             d.intern_atom('_NET_CLIENT_LIST'),
             X.AnyPropertyType
         ).value
-        
+
         # Pre-intern atoms for common properties
         net_wm_name = d.intern_atom('_NET_WM_NAME')
         utf8_string = d.intern_atom('UTF8_STRING')
-        
+
         for window_id in window_ids:
             window = d.create_resource_object('window', window_id)
-            
+
             # Try multiple ways to get the window name
             name = None
             try:
@@ -1319,7 +1477,7 @@ elif OS_NAME.startswith("Linux"):
                 if bounds == self.prev_rect:
                     return True
                 self.prev_rect = bounds
-                
+
                 # Apply monitor clamping logic
                 _, clamped_rect = self._choose_monitor_and_rect(bounds)
                 self.left, self.top, self.width, self.height = clamped_rect
@@ -1329,7 +1487,7 @@ elif OS_NAME.startswith("Linux"):
         def grab(self):
             if not self._ensure_rect():
                 return None, self.scaled_height
-                
+
             monitor = {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
             shot = self._mss.grab(monitor)
             arr = np.asarray(shot)

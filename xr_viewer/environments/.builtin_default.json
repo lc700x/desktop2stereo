@@ -26,7 +26,8 @@
     "pan_y": 1.32,
     "yaw": 0.0,
     "pitch": 0.0,
-    "curved": false,
-    "preset_index": 4
-  }
+    "curve_axis": "none",
+    "preset_index": 3
+  },
+  "glow_mode": "veil"
 }

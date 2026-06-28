@@ -41,6 +41,45 @@ void main() {
 }
 """
 
+_PANORAMA_VERT = """
+#version 330
+in vec2 in_position;
+out vec2 v_ndc;
+void main() {
+    v_ndc = in_position;
+    gl_Position = vec4(in_position, 0.999, 1.0);
+}
+"""
+
+_PANORAMA_FRAG = """
+#version 330
+uniform sampler2D u_tex;
+uniform mat4 u_inv_proj;
+uniform mat4 u_inv_view_rot;
+uniform float u_yaw_offset;
+uniform float u_exposure;
+uniform int u_flip_y;
+in vec2 v_ndc;
+out vec4 fragColor;
+
+const float PI = 3.14159265358979323846;
+
+void main() {
+    vec4 view_h = u_inv_proj * vec4(v_ndc, 1.0, 1.0);
+    vec3 view_dir = normalize(view_h.xyz / max(abs(view_h.w), 1e-6));
+    vec3 dir = normalize((u_inv_view_rot * vec4(view_dir, 0.0)).xyz);
+
+    float u = atan(dir.x, -dir.z) / (2.0 * PI) + 0.5 + u_yaw_offset;
+    float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
+    if (u_flip_y != 0) {
+        v = 1.0 - v;
+    }
+
+    vec3 color = texture(u_tex, vec2(fract(u), clamp(v, 0.0, 1.0))).rgb;
+    fragColor = vec4(color * u_exposure, 1.0);
+}
+"""
+
 # Solid-color vertex shader (no UV avoids GLSL optimizer stripping in_uv)
 _SOLID_VERT = """
 #version 330
@@ -561,5 +600,90 @@ void main() {
 
     glow = min(glow, 1.0);
     frag_color = vec4(u_glow_color * glow, glow);
+}
+"""
+
+_FROST_GLOW_VERT = """
+#version 330
+in vec3 in_position;
+in vec2 in_uv;
+out vec2 v_uv;
+out vec3 v_local;
+uniform mat4 u_model;
+uniform mat4 u_vp;
+void main() {
+    v_uv = in_uv;
+    v_local = in_position;
+    gl_Position = u_vp * u_model * vec4(in_position, 1.0);
+}
+"""
+
+_FROST_CURVED_VERT = """
+#version 330
+in vec3 in_position;
+in vec2 in_uv;
+in vec3 in_local;
+out vec2 v_uv;
+out vec3 v_local;
+uniform mat4 u_vp;
+void main() {
+    v_uv = in_uv;
+    v_local = in_local;
+    gl_Position = u_vp * vec4(in_position, 1.0);
+}
+"""
+
+_FROST_GLOW_FRAG = """
+#version 330
+uniform sampler2D u_source;
+uniform float u_edge_inset;
+uniform float u_lod;
+uniform float u_threshold;
+uniform float u_intensity;
+uniform float u_frost_alpha;
+uniform float u_noise_scale;
+uniform float u_beam_softness;
+uniform float u_frost_blend;
+uniform float u_beam_thickness;
+uniform float u_diffuse_scatter;
+uniform float u_time;
+
+in vec2 v_uv;
+in vec3 v_local;
+out vec4 frag_color;
+
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+void main() {
+    vec2 sample_uv = clamp(v_uv, vec2(0.0), vec2(1.0));
+    vec3 src = textureLod(u_source, sample_uv, max(u_lod, 0.0)).rgb;
+    float luma = dot(src, vec3(0.2126, 0.7152, 0.0722));
+    float bright = smoothstep(u_threshold, 1.0, luma);
+
+    float depth = clamp(v_local.z, 0.0, 1.0);
+    float beam = exp(-depth / max(u_beam_softness, 0.001));
+    beam = pow(max(beam, 0.0), 1.0 / max(u_beam_thickness, 0.1));
+
+    float edge_dist = min(min(sample_uv.x, 1.0 - sample_uv.x),
+                          min(sample_uv.y, 1.0 - sample_uv.y));
+    float edge = 1.0 - smoothstep(max(u_edge_inset, 0.0001),
+                                  max(u_edge_inset, 0.0001) * 4.0,
+                                  edge_dist);
+
+    float n = hash12(floor((sample_uv + vec2(u_time * 0.011, -u_time * 0.007)) * u_noise_scale));
+    float scatter = max(bright, luma * clamp(u_diffuse_scatter, 0.0, 2.0) * 0.35);
+    float alpha = edge * beam * scatter * u_frost_alpha * u_intensity * (0.82 + 0.30 * n);
+    if (alpha <= 0.002) {
+        discard;
+    }
+
+    vec3 frost = mix(src, vec3(luma), 0.28);
+    frost = frost * (0.55 + u_frost_blend * 0.35) + src * bright * 0.35;
+    alpha = min(alpha, 1.0);
+    frag_color = vec4(frost * alpha, alpha);
 }
 """

@@ -107,7 +107,7 @@
       0.0,
       0.0
     ],
-    "curved": false,
+    "curve_axis": "none",
     "allow_curve": true
   }
 }

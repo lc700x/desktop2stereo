@@ -1,4 +1,4 @@
-# Desktop2Stereo Update: v2.4.2 -> v2.5.0 Beta
+# Desktop2Stereo Update: v2.4.2 -> v2.5.0 Beta.Post01
 
 **Branch**: `Dev`  
 **Commits**: 38
@@ -74,7 +74,7 @@
 | 16 | 鼠标右键点击（扳机） | 右扳机（扣动 = 点击，按住 = 拖拽） | `impl.py:4445` |
 | 17 | 切换快捷键帮助面板 | 激光指向 FPS 覆盖面板时扣动扳机 | `impl.py:4515-4516` |
 | 18 | 切换手柄品牌 | 右 A + B 按住 ≥ 0.5 秒 | `impl.py:4992-5009` |
-| 19 | 调整深度强度 | 右握持 + 右摇杆 Y 轴 | `impl.py:5521-5530` |
+| 19 | 调整深度强度 | 右握持 + 左摇杆 Y 轴 | `impl.py:5521-5530` |
 | 20 | 移动屏幕（平移 X/Y） | 左握持 + 左摇杆 X/Y | `impl.py:5491-5520` |
 | 21 | 旋转屏幕（偏航） | 左握持 + 右摇杆 X | `impl.py:5620-5623` |
 | 22 | 旋转屏幕（俯仰） | 左握持 + 右摇杆 Y | `impl.py:5624-5627` |
@@ -405,7 +405,7 @@ Defined in `overlay.py:140-174` as the 5‑row help panel layout (`ROWS` from ut
 | 16 | Right Mouse Click (Trigger) | Right Trigger (pull = click, hold = drag) | `impl.py:4445` |
 | 17 | Toggle Shortcut Help Panel | Trigger while laser on FPS overlay panel | `impl.py:4515-4516` |
 | 18 | Switch Controller Brand | Right A + B held ≥ 0.5s | `impl.py:4992-5009` |
-| 19 | Adjust Depth Intensity | Right Grip + Right Stick Y | `impl.py:5521-5530` |
+| 19 | Adjust Depth Intensity | Right Grip + Left Stick Y | `impl.py:5521-5530` |
 | 20 | Move Screen (Pan X/Y) | Left Grip + Left Stick X/Y | `impl.py:5491-5520` |
 | 21 | Rotate Screen (Yaw) | Left Grip + Right Stick X | `impl.py:5620-5623` |
 | 22 | Rotate Screen (Pitch) | Left Grip + Right Stick Y | `impl.py:5624-5627` |

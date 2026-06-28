@@ -9,10 +9,21 @@
 #   https://github.com/rwightman/pytorch-image-models/tree/master/timm/models/vision_transformer.py
 
 import logging
+import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
 logger = logging.getLogger("dinov2")
+
+
+def stable_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, **kwargs) -> Tensor:
+    out_dtype = v.dtype
+    if q.dtype in (torch.float16, torch.bfloat16):
+        q = torch.nan_to_num(q.float(), nan=0.0, posinf=64.0, neginf=-64.0).clamp(-64.0, 64.0)
+        k = torch.nan_to_num(k.float(), nan=0.0, posinf=64.0, neginf=-64.0).clamp(-64.0, 64.0)
+        v = torch.nan_to_num(v.float(), nan=0.0, posinf=65504.0, neginf=-65504.0).clamp(-65504.0, 65504.0)
+        return F.scaled_dot_product_attention(q, k, v, **kwargs).to(dtype=out_dtype)
+    return F.scaled_dot_product_attention(q, k, v, **kwargs)
 
 
 class Attention(nn.Module):
@@ -57,7 +68,7 @@ class Attention(nn.Module):
             q = self.rope(q, pos)
             k = self.rope(k, pos)
         if self.fused_attn:
-            x = F.scaled_dot_product_attention(
+            x = stable_scaled_dot_product_attention(
                 q,
                 k,
                 v,
@@ -70,6 +81,9 @@ class Attention(nn.Module):
             )
         else:
             q = q * self.scale
+            if q.dtype == torch.float16:
+                q = torch.nan_to_num(q, nan=0.0, posinf=64.0, neginf=-64.0).clamp(-64.0, 64.0)
+                k = torch.nan_to_num(k, nan=0.0, posinf=64.0, neginf=-64.0).clamp(-64.0, 64.0)
             attn = q @ k.transpose(-2, -1)
             attn = attn.softmax(dim=-1)
             attn = self.attn_drop(attn)
@@ -89,6 +103,9 @@ class Attention(nn.Module):
         )
 
         q, k, v = qkv[0] * self.scale, qkv[1], qkv[2]
+        if q.dtype == torch.float16:
+            q = torch.nan_to_num(q, nan=0.0, posinf=64.0, neginf=-64.0).clamp(-64.0, 64.0)
+            k = torch.nan_to_num(k, nan=0.0, posinf=64.0, neginf=-64.0).clamp(-64.0, 64.0)
         attn = q @ k.transpose(-2, -1)
 
         attn = attn.softmax(dim=-1)

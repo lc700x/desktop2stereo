@@ -97,21 +97,21 @@ _KB_ROWS = [
     ('L',0x4C,None,0x4C,1),(';',0xBA,':',0xBA,1),("'",0xDE,'"',0xDE,1),
     ('Enter',0x0D,None,0x0D,2.25),
     ('',-1,None,-1,3)],
-    # Row 3: ZXCV + Up arrow directly above Down
+    # Row 3: ZXCV + ▲ key directly above ▼
     # 2.25 + 10 + 2.75 = 15.0   then  gap(1) | 1) | gap(1)   occupies col 16-17 (same as 
     [('Shift',0x10,None,0x10,2.25),('Z',0x5A,None,0x5A,1),('X',0x58,None,0x58,1),
     ('C',0x43,None,0x43,1),('V',0x56,None,0x56,1),('B',0x42,None,0x42,1),
     ('N',0x4E,None,0x4E,1),('M',0x4D,None,0x4D,1),(',',0xBC,'<',0xBC,1),
     ('.',0xBE,'>',0xBE,1),('/',0xBF,'',0xBF,1),('Shift',0x10,None,0x10,2.75),
-    ('',-1,None,-1,1),('Up',0x26,None,0x26,1),('',-1,None,-1,1)],
-    # Row 4: bottom + arrow cluster Down sits directly under Up at col 16-17.
+    ('',-1,None,-1,1),('▲',0x26,None,0x26,1),('',-1,None,-1,1)],
+    # Row 4: bottom + arrow cluster; ▼ sits directly under ▲ at col 16-17.
     # 1.5+1+1.25+7.5+1.25+1+1.5 = 15.0   then  1) | 1) | 1)
     [('Ctrl',0x11,None,0x11,1.5),('Win',0x5B,None,0x5B,1),
     ('Alt',0x12,None,0x12,1.25),
     ('Space',0x20,None,0x20,7.5),
     ('Alt',0x12,None,0x12,1.25),('Apps',0x5D,None,0x5D,1),
     ('Ctrl',0x11,None,0x11,1.5),
-    ('Left',0x25,None,0x25,1),('Down',0x28,None,0x28,1),('Right',0x27,None,0x27,1)],
+    ('◀',0x25,None,0x25,1),('▼',0x28,None,0x28,1),('▶',0x27,None,0x27,1)],
 ]
 
 _KeyEntry = _collections.namedtuple('_KeyEntry', 'label shifted_label vk shifted_vk rect_uv rect_local')

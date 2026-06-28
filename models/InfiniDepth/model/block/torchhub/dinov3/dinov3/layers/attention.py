@@ -27,6 +27,19 @@ def rope_apply(x: Tensor, sin: Tensor, cos: Tensor) -> Tensor:
     return (x * cos) + (rope_rotate_half(x) * sin)
 
 
+def stable_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, **kwargs) -> Tensor:
+    # ONNX backends lower SDPA to QK^T dots. DINOv3 q/k can contain large
+    # outliers that are fine in eager SDPA but overflow fp16 dot kernels.
+    out_dtype = v.dtype
+    if q.dtype in (torch.float16, torch.bfloat16):
+        q = torch.nan_to_num(q.float(), nan=0.0, posinf=64.0, neginf=-64.0).clamp(-64.0, 64.0)
+        k = torch.nan_to_num(k.float(), nan=0.0, posinf=64.0, neginf=-64.0).clamp(-64.0, 64.0)
+        v = torch.nan_to_num(v.float(), nan=0.0, posinf=65504.0, neginf=-65504.0).clamp(-65504.0, 65504.0)
+        return F.scaled_dot_product_attention(q, k, v, **kwargs).to(dtype=out_dtype)
+
+    return F.scaled_dot_product_attention(q, k, v, **kwargs)
+
+
 class LinearKMaskedBias(nn.Linear):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -113,7 +126,7 @@ class SelfAttention(nn.Module):
         q, k, v = [t.transpose(1, 2) for t in [q, k, v]]
         if rope is not None:
             q, k = self.apply_rope(q, k, rope)
-        x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        x = stable_scaled_dot_product_attention(q, k, v)
         x = x.transpose(1, 2)
         return x.reshape([B, N, C])
 
@@ -156,7 +169,7 @@ class CausalSelfAttention(nn.Module):
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads)
         q, k, v = torch.unbind(qkv, 2)
         q, k, v = [t.transpose(1, 2) for t in [q, k, v]]
-        x = torch.nn.functional.scaled_dot_product_attention(
+        x = stable_scaled_dot_product_attention(
             q, k, v, attn_mask=None, dropout_p=self.attn_drop if self.training else 0, is_causal=is_causal
         )
         x = x.transpose(1, 2).contiguous().view(B, N, C)

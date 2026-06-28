@@ -24,6 +24,16 @@ from OpenGL.GL import (
 
 import moderngl
 
+_PANORAMA_IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff')
+_PANORAMA_IMAGE_NAMES = (
+    'background',
+    'panorama',
+    'equirectangular',
+    '360',
+    'sky',
+    'skybox',
+)
+
 try:
     import xr
 except ImportError:
@@ -275,6 +285,35 @@ class EnvironmentMixin:
             print(f'[OpenXRViewer] Dark-room geometry built ({len(faces)} faces)')
 
     @staticmethod
+    def _read_env_profile(profile_path):
+        if not os.path.isfile(profile_path):
+            return {}
+        try:
+            with open(profile_path, 'r', encoding='utf-8-sig') as f:
+                loaded = json.load(f)
+            return loaded if isinstance(loaded, dict) else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _find_panorama_image_file(room_dir):
+        if not room_dir or not os.path.isdir(room_dir):
+            return None
+        for stem in _PANORAMA_IMAGE_NAMES:
+            for ext in _PANORAMA_IMAGE_EXTS:
+                path = os.path.join(room_dir, stem + ext)
+                if os.path.isfile(path):
+                    return path
+        try:
+            for name in sorted(os.listdir(room_dir), key=lambda v: v.lower()):
+                path = os.path.join(room_dir, name)
+                if os.path.isfile(path) and os.path.splitext(name)[1].lower() in _PANORAMA_IMAGE_EXTS:
+                    return path
+        except OSError:
+            pass
+        return None
+
+    @staticmethod
     def _prebake_prim_render_state(prim):
         rs = {}
         bc = prim.get('base_color')
@@ -331,6 +370,10 @@ class EnvironmentMixin:
         if not getattr(self, '_environment_enabled', True):
             self._env_model_visible = False
             return
+        if getattr(self, '_panorama_background_path', None):
+            self._env_model_visible = False
+            self._active_environment = None
+            return
         selected = (self._environment_model or '').strip().lower()
         if selected == 'default':
             self._env_model_visible = False
@@ -371,32 +414,36 @@ class EnvironmentMixin:
 
     def _discover_environment_models(self):
         """Return room folders that can be switched at runtime."""
-        models = ['Default']
+        panorama_models = []
+        glb_models = []
         root = getattr(self, '_environment_root', None)
         if not root or not os.path.isdir(root):
-            return models
+            return ['Default']
         try:
             for name in sorted(os.listdir(root), key=lambda v: v.lower()):
                 room_dir = os.path.join(root, name)
                 if not os.path.isdir(room_dir):
                     continue
                 profile_path = os.path.join(room_dir, 'profile.json')
-                if not os.path.isfile(profile_path):
-                    continue
+                profile = self._read_env_profile(profile_path)
                 glb_path = os.path.join(room_dir, 'environment.glb')
+                explicit_pano, pano_path, _pano_cfg = self._panorama_profile_config(profile, room_dir)
+                if explicit_pano and pano_path and os.path.isfile(pano_path):
+                    panorama_models.append(name)
+                    continue
                 if not os.path.isfile(glb_path):
-                    try:
-                        with open(profile_path, 'r', encoding='utf-8-sig') as f:
-                            profile = json.load(f)
-                        if isinstance(profile, dict):
-                            glb_name = str(profile.get('glb', 'environment.glb') or 'environment.glb')
-                            glb_path = glb_name if os.path.isabs(glb_name) else os.path.join(room_dir, glb_name)
-                    except Exception:
-                        continue
+                    glb_name = str(profile.get('glb', 'environment.glb') or 'environment.glb')
+                    glb_path = glb_name if os.path.isabs(glb_name) else os.path.join(room_dir, glb_name)
                 if os.path.isfile(glb_path):
-                    models.append(name)
+                    glb_models.append(name)
+                    continue
+                auto_pano = self._find_panorama_image_file(room_dir)
+                if auto_pano:
+                    panorama_models.append(name)
+                    continue
         except Exception:
             pass
+        models = ['Default'] + panorama_models + glb_models
         selected = (getattr(self, '_environment_model', '') or '').strip()
         if selected and selected.lower() not in ('default', 'default glow', 'default with glow') and selected not in models:
             models.insert(0, selected)
@@ -433,6 +480,54 @@ class EnvironmentMixin:
             self._glow_width_m = float(base['glow_width'])
         if 'glow_intensity_multiplier' in base:
             self._glow_intensity_multiplier = float(base['glow_intensity_multiplier'])
+        if 'glow_mode' in base:
+            self._glow_mode = str(base['glow_mode'])
+        self._panorama_background_path = None
+        self._panorama_background_settings = {}
+
+    def _panorama_profile_config(self, profile, room_dir):
+        if not isinstance(profile, dict):
+            return False, None, {}
+        raw_bg = profile.get('background')
+        raw_panorama = profile.get('panorama')
+        cfg = {}
+        if isinstance(raw_bg, str):
+            cfg['image'] = raw_bg
+        elif isinstance(raw_bg, dict):
+            cfg.update(raw_bg)
+        if isinstance(raw_panorama, str):
+            cfg.setdefault('image', raw_panorama)
+        elif isinstance(raw_panorama, dict):
+            cfg.update(raw_panorama)
+
+        env_type = str(profile.get('environment_type', profile.get('type', '')) or '').strip().lower()
+        bg_type = str(cfg.get('type', cfg.get('kind', '')) or '').strip().lower()
+        projection = str(cfg.get('projection', cfg.get('format', '')) or '').strip().lower()
+        is_panorama = (
+            env_type in ('panorama', '360', '360_photo', '360-photo', 'photo_sphere', 'photosphere')
+            or bg_type in ('panorama', '360', '360_photo', '360-photo', 'equirectangular', 'photo_sphere', 'photosphere')
+            or projection in ('equirectangular', '360', '360_photo', '360-photo')
+            or raw_panorama is True
+        )
+        if not is_panorama:
+            return False, None, {}
+
+        image = (
+            cfg.get('image')
+            or cfg.get('path')
+            or cfg.get('file')
+            or profile.get('background_image')
+            or None
+        )
+        if image:
+            image = str(image)
+            path = image if os.path.isabs(image) else os.path.join(room_dir, image)
+            cfg['image'] = image
+        else:
+            path = self._find_panorama_image_file(room_dir)
+            if path:
+                cfg['image'] = os.path.basename(path)
+        return True, path, cfg
 
     def _configure_environment_profile(self):
         """Resolve the selected room folder and apply optional profile settings."""
@@ -476,6 +571,10 @@ class EnvironmentMixin:
                         setattr(self, attr, float(builtin_profile[key]))
                     except (TypeError, ValueError):
                         pass
+            if 'glow_mode' in builtin_profile:
+                self._glow_mode = str(builtin_profile.get('glow_mode') or 'off').strip().lower()
+            else:
+                self._glow_mode = 'glow' if float(getattr(self, '_glow_intensity_multiplier', 0.0)) > 0.0 else 'off'
             lp = builtin_profile.get('lighting_presets')
             self._lighting_presets = lp if isinstance(lp, list) and lp else []
             self._lighting_preset_index = 0
@@ -492,9 +591,30 @@ class EnvironmentMixin:
                     profile = loaded
             except Exception as exc:
                 print(f"[OpenXRViewer] Failed to read environment profile {profile_path}: {exc}")
+        is_panorama, panorama_path, panorama_cfg = self._panorama_profile_config(profile, room_dir)
         glb_name = str(profile.get('glb', 'environment.glb') or 'environment.glb')
         glb_path = glb_name if os.path.isabs(glb_name) else os.path.join(room_dir, glb_name)
-        if not os.path.exists(glb_path) and not is_default:
+        if not is_panorama and not os.path.isfile(glb_path):
+            auto_panorama_path = self._find_panorama_image_file(room_dir)
+            if auto_panorama_path:
+                is_panorama = True
+                panorama_path = auto_panorama_path
+                panorama_cfg = {
+                    'type': 'equirectangular',
+                    'image': os.path.basename(auto_panorama_path),
+                    'exposure': 1.0,
+                    'yaw_offset_deg': 0.0,
+                }
+        if is_panorama:
+            if panorama_path and os.path.isfile(panorama_path):
+                glb_path = None
+            else:
+                missing = panorama_path or os.path.join(room_dir, 'background.png')
+                print(f"[OpenXRViewer] Panorama environment '{selected}' missing image: {missing}")
+                is_panorama = False
+                panorama_path = None
+                panorama_cfg = {}
+        if not is_panorama and not os.path.exists(glb_path) and not is_default:
             fallback = os.path.join(root, 'environment.glb')
             print(f"[OpenXRViewer] Environment '{selected}' missing GLB, fallback to Default")
             selected = 'Default'
@@ -505,6 +625,8 @@ class EnvironmentMixin:
         self._environment_model = selected
         self._env_profile = profile
         self._env_model_path = glb_path
+        self._panorama_background_path = panorama_path if is_panorama else None
+        self._panorama_background_settings = panorama_cfg if is_panorama else {}
         self._env_model_pos = self._profile_vec3(profile, ('model_position', 'position'), self._env_model_pos)
         self._env_model_scale = self._profile_vec3(profile, ('model_scale', 'scale'), self._env_model_scale)
         rot_deg = profile.get('model_rotation_deg', profile.get('rotation_deg'))
@@ -551,10 +673,17 @@ class EnvironmentMixin:
                     setattr(self, attr, float(profile[key]))
                 except (TypeError, ValueError):
                     pass
+        if 'glow_mode' in profile:
+            self._glow_mode = str(profile.get('glow_mode') or 'off').strip().lower()
+        else:
+            self._glow_mode = 'glow' if float(getattr(self, '_glow_intensity_multiplier', 0.0)) > 0.0 else 'off'
         lp = profile.get('lighting_presets')
         self._lighting_presets = lp if isinstance(lp, list) and lp else []
         self._lighting_preset_index = 0
-        print(f"[OpenXRViewer] Environment: {self._environment_model} ({self._env_model_path})")
+        if is_panorama:
+            print(f"[OpenXRViewer] Environment: {self._environment_model} (panorama {os.path.basename(panorama_path)})")
+        else:
+            print(f"[OpenXRViewer] Environment: {self._environment_model} ({self._env_model_path})")
 
     def _configure_profile_view_layout(self):
         """Cache optional room-specific viewer and screen layout settings."""
@@ -834,8 +963,9 @@ class EnvironmentMixin:
                 self.screen_yaw = math.atan2(-fx, -fz)
                 self.screen_pitch = 0.0
                 self.screen_roll = 0.0
-        if 'curved' in screen:
-            self._screen_curved = bool(screen['curved'])
+        curve_mode = self._curve_mode_from_json(screen)
+        if curve_mode is not None:
+            self._set_screen_curve_mode(curve_mode)
         if 'allow_curve' in screen:
             self._env_allow_curve = bool(screen['allow_curve'])
         self._last_overlay_update = 0.0
@@ -845,6 +975,24 @@ class EnvironmentMixin:
         self._profile_loaded = True
         self._clear_screen_grab_anchors()
         return True
+
+    def _curve_mode_from_json(self, data):
+        """Read current curve_axis values, with old curved bool compatibility."""
+        if not isinstance(data, dict):
+            return None
+        if 'curve_axis' in data:
+            return str(data.get('curve_axis') or 'none').strip().lower()
+        if 'curved' not in data:
+            return None
+        curved = data.get('curved')
+        if isinstance(curved, str):
+            val = curved.strip().lower()
+            if val in ('horizontal', 'vertical', 'none', 'flat', 'off'):
+                return val
+            if val in ('true', 'yes', 'on', 'curved'):
+                return 'horizontal'
+            return 'none'
+        return 'horizontal' if bool(curved) else 'none'
 
     def _switch_environment_model(self, model_name=None):
         """Switch to another room environment during runtime."""
@@ -974,9 +1122,22 @@ class EnvironmentMixin:
     def _persist_runtime_settings(self):
         """Save GUI-facing runtime settings without touching render-only state."""
         try:
-            from utils import write_yaml as _wy
+            import yaml
+            from utils import read_yaml as _ry
             path = os.path.join(_PROJECT_ROOT, 'settings.yaml')
-            _wy(path, self._settings_snapshot())
+            cfg = {}
+            if os.path.exists(path):
+                try:
+                    cfg = _ry(path)
+                except Exception:
+                    cfg = {}
+            if not isinstance(cfg, dict):
+                cfg = {}
+            for stale_key in ('Glow Mode', 'Screen Curve', 'Screen Opacity'):
+                cfg.pop(stale_key, None)
+            cfg.update(self._settings_snapshot())
+            with open(path, 'w', encoding='utf-8') as f:
+                yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
             self._last_persisted_depth_ratio = float(self.depth_ratio)
             self._settings_sync_dirty = False
         except Exception as exc:
@@ -995,6 +1156,12 @@ class EnvironmentMixin:
     def _builtin_profile_path(self):
         return os.path.join(self._environment_root, '.builtin_default.json')
 
+    def _active_profile_path(self):
+        env_name = (self._active_environment or self._environment_model or 'Default').strip()
+        if env_name.lower() in ('default', 'default glow', 'default with glow'):
+            return self._builtin_profile_path()
+        return os.path.join(self._environment_root, env_name, 'profile.json')
+
     def _persist_screen_state(self):
         """Save Default-environment screen layout to .builtin_default.json."""
         if self._environment_screen_locked():
@@ -1008,7 +1175,7 @@ class EnvironmentMixin:
             'pan_y': round(float(self.screen_pan_y), 4),
             'yaw': round(float(self.screen_yaw), 6),
             'pitch': round(float(self.screen_pitch), 6),
-            'curved': bool(self._screen_curved),
+            'curve_axis': self._screen_curve_mode(),
             'preset_index': int(self._preset_index),
         }
         builtin_path = self._builtin_profile_path()
@@ -1059,10 +1226,12 @@ class EnvironmentMixin:
         self.screen_pan_y = float(state.get('pan_y', self.screen_pan_y))
         self.screen_yaw = float(state.get('yaw', self.screen_yaw))
         self.screen_pitch = float(state.get('pitch', self.screen_pitch))
-        self._screen_curved = bool(state.get('curved', False))
+        curve_mode = self._curve_mode_from_json(state)
+        if curve_mode is not None:
+            self._set_screen_curve_mode(curve_mode)
         self._preset_index = int(state.get('preset_index', self._preset_index))
         print(f"[OpenXRViewer] Restored screen state: {state.get('width')}m, "
-              f"dist={state.get('distance')}, curved={state.get('curved')}")
+              f"dist={state.get('distance')}, curve={self._screen_curve_mode()}")
         return True
 
     def _cycle_environment(self):
@@ -1114,6 +1283,10 @@ class EnvironmentMixin:
                     setattr(self, attr, float(p[key]))
                 except (TypeError, ValueError):
                     pass
+        if 'glow_mode' in p:
+            self._glow_mode = str(p.get('glow_mode') or 'off').strip().lower()
+        elif 'glow_intensity_multiplier' in p:
+            self._glow_mode = 'glow' if float(getattr(self, '_glow_intensity_multiplier', 0.0)) > 0.0 else 'off'
         name = p.get('name', f'Preset {self._lighting_preset_index}')
         print(f"[OpenXRViewer] Lighting preset: {name}")
 
@@ -1166,44 +1339,76 @@ class EnvironmentMixin:
             print("[OpenXRViewer] Passthrough backdrop: on")
 
     def _cycle_light_from_x(self):
-        """Toggle lighting preset (glow on/off for Default, Day/Night for rooms)."""
-        if self._lighting_presets:
-            self._cycle_lighting_preset()
-            if self._active_environment is None:
-                self._save_glow_to_builtin_profile()
-            else:
-                self._persist_runtime_settings()
-            return True
-        if self._environment_screen_locked():
-            print("[OpenXRViewer] Light toggle unavailable for this environment")
-            return False
-        current = getattr(self, '_glow_intensity_multiplier', 0.0)
-        if current > 0.0:
-            self._glow_intensity_multiplier = 0.0
-            print("[OpenXRViewer] Glow: off")
+        """Cycle screen glow mode from the left X long-press release."""
+        modes = ('glow', 'veil', 'frosted', 'off')
+        if hasattr(self, '_active_glow_mode'):
+            current = self._active_glow_mode()
         else:
+            current = str(getattr(self, '_glow_mode', 'off') or 'off').strip().lower()
+        if current not in modes:
+            current = 'glow' if float(getattr(self, '_glow_intensity_multiplier', 0.0)) > 0.0 else 'off'
+        next_mode = modes[(modes.index(current) + 1) % len(modes)]
+        self._glow_mode = next_mode
+        if next_mode == 'off':
+            self._glow_intensity_multiplier = 0.0
+        elif float(getattr(self, '_glow_intensity_multiplier', 0.0)) <= 0.0:
             self._glow_intensity_multiplier = 1.5
-            print("[OpenXRViewer] Glow: on")
-        self._save_glow_to_builtin_profile()
+        print(f"[OpenXRViewer] Glow mode: {next_mode}")
+        self._save_glow_to_active_profile()
         return True
 
     def _save_glow_to_builtin_profile(self):
         """Write glow settings into .builtin_default.json for the Default env."""
-        builtin_path = os.path.join(self._environment_root, '.builtin_default.json')
+        self._save_glow_to_profile_path(self._builtin_profile_path(), update_active=False)
+
+    def _save_glow_to_active_profile(self):
+        """Write glow settings into the active XR JSON profile."""
+        self._save_glow_to_profile_path(self._active_profile_path(), update_active=True)
+
+    def _save_glow_to_profile_path(self, profile_path, update_active=False):
         try:
             profile = {}
-            if os.path.isfile(builtin_path):
-                with open(builtin_path, 'r', encoding='utf-8-sig') as f:
+            if os.path.isfile(profile_path):
+                with open(profile_path, 'r', encoding='utf-8-sig') as f:
                     loaded = json.load(f)
                 if isinstance(loaded, dict):
                     profile = loaded
             profile['glow_intensity'] = self._glow_intensity
             profile['glow_width'] = self._glow_width_m
             profile['glow_intensity_multiplier'] = self._glow_intensity_multiplier
-            with open(builtin_path, 'w', encoding='utf-8') as f:
+            profile['glow_mode'] = str(getattr(self, '_glow_mode', 'off') or 'off')
+            with open(profile_path, 'w', encoding='utf-8') as f:
                 json.dump(profile, f, indent=2, ensure_ascii=False)
+            if update_active and profile_path != self._builtin_profile_path():
+                self._env_profile = profile
         except Exception as exc:
-            print(f"[OpenXRViewer] _save_glow_to_builtin_profile failed: {exc}")
+            print(f"[OpenXRViewer] _save_glow_to_profile_path failed: {exc}")
+
+    def _save_curve_to_active_profile(self):
+        """Write the active curve mode into the relevant XR JSON profile."""
+        if self._active_environment is None:
+            self._persist_screen_state()
+            return
+        profile_path = self._active_profile_path()
+        try:
+            profile = {}
+            if os.path.isfile(profile_path):
+                with open(profile_path, 'r', encoding='utf-8-sig') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    profile = loaded
+            screen = profile.get('screen')
+            if not isinstance(screen, dict):
+                screen = {}
+            screen['curve_axis'] = self._screen_curve_mode()
+            screen.pop('curved', None)
+            profile['screen'] = screen
+            with open(profile_path, 'w', encoding='utf-8') as f:
+                json.dump(profile, f, indent=2, ensure_ascii=False)
+            self._env_profile = profile
+            self._screen_profile = screen
+        except Exception as exc:
+            print(f"[OpenXRViewer] _save_curve_to_active_profile failed: {exc}")
 
     # ------------------------------------------------------------------
     # Dead stub: kept for backward compatibility with callers that still

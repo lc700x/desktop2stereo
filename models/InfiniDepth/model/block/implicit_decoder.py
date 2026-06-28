@@ -258,6 +258,70 @@ class ImplicitHead(nn.Module):
             gate_weights = self.gate(gate_input)  # [B, N, hidden_dim]
             return gate_weights * feat_dino + (1 - gate_weights) * feat_basic_proj
 
+    @staticmethod
+    def _dense_zero_padding_mask(input_h, input_w, output_h, output_w, device, dtype):
+        """Mask F.interpolate edges so dense upsample matches grid_sample zero padding."""
+        # ONNX export cannot constant-fold Half Range reliably. Build the
+        # coordinate mask in fp32, then cast back so FP16 model outputs stay FP16.
+        work_dtype = torch.float32 if dtype == torch.float16 else dtype
+        yy = (torch.arange(output_h, device=device, dtype=work_dtype) + 0.5) * (
+            float(input_h) / float(output_h)
+        ) - 0.5
+        xx = (torch.arange(output_w, device=device, dtype=work_dtype) + 0.5) * (
+            float(input_w) / float(output_w)
+        ) - 0.5
+        one_y = torch.ones_like(yy)
+        one_x = torch.ones_like(xx)
+        wy = torch.where(
+            yy < 0,
+            yy + 1.0,
+            torch.where(yy > float(input_h - 1), float(input_h) - yy, one_y),
+        ).clamp(0.0, 1.0)
+        wx = torch.where(
+            xx < 0,
+            xx + 1.0,
+            torch.where(xx > float(input_w - 1), float(input_w) - xx, one_x),
+        ).clamp(0.0, 1.0)
+        return (wy.view(1, 1, output_h, 1) * wx.view(1, 1, 1, output_w)).to(dtype=dtype)
+
+    def _dense_sample(self, feat, output_h, output_w):
+        sampled = F.interpolate(
+            feat,
+            size=(output_h, output_w),
+            mode="bilinear",
+            align_corners=False,
+        )
+        mask = self._dense_zero_padding_mask(
+            feat.shape[-2],
+            feat.shape[-1],
+            output_h,
+            output_w,
+            feat.device,
+            feat.dtype,
+        )
+        return sampled * mask
+
+    def _decode_dense_dpt(self, feat, basic_feat, output_h, output_w):
+        """
+        Dense full-image decoder.
+
+        This is mathematically equivalent to querying _make_dense_query_coord at
+        every output pixel, but avoids exporting GridSample for MIGraphX.
+        """
+        feat_dino = self._dense_sample(feat, output_h, output_w).flatten(2).permute(0, 2, 1)
+        if basic_feat is not None:
+            feat_basic = self._dense_sample(basic_feat, output_h, output_w).flatten(2).permute(0, 2, 1)
+            feat_fused = self._fuse_features(feat_dino, feat_basic)
+        else:
+            feat_fused = feat_dino
+
+        pred = self.out_layer(feat_fused)
+        return pred.permute(0, 2, 1).reshape(feat.shape[0], -1, output_h, output_w)
+
+    def forward_dense(self, features, basic_feat, patch_h, patch_w, output_h, output_w):
+        feat = self._encode_feat(features, patch_h, patch_w)
+        return self._decode_dense_dpt(feat, basic_feat, output_h, output_w)
+
     def forward(self, features, basic_feat, patch_h, patch_w, coords):
         """
         Forward pass.

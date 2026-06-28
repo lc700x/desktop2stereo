@@ -142,7 +142,7 @@ elif "AMD" in DEVICE_INFO:
     BACKEND = "HIP"
     class CUDART_GL:
         """
-        HIP-OpenGL interop helper – performance‑tuned for AMD GPUs.
+        HIP-OpenGL interop helper, performance-tuned for AMD GPUs.
         Equivalent to the CUDA version, but uses the HIP runtime.
         """
 
@@ -158,7 +158,7 @@ elif "AMD" in DEVICE_INFO:
             torch_dir = os.path.dirname(torch.__file__)
             site_packages = os.path.dirname(torch_dir)
 
-            # Common install locations – extend as needed
+            # Common install locations; extend as needed.
             candidates = [
                 os.path.join(torch_dir, "lib"),
                 os.path.join(site_packages, "_rocm_sdk_core", "bin"),
@@ -221,7 +221,7 @@ elif "AMD" in DEVICE_INFO:
             self.lib.hipGraphicsUnregisterResource.argtypes = [ctypes.c_void_p]
             self.lib.hipGraphicsUnregisterResource.restype = ctypes.c_int
 
-            # hipGraphicsMapResources – stream now accepted (0 = default stream)
+            # hipGraphicsMapResources: stream now accepted (0 = default stream).
             self.lib.hipGraphicsMapResources.argtypes = [
                 ctypes.c_int,                      # count
                 ctypes.POINTER(ctypes.c_void_p),   # *resources
@@ -362,9 +362,9 @@ FRAGMENT_SHADER = """
     uniform sampler2D tex_color;   // RGB image
     uniform sampler2D tex_depth;   // Single-channel depth (0 = near, 1 = far)
     uniform vec2 u_resolution;     // viewport resolution
-    uniform float u_eye_offset;    // e.g. ±0.03 (positive = right eye)
+    uniform float u_eye_offset;    // e.g. +/-0.03 (positive = right eye)
     uniform float u_depth_strength;// parallax intensity
-    uniform float u_convergence;   // depth value at screen plane (0–1)
+    uniform float u_convergence;   // depth value at screen plane (0..1)
     uniform float u_roll;          // screen roll (radians), rotates parallax direction
 
     // Optimized inpainting controls
@@ -538,13 +538,13 @@ FRAGMENT_SHADER = """
         // Normal sampling
         vec4 color = texture(tex_color, shifted_uv);
         if (conf > 0.001) {
-            // Disoccluded region → optimized inpainting, blended by confidence
+            // Disoccluded region: optimized inpainting, blended by confidence
             vec4 filled = push_pull_inpaint(flipped_uv, depth_inv);
             // Alternative: vec4 filled = separable_inpaint(flipped_uv, depth_inv);
             color = mix(color, filled, conf);
         }
 
-        // Screen-edge alpha clip: keep the out-of-bounds safety net (alpha→0
+        // Screen-edge alpha clip: keep the out-of-bounds safety net (alpha -> 0
         // if parallax somehow over-shoots into negative UV) but use a
         // sub-pixel fade band so the user does not see a visible soft border
         // between the desktop image and the screen edge. 
@@ -592,7 +592,8 @@ FRAGMENT_SHADER = """
         float corner_alpha = 1.0 - smoothstep(0.0, 0.01, corner_sdf);
         color.a = min(color.a, corner_alpha);
 
-        // Glow outside the screen edge only (sdf > 0 = outside the rounded rect) — MOVED to dedicated glow quad in XR view
+        // Glow outside the screen edge only (sdf > 0 = outside the rounded rect).
+        // Moved to dedicated glow quad in XR view.
 
         frag_color = color;
     }
@@ -642,7 +643,7 @@ DEPTH_FRAGMENT = """
     }
 """
 
-# Anaglyph red-cyan composite shader – samples both eyes and blends
+# Anaglyph red-cyan composite shader: samples both eyes and blends.
 ANAGLYPH_FRAGMENT = """
     #version 330
     in vec2 uv;
@@ -799,7 +800,7 @@ ANAGLYPH_FRAGMENT = """
     }
 """
 
-# Row-interleaved stereo shader – eye determined by row parity
+# Row-interleaved stereo shader: eye determined by row parity.
 INTERLEAVED_FRAGMENT = """
     #version 330
     in vec2 uv;
@@ -950,7 +951,7 @@ INTERLEAVED_FRAGMENT = """
             color = texture(tex_color, shifted_uv);
         }
 
-        // Screen-edge alpha clip: keep the out-of-bounds safety net (alpha→0
+        // Screen-edge alpha clip: keep the out-of-bounds safety net (alpha -> 0
         // if parallax somehow over-shoots into negative UV) but use a
         // sub-pixel fade band so the user does not see a visible soft border
         vec2 border = smoothstep(-0.001, 0.001, shifted_uv) * smoothstep(1.001, 0.999, shifted_uv);
@@ -984,7 +985,7 @@ INTERLEAVED_FRAGMENT = """
     }
 """
 
-# Interleaved-V – column-interleaved stereo (alternating columns per eye)
+# Interleaved-V: column-interleaved stereo (alternating columns per eye).
 VERTICAL_INTERLEAVED_FRAGMENT = """
     #version 330
     in vec2 uv;
@@ -1474,7 +1475,7 @@ class StereoWindow:
             self.interleaved_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
         )
 
-        # Interleaved-V shader program – columns alternate per eye
+        # Interleaved-V shader program: columns alternate per eye.
         self.vertical_interleaved_prog = self.ctx.program(
             vertex_shader=VERTEX_SHADER,
             fragment_shader=VERTICAL_INTERLEAVED_FRAGMENT
@@ -1541,7 +1542,7 @@ class StereoWindow:
             except Exception:
                 self._cuda_integrated = False
 
-            # Colour PBO (RGB8, 3 bytes/pixel) — only needed for the discrete-GPU
+            # Colour PBO (RGB8, 3 bytes/pixel): only needed for the discrete-GPU
             # pinned upload path. Integrated GPUs upload colour via texture.write.
             self._pbo_color = glGenBuffers(1)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
@@ -1558,7 +1559,7 @@ class StereoWindow:
             self._cuda_resource_depth = self._cudart.register_buffer(self._pbo_depth)
 
             # Persistent pinned staging buffer for the (overlay-composited) colour
-            # frame — only on discrete GPUs, where pinned H2D bandwidth pays off.
+            # frame only on discrete GPUs, where pinned H2D bandwidth pays off.
             if not self._cuda_integrated:
                 try:
                     self._pinned_rgb = torch.empty(
@@ -1586,7 +1587,7 @@ class StereoWindow:
           Host->Device copy into the registered PBO (PCIe-optimal, no per-frame
           device allocation).
         - Integrated GPU (APU): there is no PCIe bus, so the pinned/PBO dance is
-          pure overhead — a direct ModernGL texture write is as fast or faster.
+          pure overhead; a direct ModernGL texture write is as fast or faster.
         """
         # Integrated GPU (or no pinned staging / colour PBO): direct texture write.
         if self._cuda_integrated or self._pinned_rgb is None or self._cuda_resource_color is None:
@@ -2206,7 +2207,7 @@ class StereoWindow:
                         new_w = int(new_h * self.aspect)
 
                     else:
-                        # Screen is taller — fit by width
+                        # Screen is taller: fit by width.
                         new_w = full_w
                         new_h = int(full_w / self.aspect)
 
@@ -2338,7 +2339,7 @@ class StereoWindow:
                     print(f"[update_frame] Error initializing CUDA PBOs: {e}")
                     self.use_cuda = False
 
-        # Try CUDA zero‑copy path first
+        # Try GPU-GL interop path first.
         cuda_success = False
         if self.stream_mode is None and self.use_cuda and self._cudart is not None:
             try:
@@ -2377,7 +2378,7 @@ class StereoWindow:
 
             if hasattr(rgb, 'detach'):
                 try:
-                    rgb_np = rgb.permute(1, 2, 0).detach().contiguous().clamp(0, 255).to(torch.uint8).cpu().numpy()
+                    rgb_np = rgb.cpu().detach().contiguous().permute(1, 2, 0).clamp(0, 255).to(torch.uint8).numpy()
                 except RuntimeError as e:
                     print(f"[update_frame] RuntimeError converting RGB tensor to numpy: {e}")
                     return
@@ -2402,7 +2403,7 @@ class StereoWindow:
         self._last_display_mode = self.display_mode
         self._last_show_original = self.show_original_in_depth_mode
 
-        # Show window after first frame (unchanged – keep as is)
+        # Show window after first frame.
         if not self._has_real_frame:
             self._has_real_frame = True
             if self.stream_mode != "MJPEG":

@@ -65,7 +65,8 @@ from .constants import (
 from .glsl import (
     _WORLD_VERT, _OVERLAY_FRAG, _BLIT_FRAG, _SOLID_VERT, _SOLID_FRAG,
     _BEAM_VERT, _BEAM_FRAG, _CURVED_VERT, _CTRL_VERT, _CTRL_FRAG,
-    _ENV_VERT, _ENV_FRAG, _GLOW_FRAG,
+    _ENV_VERT, _ENV_FRAG, _GLOW_FRAG, _FROST_GLOW_VERT,
+    _FROST_CURVED_VERT, _FROST_GLOW_FRAG, _PANORAMA_VERT, _PANORAMA_FRAG,
 )
 from .input import (
     _MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP,
@@ -98,13 +99,6 @@ try:
 except ImportError:
     CUDART_GL = None
 
-
-
-
-
-
-
-
 class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
     """
     Renders the depth-parallax stereo views into a VR headset using OpenXR.
@@ -132,6 +126,8 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         capture_mode='Monitor',
         monitor_index=1,
         environment_name=None,
+        glow_mode=None,
+        screen_curve=None,
         **kwargs,
     ):
         self._controller_model = controller_model
@@ -264,6 +260,31 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._glow_ref_screen = 2.4               # reference screen long edge (meters)
         self._glow_target_color = (0.3, 0.6, 1.0)  # latest sampled frame average
         self._glow_color_counter = 0              # reserved for future tuning
+        self._glow_mode = 'off'                   # glow | veil | frosted | off
+        requested_glow_mode = glow_mode if glow_mode is not None else kwargs.get('glow_mode', None)
+        if requested_glow_mode is not None:
+            mode = str(requested_glow_mode or 'off').strip().lower()
+            self._glow_mode = {
+                'none': 'off',
+                'false': 'off',
+                '0': 'off',
+                'frost': 'frosted',
+                'frost_glow': 'frosted',
+                'frosted_glow': 'frosted',
+            }.get(mode, mode)
+        self._frost_glow_intensity = 1.0
+        self._frost_glow_alpha = 0.42
+        self._frost_glow_threshold = 0.46
+        self._frost_glow_lod = 5.4
+        self._frost_glow_blend = 1.35
+        self._frost_glow_thickness = 1.6
+        self._frost_glow_diffuse = 0.85
+        self._frost_glow_margin_m = 3.6
+        self._frost_glow_inset = 0.045
+        self._frost_veil_intensity = 1.0
+        self._frost_veil_alpha = 0.34
+        self._frost_veil_threshold = 0.28
+        self._frost_veil_lod = 6.6
         self._screen_light_intensity = 3.5
 
         # Environment lighting config (overridable via profile.json)
@@ -292,6 +313,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             'glow_intensity': self._glow_intensity,
             'glow_width': self._glow_width_m,
             'glow_intensity_multiplier': self._glow_intensity_multiplier,
+            'glow_mode': self._glow_mode,
         }
 
         self._yaw_offset     = 0.0    # manual yaw offset (relative to face-head baseline)
@@ -350,7 +372,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._act_left_trigger       = None   # left trigger (float) left mouse click
         self._act_right_trigger      = None   # right trigger (float) right mouse click / hold
         self._act_left_stick_click   = None   # left thumbstick click cycle environment
-        self._act_right_stick_click  = None   # right thumbstick click toggle curved screen
+        self._act_right_stick_click  = None   # right thumbstick click cycles screen curve mode
 
         # Vive trackpad button emulation (computed per-frame, OR'd into reads)
         self._emu_a   = False   # right hand bottom click A
@@ -631,8 +653,27 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._glow_band_params = None
         self._glow_model_params = None
         self._glow_model_mat = None
+        self._curved_glow_prog = None
+        self._curved_glow_vbo = None
+        self._curved_glow_vao = None
+        self._curved_glow_verts_params = None
+        self._frost_glow_prog = None
+        self._frost_glow_vbo = None
+        self._frost_glow_vao = None
+        self._frost_glow_verts_params = None
+        self._curved_frost_prog = None
+        self._curved_frost_vbo = None
+        self._curved_frost_vao = None
+        self._curved_frost_verts_params = None
         self._blit_prog = None
         self._blit_vao  = None
+        self._panorama_prog = None
+        self._panorama_vao = None
+        self._panorama_vbo = None
+        self._panorama_tex = None
+        self._panorama_tex_path = None
+        self._panorama_background_path = None
+        self._panorama_background_settings = {}
 
         # Right thumbstick click state
         self._right_stick_click_prev = False
@@ -672,6 +713,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
 
         # Curved screen mode
         self._screen_curved   = False   # True = cylindrical arc; False = flat quad
+        self._screen_curve_axis = 'horizontal'  # horizontal | vertical; ignored when flat
         self._curved_prog     = None    # shader program (uses _CURVED_VERT)
         self._curved_vbo      = None    # dynamic VBO for arc strip vertices
         self._curved_vao      = None
@@ -680,6 +722,9 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._curved_border_vao  = None
         self._curved_verts_params = None        # curved screen VBO cache dirty flag
         self._curved_border_verts_params = None # border VBO cache dirty flag
+        requested_curve = screen_curve if screen_curve is not None else kwargs.get('screen_curve', None)
+        if requested_curve is not None:
+            self._set_screen_curve_mode(requested_curve)
 
         # Background color index: 0 = black (default), 1 = green (passthrough,
         # toggled via long-press X). Left thumbstick click cycles environments
@@ -905,6 +950,17 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             self._glow_prog, [(self._glow_vbo, '2f 2f', 'in_position', 'in_uv')]
         )
 
+        self._frost_glow_prog = self.ctx.program(
+            vertex_shader=_FROST_GLOW_VERT,
+            fragment_shader=_FROST_GLOW_FRAG,
+        )
+        self._frost_glow_prog['u_source'].value = 0
+        self._frost_glow_vbo = self.ctx.buffer(reserve=16 * 5 * 4, dynamic=True)
+        self._frost_glow_vao = self.ctx.vertex_array(
+            self._frost_glow_prog,
+            [(self._frost_glow_vbo, '3f 2f', 'in_position', 'in_uv')],
+        )
+
         # Laser beam: a very thin elongated quad (width=0.003 m, length=5 m)
         # in local space X=[-0.5,0.5], Y=[-1,1]; we scale X to beam_w, Y to half-length
         laser_verts = np.array([
@@ -1041,6 +1097,26 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             [(self.ctx.buffer(_blit_verts.tobytes()), '2f 2f', 'in_position', 'in_uv')],
         )
 
+        self._panorama_prog = self.ctx.program(
+            vertex_shader=_PANORAMA_VERT,
+            fragment_shader=_PANORAMA_FRAG,
+        )
+        self._panorama_prog['u_tex'].value = 8
+        self._panorama_prog['u_yaw_offset'].value = 0.0
+        self._panorama_prog['u_exposure'].value = 1.0
+        self._panorama_prog['u_flip_y'].value = 0
+        _pano_verts = np.array([
+            -1.0, -1.0,
+             1.0, -1.0,
+            -1.0,  1.0,
+             1.0,  1.0,
+        ], dtype='f4')
+        self._panorama_vbo = self.ctx.buffer(_pano_verts.tobytes())
+        self._panorama_vao = self.ctx.vertex_array(
+            self._panorama_prog,
+            [(self._panorama_vbo, '2f', 'in_position')],
+        )
+
         # Curved screen program: same fragment shader, but world-space arc geometry
         # (no model matrix verts are built directly in world space each frame).
         self._curved_prog = self.ctx.program(
@@ -1071,6 +1147,27 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._curved_border_vao = self.ctx.vertex_array(
             self._curved_border_prog,
             [(self._curved_border_vbo, '3f 8x', 'in_position')],
+        )
+
+        self._curved_glow_prog = self.ctx.program(
+            vertex_shader=_CURVED_VERT,
+            fragment_shader=_GLOW_FRAG,
+        )
+        self._curved_glow_vbo = self.ctx.buffer(reserve=_curved_buf_bytes, dynamic=True)
+        self._curved_glow_vao = self.ctx.vertex_array(
+            self._curved_glow_prog,
+            [(self._curved_glow_vbo, '3f 2f', 'in_position', 'in_uv')],
+        )
+        self._curved_frost_prog = self.ctx.program(
+            vertex_shader=_FROST_CURVED_VERT,
+            fragment_shader=_FROST_GLOW_FRAG,
+        )
+        self._curved_frost_prog['u_source'].value = 0
+        _curved_frost_buf_bytes = (((_CURVED_N + 1) * 4) + 8) * (3 + 2 + 3) * 4
+        self._curved_frost_vbo = self.ctx.buffer(reserve=_curved_frost_buf_bytes, dynamic=True)
+        self._curved_frost_vao = self.ctx.vertex_array(
+            self._curved_frost_prog,
+            [(self._curved_frost_vbo, '3f 2f 3f', 'in_position', 'in_uv', 'in_local')],
         )
 
         # VR controller 3D model shader
@@ -1150,6 +1247,9 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             self._init_openxr_opengl()
             return
         except Exception as e:
+            if self._is_openxr_device_unavailable(e):
+                self._cleanup_partial_openxr()
+                raise
             if sys.platform != "win32":
                 raise
             print(f"[OpenXRViewer] OpenGL init failed ({e}), falling back to D3D11")
@@ -1157,6 +1257,37 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
 
         self._init_openxr_d3d11()
         self._use_d3d11 = True
+
+    def _is_openxr_device_unavailable(self, exc):
+        """Return True when the runtime exists but no headset is currently available."""
+        unavailable_cls = getattr(getattr(xr, 'exception', None), 'FormFactorUnavailableError', None)
+        if unavailable_cls is not None and isinstance(exc, unavailable_cls):
+            return True
+        return exc.__class__.__name__ == 'FormFactorUnavailableError'
+
+    def _wait_for_openxr_device(self, shutdown_event, retry_delay=2.0):
+        """Retry OpenXR init until the headset is connected or startup is cancelled."""
+        prompted = False
+        while not glfw.window_should_close(self.window) and not shutdown_event.is_set():
+            try:
+                self._init_openxr()
+                if prompted:
+                    print("[OpenXRViewer] XR device connected; continuing startup")
+                return True
+            except Exception as exc:
+                self._cleanup_partial_openxr()
+                if not self._is_openxr_device_unavailable(exc):
+                    raise
+                if not prompted:
+                    print("[OpenXRViewer] Waiting for XR device. Please connect or power on the headset...")
+                    prompted = True
+                end_t = time.perf_counter() + float(retry_delay)
+                while time.perf_counter() < end_t:
+                    glfw.poll_events()
+                    if glfw.window_should_close(self.window) or shutdown_event.is_set():
+                        return False
+                    time.sleep(0.05)
+        return False
 
     def _cleanup_partial_openxr(self):
         """Tear down any partially-initialised OpenXR + D3D11 state so a retry is clean."""
@@ -1224,13 +1355,13 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             enabled_extension_names=[xr.KHR_OPENGL_ENABLE_EXTENSION_NAME],
         )
         self._xr_instance = xr.create_instance(create_info)
-        print("[OpenXRViewer] XrInstance created (OpenGL)")
 
         # 2. System
         self._xr_system_id = xr.get_system(
             self._xr_instance,
             xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
         )
+        print("[OpenXRViewer] XrInstance created (OpenGL)")
 
         # 3. Verify GL requirements (mandatory before session creation)
         _pfn = ctypes.cast(
@@ -1899,6 +2030,44 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._model_mat4_cache_val = result
         return result
 
+    def _screen_curve_mode(self):
+        if not getattr(self, '_screen_curved', False):
+            return 'none'
+        axis = str(getattr(self, '_screen_curve_axis', 'horizontal') or 'horizontal').strip().lower()
+        return axis if axis in ('horizontal', 'vertical') else 'horizontal'
+
+    def _set_screen_curve_mode(self, mode):
+        mode = str(mode or 'none').strip().lower()
+        if mode in ('vertical', 'v'):
+            self._screen_curved = True
+            self._screen_curve_axis = 'vertical'
+        elif mode in ('horizontal', 'h', 'curved', 'true'):
+            self._screen_curved = True
+            self._screen_curve_axis = 'horizontal'
+        else:
+            self._screen_curved = False
+        self._curved_verts_params = None
+        self._curved_border_verts_params = None
+        self._curved_glow_verts_params = None
+        self._curved_frost_verts_params = None
+
+    def _cycle_screen_curve_mode(self):
+        mode = self._screen_curve_mode()
+        next_mode = {
+            'none': 'horizontal',
+            'horizontal': 'vertical',
+            'vertical': 'none',
+        }.get(mode, 'horizontal')
+        self._set_screen_curve_mode(next_mode)
+        label = {
+            'horizontal': 'curved horizontally',
+            'vertical': 'curved vertically',
+            'none': 'no curve',
+        }[next_mode]
+        print(f"[OpenXRViewer] Screen curve: {label}")
+        self._save_curve_to_active_profile()
+        return next_mode
+
     def _build_curved_screen_verts(self, N=48, width_override=None, height_override=None,
                                    dist_offset=0.0, normal_offset=0.0):
         """Return a float32 numpy array for a TRIANGLE_STRIP curved screen arc.
@@ -1926,46 +2095,48 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                 self.screen_width = self._screen_ref_size
                 self.screen_height = self.screen_width * ar
 
-        half_w   = (width_override  if width_override  is not None else self.screen_width)  / 2.0
-        half_h   = (height_override if height_override is not None else self.screen_height) / 2.0
+        half_w = (width_override if width_override is not None else self.screen_width) / 2.0
+        half_h = (height_override if height_override is not None else self.screen_height) / 2.0
         half_ang = min(_CURVED_HALF_ANGLE_RAD, math.pi / 2)
-        R        = half_w / max(half_ang, 1e-6)
+        axis = self._screen_curve_mode()
+        if axis == 'none':
+            axis = 'horizontal'
 
-        yaw   = self.screen_yaw
-        pitch = self.screen_pitch
-        c_yaw, s_yaw = math.cos(yaw), math.sin(yaw)
-        c_pitch, s_pitch = math.cos(pitch), math.sin(pitch)
-        c_roll, s_roll = math.cos(self.screen_roll), math.sin(self.screen_roll)
-
+        Rm, center = self._screen_effect_basis()
+        rot = Rm[:3, :3]
+        normal = rot[:, 2]
         n_cols = N + 1
         angles = np.linspace(-half_ang, half_ang, n_cols)
-        us = np.linspace(0.0, 1.0, n_cols)
-        lx = R * np.sin(angles)
-        lz = R * (1.0 - np.cos(angles))
-
-        rx = lx * c_yaw + lz * s_yaw
-        rz = -lx * s_yaw + lz * c_yaw
-
         out = np.empty((n_cols * 2, 5), dtype=np.float32)
-        for row_idx, (ly, v) in enumerate(((-half_h, 0.0), (half_h, 1.0))):
-            wy = ly * c_pitch - rz * s_pitch
-            wz = ly * s_pitch + rz * c_pitch
-            wx = rx
-            wx_r = wx * c_roll - wy * s_roll
-            wy_r = wx * s_roll + wy * c_roll
-            wx_r += self.screen_pan_x
-            wy_r += self.screen_pan_y
-            wz_f = wz - (self.screen_distance + dist_offset)
-            if normal_offset:
-                nw = np.array([s_yaw * c_pitch, -s_pitch, c_yaw * c_pitch], dtype=np.float64)
-                wx_r += float(nw[0]) * normal_offset
-                wy_r += float(nw[1]) * normal_offset
-                wz_f += float(nw[2]) * normal_offset
-            out[row_idx::2, 0] = wx_r
-            out[row_idx::2, 1] = wy_r
-            out[row_idx::2, 2] = wz_f
-            out[row_idx::2, 3] = us
-            out[row_idx::2, 4] = v
+
+        if axis == 'vertical':
+            radius = half_h / max(half_ang, 1e-6)
+            vs = np.linspace(0.0, 1.0, n_cols)
+            for i, (ang, v) in enumerate(zip(angles, vs)):
+                ly = radius * math.sin(float(ang))
+                lz = radius * (1.0 - math.cos(float(ang))) - dist_offset
+                for j, (lx, u) in enumerate(((-half_w, 0.0), (half_w, 1.0))):
+                    local = np.array([lx, ly, lz], dtype=np.float32)
+                    world = center + rot @ local
+                    if normal_offset:
+                        world = world + normal * float(normal_offset)
+                    out[i * 2 + j, 0:3] = world
+                    out[i * 2 + j, 3] = u
+                    out[i * 2 + j, 4] = v
+        else:
+            radius = half_w / max(half_ang, 1e-6)
+            us = np.linspace(0.0, 1.0, n_cols)
+            for i, (ang, u) in enumerate(zip(angles, us)):
+                lx = radius * math.sin(float(ang))
+                lz = radius * (1.0 - math.cos(float(ang))) - dist_offset
+                for j, (ly, v) in enumerate(((-half_h, 0.0), (half_h, 1.0))):
+                    local = np.array([lx, ly, lz], dtype=np.float32)
+                    world = center + rot @ local
+                    if normal_offset:
+                        world = world + normal * float(normal_offset)
+                    out[i * 2 + j, 0:3] = world
+                    out[i * 2 + j, 3] = u
+                    out[i * 2 + j, 4] = v
 
         return out.ravel()
 
@@ -2334,7 +2505,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self.screen_pitch    = 0.0
         self.screen_roll     = 0.0
         if not self._environment_screen_locked():
-            self._screen_curved  = False
+            self._set_screen_curve_mode('none')
         self._preset_index            = index
         self.screen_pan_y    = float(self._initial_head_y)
 
@@ -2557,11 +2728,11 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         profile['model_position'] = [round(float(v), 4) for v in self._env_model_pos]
         profile['screen_light_intensity'] = round(float(self._screen_light_intensity), 2)
         if 'screen' in profile and isinstance(profile['screen'], dict):
-            profile['screen']['curved'] = bool(self._screen_curved)
+            profile['screen']['curve_axis'] = self._screen_curve_mode()
         try:
             with open(profile_path, 'w', encoding='utf-8') as f:
                 json.dump(profile, f, indent=2, ensure_ascii=False)
-            print(f"[OpenXRViewer] Saved view_pose to {profile_path}: x={vp['x']} y={vp['y']} z={vp['z']} angle={vp['angle']} curved={self._screen_curved}")
+            print(f"[OpenXRViewer] Saved view_pose to {profile_path}: x={vp['x']} y={vp['y']} z={vp['z']} angle={vp['angle']} curve={self._screen_curve_mode()}")
         except Exception as exc:
             print(f"[OpenXRViewer] Failed to save profile: {exc}")
 
@@ -2591,7 +2762,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             self.screen_width    = 2.4
             self._screen_ref_size = 2.4
             self.screen_height   = None
-            self._screen_curved  = False
+            self._set_screen_curve_mode('none')
             self._preset_index   = DEFAULT_PRESET
         self.screen_pitch    = 0.0   # always vertical perpendicular to floor
         self.screen_roll     = 0.0   # always level no tilt
@@ -2645,35 +2816,30 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             fw, fh = self.frame_size
             sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
 
-        # Curved-screen mapping: parametric cylindrical arc (world-space verts
-        # are generated in _build_curved_screen_verts). For a given (u,v) we can
-        # reconstruct the same world-space vertex analytically.
+        # Curved-screen mapping: parametric cylindrical arc. Horizontal curves
+        # bend across U; vertical curves bend across V.
         if self._screen_curved:
-            half_w = self.screen_width / 2.0
-            half_h = sh / 2.0
+            half_w = float(self.screen_width) / 2.0
+            half_h = float(sh) / 2.0
             half_ang = min(_CURVED_HALF_ANGLE_RAD, math.pi / 2)
-            R = half_w / max(half_ang, 1e-6)
-
-            cy = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
-            cp = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
-
-            cx = self.screen_pan_x
-            cy_pan = self.screen_pan_y
-
-            ang = -half_ang + 2.0 * half_ang * float(u)
-            lx = R * math.sin(ang)
-            lz = R * (1.0 - math.cos(ang))
-            ly = (v - 0.5) * sh
-
-            # Apply yaw (around Y) then pitch (around X) then translate
-            rx = lx * cy + lz * sy_
-            rz = -lx * sy_ + lz * cy
-            wy = ly * cp - rz * sp
-            wz = ly * sp + rz * cp
-            wx = rx + cx
-            wy += cy_pan
-            wz += -self.screen_distance
-            return np.array([wx, wy, wz], dtype='f8')
+            if self._screen_curve_mode() == 'vertical':
+                radius = half_h / max(half_ang, 1e-6)
+                ang = -half_ang + 2.0 * half_ang * float(v)
+                local = np.array([
+                    (float(u) - 0.5) * self.screen_width,
+                    radius * math.sin(ang),
+                    radius * (1.0 - math.cos(ang)),
+                ], dtype='f8')
+            else:
+                radius = half_w / max(half_ang, 1e-6)
+                ang = -half_ang + 2.0 * half_ang * float(u)
+                local = np.array([
+                    radius * math.sin(ang),
+                    (float(v) - 0.5) * sh,
+                    radius * (1.0 - math.cos(ang)),
+                ], dtype='f8')
+            Rm, center = self._screen_effect_basis()
+            return center.astype('f8') + Rm[:3, :3].astype('f8') @ local
 
         # Flat screen mapping (original behaviour)
         cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
@@ -3403,12 +3569,213 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             c[2] + lerp * (t[2] - c[2]),
         )
 
+    def _active_glow_mode(self):
+        mode = str(getattr(self, '_glow_mode', '') or '').strip().lower()
+        aliases = {
+            'screen': 'glow',
+            'surround': 'glow',
+            'frost': 'frosted',
+            'frosted': 'frosted',
+            'veil': 'veil',
+            'glow': 'glow',
+            'off': 'off',
+            'none': 'off',
+        }
+        if mode in aliases:
+            return aliases[mode]
+        mult = float(getattr(self, '_glow_intensity_multiplier', 0.0) or 0.0)
+        return 'glow' if mult > 0.0 else 'off'
+
+    def _screen_effect_basis(self):
+        cy = math.cos(self.screen_yaw)
+        sy_ = math.sin(self.screen_yaw)
+        cp = math.cos(self.screen_pitch)
+        sp = math.sin(self.screen_pitch)
+        cr = math.cos(self.screen_roll)
+        sr = math.sin(self.screen_roll)
+        R = np.array([
+            [ cy * cr + sy_ * sp * sr, -cy * sr + sy_ * sp * cr,  sy_ * cp, 0],
+            [ cp * sr,                  cp * cr,                 -sp,      0],
+            [-sy_ * cr + cy * sp * sr,  sy_ * sr + cy * sp * cr,  cy * cp, 0],
+            [ 0,                        0,                        0,       1],
+        ], dtype=np.float32)
+        center = np.array(
+            [self.screen_pan_x, self.screen_pan_y, -self.screen_distance],
+            dtype=np.float32,
+        )
+        return R, center
+
+    def _screen_effect_model(self, width, height, z_offset=0.0, y_offset=0.0, z_scale=1.0):
+        if self.screen_height is None:
+            self._build_model_mat4()
+
+        sx = width / 2.0
+        sy = height / 2.0
+        R, center = self._screen_effect_basis()
+        S = np.diag([sx, sy, z_scale, 1.0]).astype(np.float32)
+        T = np.eye(4, dtype=np.float32)
+        T[:3, 3] = center
+        T[1, 3] += y_offset
+        if z_offset:
+            n = R[:3, 2]
+            T[0, 3] += float(n[0]) * z_offset
+            T[1, 3] += float(n[1]) * z_offset
+            T[2, 3] += float(n[2]) * z_offset
+        return T @ R @ S
+
+    def _frost_front_layout(self):
+        if self.screen_height is None:
+            self._build_model_mat4()
+        R, center = self._screen_effect_basis()
+        head = getattr(self, '_head_pos_w', None)
+        if head is None:
+            head_w = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        else:
+            head_w = np.array(head, dtype=np.float32)
+        head_local = R[:3, :3].T @ (head_w - center)
+        front_depth = max(float(head_local[2]) + 0.55, float(self.screen_distance) + 0.35, 0.75)
+        front_half_w = max(float(self.screen_width) * 0.5, abs(float(head_local[0])) + 0.65, 0.65)
+        front_half_h = max(float(self.screen_height) * 0.5, abs(float(head_local[1])) + 0.65, 0.65)
+        return R, center, front_depth, front_half_w, front_half_h
+
+    def _build_flat_frost_verts(self, front_half_w, front_half_h):
+        sx = max(float(self.screen_width) * 0.5, 1e-6)
+        sy = max(float(self.screen_height) * 0.5, 1e-6)
+        fx = front_half_w / sx
+        fy = front_half_h / sy
+        verts = [
+            -1, -1, 0, 0, 0,  -1,  1, 0, 0, 1,  -fx, -fy, 1, 0, 0,  -fx,  fy, 1, 0, 1,
+             1, -1, 0, 1, 0,   1,  1, 0, 1, 1,   fx, -fy, 1, 1, 0,   fx,  fy, 1, 1, 1,
+            -1, -1, 0, 0, 0,   1, -1, 0, 1, 0,  -fx, -fy, 1, 0, 0,   fx, -fy, 1, 1, 0,
+            -1,  1, 0, 0, 1,   1,  1, 0, 1, 1,  -fx,  fy, 1, 0, 1,   fx,  fy, 1, 1, 1,
+        ]
+        return np.array(verts, dtype='f4')
+
+    def _build_curved_frost_verts(self, front_depth, front_half_w, front_half_h, N=48):
+        surface = self._build_curved_screen_verts(N=N).reshape((-1, 5))
+        R, center = self._screen_effect_basis()
+        rot = R[:3, :3]
+        axis = self._screen_curve_mode()
+
+        def _front(u, v):
+            lx = (float(u) * 2.0 - 1.0) * front_half_w
+            ly = (float(v) * 2.0 - 1.0) * front_half_h
+            local = np.array([lx, ly, front_depth], dtype=np.float32)
+            return center + rot @ local
+
+        def _v(world, uv, local_z):
+            u, v = float(uv[0]), float(uv[1])
+            lx = u * 2.0 - 1.0
+            ly = v * 2.0 - 1.0
+            return [float(world[0]), float(world[1]), float(world[2]), u, v, lx, ly, local_z]
+
+        verts = []
+        cols = N + 1
+        if axis == 'vertical':
+            # Left and right strips follow the vertical curved edges.
+            for side in (0, 1):
+                for i in range(cols):
+                    rear = surface[i * 2 + side]
+                    uv = (rear[3], rear[4])
+                    verts.extend(_v(rear[:3], uv, 0.0))
+                    verts.extend(_v(_front(*uv), uv, 1.0))
+
+            for v in (0.0, 1.0):
+                for u in (0.0, 1.0):
+                    rear = self._screen_uv_to_world(u, v)
+                    uv = (u, v)
+                    verts.extend(_v(rear, uv, 0.0))
+                    verts.extend(_v(_front(*uv), uv, 1.0))
+        else:
+            # Top and bottom strips follow the horizontal curved edges.
+            for row in (1, 0):
+                for i in range(cols):
+                    rear = surface[i * 2 + row]
+                    uv = (rear[3], rear[4])
+                    verts.extend(_v(rear[:3], uv, 0.0))
+                    verts.extend(_v(_front(*uv), uv, 1.0))
+
+            for col in (0, cols - 1):
+                for row in (0, 1):
+                    rear = surface[col * 2 + row]
+                    uv = (rear[3], rear[4])
+                    verts.extend(_v(rear[:3], uv, 0.0))
+                    verts.extend(_v(_front(*uv), uv, 1.0))
+
+        return np.array(verts, dtype='f4')
+
+    def _render_screen_background_effects(self, mgl_fbo, vp_mat, env_model_active=False,
+                                          passthrough_active=False):
+        mode = self._active_glow_mode()
+        if mode != 'glow' or passthrough_active:
+            return
+        if env_model_active:
+            return
+        self._render_glow(mgl_fbo, vp_mat)
+
+    def _render_screen_foreground_effects(self, mgl_fbo, vp_mat, passthrough_active=False):
+        if passthrough_active:
+            return
+        mode = self._active_glow_mode()
+        if mode == 'veil':
+            self._render_frost_veil(mgl_fbo, vp_mat)
+        elif mode == 'frosted':
+            self._render_frost_glow(mgl_fbo, vp_mat)
+
+    def _render_curved_glow(self, mgl_fbo, vp_mat, glow_intensity):
+        if self.screen_height is None:
+            return
+        if self._curved_glow_prog is None or self._curved_glow_vao is None:
+            return
+
+        screen_long = max(self.screen_width, self.screen_height)
+        glow_scale = screen_long / max(self._glow_ref_screen, 1e-6)
+        glow_width = self._glow_width_m * glow_scale
+        glow_range = glow_width * 0.75
+        glow_margin = glow_range
+        glow_w = self.screen_width + 2 * glow_margin
+        glow_h = self.screen_height + 2 * glow_margin
+        uv_glow_range = glow_range / max(glow_w, glow_h, 1e-6)
+        inner_w = self.screen_width / glow_w
+        inner_h = self.screen_height / glow_h
+
+        params = (
+            round(float(glow_w), 6), round(float(glow_h), 6),
+            float(self.screen_distance), float(self.screen_pan_x), float(self.screen_pan_y),
+            float(self.screen_yaw), float(self.screen_pitch), float(self.screen_roll),
+            self._screen_curve_mode(),
+        )
+        if params != self._curved_glow_verts_params:
+            verts = self._build_curved_screen_verts(
+                width_override=glow_w,
+                height_override=glow_h,
+                normal_offset=-0.002,
+            )
+            self._curved_glow_vbo.write(verts.tobytes())
+            self._curved_glow_verts_params = params
+
+        self.ctx.depth_mask = False
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA
+        self._advance_glow_color()
+        self._curved_glow_prog['u_mvp'].write(vp_mat.T.astype('f4').tobytes())
+        self._curved_glow_prog['u_screen_half'].value = (inner_w * 0.5, inner_h * 0.5)
+        self._curved_glow_prog['u_glow_color'].value = self._glow_color
+        self._curved_glow_prog['u_glow_inv_range'].value = 1.0 / max(uv_glow_range, 1e-6)
+        self._curved_glow_prog['u_glow_intensity'].value = glow_intensity
+        self._curved_glow_vao.render(moderngl.TRIANGLE_STRIP, vertices=(48 + 1) * 2)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.depth_mask = True
+        self.ctx.enable(moderngl.DEPTH_TEST)
+
     def _render_glow(self, mgl_fbo, vp_mat):
         """Render a soft glow outside the screen edges using a larger quad."""
         glow_intensity = self._glow_intensity * self._glow_intensity_multiplier
         if glow_intensity <= 0.0 or self.screen_height is None:
             return
         if self._screen_curved:
+            self._render_curved_glow(mgl_fbo, vp_mat, glow_intensity)
             return
 
         # Glow scales with screen size, referenced to a default 2.4m screen
@@ -3497,6 +3864,129 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self.ctx.depth_mask = True
         self.ctx.enable(moderngl.DEPTH_TEST)
 
+    def _frost_source_texture(self):
+        return getattr(self, 'color_tex', None)
+
+    def _set_frost_uniforms(self, prog, source_tex, intensity):
+        source_tex.use(location=0)
+        prog['u_edge_inset'].value = float(getattr(self, '_frost_glow_inset', 0.045))
+        prog['u_lod'].value = float(getattr(self, '_frost_glow_lod', 5.4))
+        prog['u_threshold'].value = float(getattr(self, '_frost_glow_threshold', 0.46))
+        prog['u_intensity'].value = float(intensity)
+        prog['u_frost_alpha'].value = float(getattr(self, '_frost_glow_alpha', 0.42))
+        prog['u_noise_scale'].value = 54.0
+        prog['u_beam_softness'].value = 0.34
+        prog['u_frost_blend'].value = float(getattr(self, '_frost_glow_blend', 1.35))
+        prog['u_beam_thickness'].value = float(getattr(self, '_frost_glow_thickness', 1.6))
+        prog['u_diffuse_scatter'].value = float(getattr(self, '_frost_glow_diffuse', 0.85))
+        prog['u_time'].value = float(time.time())
+
+    def _render_curved_frost_glow(self, mgl_fbo, vp_mat, source_tex, intensity):
+        if self._curved_frost_prog is None or self._curved_frost_vao is None:
+            return
+        _, _, front_depth, front_half_w, front_half_h = self._frost_front_layout()
+        params = (
+            round(float(self.screen_width), 6), round(float(self.screen_height), 6),
+            float(self.screen_distance), float(self.screen_pan_x), float(self.screen_pan_y),
+            float(self.screen_yaw), float(self.screen_pitch), float(self.screen_roll),
+            round(float(front_depth), 6), round(float(front_half_w), 6), round(float(front_half_h), 6),
+            self._screen_curve_mode(),
+        )
+        if params != self._curved_frost_verts_params:
+            verts = self._build_curved_frost_verts(front_depth, front_half_w, front_half_h)
+            self._curved_frost_vbo.write(verts.tobytes())
+            self._curved_frost_verts_params = params
+
+        self.ctx.depth_mask = False
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA
+        self._curved_frost_prog['u_vp'].write(vp_mat.T.astype('f4').tobytes())
+        self._set_frost_uniforms(self._curved_frost_prog, source_tex, intensity)
+        strip_n = (48 + 1) * 2
+        self._curved_frost_vao.render(moderngl.TRIANGLE_STRIP, vertices=strip_n)
+        self._curved_frost_vao.render(moderngl.TRIANGLE_STRIP, vertices=strip_n, first=strip_n)
+        self._curved_frost_vao.render(moderngl.TRIANGLE_STRIP, vertices=4, first=strip_n * 2)
+        self._curved_frost_vao.render(moderngl.TRIANGLE_STRIP, vertices=4, first=strip_n * 2 + 4)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.depth_mask = True
+        self.ctx.enable(moderngl.DEPTH_TEST)
+
+    def _render_frost_glow(self, mgl_fbo, vp_mat):
+        intensity = float(getattr(self, '_frost_glow_intensity', 1.0))
+        intensity *= max(float(getattr(self, '_glow_intensity_multiplier', 0.0)), 0.0)
+        if intensity <= 0.0 or self.screen_height is None:
+            return
+        source_tex = self._frost_source_texture()
+        if source_tex is None:
+            return
+        if self._screen_curved:
+            self._render_curved_frost_glow(mgl_fbo, vp_mat, source_tex, intensity)
+            return
+        if self._frost_glow_prog is None or self._frost_glow_vao is None:
+            return
+
+        _, _, beam_len, front_half_w, front_half_h = self._frost_front_layout()
+        params = (
+            round(float(self.screen_width), 6), round(float(self.screen_height), 6),
+            round(float(front_half_w), 6), round(float(front_half_h), 6),
+        )
+        if params != self._frost_glow_verts_params:
+            self._frost_glow_vbo.write(self._build_flat_frost_verts(front_half_w, front_half_h).tobytes())
+            self._frost_glow_verts_params = params
+
+        self.ctx.depth_mask = False
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA
+        model = self._screen_effect_model(self.screen_width, self.screen_height, z_scale=beam_len)
+        self._frost_glow_prog['u_model'].write(model.T.astype('f4').tobytes())
+        self._frost_glow_prog['u_vp'].write(vp_mat.T.astype('f4').tobytes())
+        self._set_frost_uniforms(self._frost_glow_prog, source_tex, intensity)
+        self._frost_glow_vao.render(moderngl.TRIANGLE_STRIP, vertices=4)
+        self._frost_glow_vao.render(moderngl.TRIANGLE_STRIP, vertices=4, first=4)
+        self._frost_glow_vao.render(moderngl.TRIANGLE_STRIP, vertices=4, first=8)
+        self._frost_glow_vao.render(moderngl.TRIANGLE_STRIP, vertices=4, first=12)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.depth_mask = True
+        self.ctx.enable(moderngl.DEPTH_TEST)
+
+    def _render_frost_veil(self, mgl_fbo, vp_mat):
+        old_values = (
+            float(getattr(self, '_frost_glow_intensity', 1.0)),
+            float(getattr(self, '_frost_glow_alpha', 0.42)),
+            float(getattr(self, '_frost_glow_threshold', 0.46)),
+            float(getattr(self, '_frost_glow_lod', 5.4)),
+            float(getattr(self, '_frost_glow_blend', 1.35)),
+            float(getattr(self, '_frost_glow_thickness', 1.6)),
+            float(getattr(self, '_frost_glow_diffuse', 0.85)),
+        )
+        try:
+            self._frost_glow_intensity = float(getattr(self, '_frost_veil_intensity', 1.0))
+            self._frost_glow_alpha = float(getattr(self, '_frost_veil_alpha', 0.34))
+            self._frost_glow_threshold = float(getattr(self, '_frost_veil_threshold', 0.28))
+            self._frost_glow_lod = float(getattr(self, '_frost_veil_lod', 6.6))
+            self._frost_glow_blend = 2.5
+            self._frost_glow_thickness = 3.0
+            self._frost_glow_diffuse = 1.2
+            self._render_frost_glow(mgl_fbo, vp_mat)
+        finally:
+            (
+                self._frost_glow_intensity,
+                self._frost_glow_alpha,
+                self._frost_glow_threshold,
+                self._frost_glow_lod,
+                self._frost_glow_blend,
+                self._frost_glow_thickness,
+                self._frost_glow_diffuse,
+            ) = old_values
+
+    def _render_frosted_glow(self, mgl_fbo, vp_mat):
+        self._render_frost_glow(mgl_fbo, vp_mat)
+
+    def _render_frosted_veil(self, mgl_fbo, vp_mat):
+        self._render_frost_veil(mgl_fbo, vp_mat)
+
     def _render_border(self, mgl_fbo, vp_mat):
         """Render a thin solid-color border slightly larger than the screen.
 
@@ -3527,7 +4017,8 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             bw = self.screen_width  + 2 * BORDER
             bh = self.screen_height + 2 * BORDER
             params = (bw, bh, self.screen_distance, self.screen_pan_x,
-                    self.screen_pan_y, self.screen_yaw, self.screen_pitch)
+                    self.screen_pan_y, self.screen_yaw, self.screen_pitch,
+                    self.screen_roll, self._screen_curve_mode())
             if self._curved_border_verts_params != params:
                 border_verts = self._build_curved_screen_verts(
                     width_override=bw, height_override=bh, dist_offset=0.001,
@@ -3560,6 +4051,90 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             self._border_vao.render(moderngl.TRIANGLE_STRIP)
 
         self.ctx.disable(moderngl.BLEND)
+
+    def _get_panorama_texture(self):
+        path = getattr(self, '_panorama_background_path', None)
+        if not path:
+            return None
+        path = os.path.abspath(path)
+        if self._panorama_tex is not None and self._panorama_tex_path == path:
+            return self._panorama_tex
+        if self._panorama_tex is not None:
+            try:
+                self._panorama_tex.release()
+            except Exception:
+                pass
+            self._panorama_tex = None
+            self._panorama_tex_path = None
+        try:
+            img = Image.open(path).convert('RGB')
+            max_tex = int(getattr(self.ctx, 'info', {}).get('GL_MAX_TEXTURE_SIZE', 8192) or 8192)
+            if max(img.size) > max_tex:
+                scale = float(max_tex) / float(max(img.size))
+                new_size = (
+                    max(1, int(round(img.size[0] * scale))),
+                    max(1, int(round(img.size[1] * scale))),
+                )
+                resample = getattr(getattr(Image, 'Resampling', Image), 'LANCZOS', Image.BICUBIC)
+                img = img.resize(new_size, resample)
+            arr = np.asarray(img, dtype=np.uint8)
+            tex = self.ctx.texture(img.size, 3, arr.tobytes())
+            tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+            try:
+                tex.repeat_x = True
+                tex.repeat_y = False
+            except Exception:
+                pass
+            try:
+                tex.build_mipmaps()
+            except Exception:
+                tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self._panorama_tex = tex
+            self._panorama_tex_path = path
+            print(f"[OpenXRViewer] Panorama background loaded: {path} ({img.size[0]}x{img.size[1]})")
+            return tex
+        except Exception as exc:
+            print(f"[OpenXRViewer] Panorama background load failed: {exc}")
+            return None
+
+    def _render_panorama_background(self, mgl_fbo, view_mat, proj_mat):
+        if self._panorama_prog is None or self._panorama_vao is None:
+            return
+        tex = self._get_panorama_texture()
+        if tex is None:
+            return
+        settings = getattr(self, '_panorama_background_settings', {}) or {}
+        try:
+            yaw_offset = math.radians(float(settings.get('yaw_offset_deg', 0.0))) / (2.0 * math.pi)
+        except (TypeError, ValueError):
+            yaw_offset = 0.0
+        try:
+            exposure = float(settings.get('exposure', 1.0))
+        except (TypeError, ValueError):
+            exposure = 1.0
+        flip_y = 1 if bool(settings.get('flip_y', False)) else 0
+
+        view_rot = np.array(view_mat, dtype=np.float32, copy=True)
+        view_rot[:3, 3] = 0.0
+        try:
+            inv_proj = np.linalg.inv(proj_mat.astype(np.float32))
+            inv_view_rot = np.linalg.inv(view_rot)
+        except Exception:
+            return
+
+        mgl_fbo.use()
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.depth_mask = False
+        self.ctx.disable(moderngl.BLEND)
+        tex.use(location=8)
+        self._panorama_prog['u_inv_proj'].write(inv_proj.T.astype('f4').tobytes())
+        self._panorama_prog['u_inv_view_rot'].write(inv_view_rot.T.astype('f4').tobytes())
+        self._panorama_prog['u_yaw_offset'].value = float(yaw_offset)
+        self._panorama_prog['u_exposure'].value = max(0.0, float(exposure))
+        self._panorama_prog['u_flip_y'].value = flip_y
+        self._panorama_vao.render(moderngl.TRIANGLE_STRIP)
+        self.ctx.depth_mask = True
+        self.ctx.enable(moderngl.DEPTH_TEST)
 
     def _render_eye(self, eye_index, mgl_fbo, view_mat, proj_mat, flip_y=False):
         """Render one eye's parallax view into the swapchain FBO using world-space MVP.
@@ -3605,6 +4180,8 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         # depth through the desktop draw so nearer furniture can occlude the
         # screen; other environments retain the legacy backdrop-only behavior.
         passthrough_active = self._bg_color_idx == 1
+        if not passthrough_active:
+            self._render_panorama_background(mgl_fbo, view_mat, proj_mat)
         env_model_active = bool(
             not passthrough_active
             and self._env_model_visible
@@ -3618,17 +4195,13 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             if not env_depth_occlusion:
                 glClear(GL_DEPTH_BUFFER_BIT)
 
-        # 0. Glow (behind border and screen).  Skipped when a 3D environment
-        # model is loaded the env shader's cinema bias light already paints
-        # the same screen-content-tinted illumination onto the model surfaces
-        # (with proper Lambertian shading + distance falloff), so the flat
-        # additive glow quad would just sit in front of the model and look
-        # like a coloured fog.  For "Default" / "Default with Glow" / plain-colour
-        # backdrops there's nothing else for the screen to spill light on,
-        # so the planar glow stays on to give the picture a sense of
-        # ambient bias light.
-        if not env_model_active and not passthrough_active:
-            self._render_glow(mgl_fbo, vp_mat)
+        # 0. Screen effects behind the desktop quad.
+        self._render_screen_background_effects(
+            mgl_fbo,
+            vp_mat,
+            env_model_active=env_model_active,
+            passthrough_active=passthrough_active,
+        )
 
         # 1. Main screen (flat quad or cylindrical curved arc)
         mgl_fbo.use()
@@ -3643,7 +4216,8 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             screen_depth_bias = _SCREEN_ENV_DEPTH_BIAS_M if env_depth_occlusion else 0.0
             params = (self.screen_width, self.screen_height, self.screen_distance,
                     self.screen_pan_x, self.screen_pan_y, self.screen_yaw,
-                    self.screen_pitch, self.screen_roll, screen_depth_bias)
+                    self.screen_pitch, self.screen_roll, screen_depth_bias,
+                    self._screen_curve_mode())
             if self._curved_verts_params != params:
                 arc_verts = self._build_curved_screen_verts(normal_offset=screen_depth_bias)
                 self._curved_vbo.write(arc_verts.tobytes())
@@ -3675,6 +4249,13 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             # edge. With SRC_ALPHA blending the edge pixels would blend against the FBO's
             # opaque black clear, creating a persistent dark halo visible at all times.
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+        # 2. Screen effects on and around the desktop quad.
+        self._render_screen_foreground_effects(
+            mgl_fbo,
+            vp_mat,
+            passthrough_active=passthrough_active,
+        )
 
         # Clear depth so UI overlays (FPS panel, OSD, keyboard, controllers,
         # lasers) are never occluded by environment geometry (e.g. cinema floor).
@@ -3923,90 +4504,61 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         safe_w = max(self.screen_width, 1e-6)
         safe_h = max(sh, 1e-6)
 
-        # Curved screen: solve ray <-> cylindrical arc intersection by transforming
-        # the world-space ray into the screen-local parametric frame used by
-        # _build_curved_screen_verts. In that local frame the surface satisfies
-        # sqrt(x^2+(z-R)^2) == R with a screen-size-derived radius. The angular
-        # span stays constant, while the screen centre remains at screen_distance.
+        # Curved screen: solve ray <-> cylindrical arc intersection in the
+        # screen-local frame. Horizontal curves bend across U (x/z cylinder);
+        # vertical curves bend across V (y/z cylinder).
         if self._screen_curved:
             BEAM_MAX = 30.0
             half_w = self.screen_width / 2.0
             half_h = sh / 2.0
             half_ang = min(_CURVED_HALF_ANGLE_RAD, math.pi / 2)
-            R = half_w / max(half_ang, 1e-6)
+            axis = self._screen_curve_mode()
+            radius = (half_h if axis == 'vertical' else half_w) / max(half_ang, 1e-6)
+            Rm, center = self._screen_effect_basis()
+            inv_rot = Rm[:3, :3].astype('f8').T
+            ro = inv_rot @ (ctrl_pos - center.astype('f8'))
+            rd = inv_rot @ fwd_w
 
-            # Rotation matrices (same convention as _build_curved_screen_verts)
-            cy = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
-            cp = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
-            yaw_rot = np.array([[cy, 0.0, sy_], [0.0, 1.0, 0.0], [-sy_, 0.0, cy]], dtype='f8')
-            pitch_rot = np.array([[1.0, 0.0, 0.0], [0.0, cp, -sp], [0.0, sp, cp]], dtype='f8')
-            # Inverse mapping: v_local = Yaw.T @ Pitch.T @ (W - T)
-            # New local frame has surface centre at origin and cylinder axis at (0,0,R)
-            M_inv = yaw_rot.T @ pitch_rot.T
-            T = np.array([self.screen_pan_x, self.screen_pan_y, -self.screen_distance], dtype='f8')
-
-            def f_dist(t):
-                P = ctrl_pos + fwd_w * t
-                vl = M_inv @ (P - T)
-                return math.hypot(float(vl[0]), float(vl[2]) - R) - R
-
-            t0 = 0.01
-            t1 = BEAM_MAX
-            f0 = f_dist(t0)
-            f1 = f_dist(t1)
-            bracket = None
-            if abs(f0) < 1e-6:
-                bracket = (t0, t0)
-            elif f0 * f1 < 0:
-                bracket = (t0, t1)
+            if axis == 'vertical':
+                a = float(rd[1] * rd[1] + rd[2] * rd[2])
+                b = float(2.0 * (ro[1] * rd[1] + (ro[2] - radius) * rd[2]))
+                c = float(ro[1] * ro[1] + (ro[2] - radius) * (ro[2] - radius) - radius * radius)
             else:
-                # Try coarse sampling to find a sign change
-                N = 48
-                a = t0
-                fa = f0
-                for i in range(1, N + 1):
-                    b = t0 + (t1 - t0) * (i / N)
-                    fb = f_dist(b)
-                    if abs(fb) < 1e-6 or fa * fb < 0:
-                        bracket = (a, b)
-                        break
-                    a = b; fa = fb
-
-            if bracket is None:
+                a = float(rd[0] * rd[0] + rd[2] * rd[2])
+                b = float(2.0 * (ro[0] * rd[0] + (ro[2] - radius) * rd[2]))
+                c = float(ro[0] * ro[0] + (ro[2] - radius) * (ro[2] - radius) - radius * radius)
+            if abs(a) < 1e-9:
                 return None
-
-            a, b = bracket
-            fa = f_dist(a)
-            fb = f_dist(b)
-            if fa * fb > 0:
+            disc = b * b - 4.0 * a * c
+            if disc < 0.0:
                 return None
-
-            # Bisection refine
-            for _ in range(40):
-                m = 0.5 * (a + b)
-                fm = f_dist(m)
-                if abs(fm) < 1e-6:
-                    a = b = m
-                    break
-                if fa * fm <= 0:
-                    b = m; fb = fm
+            sqrt_disc = math.sqrt(disc)
+            hits = sorted(((-b - sqrt_disc) / (2.0 * a), (-b + sqrt_disc) / (2.0 * a)))
+            for t_hit in hits:
+                if t_hit < 0.01 or t_hit > BEAM_MAX:
+                    continue
+                vl = ro + rd * t_hit
+                lx = float(vl[0])
+                ly = float(vl[1])
+                lz = float(vl[2])
+                if axis == 'vertical':
+                    if abs(lx) > half_w + 1e-6:
+                        continue
+                    ang = math.atan2(ly, radius - lz)
+                    if ang < -half_ang - 1e-6 or ang > half_ang + 1e-6:
+                        continue
+                    u = (lx + half_w) / (2.0 * half_w) if half_w > 1e-9 else 0.5
+                    v = (ang + half_ang) / (2.0 * half_ang) if half_ang > 1e-9 else 0.5
                 else:
-                    a = m; fa = fm
-            t_hit = 0.5 * (a + b)
-            if t_hit < 0.01 or t_hit > BEAM_MAX:
-                return None
-
-            P = ctrl_pos + fwd_w * t_hit
-            vl = M_inv @ (P - T)
-            lx = float(vl[0]); ly = float(vl[1]); lz = float(vl[2])
-            if abs(ly) > half_h + 1e-6:
-                return None
-            ang = math.atan2(lx, R - lz)
-            if ang < -half_ang - 1e-6 or ang > half_ang + 1e-6:
-                return None
-            u = (ang + half_ang) / (2.0 * half_ang) if half_ang > 1e-9 else 0.5
-            v = (ly + half_h) / (2.0 * half_h) if half_h > 1e-9 else 0.5
-            return float(u), float(v), float(t_hit)
+                    if abs(ly) > half_h + 1e-6:
+                        continue
+                    ang = math.atan2(lx, radius - lz)
+                    if ang < -half_ang - 1e-6 or ang > half_ang + 1e-6:
+                        continue
+                    u = (ang + half_ang) / (2.0 * half_ang) if half_ang > 1e-9 else 0.5
+                    v = (ly + half_h) / (2.0 * half_h) if half_h > 1e-9 else 0.5
+                return float(u), float(v), float(t_hit)
+            return None
 
         # Flat-screen (plane) fallback
         cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
@@ -4923,7 +5475,8 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         Left grip + Left stick (when keyboard visible) Keyboard pan (preserved)
         Left stick press hold 1s    Toggle FPS/shortcut panel
         Left stick short press      Cycle environment
-        Right stick press hold 1s   Toggle curved/flat (when no grip)
+        Right stick press hold 1s   Reset screen direction (when no grip)
+        Right stick short press     Cycle horizontal curve / vertical curve / flat
         Both sticks press 0.5s       Toggle FPS/help panel
         A/B/X/Y/Menu/Triggers      Original functions unchanged
         """
@@ -5728,7 +6281,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
 
         # X (left):
         #   release <1s              toggle virtual keyboard
-        #   release 1~4s             toggle cinema glow / lighting preset
+        #   release 1~4s             cycle glow mode (glow -> veil -> frosted -> off)
         #   hold >4s (release)       toggle VDXR green passthrough backdrop
         X_GLOW_HOLD = 1.0
         X_PASSTHROUGH_HOLD = 4.0
@@ -5803,7 +6356,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
 
         # Non-double-press case: handle each thumbstick separately
         # - Long press (>= SINGLE_LONG) triggers shortcut panel (same as double press);
-        # - Short press (released when < SINGLE_LONG) performs background/curved surface switching or grip modifier actions;
+        # - Short press (released when < SINGLE_LONG) performs background/curve mode switching or grip modifier actions;
         if not both_clicked:
             now = self._frame_now
 
@@ -5829,7 +6382,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                         self._cycle_environment()
 
             # Right thumbstick: long-press reset screen direction (keep distance + size);
-            #          short-press toggle curved/flat
+            #          short-press cycle horizontal curve -> vertical curve -> flat
             if rsc_now and not self._right_stick_click_prev:
                 self._rsc_press_t = now
                 self._rsc_long_fired = False
@@ -5841,7 +6394,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                 if not self._rsc_long_fired:
                     if not grip_r and not grip_l and (
                             not self._environment_screen_locked() or self._env_allow_curve):
-                        self._screen_curved = not self._screen_curved
+                        self._cycle_screen_curve_mode()
                     elif grip_r:
                         old_val = self.depth_ratio
                         self.depth_ratio = 2.0
@@ -5881,7 +6434,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         if not screen_locked:
             cur = (self.screen_width, self.screen_distance, self.screen_pan_x,
                    self.screen_pan_y, self.screen_yaw, self.screen_pitch,
-                   self._screen_curved, self._preset_index)
+                   self._screen_curve_mode(), self._preset_index)
             prev = getattr(self, '_prev_screen_snapshot', None)
             if prev != cur:
                 self._screen_state_dirty = True
@@ -5910,12 +6463,16 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._init_moderngl()
 
         screen_h = self.screen_height if self.screen_height else (self.screen_width / (self.frame_size[0] / self.frame_size[1]) if self.frame_size else 1.35)
+        curve_mode = self._screen_curve_mode()
         print(f"[OpenXRViewer] Screen: {self.screen_width:.2f}m x {screen_h:.2f}m @ {self.screen_distance:.2f}m"
-              f"{' (curved)' if self._screen_curved else ''}")
+              f"{f' (curved {curve_mode})' if curve_mode != 'none' else ''}")
         print(f"[OpenXRViewer] IPD: {self.ipd_uv:.3f}m, Depth: {self.depth_ratio}, Frames: {self.frame_size}")
 
         try:
-            self._init_openxr()
+            if not self._wait_for_openxr_device(shutdown_event):
+                print("[OpenXRViewer] OpenXR startup cancelled while waiting for XR device")
+                self.cleanup()
+                return
         except Exception as e:
             import traceback
             print(f"[OpenXRViewer] OpenXR init failed: {e}")
@@ -6327,6 +6884,10 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
     # Cleanup
     def cleanup(self):
         """Release all OpenXR and OpenGL resources."""
+        try:
+            self._persist_screen_state()
+        except Exception:
+            pass
         self._persist_runtime_settings()
 
         if sys.platform == "win32" and self._saved_dclick_time is not None:
@@ -6412,13 +6973,15 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
 
         for tex in (self._overlay_tex, self._depth_osd_tex, self._screen_osd_tex,
                     self._preset_osd_tex, self._brand_osd_tex, self._seat_adjust_osd_tex,
-                    self.color_tex, self.depth_tex):
+                    self._panorama_tex, self.color_tex, self.depth_tex):
             if tex:
                 try:
                     tex.release()
                 except Exception:
                     pass
         self._overlay_tex = self._depth_osd_tex = self._screen_osd_tex = self._preset_osd_tex = self._brand_osd_tex = self._seat_adjust_osd_tex = None
+        self._panorama_tex = None
+        self._panorama_tex_path = None
         if self._calib_tex:
             try:
                 self._calib_tex.release()
@@ -6431,6 +6994,14 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             except Exception:
                 pass
             self._help_tex = None
+        for attr in ('_panorama_vao', '_panorama_vbo', '_panorama_prog'):
+            obj = getattr(self, attr, None)
+            if obj:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
         self.color_tex = self.depth_tex = None
 
         # Release controller model GL resources

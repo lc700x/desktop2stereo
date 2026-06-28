@@ -79,13 +79,13 @@ class D3D11BackendMixin:
             enabled_extension_names=[xr.KHR_D3D11_ENABLE_EXTENSION_NAME],
         )
         self._xr_instance = xr.create_instance(create_info)
-        print("[OpenXRViewer] XrInstance created (D3D11)")
 
         # 2. System
         self._xr_system_id = xr.get_system(
             self._xr_instance,
             xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
         )
+        print("[OpenXRViewer] XrInstance created (D3D11)")
 
         # 3. Query D3D11 requirements (runtime mandates this call before session creation)
         _pfn = ctypes.cast(

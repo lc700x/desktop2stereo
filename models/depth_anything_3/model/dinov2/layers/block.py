@@ -23,6 +23,15 @@ logger = logging.getLogger("dinov2")
 XFORMERS_AVAILABLE = True
 
 
+def _finite_fp16(x: Tensor) -> Tensor:
+    if x.dtype == torch.float16:
+        if torch.onnx.is_in_onnx_export():
+            return x
+        x = x.clamp(-65504.0, 65504.0)
+        x = torch.nan_to_num(x, nan=0.0, posinf=65504.0, neginf=-65504.0)
+    return x
+
+
 class Block(nn.Module):
     def __init__(
         self,
@@ -95,11 +104,11 @@ class Block(nn.Module):
                 sample_drop_ratio=self.sample_drop_ratio,
             )
         elif self.training and self.sample_drop_ratio > 0.0:
-            x = x + self.drop_path1(attn_residual_func(x, pos=pos, attn_mask=attn_mask))
-            x = x + self.drop_path1(ffn_residual_func(x))  # FIXME: drop_path2
+            x = _finite_fp16(x + self.drop_path1(attn_residual_func(x, pos=pos, attn_mask=attn_mask)))
+            x = _finite_fp16(x + self.drop_path1(ffn_residual_func(x)))  # FIXME: drop_path2
         else:
-            x = x + attn_residual_func(x, pos=pos, attn_mask=attn_mask)
-            x = x + ffn_residual_func(x)
+            x = _finite_fp16(x + attn_residual_func(x, pos=pos, attn_mask=attn_mask))
+            x = _finite_fp16(x + ffn_residual_func(x))
         return x
 
 

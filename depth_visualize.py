@@ -1,7 +1,8 @@
 # depth.py
 import os, warnings
-import torch
 import contextlib
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, USE_MIGRAPHX, RECOMPILE_MIGRAPHX, DISABLE_TRT_KEYWORDS, DISABLE_MIGRAPHX_KEYWORDS,  DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_GFX, DISABLE_TRITON_GFX, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, FORCE_FP32_KEYWORDS, CAPTURE_MODE, enable_torch_compile_fallback, torch_compile_or_original, torch_compile_with_runtime_fallback
+import torch
 # Support for old AMD GPU with ZLUDA support (hide)
 # try:
 #     import zluda 
@@ -9,8 +10,62 @@ import contextlib
 # except ImportError:
 #     pass
 
+import torch.nn.functional as F
+from transformers import AutoModelForDepthEstimation
+import numpy as np
+from threading import Lock
+import cv2
+
+# debug constants
+from PIL import Image
+img  = Image.open("assets/cats.jpg").convert("RGB")
+image_rgb = np.array(img).astype(np.float32)
+
+
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, USE_MIGRAPHX, RECOMPILE_MIGRAPHX, DISABLE_TRT_KEYWORDS, DISABLE_MIGRAPHX_KEYWORDS,  DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_GFX, DISABLE_TRITON_GFX, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, FORCE_FP32_KEYWORDS, CAPTURE_MODE
+# Testing parameters 
+DEBUG = True
+AA_STRENGTH = 0
+FP16 = True
+FILL_16_9 = True
+DEPTH_RESOLUTION = 336
+FOREGROUND_SCALE = 0
+
+USE_TORCH_COMPILE = True
+
+USE_TENSORRT = True
+RECOMPILE_TRT = True
+
+USE_MIGRAPHX = True
+RECOMPILE_MIGRAPHX = True
+
+USE_COREML = False
+RECOMPILE_COREML = True
+
+USE_OPENVINO = False
+RECOMPILE_OPENVINO = True
+
+
+# MODEL_ID ="depth-anything/DA3-LARGE-1.1"
+# MODEL_ID ="depth-anything/DA3-SMALL"
+# MODEL_ID ="depth-anything/DA3NESTED-GIANT-LARGE"
+# MODEL_ID = "depth-anything/DA3METRIC-LARGE"
+# MODEL_ID = "LiheYoung/depth-anything-small-hf"
+# MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf"
+# MODEL_ID = "lc700x/depth-anything-indoor-large-hf"
+# MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+# MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
+# MODEL_ID = "depth-anything/DA3MONO-LARGE"
+# MODEL_ID = "Intel/dpt-large"
+# MODEL_ID = "apple/DepthPro-hf"
+# MODEL_ID = "Intel/zoedepth-nyu"
+# MODEL_ID = "Intel/zoedepth-nyu-kitti"
+# MODEL_ID = "lc700x/dpt-hybrid-midas-hf"
+# MODEL_ID = "lc700x/dpt-large-redesign-hf"
+# MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
+# MODEL_ID = "Intel/dpt-beit-base-384"
+MODEL_ID = "lc700x/InfiniDepth-Small"
+# MODEL_ID = "xingyang1/Distill-Any-Depth-Small-hf"
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -27,62 +82,7 @@ USE_COREML = False if not IS_MPS else USE_COREML
 USE_OPENVINO = False if not IS_XPU else USE_OPENVINO
 USE_MIGRAPHX = False if not IS_AMD_ROCM else USE_MIGRAPHX
 
-
-import torch.nn.functional as F
-from transformers import AutoModelForDepthEstimation
-import numpy as np
-from threading import Lock
-import cv2
-
-# debug constants
-from PIL import Image
-img  = Image.open("assets/cats.jpg").convert("RGB")
-image_rgb = np.array(img).astype(np.float32)
-
-# MODEL_ID ="depth-anything/DA3-LARGE-1.1"
-# MODEL_ID ="depth-anything/DA3-SMALL"
-# MODEL_ID ="depth-anything/DA3NESTED-GIANT-LARGE"
-# MODEL_ID = "depth-anything/DA3METRIC-LARGE"
-# MODEL_ID = "LiheYoung/depth-anything-small-hf"
-# MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf"
-# MODEL_ID = "lc700x/depth-anything-indoor-large-hf"
-# MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
-# MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
-# MODEL_ID = "depth-anything/DA3-SMALL"
-# MODEL_ID = "depth-anything/DA3MONO-LARGE"
-# MODEL_ID = "depth-anything/DA3METRIC-LARGE"
-# MODEL_ID = "Intel/dpt-large"
-# MODEL_ID = "apple/DepthPro-hf"
-# MODEL_ID = "Intel/zoedepth-nyu"
-# MODEL_ID = "Intel/zoedepth-nyu-kitti"
-# MODEL_ID = "lc700x/dpt-hybrid-midas-hf"
-# MODEL_ID = "lc700x/dpt-large-redesign-hf"
-# MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
-# MODEL_ID = "Intel/dpt-beit-base-384"
-# MODEL_ID = "lc700x/InfiniDepth-Large"
-MODEL_ID = "xingyang1/Distill-Any-Depth-Small-hf"
-
-DEBUG = True
-AA_STRENGTH = 0
-FP16 = True
-FILL_16_9 = True
-DEPTH_RESOLUTION = 336
-FOREGROUND_SCALE = 0
-
-USE_TORCH_COMPILE = False
-
-USE_TENSORRT = True
-RECOMPILE_TRT = True
-
-USE_MIGRAPHX = False
-RECOMPILE_MIGRAPHX = False
-
-USE_COREML = False
-RECOMPILE_COREML = True
-
-USE_OPENVINO = False
-RECOMPILE_OPENVINO = True
-
+print(f"[Main] Using HF Endpoint: {os.environ.get('HF_ENDPOINT')}")
 print(f"{DEVICE_INFO}")
 print(f"Model: {MODEL_ID.split('/')[-1]}")
 
@@ -92,6 +92,7 @@ if not DEBUG:
 warnings.filterwarnings("ignore", message=".*ONNX export mode is set to TrainingMode.EVAL.*instance_norm.*")
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
 
 # Try import OpenVINO runtime
 if IS_XPU:
@@ -124,6 +125,10 @@ if IS_XPU:
 else:
     USE_OPENVINO = False
 
+@contextlib.contextmanager
+def coreml_safe_interpolate():
+    yield
+
 if USE_COREML and IS_MPS:    
     try:
         import coremltools as ct  # optional on macOS only
@@ -133,9 +138,8 @@ if USE_COREML and IS_MPS:
     USE_COREML = ct is not None
     # imports for CoreML
     if USE_COREML:
-        from contextlib import contextmanager
         # export-time patch to replace bicubic -> bilinear
-        @contextmanager
+        @contextlib.contextmanager
         def coreml_safe_interpolate():
             """
             Temporarily monkey-patch torch.nn.functional.interpolate so that any call
@@ -173,8 +177,9 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or IS_MPS or ((USE_TENSORRT or USE_COREML or USE_OPENVINO or USE_MIGRAPHX) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS) or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or (MODEL_ID in FORCE_FP32_KEYWORDS):
+if IS_DIRECTML or IS_MPS or ((USE_TENSORRT or USE_COREML or USE_OPENVINO or USE_MIGRAPHX) and MODEL_ID in TRT_FIX_KEYWORDS) or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or (MODEL_ID in FORCE_FP32_KEYWORDS):
     FP16 = False
+    print("FP16 disabled")
 
 # Disable CoreML for models whose architecture can't be traced (implicit heads, etc.)
 if any(x in MODEL_ID.lower() for x in DISABLE_COREML_KEYWORDS):
@@ -424,6 +429,33 @@ else:
         Resize BGR/UMat image to target height, keeping aspect ratio.
         Uses cv2.UMat for GPU acceleration when possible.
         """
+        if isinstance(img_rgb, torch.Tensor):
+            # Tensor capture path is already RGB CHW; keep resize on accelerator.
+            if img_rgb.ndim == 3 and img_rgb.shape[0] in (3, 4):
+                img_rgb = img_rgb[:3]
+            elif img_rgb.ndim == 3 and img_rgb.shape[-1] >= 3:
+                img_rgb = img_rgb[..., :3].permute(2, 0, 1).contiguous()
+            else:
+                raise ValueError(f"Unsupported tensor image shape: {tuple(img_rgb.shape)}")
+
+            img_rgb = img_rgb.to(DEVICE)
+            _, h0, w0 = img_rgb.shape
+            if height >= h0:
+                return img_rgb
+
+            width = int(w0 * height / h0)
+            height = (height // 2) * 2
+            width = (width // 2) * 2
+
+            with torch.no_grad(), coreml_safe_interpolate():
+                return F.interpolate(
+                    img_rgb.to(dtype=DTYPE).unsqueeze(0),
+                    size=(height, width),
+                    mode='bilinear',
+                    align_corners=False,
+                    antialias=False
+                ).squeeze(0)
+       
         # Determine if input is UMat
         is_umat = isinstance(img_rgb, cv2.UMat)
 
@@ -482,9 +514,9 @@ font_dict = {
 }
 
 # Model casting helper
-def maybe_autocast(device, enabled=True):
+def maybe_autocast(device):
     return (
-        torch.autocast(device_type=device.type, enabled=enabled)
+        torch.autocast(device_type=device.type, enabled=True)
         if device.type != "privateuseone"
         else contextlib.nullcontext()
     )
@@ -720,8 +752,8 @@ def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
 
     from models.InfiniDepth.api import InfiniDepthModel
     model = InfiniDepthModel(model_path=model_path, encoder=encoder_dict.get(model_id, 'vitl16'))
-    # Keep model in float32 — internal autocast in the backbone handles
-    # mixed precision. Converting to float16 breaks the ImplicitHead MLP.
+    # Honor the configured dtype. InfiniDepthModel keeps inputs consistent with
+    # the loaded parameter dtype so FP16 exports do not hit input/bias mismatches.
     return model.to(DEVICE, dtype=DTYPE)
 
 # Load Depth-Anything-V3 Model
@@ -765,8 +797,17 @@ def optimize_with_migraphx(onnx_path, migraphx_path):
         print("[MIGraphX] Compiling ONNX model, this may take a while...")
         prog = mx.parse_onnx(onnx_path)
         target = mx.get_target("gpu")
-        if not(MODEL_ID in FORCE_FP32_KEYWORDS or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or 'infinidepth' in MODEL_ID.lower() or 'da3' in MODEL_ID.lower()):
-            mx.quantize_fp16(prog)
+        force_migraphx_fp32 = (
+            MODEL_ID in FORCE_FP32_KEYWORDS
+            or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512)
+        )
+        if not force_migraphx_fp32:
+            try:
+                mx.autocast_fp8(prog)
+                print("[MIGraphX] Quantized to FP8")
+            except Exception:
+                print("[MIGraphX] FP8 not available, falling back to FP16")
+                mx.quantize_fp16(prog)
         prog.compile(target, offload_copy=False)
         mx.save(prog, migraphx_path)
 
@@ -828,7 +869,8 @@ class MIGraphXEngine:
         self.prog.run_async({self.input_name: in_arg, self._out_name: out_arg},
                             stream.cuda_stream, "ihipStream_t")
         if not self._logged_zero_copy:
-            print(f"[MIGraphX] Zero-copy GPU path active | input={tuple(tensor.shape)} {tensor.dtype} -> output={tuple(out.shape)} {out.dtype}")
+            if DEBUG:
+                print(f"[MIGraphX] Zero-copy GPU path active | input={tuple(tensor.shape)} {tensor.dtype} -> output={tuple(out.shape)} {out.dtype}")
             self._logged_zero_copy = True
         return out
 
@@ -862,7 +904,7 @@ def optimize_with_tensorrt(onnx_path, trt_path):
 
         config = builder.create_builder_config()
 
-        if MODEL_ID in FORCE_FP32_KEYWORDS or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or 'infinidepth-large' in MODEL_ID.lower():
+        if MODEL_ID in FORCE_FP32_KEYWORDS or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512):
             # Transformer-based model: use TF32 only. 
             config.set_flag(trt.BuilderFlag.TF32)
         else:
@@ -908,14 +950,23 @@ def optimize_with_tensorrt(onnx_path, trt_path):
 # Export to ONNX
 class ModelForONNX(torch.nn.Module):
     """Return a single depth tensor for accelerator exports."""
-    def __init__(self, model, force_fp32_predict: bool = False):
+    def __init__(self, model):
         super().__init__()
         self.model = model
-        self.force_fp32_predict = force_fp32_predict
 
     def forward(self, x):
         if hasattr(self.model, "predict_depth"):
-            return self.model.predict_depth(x, fp32=self.force_fp32_predict)
+            return self.model.predict_depth(x)
+
+        if (
+            "video-depth-anything" in MODEL_ID.lower()
+            and hasattr(self.model, "forward_features")
+            and hasattr(self.model, "forward_depth")
+        ):
+            cur_input = x.unsqueeze(0)
+            features = self.model.forward_features(cur_input)
+            depth, _ = self.model.forward_depth(features, cur_input.shape)
+            return depth
 
         try:
             out = self.model(pixel_values=x)
@@ -932,22 +983,50 @@ class ModelForONNX(torch.nn.Module):
             return out[0]
         raise RuntimeError("Unsupported model output type for ONNX export")
 
+@contextlib.contextmanager
+def _onnx_export_safe_attention():
+    if "video-depth-anything" not in MODEL_ID.lower():
+        yield
+        return
+
+    toggled = []
+    for module_name in (
+        "models.video_depth_anything.dinov2_layers.attention",
+        "models.video_depth_anything.motion_module.attention",
+        "models.video_depth_anything.motion_module.motion_module",
+    ):
+        try:
+            module = __import__(module_name, fromlist=("XFORMERS_AVAILABLE",))
+        except Exception:
+            continue
+        if hasattr(module, "XFORMERS_AVAILABLE"):
+            toggled.append((module, module.XFORMERS_AVAILABLE))
+            module.XFORMERS_AVAILABLE = False
+
+    try:
+        yield
+    finally:
+        for module, original in toggled:
+            module.XFORMERS_AVAILABLE = original
+
 def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=DTYPE):
     """
     Export the depth estimation model to ONNX format with fixed square input.
     """
+    model_param_dtype = next(
+        (p.dtype for p in model.parameters() if p.is_floating_point()),
+        dtype,
+    )
+
     # Use fixed square input size
-    dummy_input = torch.randn(1, 3, ENGINE_H, ENGINE_W, device=device, dtype=dtype)
+    dummy_input = torch.randn(1, 3, ENGINE_H, ENGINE_W, device=device, dtype=model_param_dtype)
     
     input_names = ["pixel_values"]
     output_names = ["predicted_depth"]
     
     model.eval()
-    export_model = ModelForONNX(
-        model,
-        force_fp32_predict=("da3" in MODEL_ID.lower() or "infinidepth" in MODEL_ID.lower()),
-    ).eval()
-    with torch.no_grad():
+    export_model = ModelForONNX(model).eval()
+    with torch.no_grad(), _onnx_export_safe_attention():
         torch.onnx.export(
             export_model,
             dummy_input,
@@ -1403,16 +1482,22 @@ class DepthModelWrapper:
             except Exception as e:
                 print(f"[Error]: Failed to load model, please check your local model file and network connection. Details: {e}")
 
-        if self.dtype == torch.float16 and not any(kw in MODEL_ID.lower() for kw in ("da3", "video-depth-anything")):
+        if self.dtype == torch.float16:
             model.half()
 
         model = model.eval()
         if self.is_nvidia and self.use_torch_compile and not enable_trt:
-            model = torch.compile(model)
-            print("Processing torch.compile with Triton, it may take a while...")
+            enable_torch_compile_fallback(torch)
+            compiled_model = torch_compile_or_original(torch, model, "depth model")
+            if compiled_model is not model:
+                print("Processing torch.compile with Triton, it may take a while...")
+            model = compiled_model
         elif self.is_rocm and self.use_torch_compile and not enable_migraphx:
-            model = torch.compile(model)
-            print("Processing torch.compile with Triton, it may take a while...")
+            enable_torch_compile_fallback(torch)
+            compiled_model = torch_compile_or_original(torch, model, "depth model")
+            if compiled_model is not model:
+                print("Processing torch.compile with Triton, it may take a while...")
+            model = compiled_model
 
         return model
     
@@ -1489,7 +1574,7 @@ class DepthModelWrapper:
 
         """Run inference using the active backend."""
         with torch.no_grad():
-            with maybe_autocast(self.device, enabled=FP16):
+            with maybe_autocast(self.device):
                 if self.backend == "PyTorch":
                     if "video-depth-anything" in MODEL_ID.lower():
                         return self.model(pixel_values=tensor, fp32=not FP16)
@@ -1520,7 +1605,8 @@ else:
 if USE_TORCH_COMPILE and IS_CUDA:
     try:
         # Compile the model as before, but SKIP compiling lightweight post-processing functions，avoid FX re-tracing conflicts. These are fast without it.  
-        post_process_depth = torch.compile(post_process_depth)
+        enable_torch_compile_fallback(torch)
+        post_process_depth = torch_compile_with_runtime_fallback(torch, post_process_depth, "post_process_depth")
         # Assign to a global or module-level var if needed for access
         globals()['post_process_depth'] = post_process_depth  # Or use a class/module attribute
         
@@ -1530,7 +1616,7 @@ if USE_TORCH_COMPILE and IS_CUDA:
 # Initialize with dummy input for warmup
 def warmup_model(model_wraper, engine_h, engine_w, steps: int = 3):
     """Warmup with the fixed model-input shape (engine_h, engine_w)."""
-    with maybe_autocast(DEVICE, enabled=FP16):
+    with maybe_autocast(DEVICE):
         for i in range(steps):
             dummy = torch.randn(1, 3, engine_h, engine_w,
                                device=DEVICE)
@@ -1584,7 +1670,10 @@ class DepthStabilizer:
 
 depth_stabilizer = DepthStabilizer(alpha=0.9)  # increase alpha for more stability
 if USE_TORCH_COMPILE and IS_CUDA:
-    depth_stabilizer.__call__ = torch.compile(depth_stabilizer.__call__, fullgraph=True)
+    enable_torch_compile_fallback(torch)
+    depth_stabilizer = torch_compile_with_runtime_fallback(
+        torch, depth_stabilizer.__call__, "depth_stabilizer"
+    )
 
 # Modified predict_depth function with improved TRT integration
 def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = True, dtype=DTYPE):
@@ -1616,14 +1705,15 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
     else:
         # Fixed square resize for models hardcoded to a square input (DepthPro).
         if (h, w) != (target_size, target_size):
-            tensor = F.interpolate(
-                tensor.to(dtype=MODEL_DTYPE),
-                size=(target_size, target_size),
-                mode='bilinear',
-                align_corners=False
-            ) / 255.0
+            with coreml_safe_interpolate():
+                tensor = F.interpolate(
+                    tensor.to(dtype=MODEL_DTYPE),
+                    size=(target_size, target_size),
+                    mode='bilinear',
+                    align_corners=False
+                ) / 255.0
         else:
-            tensor = tensor.to(dtype=MODEL_DTYPE)
+            tensor = tensor.to(dtype=MODEL_DTYPE) / 255.0
 
     # InfiniDepth normalizes internally.
     if "infinidepth" not in MODEL_ID.lower():
@@ -1646,13 +1736,14 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
         if use_temporal_smooth:
             depth = depth_stabilizer(depth)
 
-    # Resize depth back to original input resolution (on GPU)
-    depth = F.interpolate(
-        depth.unsqueeze(0).unsqueeze(0),  # [1, 1, target_size, target_size]
-        size=(h, w),
-        mode='bilinear',
-        align_corners=False
-    ).squeeze(0).squeeze(0)
+    # Resize depth back to original input resolution (on GPU)# Resize depth back to original input resolution (on GPU)
+    with coreml_safe_interpolate():
+        depth = F.interpolate(
+            depth.unsqueeze(0).unsqueeze(0),  # [1, 1, target_size, target_size]
+            size=(h, w),
+            mode='bilinear',
+            align_corners=False
+        ).squeeze(0).squeeze(0)
 
     # Return
     if return_tuple:
@@ -1781,7 +1872,7 @@ def make_sbs_core(rgb: torch.Tensor,
     max_px = ipd_uv * W
     shifts = inv * max_px * depth_strength
     
-    with maybe_autocast(device, enabled=FP16):
+    with maybe_autocast(device):
         # CUDA fast path: grid_sample
         if not IS_DIRECTML:
             xs = torch.linspace(-1.0, 1.0, W, device=device).view(1, 1, W).expand(1, H, W)
@@ -1858,7 +1949,8 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=0.0, fill_
     return chw_tensor_to_numpy(sbs_tensor)
 
 if USE_TORCH_COMPILE and IS_CUDA:
-    make_sbs_core = torch.compile(make_sbs_core)
+    enable_torch_compile_fallback(torch)
+    make_sbs_core = torch_compile_with_runtime_fallback(torch, make_sbs_core, "make_sbs_core")
 
 
 if __name__ == "__main__":
@@ -1879,11 +1971,11 @@ if __name__ == "__main__":
     BENCH_N = 30
     for _ in range(5):
         predict_depth(image_rgb, dtype=DTYPE)
-    torch.cuda.synchronize()
+    torch.cuda.synchronize() if torch.cuda.is_available() else None
     t0 = time.perf_counter()
     for _ in range(BENCH_N):
         predict_depth(image_rgb, dtype=DTYPE)
-    torch.cuda.synchronize()
+    torch.cuda.synchronize() if torch.cuda.is_available() else None
     elapsed = time.perf_counter() - t0
     print(f"[Benchmark] backend={model_wraper.backend} | {BENCH_N} iters | {elapsed:.2f}s | {BENCH_N/elapsed:.1f} FPS")
 

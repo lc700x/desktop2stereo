@@ -28,6 +28,22 @@ from depth_anything_3.model.utils.head_utils import (
 )
 
 
+def _module_param_dtype(module: nn.Module, default: torch.dtype) -> torch.dtype:
+    return next(
+        (p.dtype for p in module.parameters(recurse=False) if p.is_floating_point()),
+        default,
+    )
+
+
+def _finite_fp16(x: torch.Tensor) -> torch.Tensor:
+    if x.dtype == torch.float16:
+        if torch.onnx.is_in_onnx_export():
+            return x
+        x = x.clamp(-65504.0, 65504.0)
+        x = torch.nan_to_num(x, nan=0.0, posinf=65504.0, neginf=-65504.0)
+    return x
+
+
 class DPT(nn.Module):
     """
     DPT for dense prediction (main head + optional sky head, sky always 1 channel).
@@ -216,15 +232,18 @@ class DPT(nn.Module):
         resized_feats = []
         for stage_idx, take_idx in enumerate(self.intermediate_layer_idx):
             x = feats[take_idx][:, patch_start_idx:]  # [B*S, N_patch, C]
+            x = x.to(dtype=_module_param_dtype(self.norm, x.dtype))
             x = self.norm(x)
             # permute -> contiguous before reshape to keep conv input contiguous
             x = x.permute(0, 2, 1).contiguous().reshape(B, C, ph, pw)  # [B*S, C, ph, pw]
 
-            x = self.projects[stage_idx](x)
+            project = self.projects[stage_idx]
+            x = project(x.to(dtype=_module_param_dtype(project, x.dtype)))
             if self.pos_embed:
                 x = self._add_pos_embed(x, W, H)
-            x = self.resize_layers[stage_idx](x)  # Align scale
-            resized_feats.append(x)
+            resize = self.resize_layers[stage_idx]
+            x = resize(x.to(dtype=_module_param_dtype(resize, x.dtype)))  # Align scale
+            resized_feats.append(_finite_fp16(x))
 
         # 2) Fusion pyramid (main branch only)
         fused = self._fuse(resized_feats)
@@ -271,10 +290,10 @@ class DPT(nn.Module):
         """
         l1, l2, l3, l4 = feats
 
-        l1_rn = self.scratch.layer1_rn(l1)
-        l2_rn = self.scratch.layer2_rn(l2)
-        l3_rn = self.scratch.layer3_rn(l3)
-        l4_rn = self.scratch.layer4_rn(l4)
+        l1_rn = self.scratch.layer1_rn(l1.to(dtype=_module_param_dtype(self.scratch.layer1_rn, l1.dtype)))
+        l2_rn = self.scratch.layer2_rn(l2.to(dtype=_module_param_dtype(self.scratch.layer2_rn, l2.dtype)))
+        l3_rn = self.scratch.layer3_rn(l3.to(dtype=_module_param_dtype(self.scratch.layer3_rn, l3.dtype)))
+        l4_rn = self.scratch.layer4_rn(l4.to(dtype=_module_param_dtype(self.scratch.layer4_rn, l4.dtype)))
 
         # 4 -> 3 -> 2 -> 1
         out = self.scratch.refinenet4(l4_rn, size=l3_rn.shape[2:])
@@ -292,11 +311,11 @@ class DPT(nn.Module):
         """
         act = activation.lower() if isinstance(activation, str) else activation
         if act == "exp":
-            return torch.exp(x)
+            return torch.exp(x.clamp(max=11.0) if x.dtype == torch.float16 else x)
         if act == "expp1":
-            return torch.exp(x) + 1
+            return torch.exp(x.clamp(max=11.0) if x.dtype == torch.float16 else x) + 1
         if act == "expm1":
-            return torch.expm1(x)
+            return torch.expm1(x.clamp(max=11.0) if x.dtype == torch.float16 else x)
         if act == "relu":
             return torch.relu(x)
         if act == "sigmoid":
@@ -333,7 +352,7 @@ class DPT(nn.Module):
         pe = create_uv_grid(pw, ph, aspect_ratio=W / H, dtype=x.dtype, device=x.device)
         pe = position_grid_to_embed(pe, x.shape[1]) * ratio
         pe = pe.permute(2, 0, 1)[None].expand(x.shape[0], -1, -1, -1)
-        return x + pe
+        return _finite_fp16(x + pe.to(dtype=x.dtype))
 
 
 # -----------------------------------------------------------------------------

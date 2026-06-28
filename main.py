@@ -169,7 +169,6 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
                 raw = frame.frame_buffer.copy()
             else:
                 raw = frame.frame_buffer.clone()
-
             raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
 
         @cap.event
@@ -181,13 +180,21 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
 else:
     # DXCamera based wincam
     from capture import DesktopGrabber
+    _USE_MAC_TENSOR_CAPTURE = (
+        OS_NAME == "Darwin"
+        and CAPTURE_TOOL in ("ScreenCaptureKit", "Quartz")
+        and "CPU" not in DEVICE_INFO
+    )
     
     def capture_loop():
         cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX)
         while not shutdown_event.is_set():
             try:
                 capture_start_time = time.perf_counter()
-                frame_raw, size = cap.grab()
+                if _USE_MAC_TENSOR_CAPTURE:
+                    frame_raw, size = cap.grab(output_format="rgb_tensor")
+                else:
+                    frame_raw, size = cap.grab()
                 
                 if shutdown_event.is_set():
                     break
@@ -300,7 +307,7 @@ def _force_exit_watchdog(delay):
 
     OpenXR / GLFW / GPU-driver native threads sometimes refuse to join, which
     would leave this process alive as an orphan still holding the GPU context +
-    model caches (e.g. ~/.miopen) — that makes the *next* launch of any mode
+    model caches (e.g. ~/.miopen) - that makes the *next* launch of any mode
     crash until a reboot.  If the main loop hasn't unwound and exited within
     `delay` seconds of a shutdown signal, force the process to die.
     """
@@ -334,7 +341,7 @@ def signal_handler(signum, frame):
 
     We intentionally do NOT exit here.  Instead we set shutdown_event and let
     the main render/stream loop unwind naturally so the viewer's own cleanup
-    runs — in OpenXR mode that means xr.end_session/destroy_session plus release
+    runs - in OpenXR mode that means xr.end_session/destroy_session plus release
     of the D3D11/GL GPU interop.  Skipping that (a hard kill mid-GPU-frame) can
     wedge the GPU/compute driver until reboot and break the next launch of any
     mode.  A watchdog thread force-exits if the graceful unwind ever hangs.
@@ -352,7 +359,7 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 if OS_NAME == "Windows":
     # CTRL_BREAK_EVENT (sent by the GUI to this process group) arrives as
-    # SIGBREAK on Windows — route it through the same graceful handler so the
+    # SIGBREAK on Windows: route it through the same graceful handler so the
     # OpenXR/GPU teardown runs before we exit.
     if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, signal_handler)
@@ -574,7 +581,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             # Alternatively: full window including borders/title bar
             # window_left, window_top, window_right, window_bottom = win32gui.GetWindowRect(hwnd)
 
-            print(f"✅ Stereo Viewer window found on monitor {monitor_idx}")
+            print(f"Stereo Viewer window found on monitor {monitor_idx}")
             print(f"Monitor bounds: X={monitor['left']} Y={monitor['top']} W={monitor['width']} H={monitor['height']}")
             print(f"Window client area: X={window_left} Y={window_top} -> {window_right}x{window_bottom}")
 
@@ -1064,7 +1071,17 @@ def main(mode="Viewer"):
     
     try:
         if mode == "Viewer":
-            from viewer import StereoWindow
+            using_metal_viewer = False
+            if OS_NAME == "Darwin" and STREAM_MODE != "MJPEG":
+                try:
+                    from metal_viewer import StereoWindow
+                    using_metal_viewer = True
+                    print("[Main] Using Metal viewer")
+                except Exception as e:
+                    print(f"[Main] Metal viewer unavailable ({e}); falling back to OpenGL viewer")
+                    from viewer import StereoWindow
+            else:
+                from viewer import StereoWindow
             # Get initial frame to determine window size (block until first frame arrives)
             rgb, depth, capture_start_time = depth_q.get()
             import torch
@@ -1079,24 +1096,34 @@ def main(mode="Viewer"):
                 h = int(1280 / w * h)
                 w = 1280
                 
-            window = StereoWindow(
-                capture_mode=CAPTURE_MODE, 
-                monitor_index=MONITOR_INDEX, 
-                ipd=IPD, depth_ratio=DEPTH_STRENGTH, 
-                convergence=CONVERGENCE, 
-                display_mode=DISPLAY_MODE, 
-                fill_16_9=FILL_16_9, 
-                show_fps=SHOW_FPS, 
-                use_3d=USE_3D_MONITOR, 
-                fix_aspect=FIX_VIEWER_ASPECT, 
-                stream_mode=STREAM_MODE, 
-                lossless_scaling=LOSSLESS_SCALING_SUPPORT, 
-                specify_display=STEREO_DISPLAY_SELECTION, 
-                stereo_display_index=STEREO_DISPLAY_INDEX, 
-                frame_size=(w,h),
+            viewer_kwargs = dict(
+                capture_mode=CAPTURE_MODE,
+                monitor_index=MONITOR_INDEX,
+                ipd=IPD,
+                depth_ratio=DEPTH_STRENGTH,
+                convergence=CONVERGENCE,
+                display_mode=DISPLAY_MODE,
+                fill_16_9=FILL_16_9,
+                show_fps=SHOW_FPS,
+                use_3d=USE_3D_MONITOR,
+                fix_aspect=FIX_VIEWER_ASPECT,
+                stream_mode=STREAM_MODE,
+                lossless_scaling=LOSSLESS_SCALING_SUPPORT,
+                specify_display=STEREO_DISPLAY_SELECTION,
+                stereo_display_index=STEREO_DISPLAY_INDEX,
+                frame_size=(w, h),
                 use_cuda=USE_CUDART,
                 cuda_device_id=DEVICE_ID,
-                vsync=VSYNC)
+                vsync=VSYNC,
+            )
+            try:
+                window = StereoWindow(**viewer_kwargs)
+            except Exception as e:
+                if not using_metal_viewer:
+                    raise
+                print(f"[Main] Metal viewer init failed ({e}); falling back to OpenGL viewer")
+                from viewer import StereoWindow
+                window = StereoWindow(**viewer_kwargs)
 
             if STREAM_MODE == "RTMP":
                 if OS_NAME == "Windows":
@@ -1234,7 +1261,8 @@ def main(mode="Viewer"):
                     next_render_time += TIME_SLEEP
                 
                 window.render()
-                glfw.swap_buffers(window.window)
+                if not getattr(window, "uses_metal", False):
+                    glfw.swap_buffers(window.window)
                 glfw.poll_events()
             
             glfw.terminate()
@@ -1242,7 +1270,7 @@ def main(mode="Viewer"):
         elif mode == "OpenXR":
             from xrviewer import OpenXRViewer, OPENXR_AVAILABLE
             if not OPENXR_AVAILABLE:
-                raise ImportError("pyopenxr not installed — run: pip install pyopenxr")
+                raise ImportError("pyopenxr not installed - run: pip install pyopenxr")
             rgb, depth, capture_start_time = depth_q.get()
             import torch
             if isinstance(rgb, torch.Tensor):

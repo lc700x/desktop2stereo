@@ -43,6 +43,7 @@ import time
 import asyncio
 import ctypes
 import re
+import json
 import atexit
 import traceback
 
@@ -70,6 +71,90 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "desktop2stereo.log")
 STOP_REQUEST_FILE = os.path.join(LOG_DIR, "stop.request")
+
+_ENV_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
+_ENV_IMAGE_NAMES = ("background", "panorama", "equirectangular", "360", "sky", "skybox")
+
+
+def _read_env_profile_for_gui(profile_path):
+    if not os.path.isfile(profile_path):
+        return {}
+    try:
+        with open(profile_path, "r", encoding="utf-8-sig") as f:
+            loaded = json.load(f)
+        return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+
+def _find_env_image_for_gui(room_dir):
+    if not os.path.isdir(room_dir):
+        return None
+    for stem in _ENV_IMAGE_NAMES:
+        for ext in _ENV_IMAGE_EXTS:
+            path = os.path.join(room_dir, stem + ext)
+            if os.path.isfile(path):
+                return path
+    try:
+        for name in sorted(os.listdir(room_dir), key=lambda v: v.lower()):
+            path = os.path.join(room_dir, name)
+            if os.path.isfile(path) and os.path.splitext(name)[1].lower() in _ENV_IMAGE_EXTS:
+                return path
+    except OSError:
+        pass
+    return None
+
+
+def _is_panorama_profile_for_gui(profile):
+    if not isinstance(profile, dict):
+        return False
+    raw_bg = profile.get("background")
+    raw_panorama = profile.get("panorama")
+    cfg = {}
+    if isinstance(raw_bg, str):
+        cfg["image"] = raw_bg
+    elif isinstance(raw_bg, dict):
+        cfg.update(raw_bg)
+    if isinstance(raw_panorama, str):
+        cfg.setdefault("image", raw_panorama)
+    elif isinstance(raw_panorama, dict):
+        cfg.update(raw_panorama)
+    env_type = str(profile.get("environment_type", profile.get("type", "")) or "").strip().lower()
+    bg_type = str(cfg.get("type", cfg.get("kind", "")) or "").strip().lower()
+    projection = str(cfg.get("projection", cfg.get("format", "")) or "").strip().lower()
+    return (
+        env_type in ("panorama", "360", "360_photo", "360-photo", "photo_sphere", "photosphere")
+        or bg_type in ("panorama", "360", "360_photo", "360-photo", "equirectangular", "photo_sphere", "photosphere")
+        or projection in ("equirectangular", "360", "360_photo", "360-photo")
+        or raw_panorama is True
+    )
+
+
+def _discover_gui_environment_folders(env_base):
+    panorama_dirs = []
+    glb_dirs = []
+    try:
+        names = sorted(os.listdir(env_base), key=lambda v: v.lower())
+    except (FileNotFoundError, OSError):
+        return []
+    for name in names:
+        room_dir = os.path.join(env_base, name)
+        if not os.path.isdir(room_dir):
+            continue
+        profile = _read_env_profile_for_gui(os.path.join(room_dir, "profile.json"))
+        glb_path = os.path.join(room_dir, "environment.glb")
+        if _is_panorama_profile_for_gui(profile) and _find_env_image_for_gui(room_dir):
+            panorama_dirs.append(name)
+            continue
+        if not os.path.isfile(glb_path):
+            glb_name = str(profile.get("glb", "environment.glb") or "environment.glb")
+            glb_path = glb_name if os.path.isabs(glb_name) else os.path.join(room_dir, glb_name)
+        if os.path.isfile(glb_path):
+            glb_dirs.append(name)
+            continue
+        if _find_env_image_for_gui(room_dir):
+            panorama_dirs.append(name)
+    return panorama_dirs + glb_dirs
 
 # Kept as an alias for backward compatibility with any external tooling
 # that referenced the old diag log path.
@@ -342,7 +427,7 @@ UI_TEXTS = {
         "tooltip_display_mode": "Stereo display format",
         "tooltip_vsync": "Synchronize the local viewer to the display refresh rate",
         "tooltip_ctrl_model": "Controller model",
-        "tooltip_env_model": "Background environment: Default (black), or a 3D scene from xr_viewer/environments/. Cinema glow can be toggled via long-press X in VR.",
+        "tooltip_env_model": "Background environment: Default (black), a 360 image folder, or a 3D scene from xr_viewer/environments/. Cinema glow can be toggled via long-press X in VR.",
         "Default": "Default",
         "tooltip_capture_mode": "Source: monitor or window",
         "tooltip_monitor": "Input monitor",
@@ -472,7 +557,7 @@ UI_TEXTS = {
         "tooltip_display_mode": "立体显示格式",
         "tooltip_vsync": "将本地查看窗口同步到显示器刷新率，关闭可用于帧率对比测试",
         "tooltip_ctrl_model": "手柄型号",
-        "tooltip_env_model": "背景环境：默认（黑色），或 xr_viewer/environments/ 中的 3D 场景。影院辉光可在 VR 中长按 X 键切换。",
+        "tooltip_env_model": "背景环境：默认（黑色）、360 图像文件夹，或 xr_viewer/environments/ 中的 3D 场景。影院辉光可在 VR 中长按 X 键切换。",
         "Default": "默认",
         "tooltip_capture_mode": "捕获源：屏幕或窗口",
         "tooltip_monitor": "输入显示器",
@@ -1368,9 +1453,8 @@ class Desktop2StereoGUI:
 
         # Environment dropdown sits to the right of the controller picker.
         # Options are the built-in "Default" (black backdrop) plus every
-        # subfolder under xr_viewer/environments/ that contains an
-        # environment.glb, matching the runtime cycle in xrviewer's
-        # _cycle_environment.
+        # panorama/image folder and every GLB room under xr_viewer/environments/,
+        # matching the runtime cycle in xrviewer's _cycle_environment.
         #   * Default -> plain opaque-black backdrop (no env model)
         #      Glow can be toggled via long-press X in VR.
         # Built-in names are localized for display (e.g. CN: 默认)
@@ -1381,15 +1465,9 @@ class Desktop2StereoGUI:
         # If absent or unreadable the folder name itself is shown.
         self.r11_label = ft.Text(UI_TEXTS[self.language]["Environment:"], size=FONT_SIZE, width=S(130))
         env_base = os.path.join(os.path.dirname(__file__), "xr_viewer", "environments")
-        try:
-            env_dirs = [d for d in os.listdir(env_base)
-                        if os.path.isdir(os.path.join(env_base, d))
-                        and os.path.isfile(os.path.join(env_base, d, "environment.glb"))]
-        except (FileNotFoundError, OSError):
-            env_dirs = []
         self._env_base = env_base
         self._env_builtin_keys = ["Default"]
-        self._env_folder_keys = sorted(env_dirs)
+        self._env_folder_keys = _discover_gui_environment_folders(env_base)
         # Cache per-folder display_name dicts so we don't hit the disk on
         # every language toggle. Populated lazily by _load_env_display_names.
         self._env_folder_display_cache = {}
@@ -3049,13 +3127,7 @@ class Desktop2StereoGUI:
         if list(self.ctrl_model_dd.options) != ctrl_dirs:
             self.ctrl_model_dd.options = ctrl_dirs
 
-        try:
-            env_dirs = [d for d in os.listdir(self._env_base)
-                        if os.path.isdir(os.path.join(self._env_base, d))
-                        and os.path.isfile(os.path.join(self._env_base, d, "environment.glb"))]
-        except (FileNotFoundError, OSError):
-            env_dirs = []
-        self._env_folder_keys = sorted(env_dirs)
+        self._env_folder_keys = _discover_gui_environment_folders(self._env_base)
         self._load_env_folder_display_names()
         self.env_dd.options = self._build_env_dd_options(self.language)
 

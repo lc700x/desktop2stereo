@@ -36,3 +36,6 @@ output
 .diff_output.txt
 .serena
 flet_client
+.codex*
+_codex*
+.codegraph

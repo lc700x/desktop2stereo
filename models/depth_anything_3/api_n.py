@@ -71,8 +71,14 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         if pixel_values.dim() != 4:
             raise ValueError("Expected input shape (B, 3, H, W)")
 
+        input_dtype = pixel_values.dtype
+        param_dtype = next(
+            (p.dtype for p in self.model.parameters() if p.is_floating_point()),
+            pixel_values.dtype,
+        )
+
         # DA3 internal expects (B, N, 3, H, W), N=1 for single image
-        x = pixel_values.unsqueeze(1)
+        x = pixel_values.to(dtype=param_dtype).unsqueeze(1)
 
         # Patch: make resize_layers dtype-safe for export
         for layer in getattr(self.model, "resize_layers", []):
@@ -94,7 +100,11 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         if depth.dim() == 4:
             depth = depth.squeeze(1)
 
-        return depth
+        if depth.dtype == torch.float16:
+            depth = depth.clamp(-65504.0, 65504.0)
+        if not torch.onnx.is_in_onnx_export():
+            depth = torch.nan_to_num(depth, nan=0.0, posinf=65504.0, neginf=-65504.0)
+        return depth.to(dtype=input_dtype)
 
     def predict_depth(self, pixel_values: torch.Tensor, fp32: bool = False) -> torch.Tensor:
         """High-level inference API with autocast.

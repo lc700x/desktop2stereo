@@ -2,6 +2,112 @@ import requests
 import yaml, threading, time
 import os, platform, socket
 import platform
+import functools
+import tempfile
+
+
+def configure_torch_compile_cache():
+    """Keep TorchInductor/Triton cache paths short enough for Windows."""
+    if os.name != "nt":
+        return None
+
+    cache_root = os.environ.get("DESKTOP2STEREO_TORCH_CACHE")
+    candidates = [cache_root] if cache_root else [_default_torch_compile_cache_root()]
+
+    last_error = None
+    for root in candidates:
+        if not root:
+            continue
+        inductor_dir = os.path.join(root, "i")
+        triton_dir = os.path.join(root, "t")
+        try:
+            os.makedirs(inductor_dir, exist_ok=True)
+            os.makedirs(triton_dir, exist_ok=True)
+        except OSError as exc:
+            last_error = exc
+            continue
+
+        os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", inductor_dir)
+        os.environ.setdefault("TRITON_CACHE_DIR", triton_dir)
+        return root
+
+    if last_error is not None:
+        print(f"[Warning] Could not prepare short torch.compile cache: {_format_exception(last_error)}")
+    return None
+
+
+def _default_torch_compile_cache_root():
+    temp_root = os.environ.get("TEMP") or os.environ.get("TMP") or tempfile.gettempdir()
+    temp_root = _short_path_if_available(temp_root)
+    return os.path.join(temp_root, f"torch_{_cache_username()}")
+
+
+def _cache_username():
+    name = os.environ.get("USERNAME") or os.environ.get("USER") or os.path.basename(os.path.expanduser("~"))
+    name = name or "user"
+    invalid = '<>:"/\\|?*'
+    return "".join("_" if ch in invalid or ord(ch) < 32 else ch for ch in name).strip(" .") or "user"
+
+
+def _short_path_if_available(path):
+    if os.name != "nt" or not path:
+        return path
+    try:
+        import ctypes
+
+        size = ctypes.windll.kernel32.GetShortPathNameW(path, None, 0)
+        if size <= 0:
+            return path
+        buf = ctypes.create_unicode_buffer(size)
+        if ctypes.windll.kernel32.GetShortPathNameW(path, buf, size) > 0:
+            return buf.value
+    except Exception:
+        pass
+    return path
+
+
+def enable_torch_compile_fallback(torch_module):
+    try:
+        torch_module._dynamo.config.suppress_errors = True
+    except Exception:
+        pass
+
+
+def torch_compile_or_original(torch_module, target, label, **compile_kwargs):
+    try:
+        return torch_module.compile(target, **compile_kwargs)
+    except Exception as exc:
+        print(f"[Warning] torch.compile failed for {label}: {_format_exception(exc)}; running without it.")
+        return target
+
+
+def torch_compile_with_runtime_fallback(torch_module, target, label, **compile_kwargs):
+    compiled = torch_compile_or_original(torch_module, target, label, **compile_kwargs)
+    if compiled is target:
+        return target
+
+    disabled = False
+
+    @functools.wraps(target)
+    def wrapper(*args, **kwargs):
+        nonlocal disabled
+        if disabled:
+            return target(*args, **kwargs)
+        try:
+            return compiled(*args, **kwargs)
+        except Exception as exc:
+            disabled = True
+            print(f"[Warning] torch.compile disabled for {label}: {_format_exception(exc)}; running without it.")
+            return target(*args, **kwargs)
+
+    return wrapper
+
+
+def _format_exception(exc):
+    first_line = str(exc).splitlines()[0] if str(exc) else ""
+    return f"{type(exc).__name__}: {first_line}"
+
+configure_torch_compile_cache()
 
 # Debug Mode
 DEBUG = False
@@ -35,7 +141,7 @@ DISABLE_TRT_KEYWORDS = [
     "depthpro",
     "da3-giant",
     "da3nested-giant",
-    "video-depth-anything",
+    # "video-depth-anything",
 ]
 
 # Models with Disabled TRT 
@@ -44,35 +150,12 @@ DISABLE_MIGRAPHX_KEYWORDS = [
     "depthpro",
     "da3-giant",
     "da3nested-giant",
-    "video-depth-anything",
+    # "video-depth-anything",
 ]
 
 TRT_FIX_KEYWORDS = [
-    # DA3 models
-    "depth-anything/DA3-SMALL",
-    "depth-anything/DA3-BASE",
-    "depth-anything/DA3-LARGE",
-    # "depth-anything/DA3-GIANT",
-    "depth-anything/DA3-LARGE-1.1",
-    "depth-anything/DA3METRIC-LARGE",
-    # "depth-anything/DA3NESTED-GIANT-LARGE",
-    "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
-    "depth-anything/DA3MONO-LARGE",
-    # Video-Depth-Anything
-    "depth-anything/Video-Depth-Anything-Small",
-    "depth-anything/Video-Depth-Anything-Base",
-    "depth-anything/Video-Depth-Anything-Large",
-    # Metric-Video-Depth-Anything
-    "depth-anything/Metric-Video-Depth-Anything-Small",
-    "depth-anything/Metric-Video-Depth-Anything-Base",
-    "depth-anything/Metric-Video-Depth-Anything-Large",
     # Intel/zoedepth
     "Intel/zoedepth-nyu-kitti",
-    # LC700X/InfiniDepth
-    "lc700x/InfiniDepth-Small",
-    "lc700x/InfiniDepth-SmallPlus",
-    "lc700x/InfiniDepth-Base",
-    "lc700x/InfiniDepth-Large",
 ]
 
 FORCE_FP32_KEYWORDS = [
@@ -81,16 +164,6 @@ FORCE_FP32_KEYWORDS = [
     "Intel/zoedepth-kitti",
 ]
 
-COMPILE_FIX_KEYWORDS = [
-    # Video-Depth-Anything
-    "depth-anything/Video-Depth-Anything-Small",
-    "depth-anything/Video-Depth-Anything-Base",
-    "depth-anything/Video-Depth-Anything-Large",
-    # Metric-Video-Depth-Anything
-    "depth-anything/Metric-Video-Depth-Anything-Small",
-    "depth-anything/Metric-Video-Depth-Anything-Base",
-    "depth-anything/Metric-Video-Depth-Anything-Large",
-]
 
 # Models with Disabled CoreML 
 DISABLE_COREML_KEYWORDS = [
@@ -549,8 +622,6 @@ if is_cn_ip():
     os.environ['HF_ENDPOINT'] = "https://hf-mirror.com"
 else:
     os.environ['HF_ENDPOINT'] = "https://huggingface.co"
-
-print(f"[Main] Using HF Endpoint: {os.environ.get('HF_ENDPOINT')}")
 
 if OS_NAME == "Windows":
     import ctypes, win32gui, win32con

@@ -10,7 +10,7 @@ import contextlib
 #     pass
 
 torch.set_num_threads(1)
-from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_KEYWORDS, DISABLE_TRITON_KEYWORDS, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, FORCE_FP32_KEYWORDS, CAPTURE_MODE
+from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, USE_MIGRAPHX, RECOMPILE_MIGRAPHX, DISABLE_TRT_KEYWORDS, DISABLE_MIGRAPHX_KEYWORDS,  DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_GFX, DISABLE_TRITON_GFX, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, COMPILE_FIX_KEYWORDS, FORCE_FP32_KEYWORDS, CAPTURE_MODE
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -25,6 +25,7 @@ USE_TORCH_COMPILE = False if not IS_CUDA else USE_TORCH_COMPILE
 USE_TENSORRT = False if not IS_NVIDIA else USE_TENSORRT
 USE_COREML = False if not IS_MPS else USE_COREML
 USE_OPENVINO = False if not IS_XPU else USE_OPENVINO
+USE_MIGRAPHX = False if not IS_AMD_ROCM else USE_MIGRAPHX
 
 
 import torch.nn.functional as F
@@ -40,6 +41,8 @@ if not DEBUG:
     warnings.filterwarnings('ignore') # disable for debug
 
 warnings.filterwarnings("ignore", message=".*ONNX export mode is set to TrainingMode.EVAL.*instance_norm.*")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Try import OpenVINO runtime
 if IS_XPU:
@@ -121,7 +124,7 @@ if USE_COREML and IS_MPS:
                 F.interpolate = orig_interpolate
                 
 # disable FP16 on DirectML and MPS without coreml          
-if IS_DIRECTML or IS_MPS or ((USE_TENSORRT or USE_COREML or USE_OPENVINO) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS) or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or (MODEL_ID in FORCE_FP32_KEYWORDS):
+if IS_DIRECTML or IS_MPS or ((USE_TENSORRT or USE_COREML or USE_OPENVINO or USE_MIGRAPHX) and MODEL_ID in TRT_FIX_KEYWORDS) or (USE_TORCH_COMPILE and MODEL_ID in COMPILE_FIX_KEYWORDS) or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or (MODEL_ID in FORCE_FP32_KEYWORDS):
     FP16 = False
 
 # Disable CoreML for models whose architecture can't be traced (implicit heads, etc.)
@@ -181,11 +184,66 @@ if IS_NVIDIA:
         USE_TENSORRT = False
 
 if IS_AMD_ROCM:
+    import platform, re, subprocess
+    
+    def get_gfx_arch():
+        """
+        Detect the current GPU's GFX architecture code (e.g., 'gfx1200', 'gfx1030').
+
+        - On **Linux**, it parses `rocminfo` output (looking for `Name: gfx...`).
+        - On **Windows**, it parses `hipinfo` output (looking for `gcnArchName: ...`).
+        - On other OSes, it tries `rocm_agent_enumerator` as a last resort.
+
+        Returns:
+            str: The GFX code, or None if not found / command unavailable.
+        """
+        system = platform.system()
+
+        try:
+            if system == "Linux":
+                # Use rocminfo
+                result = subprocess.run(['rocminfo'], capture_output=True, text=True, check=True)
+                output = result.stdout
+
+                # Most reliable: find a line like "Name: gfx1030"
+                match = re.search(r'Name:\s*(gfx[0-9a-f]+)', output, re.IGNORECASE)
+                if match:
+                    return match.group(1)
+
+                # Fallback: search for any "gfxXXXX" string
+                fallback = re.search(r'gfx[0-9a-f]+', output)
+                if fallback:
+                    return fallback.group(0)
+
+            elif system == "Windows":
+                # Use hipinfo (available with ROCm on Windows)
+                result = subprocess.run(['hipinfo'], capture_output=True, text=True, check=True)
+                output = result.stdout
+                match = re.search(r'gcnArchName:\s*(\S+)', output)
+                if match:
+                    return match.group(1)
+
+            # For other OSes (macOS, etc.) or if the above fail, try rocm_agent_enumerator
+            result = subprocess.run(['rocm_agent_enumerator'], capture_output=True, text=True, check=True)
+            lines = result.stdout.strip().split()
+            if lines:
+                return lines[0]   # usually the first GPU
+
+        except (subprocess.SubprocessError, FileNotFoundError):
+            # Command not found or execution failed
+            pass
+
+        return None
+    GPU_ARCH = get_gfx_arch()
+    
     # Set up ROCm7 Path
     torch_dir = os.path.dirname(torch.__file__)
     site_packages = os.path.dirname(torch_dir)
     ROCM_PATH = os.path.join(site_packages, "_rocm_sdk_devel")
 
+    os.environ['MIOPEN_ENABLE_LOGGING'] = '0'
+    warnings.filterwarnings("ignore", message="bgemm_internal_cublaslt error")
+    warnings.filterwarnings("ignore", message="gemm_and_bias error")
     os.environ["HIP_PLATFORM"] = "amd"
     os.environ["HIP_PATH"] = ROCM_PATH
     os.environ["HIP_CLANG_PATH"] = os.path.join(ROCM_PATH, "llvm", "bin")
@@ -204,13 +262,12 @@ if IS_AMD_ROCM:
         os.environ.get("LIBRARY_PATH", "")
     ])
     os.environ["PKG_CONFIG_PATH"] = os.path.join(ROCM_PATH, "lib", "pkgconfig") + os.pathsep + os.environ.get("PKG_CONFIG_PATH", "")
-    for gpu_id in DISABLE_CUDNN_KEYWORDS:
-        if gpu_id in DEVICE_INFO:
-            torch.backends.cudnn.enabled = False  # Disable cuDNN for known problematic AMD RX6000 GPUs
-            print(f"[Main] Disabled cuDNN for {DEVICE_INFO}. ")
-            break
+    if GPU_ARCH in DISABLE_CUDNN_GFX:
+        torch.backends.cudnn.enabled = False  # Disable cuDNN for known problematic AMD RX6000 GPUs
+        print(f"[Main] Disabled cuDNN for {DEVICE_INFO}. ")
+        
     # disable trition for RX5000 series and older AMD GPUs
-    is_legacy_amd = any(gpu_id in DEVICE_INFO for gpu_id in DISABLE_TRITON_KEYWORDS)   
+    is_legacy_amd = GPU_ARCH in DISABLE_TRITON_GFX   
     if is_legacy_amd:
         USE_TORCH_COMPILE = False  # Disable Triton for known problematic AMD GPUs
         print(f"[Main] Disabled torch.compile for {DEVICE_INFO}. ")
@@ -218,6 +275,10 @@ if IS_AMD_ROCM:
         os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
         os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "TRUE" # Enable flash attention autotune for AMD ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Enable AOTriton for ROCm
+
+    # Disable TRT for unsupported models
+    if any(x in MODEL_ID.lower() for x in DISABLE_MIGRAPHX_KEYWORDS):
+        USE_MIGRAPHX = False
 
 # Model configuration
 DTYPE = torch.float16 if FP16 else torch.float32
@@ -350,6 +411,7 @@ DTYPE_INFO = "fp16" if FP16 else "fp32"
 ONNX_PATH = None
 TRT_PATH = None
 COREML_PATH = None
+MIGRAPHX_PATH = None
 # Single character digits and letters for "FPS: XX.X"
 font_dict = {
     "0": ["111","101","101","101","111"],
@@ -481,10 +543,14 @@ def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
     return depth.squeeze()
 
 def chw_tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
-    hwc_tensor = tensor.permute(1, 2, 0).contiguous()
-    return hwc_tensor.detach().cpu().numpy()
+    hwc_tensor = tensor.permute(1, 2, 0).contiguous().detach().cpu().float()
+    # torch.compile can return tensor subclasses on recent PyTorch builds.
+    # NumPy export only supports plain Tensor instances, so unwrap last.
+    if type(hwc_tensor) is not torch.Tensor and hasattr(hwc_tensor, "as_subclass"):
+        hwc_tensor = hwc_tensor.as_subclass(torch.Tensor)
+    return hwc_tensor.numpy()
 
-def apply_gamma(depth, gamma=1.2):
+def apply_gamma(depth, gamma=1.45):
     return torch.pow(depth, gamma)
 
 def normalize_tensor(depth: torch.tensor):
@@ -619,6 +685,105 @@ def get_da3_model(model_id=MODEL_ID, dtype=DTYPE):
         model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH, dtype=dtype)
     return model.to(DEVICE)
 
+# MIGraphX Optimization and Engine (ROCm7)
+def _ensure_migraphx_available():
+    """Check if migraphx is available."""
+    try:
+        import migraphx  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+MIGRAPHX_AVAILABLE = _ensure_migraphx_available()
+
+def optimize_with_migraphx(onnx_path, migraphx_path):
+    """
+    Parse ONNX and compile with MIGraphX for AMD GPU.
+    Saves compiled graph to disk for persistent caching.
+
+    Returns path to compiled graph, or None on failure.
+    """
+    if not MIGRAPHX_AVAILABLE:
+        raise ImportError("migraphx is not installed")
+
+    if os.path.exists(migraphx_path) and not RECOMPILE_MIGRAPHX:
+        print(f"[MIGraphX] Using cached graph: {migraphx_path}")
+        return migraphx_path
+
+    try:
+        import migraphx as mx
+
+        print("[MIGraphX] Compiling ONNX model, this may take a while...")
+        prog = mx.parse_onnx(onnx_path)
+        target = mx.get_target("gpu")
+        if not(MODEL_ID in FORCE_FP32_KEYWORDS or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or 'infinidepth' in MODEL_ID.lower() or 'da3' in MODEL_ID.lower()):
+            mx.quantize_fp16(prog)
+        prog.compile(target, offload_copy=False)
+        mx.save(prog, migraphx_path)
+
+        print(f"[MIGraphX] Graph saved to {migraphx_path}")
+        return migraphx_path
+
+    except Exception as e:
+        print(f"[Error] MIGraphX optimization failed: {e}")
+        return None
+
+
+class MIGraphXEngine:
+    """
+    Wrapper around a compiled MIGraphX program (offload_copy=False).
+    Zero-copy GPU path: argument_from_pointer for both input and output.
+    offload_copy=False requires caller to supply GPU buffers for all params,
+    including output params named '#output_N'.
+    """
+    def __init__(self, graph_path, device, dtype):
+        import migraphx as mx
+        self.mx = mx
+        self.device = device
+        self.dtype = dtype
+        self.prog = mx.load(graph_path)
+        self._logged_zero_copy = False
+        param_shapes = self.prog.get_parameter_shapes()
+        self.input_name = None
+        self._out_params = {}
+        for name, shape in param_shapes.items():
+            if '#output_' in name:
+                self._out_params[name] = shape
+            else:
+                self.input_name = name
+                self._in_shape = shape
+        if self.input_name is None:
+            raise RuntimeError("MIGraphX graph has no input parameter")
+        if not self._out_params:
+            raise RuntimeError(
+                "MIGraphX graph has no output parameter buffers. "
+                "Recompile it with offload_copy=False or delete the cached .mgx file."
+            )
+        self._out_name = list(self._out_params.keys())[0]
+        self._out_lens = list(self._out_params[self._out_name].lens())
+        # Map MIGraphX type enum to torch dtype (half_type=1, float_type=2)
+        _MX_TO_TORCH = {1: torch.float16, 2: torch.float32, 3: torch.float64}
+        self._mgx_in_dtype = _MX_TO_TORCH.get(int(self._in_shape.type()), torch.float32)
+        self._mgx_out_dtype = _MX_TO_TORCH.get(int(self._out_params[self._out_name].type()), torch.float32)
+
+    def __call__(self, tensor: torch.Tensor):
+        if tensor.dtype != self._mgx_in_dtype or not tensor.is_contiguous():
+            tensor = tensor.contiguous().to(dtype=self._mgx_in_dtype)
+        in_arg = self.mx.argument_from_pointer(self._in_shape, tensor.data_ptr())
+        out = torch.empty(tuple(self._out_lens), dtype=self._mgx_out_dtype, device=self.device)
+        out_arg = self.mx.argument_from_pointer(self._out_params[self._out_name], out.data_ptr())
+        # Run on PyTorch's current stream so input writes, inference, and output
+        # reads stay stream-ordered. Avoids blocking syncs and the FP16
+        # cross-stream race in one shot.
+        stream = torch.cuda.current_stream(self.device)
+        self.prog.run_async({self.input_name: in_arg, self._out_name: out_arg},
+                            stream.cuda_stream, "ihipStream_t")
+        if not self._logged_zero_copy:
+            print(f"[MIGraphX] Zero-copy GPU path active | input={tuple(tensor.shape)} {tensor.dtype} -> output={tuple(out.shape)} {out.dtype}")
+            self._logged_zero_copy = True
+        return out
+
+
 # TensorRT Optimization
 def optimize_with_tensorrt(onnx_path, trt_path):
     """
@@ -649,9 +814,7 @@ def optimize_with_tensorrt(onnx_path, trt_path):
         config = builder.create_builder_config()
 
         if MODEL_ID in FORCE_FP32_KEYWORDS or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or 'infinidepth-large' in MODEL_ID.lower():
-            # Transformer-based model: use TF32 only. Enabling FP16/FP8 with
-            # PREFER_PRECISION_CONSTRAINTS causes attention layers to underflow
-            # and produce all-zero depth maps.
+            # Transformer-based model: use TF32 only. 
             config.set_flag(trt.BuilderFlag.TF32)
         else:
             # FP4, FP8, FP16 ENABLED
@@ -694,6 +857,32 @@ def optimize_with_tensorrt(onnx_path, trt_path):
         return None
  
 # Export to ONNX
+class ModelForONNX(torch.nn.Module):
+    """Return a single depth tensor for accelerator exports."""
+    def __init__(self, model, force_fp32_predict: bool = False):
+        super().__init__()
+        self.model = model
+        self.force_fp32_predict = force_fp32_predict
+
+    def forward(self, x):
+        if hasattr(self.model, "predict_depth"):
+            return self.model.predict_depth(x, fp32=self.force_fp32_predict)
+
+        try:
+            out = self.model(pixel_values=x)
+        except TypeError:
+            out = self.model(x)
+
+        if hasattr(out, "predicted_depth"):
+            return out.predicted_depth
+        if isinstance(out, dict) and "predicted_depth" in out:
+            return out["predicted_depth"]
+        if isinstance(out, torch.Tensor):
+            return out
+        if isinstance(out, (tuple, list)) and out and isinstance(out[0], torch.Tensor):
+            return out[0]
+        raise RuntimeError("Unsupported model output type for ONNX export")
+
 def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=DTYPE):
     """
     Export the depth estimation model to ONNX format with fixed square input.
@@ -705,9 +894,13 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
     output_names = ["predicted_depth"]
     
     model.eval()
+    export_model = ModelForONNX(
+        model,
+        force_fp32_predict=("da3" in MODEL_ID.lower() or "infinidepth" in MODEL_ID.lower()),
+    ).eval()
     with torch.no_grad():
         torch.onnx.export(
-            model,
+            export_model,
             dummy_input,
             output_path,
             input_names=input_names,
@@ -716,13 +909,17 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
             export_params=True,
             verbose=False,
             training=torch.onnx.TrainingMode.EVAL,
+            dynamo=False,
         )
     
-    engine_name = None
     if USE_TENSORRT:
         engine_name = "TensorRT"
     elif USE_OPENVINO:
         engine_name = "OpenVINO"
+    elif USE_MIGRAPHX:
+        engine_name = "MIGraphX"
+    else:
+        engine_name = "unknown"
     print(f"ONNX model generated, {engine_name} engine compiling may take a while...")
 
 class ModelForCoreML(torch.nn.Module):
@@ -1038,9 +1235,9 @@ class TensorRTEngine:
 # Model Wrapper Class
 class DepthModelWrapper:
     def __init__(self, model_path, device, device_info, dtype, size=None,
-                 onnx_path=None, trt_path=None):
+                 onnx_path=None, trt_path=None, migraphx_path=None):
         """
-        Wrapper class that handles both PyTorch and TensorRT backends.
+        Wrapper class that handles both PyTorch and TensorRT/MIGraphX backends.
         """
         self.device = device
         self.device_info = device_info
@@ -1048,11 +1245,13 @@ class DepthModelWrapper:
         self.model_path = model_path
         self.onnx_path = onnx_path
         self.trt_path = trt_path
+        self.migraphx_path = migraphx_path
         self.size = size
         self.use_torch_compile = USE_TORCH_COMPILE
-        
+
         # Determine backend based on device
-        self.is_cuda = IS_CUDA
+        self.is_nvidia = IS_NVIDIA
+        self.is_rocm = IS_AMD_ROCM
         self.is_mps = IS_MPS
         self.is_xpu = IS_XPU
         self.is_cpu = IS_CPU
@@ -1066,7 +1265,9 @@ class DepthModelWrapper:
             self._pending_backend = "CoreML"
         elif USE_OPENVINO and OPENVINO_AVAILABLE and OPENVINO_DEVICE is not None:
             self._pending_backend = "OpenVINO"
-        elif self.is_cuda and USE_TENSORRT:
+        elif self.is_rocm and USE_MIGRAPHX and MIGRAPHX_AVAILABLE:
+            self._pending_backend = "MIGraphX"
+        elif self.is_nvidia and USE_TENSORRT:
             warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
             self._pending_backend = "TensorRT"
         else:
@@ -1080,7 +1281,7 @@ class DepthModelWrapper:
         if self._pending_backend is None:
             print(f"Using backend: {self.backend}")
 
-    def build_accelerated_backend(self, engine_h, engine_w, onnx_path, trt_path, coreml_path):
+    def build_accelerated_backend(self, engine_h, engine_w, onnx_path, trt_path, coreml_path, migraphx_path=None):
         """Compile the deferred accelerated backend for the known engine shape;
         falls back to PyTorch on failure. Runs at most once."""
         if self._built or self._pending_backend is None:
@@ -1089,6 +1290,7 @@ class DepthModelWrapper:
 
         self.onnx_path = onnx_path
         self.trt_path = trt_path
+        self.migraphx_path = migraphx_path
         try:
             if self._pending_backend == "TensorRT":
                 engine = self._load_tensorrt_engine()
@@ -1097,6 +1299,13 @@ class DepthModelWrapper:
                     self.backend = "TensorRT"
                 else:
                     print("[Error] TensorRT failed, keeping PyTorch")
+            elif self._pending_backend == "MIGraphX":
+                engine = self._load_migraphx_engine()
+                if engine is not None:
+                    self.model = engine
+                    self.backend = "MIGraphX"
+                else:
+                    print("[Error] MIGraphX failed, keeping PyTorch")
             elif self._pending_backend == "OpenVINO":
                 self.model = self._load_openvino_engine()
                 self.backend = "OpenVINO"
@@ -1112,7 +1321,7 @@ class DepthModelWrapper:
         print(f"Using backend: {self.backend}")
         self._built = True
 
-    def _load_pytorch_model(self, enable_trt=USE_TENSORRT):
+    def _load_pytorch_model(self, enable_trt=USE_TENSORRT, enable_migraphx=USE_MIGRAPHX):
         """Load the original PyTorch model."""
         global DTYPE
         DTYPE = self.dtype
@@ -1148,12 +1357,15 @@ class DepthModelWrapper:
         if self.dtype == torch.float16 and not any(kw in MODEL_ID.lower() for kw in ("da3", "video-depth-anything")):
             model.half()
 
-        # Special setup precision for DA3
-        if self.is_cuda and self.use_torch_compile and not enable_trt:
+        model = model.eval()
+        if self.is_nvidia and self.use_torch_compile and not enable_trt:
             model = torch.compile(model)
             print("Processing torch.compile with Triton, it may take a while...")
-        
-        return model.eval()
+        elif self.is_rocm and self.use_torch_compile and not enable_migraphx:
+            model = torch.compile(model)
+            print("Processing torch.compile with Triton, it may take a while...")
+
+        return model
     
     def _load_coreml_model(self, engine_h, engine_w):
         pytorch_model = self._load_pytorch_model()
@@ -1200,11 +1412,30 @@ class DepthModelWrapper:
         except Exception as e:
             print(f"[Error] TensorRT engine loading failed: {str(e)}")
             return None
-    
+
+    def _load_migraphx_engine(self):
+        """Load or create MIGraphX engine for AMD ROCm7."""
+        # Export to ONNX if not exists
+        if RECOMPILE_MIGRAPHX or not os.path.exists(self.onnx_path):
+            # Only load PyTorch for export. Cached ONNX/MGX runs avoid the extra
+            # model load and stay on the compiled zero-copy path sooner.
+            pytorch_model = self._load_pytorch_model()
+            export_to_onnx(pytorch_model, self.onnx_path, self.device, self.dtype)
+
+        # Build or load MIGraphX graph
+        migraphx_graph_path = optimize_with_migraphx(self.onnx_path, self.migraphx_path)
+        if migraphx_graph_path is None:
+            return None
+        try:
+            return MIGraphXEngine(migraphx_graph_path, self.device, self.dtype)
+        except Exception as e:
+            print(f"[Error] MIGraphX engine loading failed: {str(e)}")
+            return None
+
     def __call__(self, tensor):
         """Run inference using the active backend."""
-        # Fast path for OpenVINO backend
-        if getattr(self, "backend", None) == "OpenVINO":
+        # Fast path for OpenVINO / MIGraphX backends (they handle their own device/dtype)
+        if getattr(self, "backend", None) in ("OpenVINO", "MIGraphX"):
             return self.model(tensor)
 
         """Run inference using the active backend."""
@@ -1262,7 +1493,7 @@ lock = Lock()
 # Build the accelerated engine + warmup on the first frame, once the shape is known.
 _engine_ready = False
 def _ensure_engine_built(engine_h, engine_w):
-    global _engine_ready, ENGINE_H, ENGINE_W, ONNX_PATH, TRT_PATH, COREML_PATH
+    global _engine_ready, ENGINE_H, ENGINE_W, ONNX_PATH, TRT_PATH, COREML_PATH, MIGRAPHX_PATH
     if _engine_ready:
         return
     with lock:
@@ -1270,14 +1501,16 @@ def _ensure_engine_built(engine_h, engine_w):
             return
         ENGINE_H, ENGINE_W = engine_h, engine_w
         if engine_h == DEPTH_RESOLUTION and engine_w == DEPTH_RESOLUTION:
-            ONNX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.onnx")
-            TRT_PATH    = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
-            COREML_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.mlpackage")
+            ONNX_PATH       = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.onnx")
+            TRT_PATH        = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
+            COREML_PATH     = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.mlpackage")
+            MIGRAPHX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}_gpu.mgx")
         else:
-            ONNX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.onnx")
-            TRT_PATH    = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.trt")
-            COREML_PATH = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.mlpackage")
-        model_wraper.build_accelerated_backend(engine_h, engine_w, ONNX_PATH, TRT_PATH, COREML_PATH)
+            ONNX_PATH       = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.onnx")
+            TRT_PATH        = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.trt")
+            COREML_PATH     = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.mlpackage")
+            MIGRAPHX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}_gpu.mgx")
+        model_wraper.build_accelerated_backend(engine_h, engine_w, ONNX_PATH, TRT_PATH, COREML_PATH, MIGRAPHX_PATH)
         warmup_model(model_wraper, engine_h, engine_w, steps=3)
         _engine_ready = True
 

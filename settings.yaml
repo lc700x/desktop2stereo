@@ -313,7 +313,7 @@ Model List:
     resolutions:
     - 1536
 Depth Model: Distill-Any-Depth-Small
-Depth Strength: 2.0
+Depth Strength: 4.0
 Depth Resolution: 336
 Anti-aliasing: 2
 Foreground Scale: 0.5

@@ -22,15 +22,14 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-from models.InfiniDepth.model.model import InfiniDepth, _make_dense_query_coord
+from models.InfiniDepth.model.model import InfiniDepth
 
 
 class InfiniDepthModel(nn.Module):
     """InfiniDepth — simplified API for dense relative depth estimation.
 
-    Wraps the coordinate-query InfiniDepth model with automatic dense
-    query-coordinate generation so callers can pass an image tensor and
-    receive a dense depth map directly.
+    Wraps InfiniDepth with a dense full-image path so callers can pass an
+    image tensor and receive a dense depth map directly.
 
     CUDA is required. The model loads onto CUDA during __init__; move it
     elsewhere via ``model.to(device)`` after construction.
@@ -39,9 +38,6 @@ class InfiniDepthModel(nn.Module):
     def __init__(self, model_path: str, encoder: str = "vitl16"):
         super().__init__()
         self.model = InfiniDepth(model_path=model_path, encoder=encoder)
-
-    # Keyed by (B, H, W, device_str) — same key → reuse coord tensor.
-    _coord_cache: dict = {}
 
     def forward(self, pixel_values: torch.Tensor, fp32: bool = False) -> torch.Tensor:
         """Dense depth prediction.
@@ -57,30 +53,27 @@ class InfiniDepthModel(nn.Module):
         if pixel_values.dim() != 4:
             raise ValueError("Expected input shape (B, 3, H, W)")
 
-        B, _, H, W = pixel_values.shape
-        device = pixel_values.device
+        B, _, _, _ = pixel_values.shape
         input_dtype = pixel_values.dtype
+        param_dtype = next(
+            (p.dtype for p in self.model.parameters() if p.is_floating_point()),
+            pixel_values.dtype,
+        )
+        run_fp32 = fp32 and param_dtype == torch.float32
 
-        # The model's internal autocast is tuned for float32 input.
-        # Running the implicit head / basic encoder in pure float16 loses
-        # precision and produces blank depth maps. Cast to float32 for
-        # inference, then restore the caller's dtype on output.
-        x = pixel_values.float()
-
-        cache_key = (B, H, W, str(device))
-        if cache_key not in InfiniDepthModel._coord_cache:
-            InfiniDepthModel._coord_cache[cache_key] = _make_dense_query_coord(B, H, W, device)
-        query = InfiniDepthModel._coord_cache[cache_key]
+        # Keep activations consistent with the loaded parameter dtype. This
+        # avoids FP32 input / FP16 bias mismatches during ONNX/MIGraphX export
+        # while preserving true FP32 inference when the model is loaded as FP32.
+        x = pixel_values.float() if run_fp32 else pixel_values.to(dtype=param_dtype)
 
         with torch.no_grad():
-            # Use non-batched forward: processes all query points in a single
-            # grid_sample + MLP pass.  The while-loop in batch_forward /
-            # inference cannot be traced by ONNX / TensorRT.  For 512x512
-            # input (262k points) this fits comfortably in GPU memory.
-            pred = self.model.forward(x=x, coords=query, force_fp32=fp32)
-            # depth = 1.0 / torch.clamp(pred, min=5e-3)
+            pred = self.model.forward_dense(x=x, force_fp32=run_fp32)
 
-        depth = pred.reshape(B, 1, H, W).squeeze(1)
+        depth = pred.reshape(B, 1, pred.shape[-2], pred.shape[-1]).squeeze(1)
+        if depth.dtype == torch.float16:
+            depth = depth.clamp(-65504.0, 65504.0)
+        if not torch.onnx.is_in_onnx_export():
+            depth = torch.nan_to_num(depth, nan=0.0, posinf=65504.0, neginf=-65504.0)
         return depth.to(input_dtype)
     
     def predict_depth(self, pixel_values: torch.Tensor, fp32: bool = False) -> torch.Tensor:
@@ -98,7 +91,8 @@ class InfiniDepthModel(nn.Module):
         """
         with torch.no_grad():
             if pixel_values.device.type != "privateuseone":
-                with torch.autocast(device_type=pixel_values.device.type, enabled=not fp32):
+                use_autocast = (not fp32) and (not torch.onnx.is_in_onnx_export())
+                with torch.autocast(device_type=pixel_values.device.type, enabled=use_autocast):
                     return self.forward(pixel_values, fp32=fp32)
             else:
                 return self.forward(pixel_values, fp32=fp32)

@@ -18,6 +18,17 @@ torch._dynamo.config.automatic_dynamic_shapes = False
 torch._dynamo.config.accumulated_cache_size_limit = 1024
 
 
+def fp16_finite(x: Tensor, enabled: bool) -> Tensor:
+    if not enabled:
+        return x
+    if torch.onnx.is_in_onnx_export():
+        return torch.clamp(x, min=-65504.0, max=65504.0)
+    if x.dtype == torch.float16:
+        x = torch.clamp(x, min=-65504.0, max=65504.0)
+        return torch.nan_to_num(x, nan=0.0, posinf=65504.0, neginf=-65504.0)
+    return x
+
+
 class SelfAttentionBlock(nn.Module):
     def __init__(
         self,
@@ -39,6 +50,7 @@ class SelfAttentionBlock(nn.Module):
         device=None,
     ) -> None:
         super().__init__()
+        self.export_fp16_residual_clamp = dim >= 1024
         # print(f"biases: qkv: {qkv_bias}, proj: {proj_bias}, ffn: {ffn_bias}")
         self.norm1 = norm_layer(dim)
         self.attn = attn_class(
@@ -118,8 +130,14 @@ class SelfAttentionBlock(nn.Module):
                 alpha=residual_scale_factor,
             )
         else:
-            x_attn = x + self.ls1(self.attn(self.norm1(x), rope=rope))
-            x_ffn = x_attn + self.ls2(self.mlp(self.norm2(x_attn)))
+            x_attn = fp16_finite(
+                x + self.ls1(self.attn(self.norm1(x), rope=rope)),
+                self.export_fp16_residual_clamp,
+            )
+            x_ffn = fp16_finite(
+                x_attn + self.ls2(self.mlp(self.norm2(x_attn))),
+                self.export_fp16_residual_clamp,
+            )
 
         return x_ffn
 
@@ -190,8 +208,14 @@ class SelfAttentionBlock(nn.Module):
         else:
             x_out = []
             for x, rope in zip(x_list, rope_list):
-                x_attn = x + self.ls1(self.attn(self.norm1(x), rope=rope))
-                x_ffn = x_attn + self.ls2(self.mlp(self.norm2(x_attn)))
+                x_attn = fp16_finite(
+                    x + self.ls1(self.attn(self.norm1(x), rope=rope)),
+                    self.export_fp16_residual_clamp,
+                )
+                x_ffn = fp16_finite(
+                    x_attn + self.ls2(self.mlp(self.norm2(x_attn))),
+                    self.export_fp16_residual_clamp,
+                )
                 x_out.append(x_ffn)
             x_ffn = x_out
 
