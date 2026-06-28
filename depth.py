@@ -753,7 +753,12 @@ def optimize_with_migraphx(onnx_path, migraphx_path):
             or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512)
         )
         if not force_migraphx_fp32:
-            mx.quantize_fp16(prog)
+            try:
+                mx.autocast_fp8(prog)
+                print("[MIGraphX] Quantized to FP8")
+            except Exception:
+                print("[MIGraphX] FP8 not available, falling back to FP16")
+                mx.quantize_fp16(prog)
         prog.compile(target, offload_copy=False)
         mx.save(prog, migraphx_path)
 
@@ -815,7 +820,8 @@ class MIGraphXEngine:
         self.prog.run_async({self.input_name: in_arg, self._out_name: out_arg},
                             stream.cuda_stream, "ihipStream_t")
         if not self._logged_zero_copy:
-            print(f"[MIGraphX] Zero-copy GPU path active | input={tuple(tensor.shape)} {tensor.dtype} -> output={tuple(out.shape)} {out.dtype}")
+            if DEBUG:
+                print(f"[MIGraphX] Zero-copy GPU path active | input={tuple(tensor.shape)} {tensor.dtype} -> output={tuple(out.shape)} {out.dtype}")
             self._logged_zero_copy = True
         return out
 

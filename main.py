@@ -1076,7 +1076,7 @@ def main(mode="Viewer"):
                 try:
                     from metal_viewer import StereoWindow
                     using_metal_viewer = True
-                    print("[Main] Using Metal viewer")
+                    print("[Main] Using Metal Accelerated Local Viewer")
                 except Exception as e:
                     print(f"[Main] Metal viewer unavailable ({e}); falling back to OpenGL viewer")
                     from viewer import StereoWindow

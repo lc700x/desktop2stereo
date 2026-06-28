@@ -39,7 +39,7 @@ RECOMPILE_TRT = True
 USE_MIGRAPHX = True
 RECOMPILE_MIGRAPHX = True
 
-USE_COREML = False
+USE_COREML = True
 RECOMPILE_COREML = True
 
 USE_OPENVINO = False
@@ -64,8 +64,8 @@ RECOMPILE_OPENVINO = True
 # MODEL_ID = "lc700x/dpt-large-redesign-hf"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 # MODEL_ID = "Intel/dpt-beit-base-384"
-MODEL_ID = "lc700x/InfiniDepth-Small"
-# MODEL_ID = "xingyang1/Distill-Any-Depth-Small-hf"
+# MODEL_ID = "lc700x/InfiniDepth-Small"
+MODEL_ID = "xingyang1/Distill-Any-Depth-Small-hf"
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
