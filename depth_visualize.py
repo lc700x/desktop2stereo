@@ -28,7 +28,7 @@ DEBUG = True
 AA_STRENGTH = 0
 FP16 = True
 FILL_16_9 = True
-DEPTH_RESOLUTION = 336
+DEPTH_RESOLUTION = 512
 FOREGROUND_SCALE = 0
 
 USE_TORCH_COMPILE = True
@@ -64,8 +64,8 @@ RECOMPILE_OPENVINO = True
 # MODEL_ID = "lc700x/dpt-large-redesign-hf"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 # MODEL_ID = "Intel/dpt-beit-base-384"
-# MODEL_ID = "lc700x/InfiniDepth-Small"
-MODEL_ID = "xingyang1/Distill-Any-Depth-Small-hf"
+MODEL_ID = "lc700x/InfiniDepth-Small"
+# MODEL_ID = "xingyang1/Distill-Any-Depth-Small-hf"
 
 IS_CUDA = "CUDA" in DEVICE_INFO
 IS_NVIDIA = "CUDA" in DEVICE_INFO and "NVIDIA" in DEVICE_INFO
@@ -290,6 +290,7 @@ if IS_AMD_ROCM:
         return None
     GPU_ARCH = get_gfx_arch()
     
+    print(GPU_ARCH)
     # Set up ROCm7 Path
     torch_dir = os.path.dirname(torch.__file__)
     site_packages = os.path.dirname(torch_dir)

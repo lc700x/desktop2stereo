@@ -647,6 +647,7 @@ uniform float u_frost_blend;
 uniform float u_beam_thickness;
 uniform float u_diffuse_scatter;
 uniform float u_time;
+uniform float u_veil_mode;
 
 in vec2 v_uv;
 in vec3 v_local;
@@ -681,9 +682,16 @@ void main() {
         discard;
     }
 
-    vec3 frost = mix(src, vec3(luma), 0.28);
-    frost = frost * (0.55 + u_frost_blend * 0.35) + src * bright * 0.35;
-    alpha = min(alpha, 1.0);
-    frag_color = vec4(frost * alpha, alpha);
+    if (u_veil_mode > 0.5) {
+        // Raw edge-pixel color extension: output source color with
+        // depth-based alpha only — no frost desaturation or brightening.
+        alpha = min(alpha, 1.0);
+        frag_color = vec4(src * alpha, alpha);
+    } else {
+        vec3 frost = mix(src, vec3(luma), 0.28);
+        frost = frost * (0.55 + u_frost_blend * 0.35) + src * bright * 0.35;
+        alpha = min(alpha, 1.0);
+        frag_color = vec4(frost * alpha, alpha);
+    }
 }
 """

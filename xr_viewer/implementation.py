@@ -281,10 +281,10 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._frost_glow_diffuse = 0.85
         self._frost_glow_margin_m = 3.6
         self._frost_glow_inset = 0.045
-        self._frost_veil_intensity = 1.0
-        self._frost_veil_alpha = 0.34
-        self._frost_veil_threshold = 0.28
-        self._frost_veil_lod = 6.6
+        self._frost_veil_intensity = 1.5
+        self._frost_veil_alpha = 1.00
+        self._frost_veil_threshold = 0.0
+        self._frost_veil_lod = 0.0
         self._screen_light_intensity = 3.5
 
         # Environment lighting config (overridable via profile.json)
@@ -1731,6 +1731,8 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             self.depth_tex.release()
         self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
         self.color_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        self.color_tex.repeat_x = False
+        self.color_tex.repeat_y = False
         self.color_tex.build_mipmaps()
         try:
             self.color_tex.anisotropy = 16.0
@@ -3643,11 +3645,21 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         sy = max(float(self.screen_height) * 0.5, 1e-6)
         fx = front_half_w / sx
         fy = front_half_h / sy
+        # Each strip connects screen edge to front-plane edge.
+        # screen: z=0, xy in [-1,1]  front: z=1, xy in [-fx,fx] x [-fy,fy]
+        # UV: u maps x (left=0, right=1), v maps y (bottom=0, top=1).
+        # Left/right bands: v goes from 1 (physical-bottom, y=-1)
+        # down to 0 (physical-top, y=1) so the band samples the
+        # correct screen-edge pixel column top-to-bottom.
         verts = [
-            -1, -1, 0, 0, 0,  -1,  1, 0, 0, 1,  -fx, -fy, 1, 0, 0,  -fx,  fy, 1, 0, 1,
-             1, -1, 0, 1, 0,   1,  1, 0, 1, 1,   fx, -fy, 1, 1, 0,   fx,  fy, 1, 1, 1,
-            -1, -1, 0, 0, 0,   1, -1, 0, 1, 0,  -fx, -fy, 1, 0, 0,   fx, -fy, 1, 1, 0,
-            -1,  1, 0, 0, 1,   1,  1, 0, 1, 1,  -fx,  fy, 1, 0, 1,   fx,  fy, 1, 1, 1,
+            # Strip 0: left band (u=0), v=1 at y=-1  v=0 at y=1
+            -1, -1, 0, 0, 1,  -1,  1, 0, 0, 0,  -fx, -fy, 1, 0, 1,  -fx,  fy, 1, 0, 0,
+            # Strip 1: right band (u=1), v=1 at y=-1  v=0 at y=1
+             1, -1, 0, 1, 1,   1,  1, 0, 1, 0,   fx, -fy, 1, 1, 1,   fx,  fy, 1, 1, 0,
+            # Strip 2: bottom band (v=1, extends bottom-edge pixel colors)
+            -1, -1, 0, 0, 1,   1, -1, 0, 1, 1,  -fx, -fy, 1, 0, 1,   fx, -fy, 1, 1, 1,
+            # Strip 3: top band (v=0, extends top-edge pixel colors)
+            -1,  1, 0, 0, 0,   1,  1, 0, 1, 0,  -fx,  fy, 1, 0, 0,   fx,  fy, 1, 1, 0,
         ]
         return np.array(verts, dtype='f4')
 
@@ -3874,11 +3886,12 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         prog['u_threshold'].value = float(getattr(self, '_frost_glow_threshold', 0.46))
         prog['u_intensity'].value = float(intensity)
         prog['u_frost_alpha'].value = float(getattr(self, '_frost_glow_alpha', 0.42))
-        prog['u_noise_scale'].value = 54.0
+        prog['u_noise_scale'].value = float(getattr(self, '_frost_glow_noise_scale', 54.0))
         prog['u_beam_softness'].value = 0.34
         prog['u_frost_blend'].value = float(getattr(self, '_frost_glow_blend', 1.35))
         prog['u_beam_thickness'].value = float(getattr(self, '_frost_glow_thickness', 1.6))
         prog['u_diffuse_scatter'].value = float(getattr(self, '_frost_glow_diffuse', 0.85))
+        prog['u_veil_mode'].value = float(getattr(self, '_frost_glow_veil_mode', 0.0))
         prog['u_time'].value = float(time.time())
 
     def _render_curved_frost_glow(self, mgl_fbo, vp_mat, source_tex, intensity):
@@ -3960,15 +3973,21 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             float(getattr(self, '_frost_glow_blend', 1.35)),
             float(getattr(self, '_frost_glow_thickness', 1.6)),
             float(getattr(self, '_frost_glow_diffuse', 0.85)),
+            float(getattr(self, '_frost_glow_inset', 0.045)),
+            float(getattr(self, '_frost_glow_noise_scale', 54.0)),
+            float(getattr(self, '_frost_glow_veil_mode', 0.0)),
         )
         try:
             self._frost_glow_intensity = float(getattr(self, '_frost_veil_intensity', 1.0))
-            self._frost_glow_alpha = float(getattr(self, '_frost_veil_alpha', 0.34))
-            self._frost_glow_threshold = float(getattr(self, '_frost_veil_threshold', 0.28))
-            self._frost_glow_lod = float(getattr(self, '_frost_veil_lod', 6.6))
+            self._frost_glow_alpha = float(getattr(self, '_frost_veil_alpha', 0.60))
+            self._frost_glow_threshold = float(getattr(self, '_frost_veil_threshold', 0.0))
+            self._frost_glow_lod = float(getattr(self, '_frost_veil_lod', 0.0))
             self._frost_glow_blend = 2.5
             self._frost_glow_thickness = 3.0
-            self._frost_glow_diffuse = 1.2
+            self._frost_glow_diffuse = 1.5
+            self._frost_glow_inset = 0.06
+            self._frost_glow_noise_scale = 4.0
+            self._frost_glow_veil_mode = 1.0
             self._render_frost_glow(mgl_fbo, vp_mat)
         finally:
             (
@@ -3979,6 +3998,9 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                 self._frost_glow_blend,
                 self._frost_glow_thickness,
                 self._frost_glow_diffuse,
+                self._frost_glow_inset,
+                self._frost_glow_noise_scale,
+                self._frost_glow_veil_mode,
             ) = old_values
 
     def _render_frosted_glow(self, mgl_fbo, vp_mat):

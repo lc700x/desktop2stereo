@@ -851,7 +851,7 @@ if LANG == "CN":
         ("", "", "", False),
 
         ("[预设与杂项]", "", "", True),
-        ("左 Menu 键", "短按", "循环面板模式: 面向头/固定/隐藏", False),
+        ("左 Menu 键", "短按", "显示/隐藏状态与快捷键面板", False),
         ("左 Y 键", "短按", "默认环境重置屏幕 / 房间重置座位高度", False),
         ("左 Y 键", "长按 1s", "默认环境循环屏幕预设 / 房间循环座位或灯光", False),
         ("左 X 键", "短按", "显示/隐藏虚拟键盘", False),
@@ -913,7 +913,7 @@ else:
         ("", "", "", False),
 
         ("[Presets & Misc]", "", "", True),
-        ("Left Menu button", "Short press", "Cycle panel: head-facing/fixed/hidden", False),
+        ("Left Menu button", "Short press", "Show / hide status + shortcuts panel", False),
         ("Left Y button", "Short press", "Reset screen / room seat height", False),
         ("Left Y button", "Long press 1s", "Cycle screen presets / room seat-light presets", False),
         ("Left X button", "Short press", "Show/hide virtual keyboard", False),
