@@ -83,6 +83,7 @@
       -3.8,
       0.0
     ],
+    "auto_movie_crop": false,
     "curve_axis": "none",
     "allow_curve": false
   }

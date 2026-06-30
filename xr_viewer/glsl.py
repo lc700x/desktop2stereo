@@ -647,7 +647,7 @@ uniform float u_frost_blend;
 uniform float u_beam_thickness;
 uniform float u_diffuse_scatter;
 uniform float u_time;
-uniform float u_veil_mode;
+uniform vec4 u_source_crop;  // xy = source top-left, zw = source size
 
 in vec2 v_uv;
 in vec3 v_local;
@@ -660,38 +660,67 @@ float hash12(vec2 p) {
 }
 
 void main() {
-    vec2 sample_uv = clamp(v_uv, vec2(0.0), vec2(1.0));
-    vec3 src = textureLod(u_source, sample_uv, max(u_lod, 0.0)).rgb;
-    float luma = dot(src, vec3(0.2126, 0.7152, 0.0722));
-    float bright = smoothstep(u_threshold, 1.0, luma);
-
+    vec2 sample_uv = clamp(u_source_crop.xy + v_uv * u_source_crop.zw,
+                           vec2(0.0), vec2(1.0));
     float depth = clamp(v_local.z, 0.0, 1.0);
     float beam = exp(-depth / max(u_beam_softness, 0.001));
     beam = pow(max(beam, 0.0), 1.0 / max(u_beam_thickness, 0.1));
 
-    float edge_dist = min(min(sample_uv.x, 1.0 - sample_uv.x),
-                          min(sample_uv.y, 1.0 - sample_uv.y));
+    float edge_dist = min(min(v_uv.x, 1.0 - v_uv.x),
+                          min(v_uv.y, 1.0 - v_uv.y));
     float edge = 1.0 - smoothstep(max(u_edge_inset, 0.0001),
                                   max(u_edge_inset, 0.0001) * 4.0,
                                   edge_dist);
 
+    vec3 src = textureLod(u_source, sample_uv, max(u_lod, 0.0)).rgb;
     float n = hash12(floor((sample_uv + vec2(u_time * 0.011, -u_time * 0.007)) * u_noise_scale));
+    float luma = dot(src, vec3(0.2126, 0.7152, 0.0722));
+    float bright = smoothstep(u_threshold, 1.0, luma);
     float scatter = max(bright, luma * clamp(u_diffuse_scatter, 0.0, 2.0) * 0.35);
     float alpha = edge * beam * scatter * u_frost_alpha * u_intensity * (0.82 + 0.30 * n);
     if (alpha <= 0.002) {
         discard;
     }
+    vec3 frost = mix(src, vec3(luma), 0.28);
+    frost = frost * (0.55 + u_frost_blend * 0.35) + src * bright * 0.35;
+    alpha = min(alpha, 1.0);
+    frag_color = vec4(frost * alpha, alpha);
+}
+"""
 
-    if (u_veil_mode > 0.5) {
-        // Raw edge-pixel color extension: output source color with
-        // depth-based alpha only — no frost desaturation or brightening.
-        alpha = min(alpha, 1.0);
-        frag_color = vec4(src * alpha, alpha);
-    } else {
-        vec3 frost = mix(src, vec3(luma), 0.28);
-        frost = frost * (0.55 + u_frost_blend * 0.35) + src * bright * 0.35;
-        alpha = min(alpha, 1.0);
-        frag_color = vec4(frost * alpha, alpha);
+_FROST_VEIL_FRAG = """
+#version 330
+uniform sampler2D u_source;
+uniform float u_edge_inset;
+uniform float u_intensity;
+uniform float u_frost_alpha;
+uniform float u_beam_softness;
+uniform float u_beam_thickness;
+uniform vec4 u_source_crop;  // xy = source top-left, zw = source size
+
+in vec2 v_uv;
+in vec3 v_local;
+out vec4 frag_color;
+
+void main() {
+    vec2 sample_uv = clamp(u_source_crop.xy + v_uv * u_source_crop.zw,
+                           vec2(0.0), vec2(1.0));
+    float depth = clamp(v_local.z, 0.0, 1.0);
+    float beam = exp(-depth / max(u_beam_softness, 0.001));
+    beam = pow(max(beam, 0.0), 1.0 / max(u_beam_thickness, 0.1));
+
+    float edge_dist = min(min(v_uv.x, 1.0 - v_uv.x),
+                          min(v_uv.y, 1.0 - v_uv.y));
+    float edge = 1.0 - smoothstep(max(u_edge_inset, 0.0001),
+                                  max(u_edge_inset, 0.0001) * 4.0,
+                                  edge_dist);
+
+    float alpha = edge * beam * u_frost_alpha * u_intensity;
+    if (alpha <= 0.002) {
+        discard;
     }
+    alpha = min(alpha, 1.0);
+    vec3 src = texture(u_source, sample_uv).rgb;
+    frag_color = vec4(src * alpha, alpha);
 }
 """

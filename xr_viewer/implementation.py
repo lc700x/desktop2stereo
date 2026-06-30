@@ -66,7 +66,8 @@ from .glsl import (
     _WORLD_VERT, _OVERLAY_FRAG, _BLIT_FRAG, _SOLID_VERT, _SOLID_FRAG,
     _BEAM_VERT, _BEAM_FRAG, _CURVED_VERT, _CTRL_VERT, _CTRL_FRAG,
     _ENV_VERT, _ENV_FRAG, _GLOW_FRAG, _FROST_GLOW_VERT,
-    _FROST_CURVED_VERT, _FROST_GLOW_FRAG, _PANORAMA_VERT, _PANORAMA_FRAG,
+    _FROST_CURVED_VERT, _FROST_GLOW_FRAG, _FROST_VEIL_FRAG,
+    _PANORAMA_VERT, _PANORAMA_FRAG,
 )
 from .input import (
     _MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP,
@@ -89,7 +90,7 @@ from .render import (
 
 
 
-from viewer import FRAGMENT_SHADER, BACKEND
+from viewer import FRAGMENT_SHADER as _BASE_FRAGMENT_SHADER, BACKEND
 from .d3d11_backend import D3D11BackendMixin
 from .environment import EnvironmentMixin
 from .overlay import OverlayMixin
@@ -98,6 +99,28 @@ try:
     from viewer import CUDART_GL
 except ImportError:
     CUDART_GL = None
+
+
+def _make_xr_fragment_shader(src):
+    """Add XR-only source cropping without changing the desktop viewer shader."""
+    if "uniform vec4 u_source_crop;" not in src:
+        src = src.replace(
+            "uniform float u_roll;          // screen roll (radians), rotates parallax direction",
+            "uniform float u_roll;          // screen roll (radians), rotates parallax direction\n"
+            "    uniform vec4 u_source_crop;    // xy = source top-left, zw = source size",
+            1,
+        )
+    src = src.replace(
+        "vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);",
+        "vec2 screen_flipped_uv = vec2(uv.x, 1.0 - uv.y);\n"
+        "        vec2 flipped_uv = u_source_crop.xy + screen_flipped_uv * u_source_crop.zw;",
+        1,
+    )
+    return src
+
+
+FRAGMENT_SHADER = _make_xr_fragment_shader(_BASE_FRAGMENT_SHADER)
+
 
 class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
     """
@@ -198,6 +221,36 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._screen_ref_size = 2.4   # long-dimension reference for resize
         self.screen_height   = None   # derived from frame aspect ratio on first frame
 
+        # Auto letterbox crop for wide movies playing on a normal desktop
+        # monitor.  Detection reads only the captured desktop frame and runs at
+        # a low cadence; rendering reuses the last accepted crop.
+        self._auto_movie_crop = bool(kwargs.get('auto_movie_crop', True))
+        self._movie_crop_detect_interval = float(kwargs.get('movie_crop_detect_interval', 1.0))
+        self._movie_crop_next_detect_t = 0.0
+        self._movie_crop_target_uv = (0.0, 0.0, 1.0, 1.0)
+        self._movie_crop_render_uv = (0.0, 0.0, 1.0, 1.0)
+        self._movie_crop_full_hits = 0
+        self._movie_crop_reveal_until = 0.0
+        self._movie_crop_reveal_margin = 0.10
+        self._movie_crop_pending_gpu = None
+        self._movie_crop_sample_cache = None
+        self._movie_crop_target_active = False
+        self._movie_crop_render_active = False
+        self._movie_crop_profile_cache_key = None
+        self._movie_crop_profile_cache_value = None
+        self._movie_crop_frame_uv = (0.0, 0.0, 1.0, 1.0)
+        self._source_crop_uniform_cache = {}
+        self._frost_uniform_cache = {}
+        self._frost_layout_cache_key = None
+        self._frost_layout_cache_val = None
+        self._frost_model_cache_key = None
+        self._frost_model_cache_bytes = None
+        self._frost_model_uniform_cache = {}
+        self._color_tex_mipmap_filter_active = None
+        self._rgb_hwc_upload_tensor = None
+        self._rgb_hwc_upload_key = None
+        self._torch_mod = None
+
         # screen presets: (name, width_m, distance_m) height is derived from width and frame aspect ratio
         self._screen_presets = [
             ("10\" Tablet",        0.30, 0.4),
@@ -272,6 +325,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                 'frost_glow': 'frosted',
                 'frosted_glow': 'frosted',
             }.get(mode, mode)
+        self._active_glow_mode_cached = self._glow_mode
         self._frost_glow_intensity = 1.0
         self._frost_glow_alpha = 0.42
         self._frost_glow_threshold = 0.46
@@ -660,10 +714,14 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._frost_glow_prog = None
         self._frost_glow_vbo = None
         self._frost_glow_vao = None
+        self._frost_veil_prog = None
+        self._frost_veil_vao = None
         self._frost_glow_verts_params = None
         self._curved_frost_prog = None
         self._curved_frost_vbo = None
         self._curved_frost_vao = None
+        self._curved_veil_prog = None
+        self._curved_veil_vao = None
         self._curved_frost_verts_params = None
         self._blit_prog = None
         self._blit_vao  = None
@@ -918,6 +976,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self.prog['u_convergence'].value = self.convergence
         self.prog['tex_color'].value = 0
         self.prog['tex_depth'].value = 1
+        self.prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
 
         vertices = np.array([
             -1, -1, 0, 0,
@@ -955,9 +1014,20 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             fragment_shader=_FROST_GLOW_FRAG,
         )
         self._frost_glow_prog['u_source'].value = 0
-        self._frost_glow_vbo = self.ctx.buffer(reserve=16 * 5 * 4, dynamic=True)
+        self._frost_glow_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
+        self._frost_glow_vbo = self.ctx.buffer(reserve=24 * 5 * 4, dynamic=True)
         self._frost_glow_vao = self.ctx.vertex_array(
             self._frost_glow_prog,
+            [(self._frost_glow_vbo, '3f 2f', 'in_position', 'in_uv')],
+        )
+        self._frost_veil_prog = self.ctx.program(
+            vertex_shader=_FROST_GLOW_VERT,
+            fragment_shader=_FROST_VEIL_FRAG,
+        )
+        self._frost_veil_prog['u_source'].value = 0
+        self._frost_veil_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
+        self._frost_veil_vao = self.ctx.vertex_array(
+            self._frost_veil_prog,
             [(self._frost_glow_vbo, '3f 2f', 'in_position', 'in_uv')],
         )
 
@@ -1126,6 +1196,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._curved_prog['u_convergence'].value = self.convergence
         self._curved_prog['tex_color'].value = 0
         self._curved_prog['tex_depth'].value  = 1
+        self._curved_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
         # Allocate dynamic VBO large enough for N=48 segments × 2 verts × (3+2) floats.
         _CURVED_N = 48
         _curved_buf_bytes = (_CURVED_N + 1) * 2 * (3 + 2) * 4   # f4
@@ -1163,10 +1234,21 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             fragment_shader=_FROST_GLOW_FRAG,
         )
         self._curved_frost_prog['u_source'].value = 0
-        _curved_frost_buf_bytes = (((_CURVED_N + 1) * 4) + 8) * (3 + 2 + 3) * 4
+        self._curved_frost_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
+        _curved_frost_buf_bytes = ((12 * _CURVED_N) + 12) * (3 + 2 + 3) * 4
         self._curved_frost_vbo = self.ctx.buffer(reserve=_curved_frost_buf_bytes, dynamic=True)
         self._curved_frost_vao = self.ctx.vertex_array(
             self._curved_frost_prog,
+            [(self._curved_frost_vbo, '3f 2f 3f', 'in_position', 'in_uv', 'in_local')],
+        )
+        self._curved_veil_prog = self.ctx.program(
+            vertex_shader=_FROST_CURVED_VERT,
+            fragment_shader=_FROST_VEIL_FRAG,
+        )
+        self._curved_veil_prog['u_source'].value = 0
+        self._curved_veil_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
+        self._curved_veil_vao = self.ctx.vertex_array(
+            self._curved_veil_prog,
             [(self._curved_frost_vbo, '3f 2f 3f', 'in_position', 'in_uv', 'in_local')],
         )
 
@@ -1731,6 +1813,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             self.depth_tex.release()
         self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
         self.color_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        self._color_tex_mipmap_filter_active = True
         self.color_tex.repeat_x = False
         self.color_tex.repeat_y = False
         self.color_tex.build_mipmaps()
@@ -1812,6 +1895,9 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                 # Tensor frames are CHW. Keep the border reduction on GPU and
                 # transfer only the final 3 floats back to CPU.
                 h, w = int(rgb.shape[1]), int(rgb.shape[2])
+                x0, y0, x1, y1 = self._movie_crop_pixel_bounds(w, h)
+                rgb = rgb[:, y0:y1, x0:x1]
+                h, w = int(rgb.shape[1]), int(rgb.shape[2])
                 bt = max(1, int(min(h, w) * 0.08))
 
                 top_h = min(bt, h)
@@ -1838,6 +1924,9 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                 return
 
             rgb_np = np.asarray(rgb, dtype=np.uint8)
+            h, w = rgb_np.shape[:2]
+            x0, y0, x1, y1 = self._movie_crop_pixel_bounds(w, h)
+            rgb_np = rgb_np[y0:y1, x0:x1, :]
             h, w = rgb_np.shape[:2]
             bt = max(1, int(min(h, w) * 0.08))
             top_h = min(bt, h)
@@ -1866,12 +1955,413 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         except Exception:
             pass
 
+    def _movie_crop_profile_enabled(self):
+        if not bool(getattr(self, '_auto_movie_crop', True)):
+            return False
+
+        profile = getattr(self, '_env_profile', None)
+        screen = getattr(self, '_screen_profile', None)
+        env_name = getattr(self, '_environment_model', None)
+        key = (id(profile), id(screen), env_name)
+        if key == getattr(self, '_movie_crop_profile_cache_key', None):
+            return bool(getattr(self, '_movie_crop_profile_cache_value', False))
+
+        if not isinstance(profile, dict):
+            profile = {}
+        if not isinstance(screen, dict):
+            nested = profile.get('screen', {})
+            screen = nested if isinstance(nested, dict) else {}
+
+        enabled = None
+        for source in (screen, profile):
+            for name in ('auto_movie_crop', 'auto_crop', 'letterbox_crop'):
+                if name in source:
+                    value = source[name]
+                    if isinstance(value, bool):
+                        enabled = value
+                    elif isinstance(value, str):
+                        enabled = value.strip().lower() in ('1', 'true', 'yes', 'on')
+                    else:
+                        enabled = bool(value)
+                    break
+            if enabled is not None:
+                break
+
+        if enabled is None:
+            enabled = str(env_name or '').strip().lower() != 'bedroom'
+
+        self._movie_crop_profile_cache_key = key
+        self._movie_crop_profile_cache_value = bool(enabled)
+        return bool(enabled)
+
+    def _movie_crop_is_active(self, crop=None):
+        if crop is None:
+            crop = getattr(self, '_movie_crop_target_uv', (0.0, 0.0, 1.0, 1.0))
+        return (
+            abs(float(crop[0])) > 1e-5
+            or abs(float(crop[1])) > 1e-5
+            or abs(float(crop[2]) - 1.0) > 1e-5
+            or abs(float(crop[3]) - 1.0) > 1e-5
+        )
+
+    def _set_movie_crop_render_uv(self, crop):
+        crop = tuple(float(v) for v in crop)
+        old = getattr(self, '_movie_crop_render_uv', (0.0, 0.0, 1.0, 1.0))
+        if max(abs(float(old[i]) - crop[i]) for i in range(4)) < 1e-5:
+            self._movie_crop_frame_uv = crop
+            return
+        self._movie_crop_render_uv = crop
+        self._movie_crop_frame_uv = crop
+        self._movie_crop_render_active = self._movie_crop_is_active(crop)
+        self._source_crop_uniform_cache = {}
+        self._frost_uniform_cache = {}
+        self._frost_layout_cache_key = None
+        self._frost_layout_cache_val = None
+        self._frost_model_cache_key = None
+        self._frost_model_cache_bytes = None
+        self._frost_model_uniform_cache = {}
+        self.screen_height = None
+        self._model_mat4_cache_key = None
+        self._curved_verts_params = None
+        self._curved_border_verts_params = None
+        self._curved_glow_verts_params = None
+        self._curved_frost_verts_params = None
+        self._frost_glow_verts_params = None
+        self._glow_band_params = None
+        self._glow_model_params = None
+        self._cl_pose_key = None
+
+    def _reset_movie_crop(self):
+        self._movie_crop_target_uv = (0.0, 0.0, 1.0, 1.0)
+        self._movie_crop_target_active = False
+        self._movie_crop_full_hits = 0
+        self._movie_crop_reveal_until = 0.0
+        self._movie_crop_pending_gpu = None
+        self._set_movie_crop_render_uv((0.0, 0.0, 1.0, 1.0))
+
+    def _refresh_movie_crop_profile_enabled(self):
+        return self._movie_crop_profile_enabled()
+
+    def _movie_crop_render_uv_fast(self):
+        if getattr(self, '_movie_crop_target_active', False):
+            reveal_until = float(getattr(self, '_movie_crop_reveal_until', 0.0))
+            if reveal_until > 0.0:
+                if time.perf_counter() < reveal_until:
+                    if getattr(self, '_movie_crop_render_active', False):
+                        self._set_movie_crop_render_uv((0.0, 0.0, 1.0, 1.0))
+                    return (0.0, 0.0, 1.0, 1.0)
+                self._movie_crop_reveal_until = 0.0
+                if not getattr(self, '_movie_crop_render_active', False):
+                    self._set_movie_crop_render_uv(getattr(self, '_movie_crop_target_uv', (0.0, 0.0, 1.0, 1.0)))
+        return getattr(self, '_movie_crop_frame_uv', (0.0, 0.0, 1.0, 1.0))
+
+    def _set_source_crop_uniform(self, prog, crop):
+        crop = tuple(float(v) for v in crop)
+        key = id(prog)
+        cache = getattr(self, '_source_crop_uniform_cache', None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._source_crop_uniform_cache = cache
+        if cache.get(key) == crop:
+            return
+        prog['u_source_crop'].value = crop
+        cache[key] = crop
+
+    def _current_movie_crop_uv(self):
+        if not self._refresh_movie_crop_profile_enabled():
+            if getattr(self, '_movie_crop_render_active', False):
+                self._reset_movie_crop()
+            return (0.0, 0.0, 1.0, 1.0)
+
+        if getattr(self, '_movie_crop_target_active', False) and time.perf_counter() < self._movie_crop_reveal_until:
+            crop = (0.0, 0.0, 1.0, 1.0)
+        else:
+            crop = getattr(self, '_movie_crop_target_uv', (0.0, 0.0, 1.0, 1.0))
+        self._set_movie_crop_render_uv(crop)
+        return getattr(self, '_movie_crop_frame_uv', crop)
+
+    def _movie_crop_pixel_bounds(self, w, h, crop=None):
+        if crop is None:
+            crop = self._current_movie_crop_uv()
+        x, y, cw, ch = (float(crop[0]), float(crop[1]), float(crop[2]), float(crop[3]))
+        x0 = max(0, min(int(round(x * w)), max(0, w - 1)))
+        y0 = max(0, min(int(round(y * h)), max(0, h - 1)))
+        x1 = max(x0 + 1, min(int(round((x + cw) * w)), w))
+        y1 = max(y0 + 1, min(int(round((y + ch) * h)), h))
+        return x0, y0, x1, y1
+
+    def _effective_frame_aspect(self):
+        fw, fh = self.frame_size
+        crop = self._current_movie_crop_uv()
+        eff_w = max(float(fw) * float(crop[2]), 1.0)
+        eff_h = max(float(fh) * float(crop[3]), 1.0)
+        return eff_h / eff_w
+
+    def _apply_movie_crop_detection(self, detected, h):
+        active = self._movie_crop_is_active(detected)
+        if active:
+            self._movie_crop_full_hits = 0
+            old = self._movie_crop_target_uv
+            if max(abs(float(old[i]) - float(detected[i])) for i in range(4)) >= (2.0 / max(h, 1)):
+                self._movie_crop_target_uv = tuple(float(v) for v in detected)
+                self._movie_crop_target_active = True
+                self._current_movie_crop_uv()
+            else:
+                self._movie_crop_target_active = True
+        else:
+            self._movie_crop_full_hits += 1
+            if self._movie_crop_full_hits >= 3 and getattr(self, '_movie_crop_target_active', False):
+                self._reset_movie_crop()
+
+    def _poll_movie_crop_gpu_result(self):
+        pending = getattr(self, '_movie_crop_pending_gpu', None)
+        if not pending:
+            return False
+        event = pending.get('event')
+        try:
+            if event is not None and not bool(event.query()):
+                return True
+            stats = pending['host'].tolist()
+            detected = self._movie_crop_from_stats(stats, pending['y_rows'], pending['w'], pending['h'])
+            self._apply_movie_crop_detection(detected, pending['h'])
+        except Exception:
+            self._apply_movie_crop_detection((0.0, 0.0, 1.0, 1.0), int(pending.get('h', 1)))
+        finally:
+            self._movie_crop_pending_gpu = None
+        return False
+
+    def _movie_crop_from_stats(self, stats, y_rows, w, h):
+        top_i_f, bottom_count_f, center_mean, center_bright = stats
+        n_rows = int(y_rows.shape[0])
+        top_i = int(round(float(top_i_f)))
+        bottom_count = int(round(float(bottom_count_f)))
+        if top_i <= 0 or bottom_count <= 0 or top_i + bottom_count >= n_rows:
+            return (0.0, 0.0, 1.0, 1.0)
+
+        bottom_anchor_i = n_rows - bottom_count - 1
+        if bottom_anchor_i < top_i:
+            return (0.0, 0.0, 1.0, 1.0)
+        top = int(y_rows[min(top_i, n_rows - 1)])
+        bottom = int(h) - min(int(h), int(y_rows[bottom_anchor_i]) + 1)
+
+        min_bar = max(8, int(h * 0.035))
+        if top < min_bar or bottom < min_bar:
+            return (0.0, 0.0, 1.0, 1.0)
+
+        bigger = max(top, bottom)
+        smaller = min(top, bottom)
+        if bigger - smaller > max(18, int(bigger * 0.25)):
+            return (0.0, 0.0, 1.0, 1.0)
+
+        edge_trim = max(2, min(8, int(round(h * 0.004))))
+        crop_top = max(0, min(top + edge_trim, h - 2))
+        crop_bottom = max(crop_top + 1, h - bottom - edge_trim)
+        crop_h = crop_bottom - crop_top
+        removed = h - crop_h
+        if removed < max(16, int(h * 0.07)):
+            return (0.0, 0.0, 1.0, 1.0)
+
+        full_aspect = w / max(float(h), 1.0)
+        movie_aspect = w / max(float(crop_h), 1.0)
+        if movie_aspect < full_aspect * 1.12:
+            return (0.0, 0.0, 1.0, 1.0)
+
+        if float(center_mean) < 14.0 or float(center_bright) < 0.035:
+            return (0.0, 0.0, 1.0, 1.0)
+
+        return (0.0, crop_top / float(h), 1.0, crop_h / float(h))
+
+    def _movie_crop_sample_plan(self, w, h, device=None, torch_mod=None):
+        device_type = getattr(device, 'type', None)
+        device_index = getattr(device, 'index', None)
+        key = (int(w), int(h), device_type, device_index)
+        cache = getattr(self, '_movie_crop_sample_cache', None)
+        if isinstance(cache, dict) and cache.get('key') == key:
+            return cache
+
+        x0 = int(w * 0.10)
+        x1 = max(x0 + 1, int(w * 0.90))
+        row_stride = max(1, (int(h) + 359) // 360)
+        y_rows = np.arange(0, int(h), row_stride, dtype=np.int64)
+        if y_rows.size == 0 or int(y_rows[-1]) != int(h) - 1:
+            y_rows = np.append(y_rows, int(h) - 1)
+        step_x = max(1, (x1 - x0) // 128)
+        center_mask_np = (y_rows >= int(h * 0.35)) & (y_rows < int(h * 0.65))
+
+        plan = {
+            'key': key,
+            'x0': x0,
+            'x1': x1,
+            'step_x': step_x,
+            'y_rows': y_rows,
+            'center_mask_np': center_mask_np,
+            'center_has_rows': bool(np.any(center_mask_np)),
+        }
+        if torch_mod is not None and device is not None:
+            plan['y_idx'] = torch_mod.as_tensor(y_rows, device=device, dtype=torch_mod.long)
+            center_mask_t = torch_mod.as_tensor(center_mask_np, device=device, dtype=torch_mod.float32)
+            plan['center_mask'] = center_mask_t
+            plan['center_count'] = center_mask_t.sum().clamp_min(1.0)
+            if device_type == 'cuda':
+                try:
+                    plan['host'] = torch_mod.empty((4,), dtype=torch_mod.float32, pin_memory=True)
+                except Exception:
+                    pass
+                try:
+                    plan['event'] = torch_mod.cuda.Event(blocking=False)
+                except Exception:
+                    pass
+        self._movie_crop_sample_cache = plan
+        return plan
+
+    def _detect_movie_letterbox_crop(self, rgb, is_tensor, w, h, async_gpu=False):
+        if w < 64 or h < 64:
+            return (0.0, 0.0, 1.0, 1.0)
+
+        dark_luma = 13.0
+        dark_bright_frac = 0.040
+
+        if is_tensor:
+            torch = getattr(self, '_torch_mod', None)
+            if torch is None:
+                torch = __import__('torch')
+                self._torch_mod = torch
+            with torch.no_grad():
+                device = getattr(rgb, 'device', None)
+                plan = self._movie_crop_sample_plan(w, h, device=device, torch_mod=torch)
+                y_rows = plan['y_rows']
+                y_idx = plan['y_idx']
+                x0 = plan['x0']
+                x1 = plan['x1']
+                step_x = plan['step_x']
+                sample = rgb.index_select(1, y_idx)[:, :, x0:x1:step_x].detach().float()
+                luma = sample[0] * 0.2126 + sample[1] * 0.7152 + sample[2] * 0.0722
+                row_mean = luma.mean(dim=1)
+                bright_frac = (luma > 20.0).float().mean(dim=1)
+                dark_i = ((row_mean < dark_luma) & (bright_frac < dark_bright_frac)).to(torch.int32)
+                top_i_t = torch.cumprod(dark_i, dim=0).sum().float()
+                bottom_count_t = torch.cumprod(torch.flip(dark_i, dims=(0,)), dim=0).sum().float()
+                center_mask = plan['center_mask']
+                center_count = plan['center_count']
+                center_mean_t = (row_mean * center_mask).sum() / center_count
+                center_bright_t = (bright_frac * center_mask).sum() / center_count
+                stats_t = torch.stack((top_i_t, bottom_count_t, center_mean_t, center_bright_t))
+                if async_gpu and getattr(device, 'type', '') == 'cuda':
+                    host = plan.get('host')
+                    if host is None:
+                        host = torch.empty((4,), dtype=torch.float32, pin_memory=True)
+                        plan['host'] = host
+                    host.copy_(stats_t.detach(), non_blocking=True)
+                    event = plan.get('event')
+                    if event is None:
+                        event = torch.cuda.Event(blocking=False)
+                        plan['event'] = event
+                    event.record(torch.cuda.current_stream(device))
+                    self._movie_crop_pending_gpu = {
+                        'host': host,
+                        'event': event,
+                        'y_rows': y_rows,
+                        'w': int(w),
+                        'h': int(h),
+                    }
+                    return None
+                stats = stats_t.detach().cpu().tolist()
+            return self._movie_crop_from_stats(stats, y_rows, w, h)
+
+        plan = self._movie_crop_sample_plan(w, h)
+        y_rows = plan['y_rows']
+        x0 = plan['x0']
+        x1 = plan['x1']
+        step_x = plan['step_x']
+        arr = np.asarray(rgb, dtype=np.uint8)
+        sample = arr[y_rows, x0:x1:step_x, :].astype(np.float32, copy=False)
+        luma = sample[:, :, 0] * 0.2126 + sample[:, :, 1] * 0.7152 + sample[:, :, 2] * 0.0722
+        row_mean_np = luma.mean(axis=1)
+        bright_frac_np = (luma > 20.0).mean(axis=1)
+        dark_rows = (row_mean_np < dark_luma) & (bright_frac_np < dark_bright_frac)
+        top_i = 0
+        n_rows = int(dark_rows.shape[0])
+        while top_i < n_rows and bool(dark_rows[top_i]):
+            top_i += 1
+        bottom_count = 0
+        while bottom_count < n_rows - top_i and bool(dark_rows[n_rows - 1 - bottom_count]):
+            bottom_count += 1
+        center_mask = plan['center_mask_np']
+        if plan.get('center_has_rows', False):
+            center_mean = float(np.mean(row_mean_np[center_mask]))
+            center_bright = float(np.mean(bright_frac_np[center_mask]))
+        else:
+            center_mean = 0.0
+            center_bright = 0.0
+        return self._movie_crop_from_stats(
+            (float(top_i), float(bottom_count), center_mean, center_bright),
+            y_rows,
+            w,
+            h,
+        )
+
+    def _maybe_update_movie_crop(self, rgb, is_tensor, w, h):
+        if not self._movie_crop_profile_enabled():
+            self._movie_crop_pending_gpu = None
+            if self._movie_crop_is_active(getattr(self, '_movie_crop_target_uv', None)) or self._movie_crop_is_active(getattr(self, '_movie_crop_render_uv', None)):
+                self._reset_movie_crop()
+            return
+
+        if self._poll_movie_crop_gpu_result():
+            return
+
+        now = time.perf_counter()
+        if now < self._movie_crop_next_detect_t:
+            return
+        self._movie_crop_next_detect_t = now + max(0.2, self._movie_crop_detect_interval)
+
+        try:
+            detected = self._detect_movie_letterbox_crop(rgb, is_tensor, w, h, async_gpu=bool(is_tensor))
+        except Exception:
+            detected = (0.0, 0.0, 1.0, 1.0)
+
+        if detected is not None:
+            self._apply_movie_crop_detection(detected, h)
+
+    def _movie_crop_note_cursor_uv(self, u, v):
+        if not getattr(self, '_movie_crop_target_active', False):
+            return
+        if not self._refresh_movie_crop_profile_enabled():
+            return
+        target = getattr(self, '_movie_crop_target_uv', (0.0, 0.0, 1.0, 1.0))
+        margin = float(getattr(self, '_movie_crop_reveal_margin', 0.10))
+        top_down_v = 1.0 - float(v)
+        y0 = float(target[1])
+        y1 = float(target[1] + target[3])
+        should_reveal = False
+        if not getattr(self, '_movie_crop_render_active', False):
+            should_reveal = top_down_v <= y0 or top_down_v >= y1
+        else:
+            fv = float(v)
+            should_reveal = fv <= margin or fv >= (1.0 - margin)
+        if should_reveal:
+            self._movie_crop_reveal_until = time.perf_counter() + 1.4
+            self._current_movie_crop_uv()
+
+    def _screen_uv_to_source_top_uv(self, u, v):
+        crop = self._current_movie_crop_uv()
+        return (
+            float(crop[0]) + float(u) * float(crop[2]),
+            float(crop[1]) + (1.0 - float(v)) * float(crop[3]),
+        )
+
     # Per-frame helpers
     def _update_frame(self, rgb, depth):
         """Upload RGB and depth to GL textures GPU path when available, CPU fallback."""
-        import torch
-
         is_tensor = hasattr(rgb, 'data_ptr')
+        torch = None
+        if is_tensor:
+            torch = getattr(self, '_torch_mod', None)
+            if torch is None:
+                torch = __import__('torch')
+                self._torch_mod = torch
+        glow_sample_rgb = rgb
+        glow_sample_is_tensor = is_tensor
 
         # Resolve depth shape and GPU tensor
         if hasattr(depth, 'detach'):
@@ -1887,7 +2377,19 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             self._init_textures(w, h)
             self.frame_size = (w, h)
             self.screen_height = None
+            self._movie_crop_sample_cache = None
+            self._rgb_hwc_upload_tensor = None
+            self._rgb_hwc_upload_key = None
+            self._reset_movie_crop()
             self._target_mon_rect = None  # force re-query: resolution changed, cursor mapping must update
+
+        active_glow_mode = self._active_glow_mode()
+        self._active_glow_mode_cached = active_glow_mode
+        color_mips_needed = self._color_mipmaps_needed(active_glow_mode)
+        update_color_mips = (
+            color_mips_needed
+            or getattr(self, '_color_tex_mipmap_filter_active', None) != color_mips_needed
+        )
 
         # Lazy GPU interop init (includes PBO registration to verify interop)
         if self._cuda_gl is None and CUDART_GL is not None and BACKEND in ("CUDA", "HIP"):
@@ -1902,18 +2404,30 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         gpu_ok = bool(self._cuda_gl) and is_tensor and BACKEND in ("CUDA", "HIP")
 
         if gpu_ok:
+            self._maybe_update_movie_crop(rgb, True, w, h)
             if self._pbo_texture_size != (w, h):
                 self._init_cuda_pbos(w, h)
 
             # Color: CHW tensor HWC contiguous uint8 on GPU, DMA into PBO
-            rgb_gpu = rgb.permute(1, 2, 0).contiguous().clamp(0, 255).to(torch.uint8)
+            rgb_hwc = rgb.permute(1, 2, 0)
+            if rgb_hwc.dtype == torch.uint8:
+                upload_key = (int(w), int(h), getattr(rgb, 'device', None))
+                rgb_gpu = self._rgb_hwc_upload_tensor
+                if rgb_gpu is None or self._rgb_hwc_upload_key != upload_key:
+                    rgb_gpu = torch.empty((int(h), int(w), 3), dtype=torch.uint8, device=rgb.device)
+                    self._rgb_hwc_upload_tensor = rgb_gpu
+                    self._rgb_hwc_upload_key = upload_key
+                rgb_gpu.copy_(rgb_hwc, non_blocking=True)
+            else:
+                rgb_gpu = rgb_hwc.contiguous().clamp(0, 255).to(torch.uint8)
             ptr = self._cuda_gl.map_resource(self._cuda_res_color)
             self._cuda_gl.memcpy_d2d(ptr, rgb_gpu.data_ptr(), rgb_gpu.nbytes)
             self._cuda_gl.unmap_resource(self._cuda_res_color)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
             glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
-            glGenerateMipmap(GL_TEXTURE_2D)
+            if update_color_mips:
+                self._maybe_generate_color_mipmaps(active_glow_mode)
             glBindTexture(GL_TEXTURE_2D, 0)
 
             ptr = self._cuda_gl.map_resource(self._cuda_res_depth)
@@ -1927,14 +2441,17 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             glBindTexture(GL_TEXTURE_2D, 0)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
         else:
-            # CPU fallback — use PBO for async DMA when available
+            # CPU fallback - use PBO for async DMA when available
             if hasattr(rgb, 'detach'):
-                rgb_np = (
-                    rgb.permute(1, 2, 0).detach().contiguous()
-                    .clamp(0, 255).to(torch.uint8).cpu().numpy()
-                )
+                rgb_hwc = rgb.permute(1, 2, 0).detach().contiguous()
+                if rgb_hwc.dtype != torch.uint8:
+                    rgb_hwc = rgb_hwc.clamp(0, 255).to(torch.uint8)
+                rgb_np = rgb_hwc.cpu().numpy()
             else:
                 rgb_np = np.asarray(rgb, dtype=np.uint8)
+            glow_sample_rgb = rgb_np
+            glow_sample_is_tensor = False
+            self._maybe_update_movie_crop(rgb_np, False, w, h)
             if depth_np is None:
                 depth_np = depth_gpu.cpu().numpy()
             rgb_bytes = rgb_np.astype('uint8', copy=False).tobytes()
@@ -1945,7 +2462,8 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                 glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(rgb_bytes), rgb_bytes)
                 glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
                 glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
-                glGenerateMipmap(GL_TEXTURE_2D)
+                if update_color_mips:
+                    self._maybe_generate_color_mipmaps(active_glow_mode)
                 glBindTexture(GL_TEXTURE_2D, 0)
                 glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._cpu_pbo_depth)
                 glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(depth_bytes), depth_bytes)
@@ -1958,15 +2476,19 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                     self._init_cpu_pbos(w, h)
                 self.color_tex.write(rgb_bytes)
                 glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
-                glGenerateMipmap(GL_TEXTURE_2D)
+                if update_color_mips:
+                    self._maybe_generate_color_mipmaps(active_glow_mode)
                 glBindTexture(GL_TEXTURE_2D, 0)
                 self.depth_tex.write(depth_bytes)
             # No glGenerateMipmap for depth: keep DIBR sampling at full-res
             # to match viewer.py FullSBS numerics.
 
-        # Sample screen-colour lighting only when a visible effect consumes it.
+        # Sample screen-colour lighting only when an active effect consumes it.
+        # Veil/frost sample the source texture directly in the shader, so they
+        # should not trigger this periodic CPU-side colour reduction.
         glow_active = (
-            float(getattr(self, '_glow_intensity', 0.0)) > 0.0
+            active_glow_mode == 'glow'
+            and float(getattr(self, '_glow_intensity', 0.0)) > 0.0
             and float(getattr(self, '_glow_intensity_multiplier', 0.0)) > 0.0
         )
         env_spill_active = (
@@ -1980,7 +2502,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             self._glow_color_counter += 1
             if self._glow_color_counter >= 15:
                 self._glow_color_counter = 0
-                self._sample_glow_target_color(rgb, is_tensor)
+                self._sample_glow_target_color(glow_sample_rgb, glow_sample_is_tensor)
 
     def _build_model_mat4(self, normal_offset=0.0):
         """
@@ -1989,7 +2511,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         """
         if self.screen_height is None:
             fw, fh = self.frame_size
-            ar = fh / fw if fw > 0 else 9.0 / 16.0
+            ar = self._effective_frame_aspect() if fw > 0 else 9.0 / 16.0
             if fh > fw:
                 self.screen_height = self._screen_ref_size
                 self.screen_width = self.screen_height / ar
@@ -2089,7 +2611,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         """
         if self.screen_height is None:
             fw, fh = self.frame_size
-            ar = fh / fw if fw > 0 else 9.0 / 16.0
+            ar = self._effective_frame_aspect() if fw > 0 else 9.0 / 16.0
             if fh > fw:
                 self.screen_height = self._screen_ref_size
                 self.screen_width = self.screen_height / ar
@@ -2816,7 +3338,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         sh = self.screen_height
         if sh is None:
             fw, fh = self.frame_size
-            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
+            sh = self.screen_width * (self._effective_frame_aspect() if fw > 0 else 9.0 / 16.0)
 
         # Curved-screen mapping: parametric cylindrical arc. Horizontal curves
         # bend across U; vertical curves bend across V.
@@ -3319,10 +3841,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
 
     def _render_lasers(self, mgl_fbo, vp_mat, view_mat, blend=False, view_inv=None):
         """blend=False: opaque rainbow beam; blend=True: semi-transparent hit circles."""
-        if getattr(self, '_beams_frame', -1) != self._frame_count:
-            self._cached_beams = self._laser_beam_setup()
-            self._beams_frame = self._frame_count
-        beams = self._cached_beams
+        beams = getattr(self, '_cached_beams', None)
         if not beams:
             return
         if blend:
@@ -3588,6 +4107,10 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         mult = float(getattr(self, '_glow_intensity_multiplier', 0.0) or 0.0)
         return 'glow' if mult > 0.0 else 'off'
 
+    def _refresh_active_glow_mode_cache(self):
+        self._active_glow_mode_cached = self._active_glow_mode()
+        return self._active_glow_mode_cached
+
     def _screen_effect_basis(self):
         cy = math.cos(self.screen_yaw)
         sy_ = math.sin(self.screen_yaw)
@@ -3628,39 +4151,59 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
     def _frost_front_layout(self):
         if self.screen_height is None:
             self._build_model_mat4()
-        R, center = self._screen_effect_basis()
         head = getattr(self, '_head_pos_w', None)
+        if head is None:
+            head_key = None
+        else:
+            head_key = (round(float(head[0]), 2), round(float(head[1]), 2), round(float(head[2]), 2))
+        key = (
+            round(float(self.screen_width), 6), round(float(self.screen_height), 6),
+            round(float(self.screen_distance), 6), round(float(self.screen_pan_x), 6),
+            round(float(self.screen_pan_y), 6), round(float(self.screen_yaw), 6),
+            round(float(self.screen_pitch), 6), round(float(self.screen_roll), 6),
+            head_key,
+        )
+        if key == getattr(self, '_frost_layout_cache_key', None):
+            return self._frost_layout_cache_val
+
+        R, center = self._screen_effect_basis()
         if head is None:
             head_w = np.array([0.0, 0.0, 0.0], dtype=np.float32)
         else:
-            head_w = np.array(head, dtype=np.float32)
+            head_w = np.asarray(head, dtype=np.float32)
         head_local = R[:3, :3].T @ (head_w - center)
         front_depth = max(float(head_local[2]) + 0.55, float(self.screen_distance) + 0.35, 0.75)
         front_half_w = max(float(self.screen_width) * 0.5, abs(float(head_local[0])) + 0.65, 0.65)
         front_half_h = max(float(self.screen_height) * 0.5, abs(float(head_local[1])) + 0.65, 0.65)
-        return R, center, front_depth, front_half_w, front_half_h
+        val = (R, center, front_depth, front_half_w, front_half_h)
+        self._frost_layout_cache_key = key
+        self._frost_layout_cache_val = val
+        return val
 
     def _build_flat_frost_verts(self, front_half_w, front_half_h):
         sx = max(float(self.screen_width) * 0.5, 1e-6)
         sy = max(float(self.screen_height) * 0.5, 1e-6)
         fx = front_half_w / sx
         fy = front_half_h / sy
-        # Each strip connects screen edge to front-plane edge.
-        # screen: z=0, xy in [-1,1]  front: z=1, xy in [-fx,fx] x [-fy,fy]
-        # UV: u maps x (left=0, right=1), v maps y (bottom=0, top=1).
-        # Left/right bands: v goes from 1 (physical-bottom, y=-1)
-        # down to 0 (physical-top, y=1) so the band samples the
-        # correct screen-edge pixel column top-to-bottom.
-        verts = [
-            # Strip 0: left band (u=0), v=1 at y=-1  v=0 at y=1
-            -1, -1, 0, 0, 1,  -1,  1, 0, 0, 0,  -fx, -fy, 1, 0, 1,  -fx,  fy, 1, 0, 0,
-            # Strip 1: right band (u=1), v=1 at y=-1  v=0 at y=1
-             1, -1, 0, 1, 1,   1,  1, 0, 1, 0,   fx, -fy, 1, 1, 1,   fx,  fy, 1, 1, 0,
-            # Strip 2: bottom band (v=1, extends bottom-edge pixel colors)
-            -1, -1, 0, 0, 1,   1, -1, 0, 1, 1,  -fx, -fy, 1, 0, 1,   fx, -fy, 1, 1, 1,
-            # Strip 3: top band (v=0, extends top-edge pixel colors)
-            -1,  1, 0, 0, 0,   1,  1, 0, 1, 0,  -fx,  fy, 1, 0, 0,   fx,  fy, 1, 1, 0,
+
+        def _quad(a, b, c, d):
+            return a + b + c + c + b + d
+
+        # Each quad connects a screen edge to the expanded front plane.
+        # UVs stay pinned to the screen edge pixel so veil samples only the edge.
+        quads = [
+            # Left edge.
+            ([-1, -1, 0, 0, 1], [-1,  1, 0, 0, 0], [-fx, -fy, 1, 0, 1], [-fx,  fy, 1, 0, 0]),
+            # Right edge.
+            ([ 1, -1, 0, 1, 1], [ 1,  1, 0, 1, 0], [ fx, -fy, 1, 1, 1], [ fx,  fy, 1, 1, 0]),
+            # Bottom edge.
+            ([-1, -1, 0, 0, 1], [ 1, -1, 0, 1, 1], [-fx, -fy, 1, 0, 1], [ fx, -fy, 1, 1, 1]),
+            # Top edge.
+            ([-1,  1, 0, 0, 0], [ 1,  1, 0, 1, 0], [-fx,  fy, 1, 0, 0], [ fx,  fy, 1, 1, 0]),
         ]
+        verts = []
+        for quad in quads:
+            verts.extend(_quad(*quad))
         return np.array(verts, dtype='f4')
 
     def _build_curved_frost_verts(self, front_depth, front_half_w, front_half_h, N=48):
@@ -3681,44 +4224,56 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             ly = v * 2.0 - 1.0
             return [float(world[0]), float(world[1]), float(world[2]), u, v, lx, ly, local_z]
 
+        def _append_quad(out, rear0, front0, rear1, front1):
+            out.extend(rear0)
+            out.extend(rear1)
+            out.extend(front0)
+            out.extend(front0)
+            out.extend(rear1)
+            out.extend(front1)
+
         verts = []
         cols = N + 1
         if axis == 'vertical':
-            # Left and right strips follow the vertical curved edges.
             for side in (0, 1):
+                pairs = []
                 for i in range(cols):
                     rear = surface[i * 2 + side]
                     uv = (rear[3], rear[4])
-                    verts.extend(_v(rear[:3], uv, 0.0))
-                    verts.extend(_v(_front(*uv), uv, 1.0))
+                    pairs.append((_v(rear[:3], uv, 0.0), _v(_front(*uv), uv, 1.0)))
+                for i in range(cols - 1):
+                    _append_quad(verts, pairs[i][0], pairs[i][1], pairs[i + 1][0], pairs[i + 1][1])
 
             for v in (0.0, 1.0):
-                for u in (0.0, 1.0):
-                    rear = self._screen_uv_to_world(u, v)
-                    uv = (u, v)
-                    verts.extend(_v(rear, uv, 0.0))
-                    verts.extend(_v(_front(*uv), uv, 1.0))
+                rear0 = self._screen_uv_to_world(0.0, v)
+                rear1 = self._screen_uv_to_world(1.0, v)
+                q0 = (_v(rear0, (0.0, v), 0.0), _v(_front(0.0, v), (0.0, v), 1.0))
+                q1 = (_v(rear1, (1.0, v), 0.0), _v(_front(1.0, v), (1.0, v), 1.0))
+                _append_quad(verts, q0[0], q0[1], q1[0], q1[1])
         else:
-            # Top and bottom strips follow the horizontal curved edges.
             for row in (1, 0):
+                pairs = []
                 for i in range(cols):
                     rear = surface[i * 2 + row]
                     uv = (rear[3], rear[4])
-                    verts.extend(_v(rear[:3], uv, 0.0))
-                    verts.extend(_v(_front(*uv), uv, 1.0))
+                    pairs.append((_v(rear[:3], uv, 0.0), _v(_front(*uv), uv, 1.0)))
+                for i in range(cols - 1):
+                    _append_quad(verts, pairs[i][0], pairs[i][1], pairs[i + 1][0], pairs[i + 1][1])
 
             for col in (0, cols - 1):
-                for row in (0, 1):
-                    rear = surface[col * 2 + row]
-                    uv = (rear[3], rear[4])
-                    verts.extend(_v(rear[:3], uv, 0.0))
-                    verts.extend(_v(_front(*uv), uv, 1.0))
+                rear0 = surface[col * 2 + 0]
+                rear1 = surface[col * 2 + 1]
+                uv0 = (rear0[3], rear0[4])
+                uv1 = (rear1[3], rear1[4])
+                q0 = (_v(rear0[:3], uv0, 0.0), _v(_front(*uv0), uv0, 1.0))
+                q1 = (_v(rear1[:3], uv1, 0.0), _v(_front(*uv1), uv1, 1.0))
+                _append_quad(verts, q0[0], q0[1], q1[0], q1[1])
 
         return np.array(verts, dtype='f4')
 
     def _render_screen_background_effects(self, mgl_fbo, vp_mat, env_model_active=False,
                                           passthrough_active=False):
-        mode = self._active_glow_mode()
+        mode = getattr(self, '_active_glow_mode_cached', None) or self._active_glow_mode()
         if mode != 'glow' or passthrough_active:
             return
         if env_model_active:
@@ -3728,7 +4283,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
     def _render_screen_foreground_effects(self, mgl_fbo, vp_mat, passthrough_active=False):
         if passthrough_active:
             return
-        mode = self._active_glow_mode()
+        mode = getattr(self, '_active_glow_mode_cached', None) or self._active_glow_mode()
         if mode == 'veil':
             self._render_frost_veil(mgl_fbo, vp_mat)
         elif mode == 'frosted':
@@ -3879,30 +4434,145 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
     def _frost_source_texture(self):
         return getattr(self, 'color_tex', None)
 
-    def _set_frost_uniforms(self, prog, source_tex, intensity):
-        source_tex.use(location=0)
-        prog['u_edge_inset'].value = float(getattr(self, '_frost_glow_inset', 0.045))
-        prog['u_lod'].value = float(getattr(self, '_frost_glow_lod', 5.4))
-        prog['u_threshold'].value = float(getattr(self, '_frost_glow_threshold', 0.46))
-        prog['u_intensity'].value = float(intensity)
-        prog['u_frost_alpha'].value = float(getattr(self, '_frost_glow_alpha', 0.42))
-        prog['u_noise_scale'].value = float(getattr(self, '_frost_glow_noise_scale', 54.0))
-        prog['u_beam_softness'].value = 0.34
-        prog['u_frost_blend'].value = float(getattr(self, '_frost_glow_blend', 1.35))
-        prog['u_beam_thickness'].value = float(getattr(self, '_frost_glow_thickness', 1.6))
-        prog['u_diffuse_scatter'].value = float(getattr(self, '_frost_glow_diffuse', 0.85))
-        prog['u_veil_mode'].value = float(getattr(self, '_frost_glow_veil_mode', 0.0))
-        prog['u_time'].value = float(time.time())
+    def _color_mipmaps_needed(self, mode=None):
+        if mode is None:
+            mode = self._active_glow_mode()
+        if mode == 'veil':
+            return float(getattr(self, '_frost_veil_lod', 0.0) or 0.0) > 0.001
+        return mode == 'frosted'
 
-    def _render_curved_frost_glow(self, mgl_fbo, vp_mat, source_tex, intensity):
-        if self._curved_frost_prog is None or self._curved_frost_vao is None:
+    def _maybe_generate_color_mipmaps(self, mode=None):
+        needs_mips = self._color_mipmaps_needed(mode)
+        if self.color_tex is not None and getattr(self, '_color_tex_mipmap_filter_active', None) != needs_mips:
+            self.color_tex.filter = (
+                (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+                if needs_mips else
+                (moderngl.LINEAR, moderngl.LINEAR)
+            )
+            self._color_tex_mipmap_filter_active = needs_mips
+        if needs_mips:
+            glGenerateMipmap(GL_TEXTURE_2D)
+
+    def _set_frost_uniforms(self, prog, source_tex, intensity):
+        self._set_frost_uniform_values(prog, source_tex, intensity)
+
+    def _set_frost_uniform_values(self, prog, source_tex, intensity, *, edge_inset=None, lod=None,
+                                  threshold=None, alpha=None, noise_scale=None, beam_softness=0.34,
+                                  blend=None, thickness=None, diffuse=None):
+        source_tex.use(location=0)
+        crop = self._movie_crop_render_uv_fast()
+        values = (
+            crop,
+            float(getattr(self, '_frost_glow_inset', 0.045) if edge_inset is None else edge_inset),
+            float(getattr(self, '_frost_glow_lod', 5.4) if lod is None else lod),
+            float(getattr(self, '_frost_glow_threshold', 0.46) if threshold is None else threshold),
+            float(intensity),
+            float(getattr(self, '_frost_glow_alpha', 0.42) if alpha is None else alpha),
+            float(getattr(self, '_frost_glow_noise_scale', 54.0) if noise_scale is None else noise_scale),
+            float(beam_softness),
+            float(getattr(self, '_frost_glow_blend', 1.35) if blend is None else blend),
+            float(getattr(self, '_frost_glow_thickness', 1.6) if thickness is None else thickness),
+            float(getattr(self, '_frost_glow_diffuse', 0.85) if diffuse is None else diffuse),
+        )
+        time_value = float(getattr(self, '_frame_now', 0.0) or time.perf_counter())
+        key = id(prog)
+        cache = getattr(self, '_frost_uniform_cache', None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._frost_uniform_cache = cache
+        cached = cache.get(key)
+        if cached is None or cached[0] != values:
+            self._set_source_crop_uniform(prog, crop)
+            prog['u_edge_inset'].value = values[1]
+            prog['u_lod'].value = values[2]
+            prog['u_threshold'].value = values[3]
+            prog['u_intensity'].value = values[4]
+            prog['u_frost_alpha'].value = values[5]
+            prog['u_noise_scale'].value = values[6]
+            prog['u_beam_softness'].value = values[7]
+            prog['u_frost_blend'].value = values[8]
+            prog['u_beam_thickness'].value = values[9]
+            prog['u_diffuse_scatter'].value = values[10]
+            cached = (values, None)
+        if cached[1] != time_value:
+            prog['u_time'].value = time_value
+            cached = (values, time_value)
+        cache[key] = cached
+
+    def _set_frost_veil_uniforms(self, prog, source_tex, intensity):
+        source_tex.use(location=0)
+        crop = self._movie_crop_render_uv_fast()
+        values = (
+            crop,
+            0.02,
+            float(intensity),
+            float(getattr(self, '_frost_veil_alpha', 1.0)),
+            0.34,
+            3.0,
+        )
+        key = id(prog)
+        cache = getattr(self, '_frost_uniform_cache', None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._frost_uniform_cache = cache
+        if cache.get(key) == values:
+            return
+        self._set_source_crop_uniform(prog, crop)
+        prog['u_edge_inset'].value = values[1]
+        prog['u_intensity'].value = values[2]
+        prog['u_frost_alpha'].value = values[3]
+        prog['u_beam_softness'].value = values[4]
+        prog['u_beam_thickness'].value = values[5]
+        cache[key] = values
+
+    def _mat4_uniform_bytes(self, mat):
+        arr = np.asarray(mat)
+        transposed = arr.T
+        if transposed.dtype == np.float32 and transposed.flags['C_CONTIGUOUS']:
+            return transposed.tobytes()
+        return transposed.astype('f4', copy=False).tobytes()
+
+    def _frost_model_bytes(self, beam_len):
+        key = (
+            round(float(self.screen_width), 6), round(float(self.screen_height), 6),
+            round(float(self.screen_distance), 6), round(float(self.screen_pan_x), 6),
+            round(float(self.screen_pan_y), 6), round(float(self.screen_yaw), 6),
+            round(float(self.screen_pitch), 6), round(float(self.screen_roll), 6),
+            round(float(beam_len), 2),
+        )
+        if key == getattr(self, '_frost_model_cache_key', None):
+            cached = getattr(self, '_frost_model_cache_bytes', None)
+            if cached is not None:
+                return cached
+        model = self._screen_effect_model(self.screen_width, self.screen_height, z_scale=beam_len)
+        data = model.T.astype('f4').tobytes()
+        self._frost_model_cache_key = key
+        self._frost_model_cache_bytes = data
+        return data
+
+    def _write_frost_model_uniform(self, prog, data):
+        cache = getattr(self, '_frost_model_uniform_cache', None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._frost_model_uniform_cache = cache
+        key = id(prog)
+        if cache.get(key) == data:
+            return
+        prog['u_model'].write(data)
+        cache[key] = data
+
+    def _render_curved_frost_with_uniforms(self, mgl_fbo, vp_mat, source_tex, intensity, uniform_setter,
+                                           prog=None, vao=None):
+        prog = self._curved_frost_prog if prog is None else prog
+        vao = self._curved_frost_vao if vao is None else vao
+        if prog is None or vao is None:
             return
         _, _, front_depth, front_half_w, front_half_h = self._frost_front_layout()
         params = (
             round(float(self.screen_width), 6), round(float(self.screen_height), 6),
             float(self.screen_distance), float(self.screen_pan_x), float(self.screen_pan_y),
             float(self.screen_yaw), float(self.screen_pitch), float(self.screen_roll),
-            round(float(front_depth), 6), round(float(front_half_w), 6), round(float(front_half_h), 6),
+            round(float(front_depth), 2), round(float(front_half_w), 2), round(float(front_half_h), 2),
             self._screen_curve_mode(),
         )
         if params != self._curved_frost_verts_params:
@@ -3914,16 +4584,42 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA
-        self._curved_frost_prog['u_vp'].write(vp_mat.T.astype('f4').tobytes())
-        self._set_frost_uniforms(self._curved_frost_prog, source_tex, intensity)
-        strip_n = (48 + 1) * 2
-        self._curved_frost_vao.render(moderngl.TRIANGLE_STRIP, vertices=strip_n)
-        self._curved_frost_vao.render(moderngl.TRIANGLE_STRIP, vertices=strip_n, first=strip_n)
-        self._curved_frost_vao.render(moderngl.TRIANGLE_STRIP, vertices=4, first=strip_n * 2)
-        self._curved_frost_vao.render(moderngl.TRIANGLE_STRIP, vertices=4, first=strip_n * 2 + 4)
+        prog['u_vp'].write(self._mat4_uniform_bytes(vp_mat))
+        uniform_setter(prog, source_tex, intensity)
+        vao.render(moderngl.TRIANGLES, vertices=(12 * 48) + 12)
         self.ctx.disable(moderngl.BLEND)
         self.ctx.depth_mask = True
         self.ctx.enable(moderngl.DEPTH_TEST)
+
+    def _render_flat_frost_with_uniforms(self, mgl_fbo, vp_mat, source_tex, intensity, uniform_setter,
+                                         prog=None, vao=None):
+        prog = self._frost_glow_prog if prog is None else prog
+        vao = self._frost_glow_vao if vao is None else vao
+        if prog is None or vao is None:
+            return
+        _, _, beam_len, front_half_w, front_half_h = self._frost_front_layout()
+        params = (
+            round(float(self.screen_width), 6), round(float(self.screen_height), 6),
+            round(float(front_half_w), 2), round(float(front_half_h), 2),
+        )
+        if params != self._frost_glow_verts_params:
+            self._frost_glow_vbo.write(self._build_flat_frost_verts(front_half_w, front_half_h).tobytes())
+            self._frost_glow_verts_params = params
+
+        self.ctx.depth_mask = False
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA
+        self._write_frost_model_uniform(prog, self._frost_model_bytes(beam_len))
+        prog['u_vp'].write(self._mat4_uniform_bytes(vp_mat))
+        uniform_setter(prog, source_tex, intensity)
+        vao.render(moderngl.TRIANGLES, vertices=24)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.depth_mask = True
+        self.ctx.enable(moderngl.DEPTH_TEST)
+
+    def _render_curved_frost_glow(self, mgl_fbo, vp_mat, source_tex, intensity):
+        self._render_curved_frost_with_uniforms(mgl_fbo, vp_mat, source_tex, intensity, self._set_frost_uniforms)
 
     def _render_frost_glow(self, mgl_fbo, vp_mat):
         intensity = float(getattr(self, '_frost_glow_intensity', 1.0))
@@ -3934,74 +4630,30 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         if source_tex is None:
             return
         if self._screen_curved:
-            self._render_curved_frost_glow(mgl_fbo, vp_mat, source_tex, intensity)
-            return
-        if self._frost_glow_prog is None or self._frost_glow_vao is None:
-            return
-
-        _, _, beam_len, front_half_w, front_half_h = self._frost_front_layout()
-        params = (
-            round(float(self.screen_width), 6), round(float(self.screen_height), 6),
-            round(float(front_half_w), 6), round(float(front_half_h), 6),
-        )
-        if params != self._frost_glow_verts_params:
-            self._frost_glow_vbo.write(self._build_flat_frost_verts(front_half_w, front_half_h).tobytes())
-            self._frost_glow_verts_params = params
-
-        self.ctx.depth_mask = False
-        self.ctx.disable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.BLEND)
-        self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA
-        model = self._screen_effect_model(self.screen_width, self.screen_height, z_scale=beam_len)
-        self._frost_glow_prog['u_model'].write(model.T.astype('f4').tobytes())
-        self._frost_glow_prog['u_vp'].write(vp_mat.T.astype('f4').tobytes())
-        self._set_frost_uniforms(self._frost_glow_prog, source_tex, intensity)
-        self._frost_glow_vao.render(moderngl.TRIANGLE_STRIP, vertices=4)
-        self._frost_glow_vao.render(moderngl.TRIANGLE_STRIP, vertices=4, first=4)
-        self._frost_glow_vao.render(moderngl.TRIANGLE_STRIP, vertices=4, first=8)
-        self._frost_glow_vao.render(moderngl.TRIANGLE_STRIP, vertices=4, first=12)
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.depth_mask = True
-        self.ctx.enable(moderngl.DEPTH_TEST)
+            self._render_curved_frost_with_uniforms(mgl_fbo, vp_mat, source_tex, intensity, self._set_frost_uniforms)
+        else:
+            self._render_flat_frost_with_uniforms(mgl_fbo, vp_mat, source_tex, intensity, self._set_frost_uniforms)
 
     def _render_frost_veil(self, mgl_fbo, vp_mat):
-        old_values = (
-            float(getattr(self, '_frost_glow_intensity', 1.0)),
-            float(getattr(self, '_frost_glow_alpha', 0.42)),
-            float(getattr(self, '_frost_glow_threshold', 0.46)),
-            float(getattr(self, '_frost_glow_lod', 5.4)),
-            float(getattr(self, '_frost_glow_blend', 1.35)),
-            float(getattr(self, '_frost_glow_thickness', 1.6)),
-            float(getattr(self, '_frost_glow_diffuse', 0.85)),
-            float(getattr(self, '_frost_glow_inset', 0.045)),
-            float(getattr(self, '_frost_glow_noise_scale', 54.0)),
-            float(getattr(self, '_frost_glow_veil_mode', 0.0)),
-        )
-        try:
-            self._frost_glow_intensity = float(getattr(self, '_frost_veil_intensity', 1.0))
-            self._frost_glow_alpha = float(getattr(self, '_frost_veil_alpha', 0.60))
-            self._frost_glow_threshold = float(getattr(self, '_frost_veil_threshold', 0.0))
-            self._frost_glow_lod = float(getattr(self, '_frost_veil_lod', 0.0))
-            self._frost_glow_blend = 2.5
-            self._frost_glow_thickness = 3.0
-            self._frost_glow_diffuse = 1.5
-            self._frost_glow_inset = 0.06
-            self._frost_glow_noise_scale = 4.0
-            self._frost_glow_veil_mode = 1.0
-            self._render_frost_glow(mgl_fbo, vp_mat)
-        finally:
-            (
-                self._frost_glow_intensity,
-                self._frost_glow_alpha,
-                self._frost_glow_threshold,
-                self._frost_glow_lod,
-                self._frost_glow_blend,
-                self._frost_glow_thickness,
-                self._frost_glow_diffuse,
-                self._frost_glow_inset,
-                self._frost_glow_noise_scale,
-                self._frost_glow_veil_mode,
-            ) = old_values
+        intensity = float(getattr(self, '_frost_veil_intensity', 1.0))
+        intensity *= max(float(getattr(self, '_glow_intensity_multiplier', 0.0)), 0.0)
+        if intensity <= 0.0 or self.screen_height is None:
+            return
+        source_tex = self._frost_source_texture()
+        if source_tex is None:
+            return
+        if self._screen_curved:
+            self._render_curved_frost_with_uniforms(
+                mgl_fbo, vp_mat, source_tex, intensity, self._set_frost_veil_uniforms,
+                prog=self._curved_veil_prog,
+                vao=self._curved_veil_vao,
+            )
+        else:
+            self._render_flat_frost_with_uniforms(
+                mgl_fbo, vp_mat, source_tex, intensity, self._set_frost_veil_uniforms,
+                prog=self._frost_veil_prog,
+                vao=self._frost_veil_vao,
+            )
 
     def _render_frosted_glow(self, mgl_fbo, vp_mat):
         self._render_frost_glow(mgl_fbo, vp_mat)
@@ -4202,7 +4854,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         # depth through the desktop draw so nearer furniture can occlude the
         # screen; other environments retain the legacy backdrop-only behavior.
         passthrough_active = self._bg_color_idx == 1
-        if not passthrough_active:
+        if not passthrough_active and self._panorama_background_path:
             self._render_panorama_background(mgl_fbo, view_mat, proj_mat)
         env_model_active = bool(
             not passthrough_active
@@ -4218,17 +4870,19 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                 glClear(GL_DEPTH_BUFFER_BIT)
 
         # 0. Screen effects behind the desktop quad.
-        self._render_screen_background_effects(
-            mgl_fbo,
-            vp_mat,
-            env_model_active=env_model_active,
-            passthrough_active=passthrough_active,
-        )
+        if self._active_glow_mode_cached != 'off':
+            self._render_screen_background_effects(
+                mgl_fbo,
+                vp_mat,
+                env_model_active=env_model_active,
+                passthrough_active=passthrough_active,
+            )
 
         # 1. Main screen (flat quad or cylindrical curved arc)
         mgl_fbo.use()
         self.color_tex.use(location=0)
         self.depth_tex.use(location=1)
+        source_crop = self._movie_crop_render_uv_fast()
 
         eye_sign = -1.0 if eye_index == 0 else 1.0
 
@@ -4250,6 +4904,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             prog['u_convergence'].value    = float(self.convergence)
             prog['u_roll'].value           = self.screen_roll
             prog['u_corner_radius'].value  = self._corner_radius
+            self._set_source_crop_uniform(prog, source_crop)
             n_verts = (48 + 1) * 2
             self._curved_vao.render(moderngl.TRIANGLE_STRIP, vertices=n_verts)
         else:
@@ -4265,6 +4920,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             self.prog['u_convergence'].value = float(self.convergence)
             self.prog['u_roll'].value      = self.screen_roll
             self.prog['u_corner_radius'].value = self._corner_radius
+            self._set_source_crop_uniform(self.prog, source_crop)
             # Render screen WITHOUT alpha blending so the shader's edge alpha is written
             # directly into the swapchain framebuffer. The XR compositor composites those
             # near-zero-alpha edge pixels against the VR background producing a clean soft
@@ -4273,11 +4929,12 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
         # 2. Screen effects on and around the desktop quad.
-        self._render_screen_foreground_effects(
-            mgl_fbo,
-            vp_mat,
-            passthrough_active=passthrough_active,
-        )
+        if self._active_glow_mode_cached not in ('off', 'glow'):
+            self._render_screen_foreground_effects(
+                mgl_fbo,
+                vp_mat,
+                passthrough_active=passthrough_active,
+            )
 
         # Clear depth so UI overlays (FPS panel, OSD, keyboard, controllers,
         # lasers) are never occluded by environment geometry (e.g. cinema floor).
@@ -4309,10 +4966,16 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         if self._brand_osd_tex is not None and self._grip_mat_r is not None:
             self._render_brand_osd(eye_index, mgl_fbo, vp_mat)
 
+        # Update laser beam cache once per frame (shared across both eyes).
+        if getattr(self, '_beams_frame', -1) != self._frame_count:
+            self._cached_beams = self._laser_beam_setup()
+            self._beams_frame = self._frame_count
+        has_beams = bool(getattr(self, '_cached_beams', None))
+
         # 7. Laser beam (opaque rainbow)
-        self._render_lasers(mgl_fbo, vp_mat, view_mat, blend=False)
-        needs_view_inv = bool(self._ctrl_prims_l or self._ctrl_prims_r)
-        needs_view_inv = needs_view_inv or bool(getattr(self, '_cached_beams', None))
+        if has_beams:
+            self._render_lasers(mgl_fbo, vp_mat, view_mat, blend=False)
+        needs_view_inv = bool(self._ctrl_prims_l or self._ctrl_prims_r) or has_beams
         if needs_view_inv and view_inv is None:
             view_inv = _view_mat_inv(view_mat)
 
@@ -4325,12 +4988,13 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             self._render_fps_overlay(eye_index, mgl_fbo, vp_mat)
 
         # 10. Laser hit circles (semi-transparent)
-        self.ctx.disable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.BLEND)
-        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-        self._render_lasers(mgl_fbo, vp_mat, view_mat, blend=True, view_inv=view_inv)
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.enable(moderngl.DEPTH_TEST)
+        if has_beams:
+            self.ctx.disable(moderngl.DEPTH_TEST)
+            self.ctx.enable(moderngl.BLEND)
+            self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+            self._render_lasers(mgl_fbo, vp_mat, view_mat, blend=True, view_inv=view_inv)
+            self.ctx.disable(moderngl.BLEND)
+            self.ctx.enable(moderngl.DEPTH_TEST)
 
         # 11. Calibration panel
         if self._calibration_mode:
@@ -4522,7 +5186,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         sh = self.screen_height
         if sh is None:
             fw, fh = self.frame_size
-            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
+            sh = self.screen_width * (self._effective_frame_aspect() if fw > 0 else 9.0 / 16.0)
         safe_w = max(self.screen_width, 1e-6)
         safe_h = max(sh, 1e-6)
 
@@ -4610,7 +5274,7 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         sh = self.screen_height
         if sh is None:
             fw, fh = self.frame_size
-            sh = self.screen_width * (fh / fw if fw > 0 else 9.0 / 16.0)
+            sh = self.screen_width * (self._effective_frame_aspect() if fw > 0 else 9.0 / 16.0)
         safe_w = max(self.screen_width, 1e-6)
         safe_h = max(sh, 1e-6)
         cp = math.cos(self.screen_pitch); sp = math.sin(self.screen_pitch)
@@ -4894,8 +5558,10 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
             if uv is None or mon_w <= 0 or mon_h <= 0:
                 return None
             u, v = float(uv[0]), float(uv[1])
-            return (mon_left + int(u * mon_w),
-                    mon_top + int((1.0 - v) * mon_h))
+            self._movie_crop_note_cursor_uv(u, v)
+            src_u, src_top_v = self._screen_uv_to_source_top_uv(u, v)
+            return (mon_left + int(src_u * mon_w),
+                    mon_top + int(src_top_v * mon_h))
         def _edge_px(cp, fw):
             """Project ray onto screen plane, clamp UV to [0,1], return pixels."""
             if cp is None or fw is None or mon_w <= 0 or mon_h <= 0:
@@ -4905,8 +5571,9 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
                 return None
             u = max(0.0, min(1.0, float(uv[0])))
             v = max(0.0, min(1.0, float(uv[1])))
-            return (mon_left + int(u * mon_w),
-                    mon_top + int((1.0 - v) * mon_h))
+            src_u, src_top_v = self._screen_uv_to_source_top_uv(u, v)
+            return (mon_left + int(src_u * mon_w),
+                    mon_top + int(src_top_v * mon_h))
         _pl = _uv_to_px(hit_l)
         _pr = _uv_to_px(hit_r)
         if _pl is not None:
@@ -5000,8 +5667,10 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._cursor_smooth_uv = (u, v)
 
         mon_left, mon_top, mon_w, mon_h = self._get_target_monitor_rect()
-        px = mon_left + int(u * mon_w)
-        py = mon_top + int((1.0 - v) * mon_h)
+        self._movie_crop_note_cursor_uv(u, v)
+        src_u, src_top_v = self._screen_uv_to_source_top_uv(u, v)
+        px = mon_left + int(src_u * mon_w)
+        py = mon_top + int(src_top_v * mon_h)
         # Always track the VR cursor position so the physical-mouse detector
         # doesn't falsely fire when grip ends and the cursor resumes moving.
         self._vr_cursor_screen_pos = (px, py)
@@ -6484,7 +7153,9 @@ class OpenXRViewer(D3D11BackendMixin, EnvironmentMixin, OverlayMixin):
         self._init_glfw()
         self._init_moderngl()
 
-        screen_h = self.screen_height if self.screen_height else (self.screen_width / (self.frame_size[0] / self.frame_size[1]) if self.frame_size else 1.35)
+        screen_h = self.screen_height if self.screen_height else (
+            self.screen_width * self._effective_frame_aspect() if self.frame_size else 1.35
+        )
         curve_mode = self._screen_curve_mode()
         print(f"[OpenXRViewer] Screen: {self.screen_width:.2f}m x {screen_h:.2f}m @ {self.screen_distance:.2f}m"
               f"{f' (curved {curve_mode})' if curve_mode != 'none' else ''}")

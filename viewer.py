@@ -400,7 +400,7 @@ FRAGMENT_SHADER = """
         float jump = abs(d_left - d_right);
 
         // Smooth ramp instead of hard threshold (soft edges -> fewer seams)
-        return smoothstep(0.04, 0.10, jump);
+        return smoothstep(0.06, 0.12, jump);
     }
 
     vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
@@ -515,18 +515,18 @@ FRAGMENT_SHADER = """
         float d0 = texture(tex_depth, flipped_uv).r;
         float dm = texture(tex_depth, flipped_uv - ds_dir).r;
         float dp = texture(tex_depth, flipped_uv + ds_dir).r;
-        float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
+        float depth = d0 * 0.7 + dm * 0.15 + dp * 0.15;
         float depth_inv = -depth;
 
         // Enhanced 3D: mild non-linear depth curve boosts perceived pop
         // for nearer objects without pushing parallax into artifact-heavy ranges.
-        float depth_shaped = depth_inv * (1.0 + 0.25 * (1.0 - depth));
+        float depth_shaped = depth_inv * (1.0 + 0.35 * (1.0 - depth));
 
         // Calculate parallax shift with edge-aware border constraint.
         // Smoothly reduces parallax near left/right edges to prevent sampling
         // beyond image boundaries (standard DIBR border handling).
         float shift = (depth_shaped + u_convergence);
-        float edge_margin = 0.05;
+        float edge_margin = 0.02;
         float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
                            * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
         float px = u_eye_offset * shift * u_depth_strength * edge_falloff;
@@ -746,11 +746,11 @@ ANAGLYPH_FRAGMENT = """
         float d0 = texture(tex_depth, flipped_uv).r;
         float dm = texture(tex_depth, flipped_uv - ds_dir).r;
         float dp = texture(tex_depth, flipped_uv + ds_dir).r;
-        float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
+        float depth = d0 * 0.7 + dm * 0.15 + dp * 0.15;
         float depth_inv = -depth;
         float shift_amount = (depth_inv + u_convergence) * u_depth_strength;
         // Edge-aware border constraint: both eyes rendered in one pass
-        float edge_margin = 0.05;
+        float edge_margin = 0.02;
         float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
                            * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
         shift_amount *= edge_falloff;
@@ -914,18 +914,18 @@ INTERLEAVED_FRAGMENT = """
         float d0 = texture(tex_depth, flipped_uv).r;
         float dm = texture(tex_depth, flipped_uv - ds_dir).r;
         float dp = texture(tex_depth, flipped_uv + ds_dir).r;
-        float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
+        float depth = d0 * 0.7 + dm * 0.15 + dp * 0.15;
         float depth_inv = -depth;
 
         // Enhanced 3D: mild non-linear depth curve boosts perceived pop
         // for nearer objects without pushing parallax into artifact-heavy ranges
-        float depth_shaped = depth_inv * (1.0 + 0.25 * (1.0 - depth));
+        float depth_shaped = depth_inv * (1.0 + 0.35 * (1.0 - depth));
 
         // Calculate parallax shift with edge-aware border constraint
         // Smoothly reduces parallax near left/right edges to prevent sampling
         // beyond image boundaries (standard DIBR border handling)
         float shift = (depth_shaped + u_convergence);
-        float edge_margin = 0.05;
+        float edge_margin = 0.02;
         float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
                            * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
         float px = my_offset * shift * u_depth_strength * edge_falloff;
@@ -941,7 +941,7 @@ INTERLEAVED_FRAGMENT = """
             float d_left  = texture(tex_depth, flipped_uv - step2).r;
             float d_right = texture(tex_depth, flipped_uv + step2).r;
             float jump = abs(d_left - d_right);
-            conf = smoothstep(0.04, 0.10, jump);
+            conf = smoothstep(0.06, 0.12, jump);
         }
 
         vec4 color;
@@ -1096,18 +1096,18 @@ VERTICAL_INTERLEAVED_FRAGMENT = """
         float d0 = texture(tex_depth, flipped_uv).r;
         float dm = texture(tex_depth, flipped_uv - ds_dir).r;
         float dp = texture(tex_depth, flipped_uv + ds_dir).r;
-        float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
+        float depth = d0 * 0.7 + dm * 0.15 + dp * 0.15;
         float depth_inv = -depth;
 
         // Enhanced 3D: mild non-linear depth curve boosts perceived pop
         // for nearer objects without pushing parallax into artifact-heavy ranges
-        float depth_shaped = depth_inv * (1.0 + 0.25 * (1.0 - depth));
+        float depth_shaped = depth_inv * (1.0 + 0.35 * (1.0 - depth));
 
         // Calculate parallax shift with edge-aware border constraint
         // Smoothly reduces parallax near left/right edges to prevent sampling
         // beyond image boundaries (standard DIBR border handling)
         float shift = (depth_shaped + u_convergence);
-        float edge_margin = 0.05;
+        float edge_margin = 0.02;
         float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
                            * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
         float px = my_offset * shift * u_depth_strength * edge_falloff;
@@ -1123,7 +1123,7 @@ VERTICAL_INTERLEAVED_FRAGMENT = """
             float d_left  = texture(tex_depth, flipped_uv - step2).r;
             float d_right = texture(tex_depth, flipped_uv + step2).r;
             float jump = abs(d_left - d_right);
-            conf = smoothstep(0.04, 0.10, jump);
+            conf = smoothstep(0.06, 0.12, jump);
         }
 
         vec4 color;

@@ -482,6 +482,8 @@ class EnvironmentMixin:
             self._glow_intensity_multiplier = float(base['glow_intensity_multiplier'])
         if 'glow_mode' in base:
             self._glow_mode = str(base['glow_mode'])
+        if hasattr(self, '_refresh_active_glow_mode_cache'):
+            self._refresh_active_glow_mode_cache()
         self._panorama_background_path = None
         self._panorama_background_settings = {}
 
@@ -575,6 +577,8 @@ class EnvironmentMixin:
                 self._glow_mode = str(builtin_profile.get('glow_mode') or 'off').strip().lower()
             else:
                 self._glow_mode = 'glow' if float(getattr(self, '_glow_intensity_multiplier', 0.0)) > 0.0 else 'off'
+            if hasattr(self, '_refresh_active_glow_mode_cache'):
+                self._refresh_active_glow_mode_cache()
             lp = builtin_profile.get('lighting_presets')
             self._lighting_presets = lp if isinstance(lp, list) and lp else []
             self._lighting_preset_index = 0
@@ -677,6 +681,8 @@ class EnvironmentMixin:
             self._glow_mode = str(profile.get('glow_mode') or 'off').strip().lower()
         else:
             self._glow_mode = 'glow' if float(getattr(self, '_glow_intensity_multiplier', 0.0)) > 0.0 else 'off'
+        if hasattr(self, '_refresh_active_glow_mode_cache'):
+            self._refresh_active_glow_mode_cache()
         lp = profile.get('lighting_presets')
         self._lighting_presets = lp if isinstance(lp, list) and lp else []
         self._lighting_preset_index = 0
@@ -1287,6 +1293,8 @@ class EnvironmentMixin:
             self._glow_mode = str(p.get('glow_mode') or 'off').strip().lower()
         elif 'glow_intensity_multiplier' in p:
             self._glow_mode = 'glow' if float(getattr(self, '_glow_intensity_multiplier', 0.0)) > 0.0 else 'off'
+        if hasattr(self, '_refresh_active_glow_mode_cache'):
+            self._refresh_active_glow_mode_cache()
         name = p.get('name', f'Preset {self._lighting_preset_index}')
         print(f"[OpenXRViewer] Lighting preset: {name}")
 
@@ -1353,6 +1361,8 @@ class EnvironmentMixin:
             self._glow_intensity_multiplier = 0.0
         elif float(getattr(self, '_glow_intensity_multiplier', 0.0)) <= 0.0:
             self._glow_intensity_multiplier = 1.5
+        if hasattr(self, '_refresh_active_glow_mode_cache'):
+            self._refresh_active_glow_mode_cache()
         print(f"[OpenXRViewer] Glow mode: {next_mode}")
         self._save_glow_to_active_profile()
         return True

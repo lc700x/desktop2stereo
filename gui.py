@@ -599,7 +599,7 @@ DEFAULTS = {
     "Show FPS": False,
     "Model List": DEFAULT_MODEL_LIST,
     "Depth Model": DEFAULT_MODEL_LIST[0] if DEFAULT_MODEL_LIST else "",
-    "Depth Strength": 2.0,
+    "Depth Strength": 4.0,
     "Depth Resolution": 322,
     "Anti-aliasing": 2,
     "Foreground Scale": 0.5,
