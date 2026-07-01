@@ -720,7 +720,10 @@ void main() {
         discard;
     }
     alpha = min(alpha, 1.0);
-    vec3 src = texture(u_source, sample_uv).rgb;
+    // Explicit LOD 0: at grazing corners the implicit-derivative mip choice
+    // differs per eye/frame -> shimmering "blinking" block along the top-left
+    // seam. Fixed LOD samples the same texels every frame.
+    vec3 src = textureLod(u_source, sample_uv, 0.0).rgb;
     frag_color = vec4(src * alpha, alpha);
 }
 """

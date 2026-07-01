@@ -376,6 +376,7 @@ class LaserMixin:
             ctrl_pos, fwd_w = self._get_smoothed_ray(is_left)
             if ctrl_pos is None:
                 continue
+            smoothed_origin = ctrl_pos  # pre-override smoothed pos (for hit circles)
 
             # Raw origin (for edge constraint uses unsmoothed position)
             if grip_mat is not None:
@@ -436,7 +437,16 @@ class LaserMixin:
             fwd = fwd_w.astype('f4')
             up = np.cross(right, fwd); up = up / (np.linalg.norm(up) + 1e-10)
             right2 = np.cross(fwd, up)
-            beams.append((now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up))
+
+            # Ray-target intersections: compute ONCE per frame here (inputs are
+            # identical for both eyes), stored in the beam so _render_lasers and
+            # _render_laser_hit_circles reuse them instead of recomputing 4x.
+            kb_dist = self._keyboard_laser_hit_dist(ctrl_pos, fwd_w)
+            sc_dist = self._laser_screen_hit_dist(ctrl_pos, fwd_w)
+            _bov_cp, _bov_fw = self._pre_snap_overlay_ray(is_left, aim_mat, grip_mat)
+            ov_dist = self._overlay_panel_hit_dist(_bov_cp, _bov_fw)
+            beams.append((now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up,
+                          kb_dist, sc_dist, ov_dist, _bov_cp, _bov_fw, smoothed_origin))
         return beams
 
     def _render_lasers(self, mgl_fbo, vp_mat, view_mat, blend=False, view_inv=None):
@@ -449,21 +459,16 @@ class LaserMixin:
             return
         mgl_fbo.use()
         BEAM_MAX_LEN = 0.4
-        for now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up in beams:
-            # Auto-shorten beam when target is closer than the default length 
+        for (now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up,
+             kb_dist, sc_dist, ov_dist, _bov_cp, _bov_fw, _sm_origin) in beams:
+            # Auto-shorten beam when target is closer than the default length
             # mirrors the priority logic in _render_laser_hit_circles so the
             # beam tip lines up with the hit circle (no over/undershoot).
+            # Hit distances precomputed in _laser_beam_setup (1x/frame).
             cursor_uv = self._cursor_uv_l if ctrl_name == 'left' else self._cursor_uv_r
             if (self._cursor_ctrl == ctrl_name and cursor_uv is not None):
                 hit_dist = max(0.01, float(cursor_uv[2]))
             else:
-                kb_dist = self._keyboard_laser_hit_dist(ctrl_pos, fwd_w)
-                sc_dist = self._laser_screen_hit_dist(ctrl_pos, fwd_w)
-                # Use pre-snap direction for overlay hit (edge-snap deflects away from panel)
-                _is_left = (ctrl_name == 'left')
-                _bgrip = self._grip_mat_l if _is_left else self._grip_mat_r
-                _bov_cp, _bov_fw = self._pre_snap_overlay_ray(_is_left, aim_mat, _bgrip)
-                ov_dist = self._overlay_panel_hit_dist(_bov_cp, _bov_fw)
                 if self._keyboard_visible and kb_dist < 5.0:
                     hit_dist = kb_dist
                 else:
@@ -490,16 +495,10 @@ class LaserMixin:
         cam_r /= np.linalg.norm(cam_r) + 1e-10
         cam_u /= np.linalg.norm(cam_u) + 1e-10
 
-        for now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up in beams:
-            kb_dist = self._keyboard_laser_hit_dist(ctrl_pos, fwd_w)
-            sc_dist = self._laser_screen_hit_dist(ctrl_pos, fwd_w)
-            # Use pre-snap direction for overlay hit so edge-snapping doesn't
-            # deflect the ray away from the panel (which sits below the screen).
-            is_left = (ctrl_name == 'left')
-            grip_mat = self._grip_mat_l if is_left else self._grip_mat_r
-            _ov_cp, _ov_fw = self._pre_snap_overlay_ray(is_left, aim_mat, grip_mat)
-            _sm_pos = self._get_smoothed_ray(is_left)[0]  # None when no smoothed data yet
-            ov_dist = self._overlay_panel_hit_dist(_ov_cp, _ov_fw)
+        for (now, ctrl_name, aim_mat, ctrl_pos, fwd_w, right2, fwd, up,
+             kb_dist, sc_dist, ov_dist, _ov_cp, _ov_fw, _sm_pos) in beams:
+            # All hit distances + overlay pre-snap ray precomputed once per frame
+            # in _laser_beam_setup; _sm_pos is the pre-override smoothed origin.
 
             beam_len = 30.0
             hit_ray_cp  = ctrl_pos   # origin for hit_pos computation (may be overridden by overlay)

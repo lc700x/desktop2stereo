@@ -527,6 +527,8 @@ class OpenXRViewer(
         self._kb_cursor_owned_t_l = 0.0    # perf_counter stamp: last frame KB owned cursor (left)
         self._kb_cursor_owned_t_r = 0.0    # perf_counter stamp: last frame KB owned cursor (right)
         self._left_btn_down       = False # left mouse button held via left trigger
+        self._last_click_ts       = 0.0   # perf_counter of last emitted left click
+        self._last_click_px       = None  # (px, py) of last emitted left click
 
         # Per-hand desktop pixel positions for the multi-touch injector refreshed
         # each frame by _handle_cursor and consumed by _handle_triggers. ``valid``
@@ -930,6 +932,12 @@ class OpenXRViewer(
         if not self.window:
             glfw.terminate()
             raise RuntimeError("[OpenXRViewer] GLFW window creation failed")
+        try:
+            from utils import OS_NAME, crop_icon
+            if OS_NAME != "Darwin":
+                glfw.set_window_icon(self.window, 1, [crop_icon(Image.open("icon2.ico"))])
+        except Exception as e:
+            print(f"[OpenXRViewer] window icon load failed: {e}")
         glfw.make_context_current(self.window)
         glfw.swap_interval(0)
 
@@ -1026,7 +1034,10 @@ class OpenXRViewer(
         )
         self._frost_glow_prog['u_source'].value = 0
         self._frost_glow_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
-        self._frost_glow_vbo = self.ctx.buffer(reserve=24 * 5 * 4, dynamic=True)
+        # 4 walls, each an 8x8 grid strip (see _build_flat_frost_verts):
+        # per-wall verts = 8*2*(8+1) + (8-1)*2 = 158; total 632 verts * 5f * 4B
+        # = 12640 B. Reserve ~1.3x headroom.
+        self._frost_glow_vbo = self.ctx.buffer(reserve=16384, dynamic=True)
         self._frost_glow_vao = self.ctx.vertex_array(
             self._frost_glow_prog,
             [(self._frost_glow_vbo, '3f 2f', 'in_position', 'in_uv')],

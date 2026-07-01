@@ -304,7 +304,7 @@ class InputHandlerMixin:
         # changes the stamps, so two resting lasers never ping-pong the last
         # hand to click keeps control until the other hand clicks.
         now_pc = time.perf_counter()
-        _CURSOR_PRESS = 0.55
+        _CURSOR_PRESS = 0.40
         if hit_l and ltrig_now >= _CURSOR_PRESS and self._cursor_trig_prev_l < _CURSOR_PRESS:
             self._cursor_click_ts_l = now_pc
         if hit_r and rtrig_now >= _CURSOR_PRESS and self._cursor_trig_prev_r < _CURSOR_PRESS:
@@ -380,6 +380,39 @@ class InputHandlerMixin:
         if not self._grabbed and not both_touch_down:
             _set_cursor_pos(px, py)
 
+    def _emit_left_click(self):
+        """Send a left click, snapping to the previous click pixel so rapid
+        taps register as a real OS double-click.
+
+        A VR laser drifts a few pixels between taps, so two clicks at slightly
+        different pixels are seen by Windows as two singles, not a double.  If a
+        second click lands within the double-click time window, we move the
+        cursor back to the exact prior pixel before firing so the OS accepts it
+        as a double-click (matching real-mouse behaviour)."""
+        now = time.perf_counter()
+        px = py = None
+        pos = getattr(self, '_vr_cursor_screen_pos', None)
+        if pos is not None:
+            px, py = pos
+        # Double-click window in seconds (system value is ms; widened in run()).
+        # Use 3x the system window so VR trigger/A taps that are naturally slower
+        # and less rhythmic than a mouse still register as a double-click.
+        try:
+            dclick_s = (_U32.GetDoubleClickTime() / 1000.0) * 3.0
+        except Exception:
+            dclick_s = 1.5
+        last_px = getattr(self, '_last_click_px', None)
+        if (last_px is not None and px is not None
+                and (now - self._last_click_ts) <= dclick_s):
+            # Snap to the first click's pixel so the OS pairs the two clicks.
+            _set_cursor_pos(last_px[0], last_px[1])
+            px, py = last_px
+        _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
+        _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
+        self._last_click_ts = now
+        if px is not None:
+            self._last_click_px = (px, py)
+
     def _handle_triggers(self):
         """Map controller triggers to Windows multi-touch contacts (preferred)
         or mouse clicks (fallback).
@@ -400,8 +433,8 @@ class InputHandlerMixin:
         If a trigger fires while the laser hits the FPS/status panel, that
         trigger toggles the shortcuts/help panel instead of generating a click.
         """
-        PRESS_THRESH   = 0.55   # rising edge
-        RELEASE_THRESH = 0.30   # falling edge (hysteresis)
+        PRESS_THRESH   = 0.40   # rising edge (loosened: partial pull clicks)
+        RELEASE_THRESH = 0.20   # falling edge (hysteresis)
         HOLD_TIME      = 0.22   # seconds trigger must stay held to enter drag mode (mouse fallback only)
 
         # While gripping (user repositioning the screen/keyboard), release any
@@ -637,8 +670,7 @@ class InputHandlerMixin:
                 if trig >= PRESS_THRESH and usable:
                     # Rising edge: fire an immediate click pulse so the OS can
                     # accumulate it toward double-click detection, then start timer.
-                    _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
-                    _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
+                    self._emit_left_click()
                     setattr(self, state_attr,   'pressed')
                     setattr(self, press_t_attr, now)
 
@@ -1458,8 +1490,14 @@ class InputHandlerMixin:
                         self.screen_yaw   = base_yaw   + self._yaw_offset
                         self.screen_pitch = base_pitch + self._pitch_offset
         elif grip_r and not seat_adjust_active:
+            # X and Y share the same stick, so require the intended axis to
+            # dominate: depth (Y) only fires when the push is mostly vertical,
+            # veil (X) only when mostly horizontal. Prevents an X push meant for
+            # veil from leaking into depth (and vice versa).
+            y_dominant = abs(ly) > abs(lx)
+            x_dominant = abs(lx) > abs(ly)
             # Right grip + left stick Y depth_ratio (no laser required)
-            if abs(ly) > DEAD:
+            if abs(ly) > DEAD and y_dominant:
                 old_val = self.depth_ratio
                 self.depth_ratio = max(DEPTH_RATIO_MIN,
                                     min(DEPTH_RATIO_MAX,
@@ -1468,7 +1506,7 @@ class InputHandlerMixin:
                     self._depth_osd_show_t = time.perf_counter()
                     self._mark_runtime_settings_dirty()
             # Right grip + left stick X veil transparency (only in veil mode)
-            if abs(lx) > DEAD and self._active_glow_mode() == 'veil':
+            if abs(lx) > DEAD and x_dominant and self._active_glow_mode() == 'veil':
                 VEIL_ALPHA_SPEED = 0.8   # units/s at full deflection
                 old_a = float(getattr(self, '_frost_veil_alpha', 1.0))
                 new_a = max(0.0, min(1.0, old_a + lx * VEIL_ALPHA_SPEED * dt))
@@ -1641,8 +1679,7 @@ class InputHandlerMixin:
                 # from clicking when pointing off-screen or at the overlay panel.
                 is_gripping = self._grabbed
                 if a_edge and laser_r_on_screen and not is_gripping:
-                    _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
-                    _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
+                    self._emit_left_click()
                 if b_edge and laser_r_on_screen and not is_gripping:
                     _send_mouse_flags(_MOUSEEVENTF_RIGHTDOWN)
                     _send_mouse_flags(_MOUSEEVENTF_RIGHTUP)

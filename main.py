@@ -18,6 +18,28 @@ try:
 except Exception:
     pass
 
+# When launched via GUI stdout/stderr are PIPEs: tqdm uses \r to redraw
+# the bar in-place, but the GUI reads lines (readline), so \r updates
+# buffer until the final \n and the bar "suddenly appears" complete.
+# Wrap stdout to convert \r -> \n so each tqdm tick becomes a new line,
+# and spoof isatty() so tqdm/HF Hub actually render bars at all.
+class _CrToLf:
+    def __init__(self, stream):
+        self._s = stream
+    def write(self, text):
+        self._s.write(text.replace('\r', '\n'))
+    def flush(self):
+        self._s.flush()
+    def isatty(self):
+        return True
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+if not sys.stdout.isatty():
+    sys.stdout = _CrToLf(sys.stdout)
+if not sys.stderr.isatty():
+    sys.stderr = _CrToLf(sys.stderr)
+
 from utils import (OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, XR_PREVIEW_WINDOW, AUTO_CROP, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, CONTROLLER_MODEL, ENVIRONMENT_MODEL, VSYNC)
 from depth import process, predict_depth
 

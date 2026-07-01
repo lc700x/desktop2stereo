@@ -129,30 +129,59 @@ class EffectsMixin:
         self._frost_layout_cache_val = val
         return val
 
-    def _build_flat_frost_verts(self, front_half_w, front_half_h):
+    # Each of the 4 veil walls is its own TRIANGLE_STRIP, subdivided as a GRID
+    # in BOTH axes: N depth steps (kills the perspective crease) AND M steps
+    # along the wall's long edge (so edge/beam shading is sampled densely and
+    # never kinks along a skinny triangle's diagonal -> straight extension).
+    # Walls are NOT stitched to each other (cross-wall joins caused the blinking
+    # corner seam); depth rows WITHIN a wall are stitched with degenerate joins.
+    _FLAT_FROST_N = 8    # depth steps
+    _FLAT_FROST_M = 8    # steps along the wall long edge
+    # verts per wall = N rows * 2*(M+1) + (N-1)*2 degenerate join verts
+    _FLAT_FROST_STRIDE = 8 * 2 * (8 + 1) + (8 - 1) * 2
+
+    def _build_flat_frost_verts(self, front_half_w, front_half_h, N=8, M=8):
         sx = max(float(self.screen_width) * 0.5, 1e-6)
         sy = max(float(self.screen_height) * 0.5, 1e-6)
         fx = front_half_w / sx
         fy = front_half_h / sy
-
-        def _quad(a, b, c, d):
-            return a + b + c + c + b + d
-
-        # Each quad connects a screen edge to the expanded front plane.
-        # UVs stay pinned to the screen edge pixel so veil samples only the edge.
-        quads = [
-            # Left edge.
-            ([-1, -1, 0, 0, 1], [-1,  1, 0, 0, 0], [-fx, -fy, 1, 0, 1], [-fx,  fy, 1, 0, 0]),
-            # Right edge.
-            ([ 1, -1, 0, 1, 1], [ 1,  1, 0, 1, 0], [ fx, -fy, 1, 1, 1], [ fx,  fy, 1, 1, 0]),
-            # Bottom edge.
-            ([-1, -1, 0, 0, 1], [ 1, -1, 0, 1, 1], [-fx, -fy, 1, 0, 1], [ fx, -fy, 1, 1, 1]),
-            # Top edge.
-            ([-1,  1, 0, 0, 0], [ 1,  1, 0, 1, 0], [-fx,  fy, 1, 0, 0], [ fx,  fy, 1, 1, 0]),
-        ]
         verts = []
-        for quad in quads:
-            verts.extend(_quad(*quad))
+
+        # A wall spans screen-edge points A->B (param s in [0,1]) and extends
+        # from the screen plane (t=0) to the front rectangle (t=1). Emit N depth
+        # rows, each a strip of M+1 columns, stitched within the wall.
+        def wall(ax, ay, uva, bx, by, uvb):
+            def vtx(s, t):
+                px = ax + s * (bx - ax)
+                py = ay + s * (by - ay)
+                x = px + t * (px * fx - px)
+                y = py + t * (py * fy - py)
+                u = uva[0] + s * (uvb[0] - uva[0])
+                v = uva[1] + s * (uvb[1] - uva[1])
+                return [x, y, t, u, v]
+            prev_last = None
+            for i in range(N):
+                t0, t1 = i / N, (i + 1) / N
+                row = []
+                for j in range(M + 1):
+                    s = j / M
+                    row.append(vtx(s, t0))
+                    row.append(vtx(s, t1))
+                if prev_last is not None:
+                    verts.extend(prev_last)   # degenerate join between depth rows
+                    verts.extend(row[0])
+                for vv in row:
+                    verts.extend(vv)
+                prev_last = row[-1]
+
+        # Top wall: TL(-1,1) -> TR(1,1)
+        wall(-1, 1, (0, 0),  1, 1, (1, 0))
+        # Bottom wall: BL(-1,-1) -> BR(1,-1)
+        wall(-1, -1, (0, 1),  1, -1, (1, 1))
+        # Left wall: TL(-1,1) -> BL(-1,-1)
+        wall(-1, 1, (0, 0),  -1, -1, (0, 1))
+        # Right wall: TR(1,1) -> BR(1,-1)
+        wall(1, 1, (1, 0),  1, -1, (1, 1))
         return np.array(verts, dtype='f4')
 
     def _build_curved_frost_verts(self, front_depth, front_half_w, front_half_h, N=48):
@@ -171,7 +200,9 @@ class EffectsMixin:
             u, v = float(uv[0]), float(uv[1])
             lx = u * 2.0 - 1.0
             ly = v * 2.0 - 1.0
-            return [float(world[0]), float(world[1]), float(world[2]), u, v, lx, ly, local_z]
+            # UV v=1 in curved-screen convention is top (+Y); flat veil expects v=0 at top.
+            # Flip v for texture sampling to match the flat veil orientation.
+            return [float(world[0]), float(world[1]), float(world[2]), u, 1.0 - v, lx, ly, local_z]
 
         def _append_quad(out, rear0, front0, rear1, front1):
             out.extend(rear0)
@@ -524,7 +555,7 @@ class EffectsMixin:
             round(float(self.screen_width), 6), round(float(self.screen_height), 6),
             float(self.screen_distance), float(self.screen_pan_x), float(self.screen_pan_y),
             float(self.screen_yaw), float(self.screen_pitch), float(self.screen_roll),
-            round(float(front_depth), 2), round(float(front_half_w), 2), round(float(front_half_h), 2),
+            round(float(front_depth), 1), round(float(front_half_w), 1), round(float(front_half_h), 1),
             self._screen_curve_mode(),
         )
         if params != self._curved_frost_verts_params:
@@ -565,7 +596,10 @@ class EffectsMixin:
         self._write_frost_model_uniform(prog, self._frost_model_bytes(beam_len))
         prog['u_vp'].write(self._mat4_uniform_bytes(vp_mat))
         uniform_setter(prog, source_tex, intensity)
-        vao.render(moderngl.TRIANGLES, vertices=24)
+        # 4 separate wall strips (no cross-wall stitch -> no blinking corner seam).
+        stride = self._FLAT_FROST_STRIDE
+        for w in range(4):
+            vao.render(moderngl.TRIANGLE_STRIP, vertices=stride, first=w * stride)
         self.ctx.disable(moderngl.BLEND)
         self.ctx.depth_mask = True
         self.ctx.enable(moderngl.DEPTH_TEST)
@@ -745,11 +779,20 @@ class EffectsMixin:
 
         view_rot = np.array(view_mat, dtype=np.float32, copy=True)
         view_rot[:3, 3] = 0.0
-        try:
-            inv_proj = np.linalg.inv(proj_mat.astype(np.float32))
-            inv_view_rot = np.linalg.inv(view_rot)
-        except Exception:
-            return
+        # view_rot is rotation-only (translation zeroed) inverse == transpose.
+        inv_view_rot = view_rot.T
+        # proj inverse changes only when the projection does cache by its bytes.
+        proj_f = proj_mat.astype(np.float32)
+        proj_key = proj_f.tobytes()
+        if getattr(self, '_panorama_inv_proj_key', None) == proj_key:
+            inv_proj = self._panorama_inv_proj_val
+        else:
+            try:
+                inv_proj = np.linalg.inv(proj_f)
+            except Exception:
+                return
+            self._panorama_inv_proj_key = proj_key
+            self._panorama_inv_proj_val = inv_proj
 
         mgl_fbo.use()
         self.ctx.disable(moderngl.DEPTH_TEST)

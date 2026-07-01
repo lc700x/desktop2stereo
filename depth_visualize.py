@@ -31,9 +31,9 @@ FILL_16_9 = True
 DEPTH_RESOLUTION = 512
 FOREGROUND_SCALE = 0
 
-USE_TORCH_COMPILE = True
+USE_TORCH_COMPILE = False
 
-USE_TENSORRT = True
+USE_TENSORRT = False
 RECOMPILE_TRT = True
 
 USE_MIGRAPHX = True
@@ -53,7 +53,7 @@ RECOMPILE_OPENVINO = True
 # MODEL_ID = "LiheYoung/depth-anything-small-hf"
 # MODEL_ID = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf"
 # MODEL_ID = "lc700x/depth-anything-indoor-large-hf"
-# MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 # MODEL_ID = "depth-anything/Video-Depth-Anything-Small"
 # MODEL_ID = "depth-anything/DA3MONO-LARGE"
 # MODEL_ID = "Intel/dpt-large"
@@ -64,7 +64,7 @@ RECOMPILE_OPENVINO = True
 # MODEL_ID = "lc700x/dpt-large-redesign-hf"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 # MODEL_ID = "Intel/dpt-beit-base-384"
-MODEL_ID = "lc700x/InfiniDepth-Small"
+# MODEL_ID = "lc700x/InfiniDepth-Small"
 # MODEL_ID = "xingyang1/Distill-Any-Depth-Small-hf"
 
 IS_CUDA = "CUDA" in DEVICE_INFO
