@@ -1533,10 +1533,13 @@ class EnvironmentMixin:
             f"offset={self._ctrl_model_offset} rot={self._ctrl_model_rot_deg}")
 
     def _env_model_mat4(self):
-        """Return model->world transform for the Environment Model (cached per frame)."""
-        fc = getattr(self, '_frame_count', -1)
-        cached = getattr(self, '_cached_env_model_mat4_frame', -2)
-        if fc == cached:
+        """Return model->world transform for the Environment Model (cached by pose/scale)."""
+        cache_key = (
+            tuple(self._env_model_pos),
+            tuple(self._env_model_rot),
+            tuple(self._env_model_scale),
+        )
+        if getattr(self, '_env_model_mat4_key', None) == cache_key:
             return self._cached_env_model_mat4_val
         yaw, pitch, roll = self._env_model_rot
         cy, sy = math.cos(yaw), math.sin(yaw)
@@ -1550,8 +1553,10 @@ class EnvironmentMixin:
             [(-sy*cr + cy*sp*sr)*sx, (sy*sr + cy*sp*cr)*sy_s,  cy*cp*sz,              tz],
             [0,                      0,                        0,                      1],
         ], dtype='f4')
+        m.flags.writeable = False
         self._cached_env_model_mat4_val = m
-        self._cached_env_model_mat4_frame = fc
+        self._env_model_mat4_key = cache_key
+        self._env_normal_mat_key = None  # invalidate normal matrix cache
         return m
 
     def _render_env_model(self, mgl_fbo, vp_mat, view_mat, view_inv=None):

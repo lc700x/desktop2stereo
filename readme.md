@@ -207,12 +207,14 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 | Left Y button (long press) | Cycle | Cycle screen presets |
 | Left stick button (short press) | Cycle | Cycle background color (5 options) |
 | Left stick button (long press) | Toggle | FPS / Help panel overlay |
-| Left X button (short press) | Toggle | Show / Hide virtual keyboard |
-| Left X button (long press) | Toggle | VDXR Passthrough mode |
+| Left X button (quick tap <1s) | Toggle | Show / Hide virtual keyboard |
+| Left X button (hold >1s, release) | Toggle | Toggle light / glow mode |
+| Left X button (hold >4s) | Toggle | VDXR Passthrough mode |
 | Left menu button (short press) | Toggle | FPS overlay |
 | Left menu button (long press) | Reset | Reset depth ratio to default |
 | **Depth Adjustment** |||
 | Right grip + Left stick Y | Up/Down | Adjust depth scale (0–10) |
+| Right grip + Left stick X | Left/Right | Adjust veil transparency (0–1) |
 | Right grip + Left stick button (short press) | Toggle | Reset depth intensity to zero / restore |
 | Right grip + Right stick button (short press) | Reset | Reset depth scale to 2.0 |
 | Right grip + A/B (hold) | Increase/Decrease | Fine-tune depth ratio |

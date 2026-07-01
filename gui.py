@@ -383,7 +383,8 @@ UI_TEXTS = {
         "Lossless Scaling Support": "LSFG",
         "3D Monitor": "3D Monitor",
         "OpenXR Link": "OpenXR Link",
-        "XR Preview Window": "XR Preview Window",
+        "XR Preview": "XR Preview",
+        "Auto Crop": "Auto Crop",
         "VSync": "VSync",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
@@ -513,7 +514,8 @@ UI_TEXTS = {
         "Lossless Scaling Support": "小黄鸭",
         "3D Monitor": "3D显示器",
         "OpenXR Link": "OpenXR串流",
-        "XR Preview Window": "XR预览窗口",
+        "XR Preview": "XR预览",
+        "Auto Crop": "自动裁剪",
         "VSync": "垂直同步",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
@@ -619,7 +621,8 @@ DEFAULTS = {
     "Computing Device": 0,
     "Language": "EN",
     "Run Mode": "OpenXR Link",
-    "XR Preview Window": False,
+    "XR Preview": False,
+    "Auto Crop": True,
     "VSync": False,
     "Stream Protocol": "HLS",
     "Streamer Port": DEFAULT_PORT,
@@ -1436,8 +1439,12 @@ class Desktop2StereoGUI:
             options=[m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Interleaved-V"]],
             value="Half-SBS", width=S(130))
         self.xr_preview_cb = ft.Checkbox(
-            label="XR Preview Window",
-            value=DEFAULTS.get("XR Preview Window", True),
+            label="XR Preview",
+            value=DEFAULTS.get("XR Preview", True),
+        )
+        self.autocrop_cb = ft.Checkbox(
+            label="Auto Crop",
+            value=DEFAULTS.get("Auto Crop", True),
         )
         self.r10_label = ft.Text("Controller:", size=FONT_SIZE, width=S(130))
         try:
@@ -1484,6 +1491,7 @@ class Desktop2StereoGUI:
             self.run_mode_dd,
             ft.Container(width=S(40)),
             self.xr_preview_cb,
+            self.autocrop_cb,
             self._xr_preview_spacer,
             self.r7b_label,
             self.display_mode_dd
@@ -1778,7 +1786,8 @@ class Desktop2StereoGUI:
         self.update_depth_resolution_options(self.current_model_name)
         self.depth_strength_dd.value = str(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
         self.display_mode_dd.value = cfg.get("Display Mode", DEFAULTS["Display Mode"])
-        self.xr_preview_cb.value = cfg.get("XR Preview Window", DEFAULTS["XR Preview Window"])
+        self.xr_preview_cb.value = cfg.get("XR Preview", DEFAULTS["XR Preview"])
+        self.autocrop_cb.value = cfg.get("Auto Crop", DEFAULTS["Auto Crop"])
         self.vsync_cb.value = cfg.get("VSync", DEFAULTS["VSync"])
         self.antialiasing_dd.value = str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"]))
         self.foreground_scale_dd.value = str(cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"]))
@@ -2355,6 +2364,7 @@ class Desktop2StereoGUI:
         self.run_mode_dd.value = mode_reverse.get(mode, texts["Local Viewer"])
         is_openxr = mode == "OpenXR Link"
         self.xr_preview_cb.visible = is_openxr
+        self.autocrop_cb.visible = is_openxr
         self.vsync_cb.visible = mode in ["Local Viewer", "3D Monitor"]
         self._xr_preview_spacer.visible = is_openxr
         self.r7b_label.visible = not is_openxr
@@ -2474,7 +2484,8 @@ class Desktop2StereoGUI:
         self.r6_label.value = t["Capture Tool:"]
         self.r7a_label.value = t["Run Mode:"]
         self.r7b_label.value = t["Display Mode:"]
-        self.xr_preview_cb.label = t.get("XR Preview Window", "XR Preview Window")
+        self.xr_preview_cb.label = t.get("XR Preview", "XR Preview")
+        self.autocrop_cb.label = t.get("Auto Crop", "Auto Crop")
         self.r9_label.value = t["Stereo Output:"]
         self.theme_label.value = t["Theme:"]
         theme_display = ["System","Blue","Green","Red","Purple","Orange","Teal","Pink","Grey"]
@@ -2904,7 +2915,8 @@ class Desktop2StereoGUI:
             "Computing Device": self.device_label_to_index.get(self.device_dd.value, DEFAULTS["Computing Device"]),
             "Language": self.language,
             "Run Mode": self.run_mode_key,
-            "XR Preview Window": self.xr_preview_cb.value,
+            "XR Preview": self.xr_preview_cb.value,
+            "Auto Crop": self.autocrop_cb.value,
             "VSync": self.vsync_cb.value,
             "Stream Protocol": self.stream_proto_dd.value,
             "Streamer Port": self._parse_int(self.stream_port_tf.value, DEFAULTS["Streamer Port"]),

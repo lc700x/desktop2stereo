@@ -916,16 +916,17 @@ else:
         ("Left Menu button", "Short press", "Show / hide status + shortcuts panel", False),
         ("Left Y button", "Short press", "Reset screen / room seat height", False),
         ("Left Y button", "Long press 1s", "Cycle screen presets / room seat-light presets", False),
-        ("Left X button", "Short press", "Show/hide virtual keyboard", False),
-        ("Left X button", "Hold 1-5s, release", "Toggle light / glow mode", False),
-        ("Left X button", "Hold 5s", "Toggle passthrough green", False),
+        ("Left X button", "Quick tap (<1s)", "Show/hide virtual keyboard", False),
+        ("Left X button", "Hold >1s, release", "Toggle light / glow mode", False),
+        ("Left X button", "Hold >4s", "Toggle passthrough green", False),
         ("Right A button", "Laser on screen click", "Left mouse click", False),
         ("Right B button", "Laser on screen click", "Right mouse click", False),
         ("Left stick press", "Short press", "Cycle environment model", False),
         ("", "", "", False),
 
         ("[Depth & Visual]", "", "", True),
-        ("Right Grip + left stick U/D", "Hold & push", "Adjust depth strength and sync settings", False),
+        ("Right Grip + left stick U/D", "Hold & push", "Adjust depth strength", False),
+        ("Right Grip + left stick L/R", "Hold & push", "Adjust veil transparency", False),
         ("Right Grip + right stick press", "Short press", "Reset depth strength to 2.0", False),
         ("Right stick press", "Short/long press", "Toggle curved / reset screen direction", False),
         ("", "", "", False),
@@ -986,7 +987,8 @@ STEREO_DISPLAY_INDEX = settings["Stereo Output"]
 STEREO_DISPLAY_SELECTION = False if not STEREO_DISPLAY_INDEX else True
 CONTROLLER_MODEL = settings["Controller Model"]
 ENVIRONMENT_MODEL = settings.get("Environment Model", "Default")
-XR_PREVIEW_WINDOW = settings.get("XR Preview Window", True)
+XR_PREVIEW_WINDOW = settings.get("XR Preview", True)
+AUTO_CROP = settings.get("Auto Crop", True)
 
 # Initialize Device
 import torch
