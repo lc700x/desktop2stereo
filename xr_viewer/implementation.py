@@ -67,7 +67,7 @@ from .glsl import (
     _BEAM_VERT, _BEAM_FRAG, _CURVED_VERT, _CTRL_VERT, _CTRL_FRAG,
     _ENV_VERT, _ENV_FRAG, _GLOW_FRAG, _FROST_GLOW_VERT,
     _FROST_CURVED_VERT, _FROST_GLOW_FRAG, _FROST_VEIL_FRAG,
-    _PANORAMA_VERT, _PANORAMA_FRAG,
+    _MIST_FRAG, _PANORAMA_VERT, _PANORAMA_FRAG,
 )
 from .input import (
     _MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP,
@@ -336,7 +336,7 @@ class OpenXRViewer(
         self._glow_ref_screen = 2.4               # reference screen long edge (meters)
         self._glow_target_color = (0.3, 0.6, 1.0)  # latest sampled frame average
         self._glow_color_counter = 0              # reserved for future tuning
-        self._glow_mode = 'off'                   # glow | veil | frosted | off
+        self._glow_mode = 'off'                   # glow | veil | frosted | mist | off
         requested_glow_mode = glow_mode if glow_mode is not None else kwargs.get('glow_mode', None)
         if requested_glow_mode is not None:
             mode = str(requested_glow_mode or 'off').strip().lower()
@@ -362,6 +362,17 @@ class OpenXRViewer(
         self._frost_veil_alpha = 1.00
         self._frost_veil_threshold = 0.0
         self._frost_veil_lod = 0.0
+        # "Mist" atmospheric effect tunables (rendered on frost wall geometry).
+        # Diffusion is driven by u_lod (mip level of the sampled edge color).
+        self._mist_intensity = 1.9
+        self._mist_alpha = 0.98
+        self._mist_lod = 7.5
+        self._mist_threshold = 0.28
+        self._mist_noise_scale = 11.0
+        self._mist_noise_strength = 1.55
+        self._mist_softness = 0.92   # feather radius: how far the mist reaches (0..1)
+        self._mist_thickness = 2.1   # feather softness (x0.35 in shader) -> broad, soft edge
+        self._mist_scatter = 1.35
         self._screen_light_intensity = 3.5
 
         # Environment lighting config (overridable via profile.json)
@@ -762,6 +773,10 @@ class OpenXRViewer(
         self._curved_veil_prog = None
         self._curved_veil_vao = None
         self._curved_frost_verts_params = None
+        self._mist_prog = None
+        self._mist_vao = None
+        self._curved_mist_prog = None
+        self._curved_mist_vao = None
         self._blit_prog = None
         self._blit_vao  = None
         self._panorama_prog = None
@@ -1079,6 +1094,20 @@ class OpenXRViewer(
             [(self._frost_glow_vbo, '3f 2f', 'in_position', 'in_uv')],
         )
 
+        # "Mist" atmospheric effect: same wall geometry as veil/frosted (moves
+        # with the screen, samples the movie edge color), separate fragment.
+        self._mist_prog = self.ctx.program(
+            vertex_shader=_FROST_GLOW_VERT,
+            fragment_shader=_MIST_FRAG,
+        )
+        self._mist_prog['u_source'].value = 0
+        self._mist_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
+        self._mist_vao = self.ctx.vertex_array(
+            self._mist_prog,
+            [(self._frost_glow_vbo, '3f 2f', 'in_position', 'in_uv')],
+        )
+        # Curved mist VAO is created after the curved frost VBO exists (below).
+
         # Laser beam: a very thin elongated quad (width=0.003 m, length=5 m)
         # in local space X=[-0.5,0.5], Y=[-1,1]; we scale X to beam_w, Y to half-length
         laser_verts = np.array([
@@ -1315,6 +1344,16 @@ class OpenXRViewer(
         self._curved_veil_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
         self._curved_veil_vao = self.ctx.vertex_array(
             self._curved_veil_prog,
+            [(self._curved_frost_vbo, '3f 2f 3f', 'in_position', 'in_uv', 'in_local')],
+        )
+        self._curved_mist_prog = self.ctx.program(
+            vertex_shader=_FROST_CURVED_VERT,
+            fragment_shader=_MIST_FRAG,
+        )
+        self._curved_mist_prog['u_source'].value = 0
+        self._curved_mist_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
+        self._curved_mist_vao = self.ctx.vertex_array(
+            self._curved_mist_prog,
             [(self._curved_frost_vbo, '3f 2f 3f', 'in_position', 'in_uv', 'in_local')],
         )
 

@@ -994,8 +994,7 @@ STEREO_DISPLAY_SELECTION = False if not STEREO_DISPLAY_INDEX else True
 CONTROLLER_MODEL = settings["Controller Model"]
 ENVIRONMENT_MODEL = settings.get("Environment Model", "Default")
 XR_PREVIEW_WINDOW = settings.get("XR Preview", True)
-AUTO_CROP = settings.get("Auto Crop", True)
-CROP_MODE = settings.get("Crop Mode", "auto")
+CROP_MODE = settings.get("Crop Mode", "manual")
 
 # Initialize Device
 import torch

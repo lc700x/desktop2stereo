@@ -48,6 +48,9 @@ class EffectsMixin:
             'frosted': 'frosted',
             'veil': 'veil',
             'glow': 'glow',
+            'mist': 'mist',
+            'fog': 'mist',
+            'dream': 'mist',
             'off': 'off',
             'none': 'off',
         }
@@ -268,6 +271,8 @@ class EffectsMixin:
             self._render_frost_veil(mgl_fbo, vp_mat)
         elif mode == 'frosted':
             self._render_frost_glow(mgl_fbo, vp_mat)
+        elif mode == 'mist':
+            self._render_mist(mgl_fbo, vp_mat)
 
     def _render_curved_glow(self, mgl_fbo, vp_mat, glow_intensity):
         if self.screen_height is None:
@@ -419,7 +424,7 @@ class EffectsMixin:
             mode = self._active_glow_mode()
         if mode == 'veil':
             return float(getattr(self, '_frost_veil_lod', 0.0) or 0.0) > 0.001
-        return mode == 'frosted'
+        return mode == 'frosted' or mode == 'mist'
 
     def _maybe_generate_color_mipmaps(self, mode=None):
         needs_mips = self._color_mipmaps_needed(mode)
@@ -1009,5 +1014,65 @@ class EffectsMixin:
             self._render_help_panel(mgl_fbo, vp_mat)
 
         self.ctx.screen.use()
-    
+
+    def _set_mist_uniforms(self, prog, source_tex, intensity):
+        source_tex.use(location=0)
+        crop = self._movie_crop_render_uv_fast()
+        values = (
+            crop,
+            float(getattr(self, '_mist_lod', 6.0)),
+            float(getattr(self, '_mist_threshold', 0.35)),
+            float(intensity),
+            float(getattr(self, '_mist_alpha', 0.98)),
+            float(getattr(self, '_mist_noise_scale', 11.0)),
+            float(getattr(self, '_mist_noise_strength', 1.55)),
+            float(getattr(self, '_mist_softness', 0.92)),
+            float(getattr(self, '_mist_thickness', 2.1)),
+            float(getattr(self, '_mist_scatter', 1.35)),
+        )
+        time_value = float(getattr(self, '_frame_now', 0.0) or time.perf_counter())
+        cache = getattr(self, '_frost_uniform_cache', None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._frost_uniform_cache = cache
+        key = id(prog)
+        cached = cache.get(key)
+        if cached is None or cached[0] != values:
+            self._set_source_crop_uniform(prog, crop)
+            prog['u_lod'].value = values[1]
+            prog['u_threshold'].value = values[2]
+            prog['u_intensity'].value = values[3]
+            prog['u_frost_alpha'].value = values[4]
+            prog['u_noise_scale'].value = values[5]
+            prog['u_noise_strength'].value = values[6]
+            prog['u_beam_softness'].value = values[7]
+            prog['u_beam_thickness'].value = values[8]
+            prog['u_diffuse_scatter'].value = values[9]
+            cached = (values, None)
+        if cached[1] != time_value:
+            prog['u_time'].value = time_value
+            cached = (values, time_value)
+        cache[key] = cached
+
+    def _render_mist(self, mgl_fbo, vp_mat):
+        intensity = float(getattr(self, '_mist_intensity', 1.6))
+        intensity *= max(float(getattr(self, '_glow_intensity_multiplier', 0.0)), 0.0)
+        if intensity <= 0.0 or self.screen_height is None:
+            return
+        source_tex = self._frost_source_texture()
+        if source_tex is None:
+            return
+        if self._screen_curved:
+            self._render_curved_frost_with_uniforms(
+                mgl_fbo, vp_mat, source_tex, intensity, self._set_mist_uniforms,
+                prog=self._curved_mist_prog,
+                vao=self._curved_mist_vao,
+            )
+        else:
+            self._render_flat_frost_with_uniforms(
+                mgl_fbo, vp_mat, source_tex, intensity, self._set_mist_uniforms,
+                prog=self._mist_prog,
+                vao=self._mist_vao,
+            )
+
     # OpenXR event loop

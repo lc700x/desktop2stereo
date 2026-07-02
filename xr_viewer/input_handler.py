@@ -1581,15 +1581,26 @@ class InputHandlerMixin:
                 if self.depth_ratio != old_val:
                     self._depth_osd_show_t = time.perf_counter()
                     self._mark_runtime_settings_dirty()
-            # Right grip + left stick X veil transparency (only in veil mode)
-            if abs(lx) > DEAD and x_dominant and self._active_glow_mode() == 'veil':
-                VEIL_ALPHA_SPEED = 0.8   # units/s at full deflection
-                old_a = float(getattr(self, '_frost_veil_alpha', 1.0))
-                new_a = max(0.0, min(1.0, old_a + lx * VEIL_ALPHA_SPEED * dt))
-                if new_a != old_a:
-                    self._frost_veil_alpha = new_a
-                    self._frost_uniform_cache = {}
-                    self._mark_runtime_settings_dirty()
+            # Right grip + left stick X: transparency of the current edge
+            # effect (veil or mist).
+            if abs(lx) > DEAD and x_dominant:
+                _gm = self._active_glow_mode()
+                if _gm == 'veil':
+                    VEIL_ALPHA_SPEED = 0.8   # units/s at full deflection
+                    old_a = float(getattr(self, '_frost_veil_alpha', 1.0))
+                    new_a = max(0.0, min(1.0, old_a + lx * VEIL_ALPHA_SPEED * dt))
+                    if new_a != old_a:
+                        self._frost_veil_alpha = new_a
+                        self._frost_uniform_cache = {}
+                        self._mark_runtime_settings_dirty()
+                elif _gm == 'mist':
+                    MIST_ALPHA_SPEED = 0.8
+                    old_a = float(getattr(self, '_mist_alpha', 0.9))
+                    new_a = max(0.0, min(1.0, old_a + lx * MIST_ALPHA_SPEED * dt))
+                    if new_a != old_a:
+                        self._mist_alpha = new_a
+                        self._frost_uniform_cache = {}
+                        self._mark_runtime_settings_dirty()
             # Don't send desktop scroll events while screen grabbed/manipulated
             if not (self._grabbed or grip_l or grip_r):
                 self._accum_scroll(lx, 0.0, dt)

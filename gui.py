@@ -384,9 +384,6 @@ UI_TEXTS = {
         "3D Monitor": "3D Monitor",
         "OpenXR Link": "OpenXR Link",
         "XR Preview": "XR Preview",
-        "Auto Crop": "Auto Crop",
-        "Manual Crop": "Manual Crop",
-        "None Crop": "None Crop",
         "Crop Auto": "Auto",
         "Crop Manual": "Manual",
         "Crop Off": "Off",
@@ -522,9 +519,6 @@ UI_TEXTS = {
         "3D Monitor": "3D显示器",
         "OpenXR Link": "OpenXR串流",
         "XR Preview": "XR预览",
-        "Auto Crop": "自动裁剪",
-        "Manual Crop": "手动裁剪",
-        "None Crop": "不裁剪",
         "Crop Auto": "自动",
         "Crop Manual": "手动",
         "Crop Off": "关闭",
@@ -636,7 +630,7 @@ DEFAULTS = {
     "Language": "EN",
     "Run Mode": "OpenXR Link",
     "XR Preview": False,
-    "Crop Mode": "auto",
+    "Crop Mode": "manual",
     "VSync": False,
     "Stream Protocol": "HLS",
     "Streamer Port": DEFAULT_PORT,
@@ -1186,6 +1180,7 @@ class Desktop2StereoGUI:
             try:
                 cfg = read_yaml(os.path.join(BASE_DIR, "settings.yaml"))
                 if cfg:
+                    cfg.pop("Auto Crop", None)   # retired key, superseded by Crop Mode
                     self._config.update(cfg)
                     self.language = self._config.get("Language", "EN")
                     self.apply_config(self._config)
