@@ -32,14 +32,7 @@ class ScreenMixin:
         Caller must transpose before writing to OpenGL.
         """
         if self.screen_height is None:
-            fw, fh = self.frame_size
-            ar = self._effective_frame_aspect() if fw > 0 else 9.0 / 16.0
-            if fh > fw:
-                self.screen_height = self._screen_ref_size
-                self.screen_width = self.screen_height / ar
-            else:
-                self.screen_width = self._screen_ref_size
-                self.screen_height = self.screen_width * ar
+            self.screen_width, self.screen_height = self._crop_screen_dims(self._screen_ref_size)
 
         _key = (self.screen_yaw, self.screen_pitch, self.screen_roll,
                 self.screen_pan_x, self.screen_pan_y, self.screen_distance,
@@ -132,14 +125,7 @@ class ScreenMixin:
         The strip has (N+1)*2 vertices one column pair per segment.
         """
         if self.screen_height is None:
-            fw, fh = self.frame_size
-            ar = self._effective_frame_aspect() if fw > 0 else 9.0 / 16.0
-            if fh > fw:
-                self.screen_height = self._screen_ref_size
-                self.screen_width = self.screen_height / ar
-            else:
-                self.screen_width = self._screen_ref_size
-                self.screen_height = self.screen_width * ar
+            self.screen_width, self.screen_height = self._crop_screen_dims(self._screen_ref_size)
 
         half_w = (width_override if width_override is not None else self.screen_width) / 2.0
         half_h = (height_override if height_override is not None else self.screen_height) / 2.0

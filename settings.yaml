@@ -331,10 +331,10 @@ Recompile OpenVINO: false
 MIGraphX: null
 Recompile MIGraphX: false
 Computing Device: 0
-Language: EN
+Language: CN
 Run Mode: OpenXR Link
 XR Preview: false
-Auto Crop: true
+Crop Mode: manual
 VSync: false
 Stream Protocol: HLS
 Streamer Port: 1122
@@ -350,3 +350,4 @@ Capture Tool: none
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stereo Output: null
+Auto Crop: true

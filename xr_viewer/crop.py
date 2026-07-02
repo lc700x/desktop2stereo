@@ -8,6 +8,8 @@ import numpy as np
 
 class CropMixin:
     def _movie_crop_profile_enabled(self):
+        if getattr(self, '_crop_mode', 'auto') != 'auto':
+            return False
         if not bool(getattr(self, '_auto_movie_crop', True)):
             return False
 
@@ -67,6 +69,14 @@ class CropMixin:
         self._movie_crop_render_active = self._movie_crop_is_active(crop)
         self._source_crop_uniform_cache = {}
         self._frost_uniform_cache = {}
+        self._refit_screen_geometry_for_crop()
+
+    def _refit_screen_geometry_for_crop(self):
+        """Rebuild screen size/geometry caches to match the current crop.
+
+        Split out of ``_set_movie_crop_render_uv`` so manual crop-adjust can
+        defer this until the drag ends instead of doing it every frame.
+        """
         self._frost_layout_cache_key = None
         self._frost_layout_cache_val = None
         self._frost_model_cache_key = None
@@ -94,6 +104,16 @@ class CropMixin:
     def _refresh_movie_crop_profile_enabled(self):
         return self._movie_crop_profile_enabled()
 
+    def _set_manual_crop_uv(self, w, h):
+        w = max(0.0, min(1.0, float(w)))
+        h = max(0.0, min(1.0, float(h)))
+        x = (1.0 - w) / 2.0
+        y = (1.0 - h) / 2.0
+        crop = (x, y, w, h)
+        self._manual_crop_uv = crop
+        self._set_movie_crop_render_uv(crop)
+        return crop
+
     def _movie_crop_render_uv_fast(self):
         if getattr(self, '_movie_crop_target_active', False):
             reveal_until = float(getattr(self, '_movie_crop_reveal_until', 0.0))
@@ -120,6 +140,16 @@ class CropMixin:
         cache[key] = crop
 
     def _current_movie_crop_uv(self):
+        crop_mode = getattr(self, '_crop_mode', 'auto')
+        if crop_mode == 'manual':
+            crop = getattr(self, '_manual_crop_uv', (0.0, 0.0, 1.0, 1.0))
+            self._set_movie_crop_render_uv(crop)
+            return getattr(self, '_movie_crop_frame_uv', crop)
+        if crop_mode == 'off':
+            crop = (0.0, 0.0, 1.0, 1.0)
+            self._set_movie_crop_render_uv(crop)
+            return getattr(self, '_movie_crop_frame_uv', crop)
+
         if not self._refresh_movie_crop_profile_enabled():
             if getattr(self, '_movie_crop_render_active', False):
                 self._reset_movie_crop()
@@ -148,6 +178,26 @@ class CropMixin:
         eff_w = max(float(fw) * float(crop[2]), 1.0)
         eff_h = max(float(fh) * float(crop[3]), 1.0)
         return eff_h / eff_w
+
+    def _crop_screen_dims(self, ref_size):
+        """Screen (width, height) that keeps a cropped axis the SAME size.
+
+        Sizes the quad from the FULL frame aspect pinned to ``ref_size``, then
+        scales each axis by its own crop fraction. Cropping the sides shrinks
+        width only (height unchanged), so the screen never appears to move
+        closer/farther when adjusting crop. Content still fills without stretch
+        because quad aspect == cropped-source aspect.
+        """
+        fw, fh = self.frame_size
+        crop = self._current_movie_crop_uv()
+        full_ar = (float(fh) / float(fw)) if fw > 0 else 9.0 / 16.0
+        if fh > fw:
+            base_h = float(ref_size)
+            base_w = base_h / full_ar
+        else:
+            base_w = float(ref_size)
+            base_h = base_w * full_ar
+        return base_w * float(crop[2]), base_h * float(crop[3])
 
     def _apply_movie_crop_detection(self, detected, h):
         active = self._movie_crop_is_active(detected)
@@ -353,6 +403,13 @@ class CropMixin:
         )
 
     def _maybe_update_movie_crop(self, rgb, is_tensor, w, h):
+        if getattr(self, '_crop_mode', 'auto') != 'auto':
+            # Manual/off modes own the render UV; auto-detection must not touch
+            # it. Resetting here fought the per-frame manual crop set in
+            # _current_movie_crop_uv, toggling the crop full<->manual every
+            # frame (flicker + apparent screen resize/distance change).
+            self._movie_crop_pending_gpu = None
+            return
         if not self._movie_crop_profile_enabled():
             self._movie_crop_pending_gpu = None
             if self._movie_crop_is_active(getattr(self, '_movie_crop_target_uv', None)) or self._movie_crop_is_active(getattr(self, '_movie_crop_render_uv', None)):

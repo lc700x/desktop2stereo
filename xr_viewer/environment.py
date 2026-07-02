@@ -1123,6 +1123,7 @@ class EnvironmentMixin:
             'Controller Model': ctrl_val,
             'Environment Model': env_val,
             'Depth Strength': round(float(self.depth_ratio), 4),
+            'Crop Mode': getattr(self, '_crop_mode', 'auto'),
         }
 
     def _persist_runtime_settings(self):

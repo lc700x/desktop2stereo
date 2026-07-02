@@ -857,6 +857,9 @@ if LANG == "CN":
         ("左 X 键", "短按", "显示/隐藏虚拟键盘", False),
         ("左 X 键", "长按 1-5s 后松开", "切换灯光/发光模式", False),
         ("左 X 键", "按住 5s", "切换透视绿幕", False),
+        ("左扳机(激光不指屏幕)", "按住 3s", "循环裁剪模式 自动/手动/关闭", False),
+        ("左扳机(激光不指屏幕,手动模式)", "双击", "开关裁剪调整暂停", False),
+        ("左摇杆(裁剪调整中,不握持)", "左右/前后", "裁剪左右(X)或上下(Y),主轴", False),
         ("右 A 键", "激光指屏幕时短按", "鼠标左键单击", False),
         ("右 B 键", "激光指屏幕时短按", "鼠标右键单击", False),
         ("左摇杆按下", "短按", "切换环境模型", False),
@@ -919,6 +922,9 @@ else:
         ("Left X button", "Quick tap (<1s)", "Show/hide virtual keyboard", False),
         ("Left X button", "Hold >1s, release", "Toggle light / glow mode", False),
         ("Left X button", "Hold >4s", "Toggle passthrough green", False),
+        ("Left trigger (laser off screen)", "Hold 3s", "Cycle Crop: Auto/Manual/Off", False),
+        ("Left trigger (off screen, Manual)", "Double-tap", "Toggle crop-adjust pause", False),
+        ("Left stick (crop-adjust, no grip)", "L/R or U/D", "Crop sides (X) or top/bottom (Y), dominant axis", False),
         ("Right A button", "Laser on screen click", "Left mouse click", False),
         ("Right B button", "Laser on screen click", "Right mouse click", False),
         ("Left stick press", "Short press", "Cycle environment model", False),
@@ -989,6 +995,7 @@ CONTROLLER_MODEL = settings["Controller Model"]
 ENVIRONMENT_MODEL = settings.get("Environment Model", "Default")
 XR_PREVIEW_WINDOW = settings.get("XR Preview", True)
 AUTO_CROP = settings.get("Auto Crop", True)
+CROP_MODE = settings.get("Crop Mode", "auto")
 
 # Initialize Device
 import torch

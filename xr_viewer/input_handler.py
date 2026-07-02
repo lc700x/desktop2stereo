@@ -897,6 +897,9 @@ class InputHandlerMixin:
         Right stick short press     Cycle horizontal curve / vertical curve / flat
         Both sticks press 0.5s       Toggle FPS/help panel
         A/B/X/Y/Menu/Triggers      Original functions unchanged
+        Left trigger hold 3s (laser off screen)   Cycle Crop: Auto/Manual/Off (OSD)
+        Left trigger double-tap (laser off screen, Manual mode)  Toggle crop-adjust pause + OSD
+        Left stick (crop-adjust active, no grip)  Shrink/grow crop width (X) / height (Y), centered
         """
         if self._action_set is None:
             return
@@ -993,6 +996,56 @@ class InputHandlerMixin:
         laser_l_on_screen = self._cursor_uv_l is not None
         laser_r_on_screen = self._cursor_uv_r is not None
         laser_on_screen = laser_l_on_screen or laser_r_on_screen
+
+        # Crop-mode gestures: left trigger, only while its laser is OFF the
+        # screen (so these never compete with the normal on-screen trigger
+        # click/drag handling in _handle_triggers).
+        #   Hold 3s   cycle Crop: Auto -> Manual -> Off -> Auto (OSD shown)
+        #   Double-tap (Manual mode only) toggle crop-adjust pause + OSD
+        CROP_HOLD            = 3.0   # seconds held to cycle crop mode
+        CROP_PRESS_THRESH    = 0.5
+        CROP_DCLICK_WINDOW   = 0.5   # seconds between taps to count as a double-click
+        ltrig_val = self._read_float_action(self._act_left_trigger, "/user/hand/left")
+        ltrig_pressed = ltrig_val >= CROP_PRESS_THRESH
+        ltrig_prev = getattr(self, '_ltrig_gesture_pressed_prev', False)
+
+        if not laser_l_on_screen:
+            if ltrig_pressed and not ltrig_prev:
+                self._ltrig_hold_start = time.perf_counter()
+                self._ltrig_hold_fired = False
+            if ltrig_pressed and not self._ltrig_hold_fired:
+                if time.perf_counter() - self._ltrig_hold_start >= CROP_HOLD:
+                    self._ltrig_hold_fired = True
+                    order = ('auto', 'manual', 'off')
+                    idx = order.index(self._crop_mode) if self._crop_mode in order else 0
+                    self._crop_mode = order[(idx + 1) % len(order)]
+                    if self._crop_mode != 'manual' and self._crop_adjust_active:
+                        self._crop_adjust_active = False
+                        self._crop_adjust_osd_show_t = -999.0
+                        self._refit_screen_geometry_for_crop()
+                    self._crop_mode_osd_show_t = time.perf_counter()
+                    self._crop_mode_osd_last_key = None
+                    self._mark_runtime_settings_dirty()
+            if (not ltrig_pressed) and ltrig_prev and not self._ltrig_hold_fired:
+                now_t = time.perf_counter()
+                if self._crop_mode == 'manual':
+                    if now_t - self._ltrig_dclick_last_t <= CROP_DCLICK_WINDOW:
+                        self._crop_adjust_active = not self._crop_adjust_active
+                        self._crop_adjust_osd_show_t = now_t
+                        self._crop_adjust_osd_last_key = None
+                        self._ltrig_dclick_last_t = -999.0
+                        if not self._crop_adjust_active:
+                            # Drag ended: apply the deferred screen-geometry
+                            # refit once now, instead of every frame during
+                            # the drag (see _set_movie_crop_render_uv).
+                            self._refit_screen_geometry_for_crop()
+                    else:
+                        self._ltrig_dclick_last_t = now_t
+        else:
+            self._ltrig_hold_fired = False
+            self._ltrig_hold_start = 0.0
+        self._ltrig_gesture_pressed_prev = ltrig_pressed
+
         active = (grip_l or grip_r) and laser_on_screen and not self._environment_screen_locked()
         self._grabbed  = active
         self._resizing = False
@@ -1419,6 +1472,29 @@ class InputHandlerMixin:
                     self._apply_seat_adjust_xr_space(sa_x, sa_y, sa_z, sa_angle)
                     self._seat_adjust_osd_dirty = True
 
+        # Manual crop-adjust: left stick shrinks/grows the crop rectangle
+        # symmetrically about center while paused in crop-adjust mode.
+        # Guarded off whenever a grip is held so it never collides with the
+        # grip+stick pan/rotate/depth/resize bindings above.
+        CROP_ADJUST_SPEED = 0.6   # unit width/height per second at full deflection
+        if self._crop_adjust_active and not grip_l and not grip_r:
+            cw = self._manual_crop_uv[2]
+            ch = self._manual_crop_uv[3]
+            changed = False
+            # Single dominant axis only: X crops sides, Y crops top/bottom.
+            # Diagonal deflection must not crop both, so ignore the minor axis.
+            if abs(lx) > DEAD and abs(lx) >= abs(ly):
+                cw = max(0.0, min(1.0, cw + lx * CROP_ADJUST_SPEED * dt))
+                changed = True
+            elif abs(ly) > DEAD:
+                ch = max(0.0, min(1.0, ch + ly * CROP_ADJUST_SPEED * dt))
+                changed = True
+            if changed:
+                self._set_manual_crop_uv(cw, ch)
+                self._crop_adjust_osd_show_t = time.perf_counter()
+                self._crop_adjust_osd_last_key = None
+                self._mark_runtime_settings_dirty()
+
         # Grip + stick fine-tuning (pan, resize, rotate, depth)
         KB_MOVE_SPEED = 0.4    # m/s at full deflection
         # Depth-ratio stick control: replaces A/B + right-grip mapping
@@ -1518,10 +1594,10 @@ class InputHandlerMixin:
             if not (self._grabbed or grip_l or grip_r):
                 self._accum_scroll(lx, 0.0, dt)
         else:
-            if not (self._grabbed or grip_l or grip_r):
+            if not (self._grabbed or grip_l or grip_r) and not self._crop_adjust_active:
                 self._accum_scroll(lx, ly, dt)
 
-        # Right grip + right stick X: resize screen width 
+        # Right grip + right stick X: resize screen width
         # Right grip + right stick Y: screen distance (acceleration curve) 
         # Left grip + right stick X: rotate screen yaw around its centre 
         # Left grip + right stick Y: depth strength (unchanged) 

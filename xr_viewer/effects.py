@@ -958,6 +958,14 @@ class EffectsMixin:
         if self._seat_adjust_osd_tex is not None:
             self._render_seat_adjust_osd(eye_index, mgl_fbo, vp_mat)
 
+        # 5e. Crop-mode OSD (Auto/Manual/Off, shown after left-trigger 3s-hold cycle)
+        if self._crop_mode_osd_tex is not None:
+            self._render_crop_mode_osd(eye_index, mgl_fbo, vp_mat)
+
+        # 5f. Crop-adjust OSD (pixel X/Y, shown during/after manual crop-adjust)
+        if self._crop_adjust_osd_tex is not None:
+            self._render_crop_adjust_osd(eye_index, mgl_fbo, vp_mat)
+
         # 6b. Brand OSD (controller model indicator, attached to right controller)
         if self._brand_osd_tex is not None and self._grip_mat_r is not None:
             self._render_brand_osd(eye_index, mgl_fbo, vp_mat)

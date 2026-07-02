@@ -212,6 +212,10 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 | Left X button (hold >4s) | Toggle | VDXR Passthrough mode |
 | Left menu button (short press) | Toggle | FPS overlay |
 | Left menu button (long press) | Reset | Reset depth ratio to default |
+| **Manual Crop** |||
+| Left trigger (laser off screen, hold 3s) | Cycle | Crop mode: Auto / Manual / Off |
+| Left trigger (off screen, Manual mode, double-tap) | Toggle | Crop-adjust pause (freeze frame + OSD) |
+| Left stick (crop-adjust active, no grip) | Direction | Crop sides (X) or top/bottom (Y), dominant axis only |
 | **Depth Adjustment** |||
 | Right grip + Left stick Y | Up/Down | Adjust depth scale (0–10) |
 | Right grip + Left stick X | Left/Right | Adjust veil transparency (0–1) |
@@ -233,6 +237,22 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 | **Controller Model** |||
 | Right A + B (hold 0.5s) | Toggle | Switch controller model brand |
 | Left menu + Right A + B (hold 1s) | Toggle | Enter / Exit controller calibration mode |
+
+#### Crop Mode (OpenXR Link)
+
+Crop Mode removes unwanted borders (e.g. movie letterbox black bars) from the captured frame so the video fills the virtual screen. Choose the mode from the **Crop Mode** dropdown in the GUI, or cycle it in VR.
+
+- **Auto** — Automatically detects and removes letterbox/pillarbox black bars each time the content changes. Best for movies with baked-in black bars.
+- **Manual** — You set a custom crop rectangle with the left controller. Use this when Auto misjudges the bars or you want a specific framing.
+- **Off** — No cropping; the full captured frame is shown.
+
+**Manual crop gestures** (left controller, laser pointed off the screen):
+
+1. **Hold the left trigger for 3s** to cycle `Auto → Manual → Off`. An on-screen indicator shows the current mode.
+2. In **Manual** mode, **double-tap the left trigger** to enter crop-adjust (the frame freezes and a pixel-size OSD appears). Double-tap again to apply and resume.
+3. While adjusting, push the **left stick**: **left/right (X)** crops the sides, **up/down (Y)** crops the top/bottom. Only the dominant stick direction is applied per movement, so you never crop both axes at once. Cropping shrinks that axis of the screen without changing screen distance.
+
+Manual crop rectangle and the selected crop mode are saved with your runtime settings.
 
 ### Local Viewer Mode
 

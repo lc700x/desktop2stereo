@@ -552,6 +552,157 @@ class OverlayMixin:
         self._overlay_prog['u_alpha'].value = 1.0
         self.ctx.disable(moderngl.BLEND)
 
+    def _render_crop_mode_osd(self, eye_index, mgl_fbo, vp_mat):
+        """Floating "Crop: Auto/Manual/Off" indicator shown after the left-trigger 3s-hold cycle."""
+        if self._crop_mode_osd_tex is None or self.screen_height is None:
+            return
+
+        now = self._frame_now
+
+        if eye_index == 0 and self.font is not None:
+            cur_key = self._crop_mode
+            if cur_key != self._crop_mode_osd_last_key:
+                self._crop_mode_osd_last_key = cur_key
+                cw, ch = self._crop_mode_osd_tex_size
+                img = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+                draw.rounded_rectangle(
+                    [0, 0, cw - 1, ch - 1],
+                    radius=12,
+                    fill=(32, 32, 36, 210),
+                )
+                bfont = self.bold_font or self.font
+                C_LABEL = (150, 158, 185, 255)
+                C_VALUE = (0, 210, 230, 255)
+                PAD = 12
+                GAP = 8
+                cy = (ch - 32) // 2
+                label = "Crop"
+                value = self._crop_mode.capitalize()
+                draw.text((PAD, cy), label, font=bfont, fill=C_LABEL)
+                try:
+                    lw = int(draw.textlength(label, font=bfont))
+                except AttributeError:
+                    lw = int(bfont.getsize(label)[0]) if hasattr(bfont, 'getsize') else 60
+                draw.text((PAD + lw + GAP, cy), value, font=self.font, fill=C_VALUE)
+                data = np.flipud(np.array(img, dtype=np.uint8))
+                self._crop_mode_osd_tex.write(data.tobytes())
+
+        HOLD = 1.5
+        DECAY = 0.8
+        elapsed = now - self._crop_mode_osd_show_t
+        if elapsed < HOLD:
+            alpha = 1.0
+        elif elapsed < HOLD + DECAY:
+            alpha = 1.0 - (elapsed - HOLD) / DECAY
+        else:
+            alpha = 0.0
+
+        if alpha <= 0.0:
+            return
+
+        OSD_H = self.screen_width * 0.03
+        cw, ch = self._crop_mode_osd_tex_size
+        OSD_W = OSD_H * (cw / ch)
+
+        cy_ = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+        cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+        rot_y = np.array([[ cy_, 0, sy_, 0], [0, 1, 0, 0], [-sy_, 0, cy_, 0], [0, 0, 0, 1]], dtype=np.float32)
+        rot_x = np.array([[1, 0, 0, 0], [0, cp, -sp, 0], [0, sp, cp, 0], [0, 0, 0, 1]], dtype=np.float32)
+
+        y_pos = self.screen_pan_y + self.screen_height / 2.0 + self.screen_width * 0.016 + OSD_H / 2.0
+        S = np.diag([OSD_W / 2.0, OSD_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        R = rot_y @ rot_x
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x; T[1, 3] = y_pos; T[2, 3] = -self.screen_distance
+        mvp = vp_mat @ T @ R @ S
+
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self._crop_mode_osd_tex.use(location=2)
+        self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = alpha
+        self._crop_mode_osd_vao.render(moderngl.TRIANGLE_STRIP)
+        self._overlay_prog['u_alpha'].value = 1.0
+        self.ctx.disable(moderngl.BLEND)
+
+    def _render_crop_adjust_osd(self, eye_index, mgl_fbo, vp_mat):
+        """Floating pixel X/Y OSD shown while manual crop-adjust is active."""
+        if self._crop_adjust_osd_tex is None or self.screen_height is None:
+            return
+        if not self._crop_adjust_active:
+            now = getattr(self, '_frame_now', time.perf_counter())
+            elapsed = now - self._crop_adjust_osd_show_t
+            if elapsed > 2.3:
+                return
+        now = getattr(self, '_frame_now', time.perf_counter())
+
+        if eye_index == 0 and self.font is not None:
+            fw, fh = self.frame_size
+            x0, y0, x1, y1 = self._movie_crop_pixel_bounds(fw, fh, self._manual_crop_uv)
+            cur_key = (x1 - x0, y1 - y0, self._crop_adjust_active)
+            if cur_key != self._crop_adjust_osd_last_key:
+                self._crop_adjust_osd_last_key = cur_key
+                cw, ch = self._crop_adjust_osd_tex_size
+                img = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+                fill_color = (40, 60, 40, 220) if self._crop_adjust_active else (32, 32, 36, 210)
+                draw.rounded_rectangle([0, 0, cw - 1, ch - 1], radius=12, fill=fill_color)
+                bfont = self.bold_font or self.font
+                C_LABEL = (150, 158, 185, 255)
+                C_VALUE = (0, 210, 230, 255)
+                C_MODE  = (100, 255, 100, 255)
+                PAD = 12
+                cy = (ch - 32) // 2
+                mode_text = "CROP ADJUST" if self._crop_adjust_active else "Paused"
+                draw.text((PAD, cy), mode_text, font=bfont,
+                          fill=C_MODE if self._crop_adjust_active else C_LABEL)
+                try:
+                    lw = int(draw.textlength(mode_text, font=bfont))
+                except AttributeError:
+                    lw = int(bfont.getsize(mode_text)[0]) if hasattr(bfont, 'getsize') else 110
+                pos_text = f"  X:{x1 - x0}px  Y:{y1 - y0}px"
+                draw.text((PAD + lw + 4, cy), pos_text, font=self.font, fill=C_VALUE)
+                data = np.flipud(np.array(img, dtype=np.uint8))
+                self._crop_adjust_osd_tex.write(data.tobytes())
+
+        if self._crop_adjust_active:
+            alpha = 1.0
+        else:
+            HOLD = 1.5
+            DECAY = 0.8
+            elapsed = now - self._crop_adjust_osd_show_t
+            if elapsed < HOLD:
+                alpha = 1.0
+            elif elapsed < HOLD + DECAY:
+                alpha = 1.0 - (elapsed - HOLD) / DECAY
+            else:
+                return
+
+        OSD_H = self._screen_ref_size * 0.03   # ref, not screen_width: crop shrinks width
+        cw, ch = self._crop_adjust_osd_tex_size
+        OSD_W = OSD_H * (cw / ch)
+        cy_ = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+        cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+        rot_y = np.array([[ cy_, 0, sy_, 0], [0, 1, 0, 0], [-sy_, 0, cy_, 0], [0, 0, 0, 1]], dtype=np.float32)
+        rot_x = np.array([[1, 0, 0, 0], [0, cp, -sp, 0], [0, sp, cp, 0], [0, 0, 0, 1]], dtype=np.float32)
+        y_pos = self.screen_pan_y - self.screen_height / 2.0 - self.screen_width * 0.016 - OSD_H / 2.0
+        S = np.diag([OSD_W / 2.0, OSD_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        R = rot_y @ rot_x
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x; T[1, 3] = y_pos; T[2, 3] = -(self.screen_distance - 0.05)
+        mvp = vp_mat @ T @ R @ S
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self._crop_adjust_osd_tex.use(location=2)
+        self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = alpha
+        self._crop_adjust_osd_vao.render(moderngl.TRIANGLE_STRIP)
+        self._overlay_prog['u_alpha'].value = 1.0
+        self.ctx.disable(moderngl.BLEND)
+
     def _render_brand_osd(self, eye_index, mgl_fbo, vp_mat):
         """Controller brand indicator attached to the right controller.
 

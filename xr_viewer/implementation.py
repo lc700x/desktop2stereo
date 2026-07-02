@@ -237,6 +237,18 @@ class OpenXRViewer(
         # a low cadence; rendering reuses the last accepted crop.
         self._auto_movie_crop = bool(kwargs.get('auto_movie_crop', True))
         self._movie_crop_detect_interval = float(kwargs.get('movie_crop_detect_interval', 1.0))
+
+        # Tri-state crop mode: 'auto' (existing letterbox detection),
+        # 'manual' (user-set rectangle via left-trigger gestures), 'off'.
+        self._crop_mode = kwargs.get('crop_mode', 'auto')
+        if self._crop_mode not in ('auto', 'manual', 'off'):
+            self._crop_mode = 'auto'
+        self._crop_adjust_active = False
+        self._manual_crop_uv = (0.0, 0.0, 1.0, 1.0)
+        self._ltrig_hold_start = 0.0
+        self._ltrig_hold_fired = False
+        self._ltrig_dclick_last_t = -999.0
+        self._ltrig_gesture_pressed_prev = False
         self._movie_crop_next_detect_t = 0.0
         self._movie_crop_target_uv = (0.0, 0.0, 1.0, 1.0)
         self._movie_crop_render_uv = (0.0, 0.0, 1.0, 1.0)
@@ -469,6 +481,20 @@ class OpenXRViewer(
         self._seat_adjust_osd_alpha    = 0.0
         self._seat_adjust_osd_dirty    = True
         self._seat_adjust_grip_move    = False
+
+        # Crop-mode OSD: shows Auto/Manual/Off after the left-trigger 3s-hold cycle
+        self._crop_mode_osd_tex      = None
+        self._crop_mode_osd_vao      = None
+        self._crop_mode_osd_tex_size = (512, 78)
+        self._crop_mode_osd_show_t   = -999.0
+        self._crop_mode_osd_last_key = None
+
+        # Crop-adjust OSD: shows current crop pixel X/Y while adjusting in manual mode
+        self._crop_adjust_osd_tex      = None
+        self._crop_adjust_osd_vao      = None
+        self._crop_adjust_osd_tex_size = (512, 78)
+        self._crop_adjust_osd_show_t   = -999.0
+        self._crop_adjust_osd_last_key = None
         self._both_grips_last = False
         self._both_grips_hold_t    = 0.0
         self._both_grips_long_fired = False
@@ -1149,6 +1175,24 @@ class OpenXRViewer(
             self._overlay_prog, [(vbo_saosd, '2f 2f', 'in_position', 'in_uv')]
         )
 
+        # Crop-mode OSD: Auto/Manual/Off indicator (reuses _overlay_prog)
+        cmw, cmh = self._crop_mode_osd_tex_size
+        self._crop_mode_osd_tex = self.ctx.texture((cmw, cmh), 4, dtype='f1')
+        self._crop_mode_osd_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        vbo_cmosd = self.ctx.buffer(vertices.tobytes())
+        self._crop_mode_osd_vao = self.ctx.vertex_array(
+            self._overlay_prog, [(vbo_cmosd, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        # Crop-adjust OSD: crop pixel X/Y panel (reuses _overlay_prog)
+        caw, cah = self._crop_adjust_osd_tex_size
+        self._crop_adjust_osd_tex = self.ctx.texture((caw, cah), 4, dtype='f1')
+        self._crop_adjust_osd_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        vbo_caosd = self.ctx.buffer(vertices.tobytes())
+        self._crop_adjust_osd_vao = self.ctx.vertex_array(
+            self._overlay_prog, [(vbo_caosd, '2f 2f', 'in_position', 'in_uv')]
+        )
+
         # Screen-info OSD: size + distance panel (reuses _overlay_prog)
         sw, sh = self._screen_osd_tex_size
         self._screen_osd_tex = self.ctx.texture((sw, sh), 4, dtype='f1')
@@ -1414,26 +1458,27 @@ class OpenXRViewer(
                 rgb_gpu.copy_(rgb_hwc, non_blocking=True)
             else:
                 rgb_gpu = rgb_hwc.contiguous().clamp(0, 255).to(torch.uint8)
-            ptr = self._cuda_gl.map_resource(self._cuda_res_color)
-            self._cuda_gl.memcpy_d2d(ptr, rgb_gpu.data_ptr(), rgb_gpu.nbytes)
-            self._cuda_gl.unmap_resource(self._cuda_res_color)
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
-            glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
-            if update_color_mips:
-                self._maybe_generate_color_mipmaps(active_glow_mode)
-            glBindTexture(GL_TEXTURE_2D, 0)
+            if not self._crop_adjust_active:
+                ptr = self._cuda_gl.map_resource(self._cuda_res_color)
+                self._cuda_gl.memcpy_d2d(ptr, rgb_gpu.data_ptr(), rgb_gpu.nbytes)
+                self._cuda_gl.unmap_resource(self._cuda_res_color)
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
+                glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
+                if update_color_mips:
+                    self._maybe_generate_color_mipmaps(active_glow_mode)
+                glBindTexture(GL_TEXTURE_2D, 0)
 
-            ptr = self._cuda_gl.map_resource(self._cuda_res_depth)
-            self._cuda_gl.memcpy_d2d(ptr, depth_gpu.contiguous().data_ptr(), depth_gpu.nbytes)
-            self._cuda_gl.unmap_resource(self._cuda_res_depth)
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_depth)
-            glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, ctypes.c_void_p(0))
-            # No glGenerateMipmap for depth: keep DIBR sampling at full-res
-            # to match viewer.py FullSBS numerics.
-            glBindTexture(GL_TEXTURE_2D, 0)
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+                ptr = self._cuda_gl.map_resource(self._cuda_res_depth)
+                self._cuda_gl.memcpy_d2d(ptr, depth_gpu.contiguous().data_ptr(), depth_gpu.nbytes)
+                self._cuda_gl.unmap_resource(self._cuda_res_depth)
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_depth)
+                glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, ctypes.c_void_p(0))
+                # No glGenerateMipmap for depth: keep DIBR sampling at full-res
+                # to match viewer.py FullSBS numerics.
+                glBindTexture(GL_TEXTURE_2D, 0)
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
         else:
             # CPU fallback - use PBO for async DMA when available
             if hasattr(rgb, 'detach'):
@@ -1448,34 +1493,35 @@ class OpenXRViewer(
             self._maybe_update_movie_crop(rgb_np, False, w, h)
             if depth_np is None:
                 depth_np = depth_gpu.cpu().numpy()
-            rgb_bytes = rgb_np.astype('uint8', copy=False).tobytes()
-            depth_bytes = depth_np.tobytes()
-            cpu_pbo = getattr(self, '_cpu_pbo_color', None)
-            if cpu_pbo is not None and self._cpu_pbo_size == (w, h):
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._cpu_pbo_color)
-                glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(rgb_bytes), rgb_bytes)
-                glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
-                if update_color_mips:
-                    self._maybe_generate_color_mipmaps(active_glow_mode)
-                glBindTexture(GL_TEXTURE_2D, 0)
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._cpu_pbo_depth)
-                glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(depth_bytes), depth_bytes)
-                glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, ctypes.c_void_p(0))
-                glBindTexture(GL_TEXTURE_2D, 0)
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
-            else:
-                if cpu_pbo is None:
-                    self._init_cpu_pbos(w, h)
-                self.color_tex.write(rgb_bytes)
-                glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
-                if update_color_mips:
-                    self._maybe_generate_color_mipmaps(active_glow_mode)
-                glBindTexture(GL_TEXTURE_2D, 0)
-                self.depth_tex.write(depth_bytes)
-            # No glGenerateMipmap for depth: keep DIBR sampling at full-res
-            # to match viewer.py FullSBS numerics.
+            if not self._crop_adjust_active:
+                rgb_bytes = rgb_np.astype('uint8', copy=False).tobytes()
+                depth_bytes = depth_np.tobytes()
+                cpu_pbo = getattr(self, '_cpu_pbo_color', None)
+                if cpu_pbo is not None and self._cpu_pbo_size == (w, h):
+                    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._cpu_pbo_color)
+                    glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(rgb_bytes), rgb_bytes)
+                    glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
+                    if update_color_mips:
+                        self._maybe_generate_color_mipmaps(active_glow_mode)
+                    glBindTexture(GL_TEXTURE_2D, 0)
+                    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._cpu_pbo_depth)
+                    glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(depth_bytes), depth_bytes)
+                    glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, ctypes.c_void_p(0))
+                    glBindTexture(GL_TEXTURE_2D, 0)
+                    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+                else:
+                    if cpu_pbo is None:
+                        self._init_cpu_pbos(w, h)
+                    self.color_tex.write(rgb_bytes)
+                    glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
+                    if update_color_mips:
+                        self._maybe_generate_color_mipmaps(active_glow_mode)
+                    glBindTexture(GL_TEXTURE_2D, 0)
+                    self.depth_tex.write(depth_bytes)
+                # No glGenerateMipmap for depth: keep DIBR sampling at full-res
+                # to match viewer.py FullSBS numerics.
 
         # Sample screen-colour lighting only when an active effect consumes it.
         # Veil/frost sample the source texture directly in the shader, so they
@@ -2027,6 +2073,7 @@ class OpenXRViewer(
 
         for tex in (self._overlay_tex, self._depth_osd_tex, self._screen_osd_tex,
                     self._preset_osd_tex, self._brand_osd_tex, self._seat_adjust_osd_tex,
+                    self._crop_mode_osd_tex, self._crop_adjust_osd_tex,
                     self._panorama_tex, self.color_tex, self.depth_tex):
             if tex:
                 try:
@@ -2034,6 +2081,7 @@ class OpenXRViewer(
                 except Exception:
                     pass
         self._overlay_tex = self._depth_osd_tex = self._screen_osd_tex = self._preset_osd_tex = self._brand_osd_tex = self._seat_adjust_osd_tex = None
+        self._crop_mode_osd_tex = self._crop_adjust_osd_tex = None
         self._panorama_tex = None
         self._panorama_tex_path = None
         if self._calib_tex:

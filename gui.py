@@ -385,6 +385,11 @@ UI_TEXTS = {
         "OpenXR Link": "OpenXR Link",
         "XR Preview": "XR Preview",
         "Auto Crop": "Auto Crop",
+        "Manual Crop": "Manual Crop",
+        "None Crop": "None Crop",
+        "Crop Auto": "Auto",
+        "Crop Manual": "Manual",
+        "Crop Off": "Off",
         "VSync": "VSync",
         "Streamer Port:": "Streamer Port:",
         "Streamer URL": "Streamer URL:",
@@ -401,6 +406,7 @@ UI_TEXTS = {
         "Failed to load settings.yaml:": "Failed to load settings.yaml:",
         "Opening URL in browser": "Opening URL in browser",
         "Controller:": "Controller:",
+        "Crop Mode:": "Crop Mode:",
         "Environment:": "Environment:",
         "Capture Tool:": "Capture Tool:",
         "Fill 16:9": "16:9",
@@ -429,6 +435,7 @@ UI_TEXTS = {
         "tooltip_vsync": "Synchronize the local viewer to the display refresh rate",
         "tooltip_ctrl_model": "Controller model",
         "tooltip_env_model": "Background environment: Default (black), a 360 image folder, or a 3D scene from xr_viewer/environments/. Cinema glow can be toggled via long-press X in VR.",
+        "tooltip_crop_mode": "Auto: detect letterbox bars. Manual: set your own crop. Off: no crop.\nManual mode (in VR, laser off screen): hold left trigger 3s to cycle mode, double-tap left trigger to start/stop adjusting, then push the left stick — X crops the sides, Y crops top/bottom (dominant axis only).",
         "Default": "Default",
         "tooltip_capture_mode": "Source: monitor or window",
         "tooltip_monitor": "Input monitor",
@@ -516,6 +523,11 @@ UI_TEXTS = {
         "OpenXR Link": "OpenXR串流",
         "XR Preview": "XR预览",
         "Auto Crop": "自动裁剪",
+        "Manual Crop": "手动裁剪",
+        "None Crop": "不裁剪",
+        "Crop Auto": "自动",
+        "Crop Manual": "手动",
+        "Crop Off": "关闭",
         "VSync": "垂直同步",
         "Streamer Port:": "推流端口:",
         "Streamer URL": "推流网址:",
@@ -532,6 +544,7 @@ UI_TEXTS = {
         "Failed to load settings.yaml:": "加载 settings.yaml 失败：",
         "Opening URL in browser": "正在浏览器中打开网址",
         "Controller:": "手柄模型：",
+        "Crop Mode:": "裁剪模式：",
         "Environment:": "虚拟环境：",
         "Capture Tool:": "捕获工具:",
         "Fill 16:9": "16:9",
@@ -560,6 +573,7 @@ UI_TEXTS = {
         "tooltip_vsync": "将本地查看窗口同步到显示器刷新率，关闭可用于帧率对比测试",
         "tooltip_ctrl_model": "手柄型号",
         "tooltip_env_model": "背景环境：默认（黑色）、360 图像文件夹，或 xr_viewer/environments/ 中的 3D 场景。影院辉光可在 VR 中长按 X 键切换。",
+        "tooltip_crop_mode": "自动：检测黑边。手动：自定义裁剪。关闭：不裁剪。\n手动模式（VR 中，激光不指屏幕）：按住左扳机 3 秒循环模式，双击左扳机开始/停止调整，然后推动左摇杆——X 裁剪左右，Y 裁剪上下（仅主轴）。",
         "Default": "默认",
         "tooltip_capture_mode": "捕获源：屏幕或窗口",
         "tooltip_monitor": "输入显示器",
@@ -622,7 +636,7 @@ DEFAULTS = {
     "Language": "EN",
     "Run Mode": "OpenXR Link",
     "XR Preview": False,
-    "Auto Crop": True,
+    "Crop Mode": "auto",
     "VSync": False,
     "Stream Protocol": "HLS",
     "Streamer Port": DEFAULT_PORT,
@@ -1110,6 +1124,7 @@ class Desktop2StereoGUI:
         self.language = "EN"
         self._config = {}
         self.run_mode_key = DEFAULTS.get("Run Mode", "Local Viewer")
+        self.crop_mode_key = DEFAULTS.get("Crop Mode", "auto")
         self.capture_mode_key = DEFAULTS.get("Capture Mode", "Monitor")
         self.stream_protocol_key = DEFAULTS.get("Stream Protocol", "RTMP")
         # Canonical environment key (English) — kept separate from the
@@ -1426,7 +1441,11 @@ class Desktop2StereoGUI:
             options=[o for o in ct_options],
             on_select=self.on_capture_tool_change,
             min_width=S(160))
-        row6 = ft.Row([self.r6_label, self.capture_tool_dd, ft.Container(width=S(15)), self.showfps_cb, self.vsync_cb], spacing=1)
+        self.xr_preview_cb = ft.Checkbox(
+            label="XR Preview",
+            value=DEFAULTS.get("XR Preview", True),
+        )
+        row6 = ft.Row([self.r6_label, self.capture_tool_dd, ft.Container(width=S(15)), self.showfps_cb, self.vsync_cb, ft.Container(width=S(40)), self.xr_preview_cb], spacing=1)
         if OS_NAME == "Linux":
             self.r6_label.visible = False
             self.capture_tool_dd.visible = False
@@ -1438,14 +1457,15 @@ class Desktop2StereoGUI:
         self.display_mode_dd = CompactDropdown(
             options=[m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Interleaved-V"]],
             value="Half-SBS", width=S(130))
-        self.xr_preview_cb = ft.Checkbox(
-            label="XR Preview",
-            value=DEFAULTS.get("XR Preview", True),
-        )
-        self.autocrop_cb = ft.Checkbox(
-            label="Auto Crop",
-            value=DEFAULTS.get("Auto Crop", True),
-        )
+        self.crop_mode_label = ft.Text("Crop Mode:", size=FONT_SIZE, width=S(130))
+        _crop_texts = UI_TEXTS[self.language]
+        self.crop_mode_dd = CompactDropdown(
+            options=[_crop_texts.get("Crop Auto", "Auto"),
+                     _crop_texts.get("Crop Manual", "Manual"),
+                     _crop_texts.get("Crop Off", "Off")],
+            value=_crop_texts.get("Crop Auto", "Auto"),
+            on_select=self.on_crop_mode_change,
+            width=S(130))
         self.r10_label = ft.Text("Controller:", size=FONT_SIZE, width=S(130))
         try:
             ctrl_base = os.path.join(os.path.dirname(__file__), "xr_viewer", "controllers")
@@ -1490,8 +1510,8 @@ class Desktop2StereoGUI:
             self.r7a_label,
             self.run_mode_dd,
             ft.Container(width=S(40)),
-            self.xr_preview_cb,
-            self.autocrop_cb,
+            self.crop_mode_label,
+            self.crop_mode_dd,
             self._xr_preview_spacer,
             self.r7b_label,
             self.display_mode_dd
@@ -1787,7 +1807,8 @@ class Desktop2StereoGUI:
         self.depth_strength_dd.value = str(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
         self.display_mode_dd.value = cfg.get("Display Mode", DEFAULTS["Display Mode"])
         self.xr_preview_cb.value = cfg.get("XR Preview", DEFAULTS["XR Preview"])
-        self.autocrop_cb.value = cfg.get("Auto Crop", DEFAULTS["Auto Crop"])
+        self.crop_mode_key = cfg.get("Crop Mode", DEFAULTS["Crop Mode"])
+        self.crop_mode_dd.value = self.crop_mode_key
         self.vsync_cb.value = cfg.get("VSync", DEFAULTS["VSync"])
         self.antialiasing_dd.value = str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"]))
         self.foreground_scale_dd.value = str(cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"]))
@@ -2350,6 +2371,17 @@ class Desktop2StereoGUI:
         self._config["Run Mode"] = self.run_mode_key
         self._sync_visibility()
 
+    def on_crop_mode_change(self, e):
+        label = e.control.value
+        texts = UI_TEXTS[self.language]
+        label_map = {
+            texts.get("Crop Auto", "Auto"): "auto",
+            texts.get("Crop Manual", "Manual"): "manual",
+            texts.get("Crop Off", "Off"): "off",
+        }
+        self.crop_mode_key = label_map.get(label, "auto")
+        self._config["Crop Mode"] = self.crop_mode_key
+
     def _sync_visibility(self):
         mode = self.run_mode_key
         texts = UI_TEXTS[self.language]
@@ -2364,7 +2396,8 @@ class Desktop2StereoGUI:
         self.run_mode_dd.value = mode_reverse.get(mode, texts["Local Viewer"])
         is_openxr = mode == "OpenXR Link"
         self.xr_preview_cb.visible = is_openxr
-        self.autocrop_cb.visible = is_openxr
+        self.crop_mode_label.visible = is_openxr
+        self.crop_mode_dd.visible = is_openxr
         self.vsync_cb.visible = mode in ["Local Viewer", "3D Monitor"]
         self._xr_preview_spacer.visible = is_openxr
         self.r7b_label.visible = not is_openxr
@@ -2485,7 +2518,10 @@ class Desktop2StereoGUI:
         self.r7a_label.value = t["Run Mode:"]
         self.r7b_label.value = t["Display Mode:"]
         self.xr_preview_cb.label = t.get("XR Preview", "XR Preview")
-        self.autocrop_cb.label = t.get("Auto Crop", "Auto Crop")
+        self.crop_mode_dd.options = [t.get("Crop Auto", "Auto"),
+                                     t.get("Crop Manual", "Manual"),
+                                     t.get("Crop Off", "Off")]
+        self.crop_mode_dd.value = t.get({"auto": "Crop Auto", "manual": "Crop Manual", "off": "Crop Off"}[self.crop_mode_key], self.crop_mode_key)
         self.r9_label.value = t["Stereo Output:"]
         self.theme_label.value = t["Theme:"]
         theme_display = ["System","Blue","Green","Red","Purple","Orange","Teal","Pink","Grey"]
@@ -2498,6 +2534,7 @@ class Desktop2StereoGUI:
         self.fix_aspect_cb.label = t["Fix Viewer Aspect"]
         self.lossless_cb.label = t["Lossless Scaling Support"]
         self.r10_label.value = t["Controller:"]
+        self.crop_mode_label.value = t["Crop Mode:"]
         self.r11_label.value = t["Environment:"]
         # Environment: localize built-in option labels (Default / Default with Glow /
         # Dark Room) AND folder labels via each folder's profile.json
@@ -2559,6 +2596,7 @@ class Desktop2StereoGUI:
             (self.capture_tool_dd, "tooltip_capture_tool"),
             (self.run_mode_dd, "tooltip_run_mode"),
             (self.display_mode_dd, "tooltip_display_mode"),
+            (self.crop_mode_dd, "tooltip_crop_mode"),
             (self.ctrl_model_dd, "tooltip_ctrl_model"),
             (self.env_dd, "tooltip_env_model"),
             (self.capture_mode_dd, "tooltip_capture_mode"),
@@ -2916,7 +2954,7 @@ class Desktop2StereoGUI:
             "Language": self.language,
             "Run Mode": self.run_mode_key,
             "XR Preview": self.xr_preview_cb.value,
-            "Auto Crop": self.autocrop_cb.value,
+            "Crop Mode": self.crop_mode_key,
             "VSync": self.vsync_cb.value,
             "Stream Protocol": self.stream_proto_dd.value,
             "Streamer Port": self._parse_int(self.stream_port_tf.value, DEFAULTS["Streamer Port"]),
@@ -3169,6 +3207,15 @@ class Desktop2StereoGUI:
             self.ctrl_model_dd.value = saved_ctrl
             self._config["Controller Model"] = saved_ctrl
             self._safe_update(self.ctrl_model_dd)
+
+        saved_crop = cfg.get("Crop Mode")
+        if saved_crop in ("auto", "manual", "off"):
+            self.crop_mode_key = saved_crop
+            self._config["Crop Mode"] = saved_crop
+            t = UI_TEXTS[self.language]
+            self.crop_mode_dd.options = [t["Crop Auto"], t["Crop Manual"], t["Crop Off"]]
+            self.crop_mode_dd.value = t[{"auto": "Crop Auto", "manual": "Crop Manual", "off": "Crop Off"}[saved_crop]]
+            self._safe_update(self.crop_mode_dd)
 
         saved_env = cfg.get("Environment Model")
         if saved_env:
