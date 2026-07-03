@@ -131,6 +131,14 @@ if "NVIDIA" in DEVICE_INFO:
             if res != 0:
                 raise RuntimeError(f"cudaMemcpy failed: {res}")
 
+        def memcpy_d2d_async(self, dst_ptr, src_ptr, size, stream):
+            stream_ptr = ctypes.c_void_p(stream) if stream else None
+            res = self.lib.cudaMemcpyAsync(
+                dst_ptr, src_ptr, size, self.CUDA_MEMCPY_DEVICE_TO_DEVICE, stream_ptr
+            )
+            if res != 0:
+                raise RuntimeError(f"cudaMemcpyAsync failed: {res}")
+
         def memcpy_h2d(self, dst_ptr, src_ptr, size):
             # Host(pinned)->Device upload straight into the mapped PBO (synchronous).
             res = self.lib.cudaMemcpy(dst_ptr, src_ptr, size, self.CUDA_MEMCPY_HOST_TO_DEVICE)
@@ -254,6 +262,16 @@ elif "AMD" in DEVICE_INFO:
             ]
             self.lib.hipMemcpy.restype = ctypes.c_int
 
+            # hipMemcpyAsync
+            self.lib.hipMemcpyAsync.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_size_t,
+                ctypes.c_int,
+                ctypes.c_void_p,
+            ]
+            self.lib.hipMemcpyAsync.restype = ctypes.c_int
+
             # optional: hipStreamCreate / hipStreamDestroy for advanced pipelining
             # (not used by default, kept for future use)
             self.lib.hipStreamCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
@@ -328,6 +346,19 @@ elif "AMD" in DEVICE_INFO:
             )
             if res != self.HIP_SUCCESS:
                 raise RuntimeError(f"hipMemcpy failed: {res}")
+
+        def memcpy_d2d_async(self, dst_ptr, src_ptr, size, stream):
+            """Async device-to-device copy on the provided HIP stream."""
+            stream_ptr = stream if stream is not None else ctypes.c_void_p(0)
+            res = self.lib.hipMemcpyAsync(
+                dst_ptr,
+                src_ptr,
+                size,
+                self.HIP_MEMCPY_DEVICE_TO_DEVICE,
+                stream_ptr,
+            )
+            if res != self.HIP_SUCCESS:
+                raise RuntimeError(f"hipMemcpyAsync failed: {res}")
 
         def memcpy_h2d(self, dst_ptr, src_ptr, size):
             """Host(pinned)->Device upload straight into the mapped PBO (synchronous)."""

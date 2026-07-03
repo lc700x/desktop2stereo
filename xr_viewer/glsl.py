@@ -697,7 +697,7 @@ _MIST_FRAG = """
 // tinted and fogged with drifting fbm, glowing on bright areas, fading out with
 // beam depth. Premultiplied-alpha output for ONE / ONE_MINUS_SRC_ALPHA blend.
 uniform sampler2D u_source;      // live movie texture (mipmapped)
-uniform float u_lod;             // diffusion: mip level to sample the edge color
+uniform float u_lod;             // diffusion: blur radius along the nearest edge
 uniform float u_threshold;       // luminance where glow/scatter kicks in
 uniform float u_intensity;       // master strength
 uniform float u_frost_alpha;     // overall opacity
@@ -750,15 +750,58 @@ float feather_mask(float depth) {
     return pow(clamp(mask, 0.0, 1.0), 0.72);
 }
 
-// Movie edge color, diffused by DEPTH: near the screen seam (depth 0) sample
-// almost sharp so the color matches the screen edge; blur more toward the
-// outer tail so it dissolves into atmosphere. This is what makes the seam
-// colour-match instead of showing a whole-frame average everywhere.
+void nearest_edge(vec2 uv, out vec2 edge_uv, out vec2 tangent) {
+    float left = uv.x;
+    float right = 1.0 - uv.x;
+    float top = uv.y;
+    float bottom = 1.0 - uv.y;
+
+    float best = left;
+    edge_uv = vec2(0.0, uv.y);
+    tangent = vec2(0.0, 1.0);
+    if (right < best) {
+        best = right;
+        edge_uv = vec2(1.0, uv.y);
+        tangent = vec2(0.0, 1.0);
+    }
+    if (top < best) {
+        best = top;
+        edge_uv = vec2(uv.x, 0.0);
+        tangent = vec2(1.0, 0.0);
+    }
+    if (bottom < best) {
+        edge_uv = vec2(uv.x, 1.0);
+        tangent = vec2(1.0, 0.0);
+    }
+}
+
+vec3 sample_edge(vec2 edge_uv, vec2 tangent, float offset_px) {
+    vec2 texel = 1.0 / vec2(textureSize(u_source, 0));
+    vec2 uv = clamp(edge_uv + tangent * texel * offset_px, vec2(0.0), vec2(1.0));
+    return texture(u_source, uv).rgb;
+}
+
+// Movie edge color, diffused by DEPTH. This deliberately avoids textureLod:
+// high mip levels are whole-frame averages, which look like the whole desktop
+// reflected in the mist. Instead, clamp to the nearest border and blur only
+// along that border's tangent.
 vec3 diffused_edge_color(vec2 sample_uv, float depth) {
-    float max_lod = max(u_lod, 0.0);
-    float base_lod = min(max_lod, max(1.35, max_lod * 0.30));
-    float lod = mix(base_lod, max_lod, pow(clamp(depth, 0.0, 1.0), 0.55));
-    return textureLod(u_source, sample_uv, lod).rgb;
+    vec2 edge_uv;
+    vec2 tangent;
+    nearest_edge(sample_uv, edge_uv, tangent);
+
+    float radius_px = max(u_lod, 0.0) * mix(0.45, 2.15, pow(clamp(depth, 0.0, 1.0), 0.55));
+    float jitter = (hash12(sample_uv * 149.7 + vec2(u_time * 0.017, depth * 13.1)) - 0.5) * radius_px * 0.32;
+    vec3 col = sample_edge(edge_uv, tangent, jitter) * 0.16;
+    col += (sample_edge(edge_uv, tangent, jitter - 0.22 * radius_px)
+          + sample_edge(edge_uv, tangent, jitter + 0.22 * radius_px)) * 0.18;
+    col += (sample_edge(edge_uv, tangent, jitter - 0.48 * radius_px)
+          + sample_edge(edge_uv, tangent, jitter + 0.48 * radius_px)) * 0.13;
+    col += (sample_edge(edge_uv, tangent, jitter - 0.78 * radius_px)
+          + sample_edge(edge_uv, tangent, jitter + 0.78 * radius_px)) * 0.08;
+    col += (sample_edge(edge_uv, tangent, jitter - 1.15 * radius_px)
+          + sample_edge(edge_uv, tangent, jitter + 1.15 * radius_px)) * 0.03;
+    return col;
 }
 
 void main() {
@@ -793,6 +836,7 @@ void main() {
         discard;
     }
     alpha = min(alpha, 1.0);
+    col *= mix(0.12, 1.0, pow(beam, 0.65));
     frag_color = vec4(col * alpha, alpha);
 }
 """

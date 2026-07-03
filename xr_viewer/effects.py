@@ -424,7 +424,7 @@ class EffectsMixin:
             mode = self._active_glow_mode()
         if mode == 'veil':
             return float(getattr(self, '_frost_veil_lod', 0.0) or 0.0) > 0.001
-        return mode == 'frosted' or mode == 'mist'
+        return mode == 'frosted'
 
     def _maybe_generate_color_mipmaps(self, mode=None):
         needs_mips = self._color_mipmaps_needed(mode)
@@ -885,6 +885,9 @@ class EffectsMixin:
         self.color_tex.use(location=0)
         self.depth_tex.use(location=1)
         source_crop = self._movie_crop_render_uv_fast()
+        screen_edge_feather = 0.0
+        if not passthrough_active and self._active_glow_mode() == 'mist':
+            screen_edge_feather = float(getattr(self, '_mist_screen_edge_feather', 0.035))
 
         eye_sign = -1.0 if eye_index == 0 else 1.0
 
@@ -907,6 +910,7 @@ class EffectsMixin:
             prog['u_roll'].value           = self.screen_roll
             prog['u_corner_radius'].value  = self._corner_radius
             self._set_source_crop_uniform(prog, source_crop)
+            prog['u_screen_edge_feather'].value = screen_edge_feather
             n_verts = (48 + 1) * 2
             self._curved_vao.render(moderngl.TRIANGLE_STRIP, vertices=n_verts)
         else:
@@ -923,6 +927,7 @@ class EffectsMixin:
             self.prog['u_roll'].value      = self.screen_roll
             self.prog['u_corner_radius'].value = self._corner_radius
             self._set_source_crop_uniform(self.prog, source_crop)
+            self.prog['u_screen_edge_feather'].value = screen_edge_feather
             # Render screen WITHOUT alpha blending so the shader's edge alpha is written
             # directly into the swapchain framebuffer. The XR compositor composites those
             # near-zero-alpha edge pixels against the VR background producing a clean soft
@@ -1020,7 +1025,7 @@ class EffectsMixin:
         crop = self._movie_crop_render_uv_fast()
         values = (
             crop,
-            float(getattr(self, '_mist_lod', 6.0)),
+            float(getattr(self, '_mist_lod', 15.0)),
             float(getattr(self, '_mist_threshold', 0.35)),
             float(intensity),
             float(getattr(self, '_mist_alpha', 0.98)),
