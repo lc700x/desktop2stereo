@@ -25,10 +25,10 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import torch
 
-from models.depth_anything_3.api import DepthAnything3
-from models.depth_anything_3.utils.memory import cleanup_cuda_memory
-from models.depth_anything_3.utils.export.glb import export_to_glb
-from models.depth_anything_3.utils.export.gs import export_to_gs_video
+from depth_anything_3.api import DepthAnything3
+from depth_anything_3.utils.memory import cleanup_cuda_memory
+from depth_anything_3.utils.export.glb import export_to_glb
+from depth_anything_3.utils.export.gs import export_to_gs_video
 
 
 class ModelInference:

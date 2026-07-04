@@ -11,7 +11,7 @@
 from typing import List
 import torch.nn as nn
 
-from models.depth_anything_3.model.dinov2.vision_transformer import (
+from depth_anything_3.model.dinov2.vision_transformer import (
     vit_base,
     vit_giant2,
     vit_large,

@@ -18,6 +18,15 @@ from .dpt import DPTHead
 from .motion_module.motion_module import TemporalModule
 from easydict import EasyDict
 
+import contextlib
+
+def maybe_autocast(device, enabled=True):
+    return (
+        torch.autocast(device_type=device.type, enabled=enabled)
+        if device.type != "privateuseone"
+        else contextlib.nullcontext()
+    )
+
 
 class DPTHeadTemporal(DPTHead):
     def __init__(self, 
@@ -103,7 +112,9 @@ class DPTHeadTemporal(DPTHead):
                 out, (int(patch_h * 14), int(patch_w * 14)), mode="bilinear", align_corners=True
             )
             ori_type = out.dtype
-            with torch.autocast(device_type="cuda"):
+            # with torch.autocast(device_type="cuda"):
+            #     out = self.scratch.output_conv2(out)
+            with maybe_autocast(device=out.device):
                 out = self.scratch.output_conv2(out)
 
             output = out.to(ori_type) 
@@ -117,7 +128,9 @@ class DPTHeadTemporal(DPTHead):
                     out, (int(patch_h * 14), int(patch_w * 14)), mode="bilinear", align_corners=True
                 )
                 ori_type = out.dtype
-                with torch.autocast(device_type="cuda"):
+                # with torch.autocast(device_type="cuda"):
+                #     out = self.scratch.output_conv2(out)
+                with maybe_autocast(device=out.device):
                     out = self.scratch.output_conv2(out)
                 ret.append(out.to(ori_type))
             output = torch.cat(ret, dim=0)

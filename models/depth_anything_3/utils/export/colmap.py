@@ -19,8 +19,8 @@ import numpy as np
 
 from PIL import Image
 
-from models.depth_anything_3.specs import Prediction
-from models.depth_anything_3.utils.logger import logger
+from depth_anything_3.specs import Prediction
+from depth_anything_3.utils.logger import logger
 
 from .glb import _depths_to_world_points_with_colors
 

@@ -34,10 +34,10 @@ class CameraDec(nn.Module):
         B, N = feat.shape[:2]
         feat = feat.reshape(B * N, -1)
         feat = self.backbone(feat)
-        out_t = self.fc_t(feat.float()).reshape(B, N, 3)
+        out_t = self.fc_t(feat).reshape(B, N, 3)
         if camera_encoding is None:
-            out_qvec = self.fc_qvec(feat.float()).reshape(B, N, 4)
-            out_fov = self.fc_fov(feat.float()).reshape(B, N, 2)
+            out_qvec = self.fc_qvec(feat).reshape(B, N, 4)
+            out_fov = self.fc_fov(feat).reshape(B, N, 2)
         else:
             out_qvec = camera_encoding[..., 3:7]
             out_fov = camera_encoding[..., -2:]

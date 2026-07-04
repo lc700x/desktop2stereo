@@ -19,6 +19,15 @@ if "NVIDIA" in DEVICE_INFO:
     BACKEND = "CUDA"
     class CUDART_GL:
         """CUDA-OpenGL interop helper (based on local_viewer.py)."""
+
+        # cudaGraphicsRegisterFlags
+        CUDA_GRAPHICS_REGISTER_FLAGS_NONE = 0
+        CUDA_GRAPHICS_REGISTER_FLAGS_READ_ONLY = 1
+        CUDA_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD = 2
+        # cudaMemcpyKind
+        CUDA_MEMCPY_HOST_TO_DEVICE = 1
+        CUDA_MEMCPY_DEVICE_TO_DEVICE = 3
+
         def __init__(self, device_id=0):
             # Locate cudart library
             torch_dir = os.path.dirname(torch.__file__)
@@ -54,27 +63,44 @@ if "NVIDIA" in DEVICE_INFO:
 
             # Set argument types
             self.lib.cudaSetDevice.argtypes = [ctypes.c_int]
+            self.lib.cudaSetDevice.restype = ctypes.c_int
             self.lib.cudaGraphicsGLRegisterBuffer.argtypes = [
                 ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.c_uint
             ]
+            self.lib.cudaGraphicsGLRegisterBuffer.restype = ctypes.c_int
             self.lib.cudaGraphicsUnregisterResource.argtypes = [ctypes.c_void_p]
+            self.lib.cudaGraphicsUnregisterResource.restype = ctypes.c_int
             self.lib.cudaGraphicsMapResources.argtypes = [
                 ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
             ]
+            self.lib.cudaGraphicsMapResources.restype = ctypes.c_int
             self.lib.cudaGraphicsUnmapResources.argtypes = [
                 ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p
             ]
+            self.lib.cudaGraphicsUnmapResources.restype = ctypes.c_int
             self.lib.cudaGraphicsResourceGetMappedPointer.argtypes = [
                 ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p
             ]
+            self.lib.cudaGraphicsResourceGetMappedPointer.restype = ctypes.c_int
             self.lib.cudaMemcpy.argtypes = [
                 ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int
             ]
+            self.lib.cudaMemcpy.restype = ctypes.c_int
+            # Async variant (used with the PyTorch stream to avoid a full device sync)
+            self.lib.cudaMemcpyAsync.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_void_p
+            ]
+            self.lib.cudaMemcpyAsync.restype = ctypes.c_int
             self.lib.cudaSetDevice(device_id)
 
         def register_buffer(self, pbo_id):
             resource = ctypes.c_void_p()
-            res = self.lib.cudaGraphicsGLRegisterBuffer(ctypes.byref(resource), pbo_id, 1)  # 1 = cudaGraphicsRegisterFlagsNone
+            # WriteDiscard: we overwrite the whole buffer every frame -> fastest, and
+            # semantically correct (we write to the mapped pointer, not read from it).
+            res = self.lib.cudaGraphicsGLRegisterBuffer(
+                ctypes.byref(resource), pbo_id,
+                self.CUDA_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD
+            )
             if res != 0:
                 raise RuntimeError(f"cudaGraphicsGLRegisterBuffer failed: {res}")
             return resource
@@ -82,38 +108,57 @@ if "NVIDIA" in DEVICE_INFO:
         def unregister_resource(self, resource):
             self.lib.cudaGraphicsUnregisterResource(resource)
 
-        def map_resource(self, resource):
-            res = self.lib.cudaGraphicsMapResources(1, ctypes.byref(resource), None)
+        def map_resource(self, resource, stream=None):
+            stream_ptr = ctypes.c_void_p(stream) if stream else None
+            res = self.lib.cudaGraphicsMapResources(1, ctypes.byref(resource), stream_ptr)
             if res != 0:
                 raise RuntimeError(f"cudaGraphicsMapResources failed: {res}")
             ptr = ctypes.c_void_p()
             size = ctypes.c_size_t()
             res = self.lib.cudaGraphicsResourceGetMappedPointer(ctypes.byref(ptr), ctypes.byref(size), resource)
             if res != 0:
-                self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), None)
+                self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), stream_ptr)
                 raise RuntimeError(f"cudaGraphicsResourceGetMappedPointer failed: {res}")
             return ptr.value
 
-        def unmap_resource(self, resource):
-            self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), None)
+        def unmap_resource(self, resource, stream=None):
+            stream_ptr = ctypes.c_void_p(stream) if stream else None
+            self.lib.cudaGraphicsUnmapResources(1, ctypes.byref(resource), stream_ptr)
 
         def memcpy_d2d(self, dst_ptr, src_ptr, size):
-            # cudaMemcpyDeviceToDevice = 3
-            res = self.lib.cudaMemcpy(dst_ptr, src_ptr, size, 3)
+            # cudaMemcpyDeviceToDevice = 3 (synchronous w.r.t. host)
+            res = self.lib.cudaMemcpy(dst_ptr, src_ptr, size, self.CUDA_MEMCPY_DEVICE_TO_DEVICE)
             if res != 0:
                 raise RuntimeError(f"cudaMemcpy failed: {res}")
+
+        def memcpy_d2d_async(self, dst_ptr, src_ptr, size, stream):
+            stream_ptr = ctypes.c_void_p(stream) if stream else None
+            res = self.lib.cudaMemcpyAsync(
+                dst_ptr, src_ptr, size, self.CUDA_MEMCPY_DEVICE_TO_DEVICE, stream_ptr
+            )
+            if res != 0:
+                raise RuntimeError(f"cudaMemcpyAsync failed: {res}")
+
+        def memcpy_h2d(self, dst_ptr, src_ptr, size):
+            # Host(pinned)->Device upload straight into the mapped PBO (synchronous).
+            res = self.lib.cudaMemcpy(dst_ptr, src_ptr, size, self.CUDA_MEMCPY_HOST_TO_DEVICE)
+            if res != 0:
+                raise RuntimeError(f"cudaMemcpy (H2D) failed: {res}")
+
 
 elif "AMD" in DEVICE_INFO:
     BACKEND = "HIP"
     class CUDART_GL:
         """
-        HIP-OpenGL interop helper – performance‑tuned for AMD GPUs.
+        HIP-OpenGL interop helper, performance-tuned for AMD GPUs.
         Equivalent to the CUDA version, but uses the HIP runtime.
         """
 
         HIP_SUCCESS = 0
-        # IMPORTANT: use the same flag as CUDA's cudaGraphicsRegisterFlagsWriteDiscard
-        HIP_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD = 1
+        # hipGraphicsRegisterFlagsWriteDiscard == 2 (we overwrite the whole buffer
+        # every frame, so WriteDiscard is both correct and the fastest mode).
+        HIP_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD = 2
+        HIP_MEMCPY_HOST_TO_DEVICE = 1            # hipMemcpyHostToDevice
         HIP_MEMCPY_DEVICE_TO_DEVICE = 3          # hipMemcpyDeviceToDevice
 
         def __init__(self, device_id=0):
@@ -121,7 +166,7 @@ elif "AMD" in DEVICE_INFO:
             torch_dir = os.path.dirname(torch.__file__)
             site_packages = os.path.dirname(torch_dir)
 
-            # Common install locations – extend as needed
+            # Common install locations; extend as needed.
             candidates = [
                 os.path.join(torch_dir, "lib"),
                 os.path.join(site_packages, "_rocm_sdk_core", "bin"),
@@ -184,7 +229,7 @@ elif "AMD" in DEVICE_INFO:
             self.lib.hipGraphicsUnregisterResource.argtypes = [ctypes.c_void_p]
             self.lib.hipGraphicsUnregisterResource.restype = ctypes.c_int
 
-            # hipGraphicsMapResources – stream now accepted (0 = default stream)
+            # hipGraphicsMapResources: stream now accepted (0 = default stream).
             self.lib.hipGraphicsMapResources.argtypes = [
                 ctypes.c_int,                      # count
                 ctypes.POINTER(ctypes.c_void_p),   # *resources
@@ -216,6 +261,16 @@ elif "AMD" in DEVICE_INFO:
                 ctypes.c_int,      # kind (e.g. hipMemcpyDeviceToDevice)
             ]
             self.lib.hipMemcpy.restype = ctypes.c_int
+
+            # hipMemcpyAsync
+            self.lib.hipMemcpyAsync.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_size_t,
+                ctypes.c_int,
+                ctypes.c_void_p,
+            ]
+            self.lib.hipMemcpyAsync.restype = ctypes.c_int
 
             # optional: hipStreamCreate / hipStreamDestroy for advanced pipelining
             # (not used by default, kept for future use)
@@ -292,6 +347,30 @@ elif "AMD" in DEVICE_INFO:
             if res != self.HIP_SUCCESS:
                 raise RuntimeError(f"hipMemcpy failed: {res}")
 
+        def memcpy_d2d_async(self, dst_ptr, src_ptr, size, stream):
+            """Async device-to-device copy on the provided HIP stream."""
+            stream_ptr = stream if stream is not None else ctypes.c_void_p(0)
+            res = self.lib.hipMemcpyAsync(
+                dst_ptr,
+                src_ptr,
+                size,
+                self.HIP_MEMCPY_DEVICE_TO_DEVICE,
+                stream_ptr,
+            )
+            if res != self.HIP_SUCCESS:
+                raise RuntimeError(f"hipMemcpyAsync failed: {res}")
+
+        def memcpy_h2d(self, dst_ptr, src_ptr, size):
+            """Host(pinned)->Device upload straight into the mapped PBO (synchronous)."""
+            res = self.lib.hipMemcpy(
+                dst_ptr,
+                src_ptr,
+                size,
+                self.HIP_MEMCPY_HOST_TO_DEVICE,
+            )
+            if res != self.HIP_SUCCESS:
+                raise RuntimeError(f"hipMemcpy (H2D) failed: {res}")
+
 # Shaders as constants (unchanged)
 VERTEX_SHADER = """
     #version 330
@@ -314,10 +393,10 @@ FRAGMENT_SHADER = """
     uniform sampler2D tex_color;   // RGB image
     uniform sampler2D tex_depth;   // Single-channel depth (0 = near, 1 = far)
     uniform vec2 u_resolution;     // viewport resolution
-    uniform float u_eye_offset;    // e.g. ±0.03 (positive = right eye)
+    uniform float u_eye_offset;    // e.g. +/-0.03 (positive = right eye)
     uniform float u_depth_strength;// parallax intensity
-    uniform float u_convergence;   // depth value at screen plane (0–1)
-    uniform int u_fxaa_enabled;    // 1 = apply FXAA, 0 = off
+    uniform float u_convergence;   // depth value at screen plane (0..1)
+    uniform float u_roll;          // screen roll (radians), rotates parallax direction
 
     // Optimized inpainting controls
     uniform float u_search_radius = 12.0;  // horizontal search distance
@@ -328,43 +407,44 @@ FRAGMENT_SHADER = """
     uniform float u_feather_width;
     uniform vec4 u_viewport;
 
+    // Rounded corners
+    uniform float u_corner_radius = 0.0;
+
     vec2 pixel_size = 1.0 / u_resolution;
 
-    // FAST DISOCCLUSION DETECTION
-    bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
-        // Bounds check
+    // Precomputed parallax direction (set once in main, reused by helpers)
+    vec2  g_par_dir;     // normalized roll direction (cos,sin) * sign(eye_offset)
+    float g_sweep_sign;  // +1 / -1: side the background is revealed from
+
+    // SOFT DISOCCLUSION CONFIDENCE (0 = none, 1 = full)
+    // Returns a smooth value instead of a hard bool -> blends inpaint in to hide seams.
+    float disocclusion_confidence(vec2 base_uv, vec2 shifted_uv) {
+        // Out-of-bounds shifted UV -> fully disoccluded
         if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
             shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
-            return true;
+            return 1.0;
 
-        // Fast depth discontinuity check (3-tap only)
-        vec2 grad_dir = vec2(sign(u_eye_offset), 0.0);
-        float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
-        float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
-        
-        // Depth jump threshold (tuned for sharp edges)
-        if (abs(d_left - d_right) > 0.08)
-            return true;
+        // Fast depth discontinuity check (2-tap) along parallax direction
+        vec2 step2 = g_par_dir * pixel_size * 2.0;
+        float d_left  = texture(tex_depth, base_uv - step2).r;
+        float d_right = texture(tex_depth, base_uv + step2).r;
+        float jump = abs(d_left - d_right);
 
-        return false;
+        // Smooth ramp instead of hard threshold (soft edges -> fewer seams)
+        return smoothstep(0.04, 0.10, jump);
     }
 
-    // Uses directional search to find background pixels efficiently
     vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
         vec4 best_color = vec4(0.0);
         float best_weight = 0.0;
         int search_range = int(u_search_radius);
-        
-        // Directional search: prioritize searching opposite to eye shift
-        // (background pixels are more likely in that direction)
-        int search_dir = u_eye_offset > 0.0 ? -1 : 1;
+        // Sweep toward the side the background is revealed from (trig precomputed)
+        vec2 sweep = g_par_dir * pixel_size.x * g_sweep_sign;
         
         // Phase 1: Directional sweep (most samples here)
         for (int i = 1; i <= search_range; i++) {
-            vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x, 0.0);
-            
-            if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
-            
+            vec2 sample_uv = uv_coord + sweep * float(i);
+            if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
             float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
             
             // Only accept background pixels (farther than current)
@@ -383,21 +463,17 @@ FRAGMENT_SHADER = """
                 if (best_weight > 5.0) break;
             }
         }
-        
-        // Phase 2: Opposite direction (fewer samples)
+
+        // Phase 2: opposite sweep fallback if not enough background found
         if (best_weight < 2.0) {
-            int opposite_range = search_range / 2;
+            int opposite_range = search_range;
             for (int i = 1; i <= opposite_range; i++) {
-                vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x, 0.0);
-                
-                if (sample_uv.x < 0.0 || sample_uv.x > 1.0) continue;
-                
+                vec2 sample_uv = uv_coord - sweep * float(i);
+                if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
                 float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
-                
                 if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
                     vec4 sample_color = texture(tex_color, sample_uv);
                     float w = exp(-float(i) * 0.2);
-                    
                     best_color += sample_color * w;
                     best_weight += w;
                 }
@@ -429,42 +505,7 @@ FRAGMENT_SHADER = """
         return texture(tex_color, uv_coord);
     }
 
-    // Lightweight FXAA — samples 4 diagonal neighbors to detect and blend edges.
-    // Cost: ~8 texture fetches + dot products per pixel, fully branchless.
-    // Reduces staircase aliasing on depth-shifted screen edges with no geometry cost.
-    vec3 fxaa_blend(sampler2D tex, vec2 coord, vec2 px) {
-        vec3 c  = texture(tex, coord).rgb;
-        vec3 nw = texture(tex, coord + px * vec2(-1.0,  1.0)).rgb;
-        vec3 ne = texture(tex, coord + px * vec2( 1.0,  1.0)).rgb;
-        vec3 sw = texture(tex, coord + px * vec2(-1.0, -1.0)).rgb;
-        vec3 se = texture(tex, coord + px * vec2( 1.0, -1.0)).rgb;
-
-        // Luma at each sample (green-weighted perceptual)
-        vec3 luma_w = vec3(0.299, 0.587, 0.114);
-        float lC  = dot(c,  luma_w);
-        float lNW = dot(nw, luma_w);
-        float lNE = dot(ne, luma_w);
-        float lSW = dot(sw, luma_w);
-        float lSE = dot(se, luma_w);
-
-        float lMin = min(lC, min(min(lNW, lNE), min(lSW, lSE)));
-        float lMax = max(lC, max(max(lNW, lNE), max(lSW, lSE)));
-        float contrast = lMax - lMin;
-
-        // Only blend where contrast exceeds the threshold — preserves fine detail
-        const float EDGE_THRESH     = 0.063;
-        const float EDGE_THRESH_MIN = 0.0312;
-        if (contrast < max(EDGE_THRESH_MIN, lMax * EDGE_THRESH)) {
-            return c;
-        }
-
-        vec3 avg = (nw + ne + sw + se) * 0.25;
-        float blend = smoothstep(0.0, 1.0, contrast * 4.0);
-        return mix(c, avg, blend * 0.5);
-    }
-
     // ALTERNATIVE: FAST SEPARABLE BLUR (Uncomment to use instead)
-    /*
     vec4 separable_inpaint(vec2 uv_coord, float center_depth_inv) {
         vec4 accum = vec4(0.0);
         float total_w = 0.0;
@@ -488,43 +529,57 @@ FRAGMENT_SHADER = """
         
         return total_w > 0.01 ? accum / total_w : texture(tex_color, uv_coord);
     }
-    */
 
     // MAIN
     void main() {
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
 
-        // Sample depth
-        float depth = texture(tex_depth, flipped_uv).r;
+        // Precompute parallax direction once (perf win: was recomputed per-loop)
+        float c = cos(u_roll);
+        float s = sin(u_roll);
+        g_par_dir = vec2(c, s) * sign(u_eye_offset);
+        g_sweep_sign = (u_eye_offset > 0.0) ? -1.0 : 1.0;
+
+        // DIBR asymmetric depth smoothing: 3-tap Gaussian along parallax dir.
+        // Per Fehn 2004, smooths sharp depth edges to narrow disocclusion width.
+        vec2 ds_dir = g_par_dir * pixel_size * 1.5;
+        float d0 = texture(tex_depth, flipped_uv).r;
+        float dm = texture(tex_depth, flipped_uv - ds_dir).r;
+        float dp = texture(tex_depth, flipped_uv + ds_dir).r;
+        float depth = d0 * 0.7 + dm * 0.15 + dp * 0.15;
         float depth_inv = -depth;
 
-        // Calculate parallax shift
-        float shift = (depth_inv + u_convergence);
-        vec2 shifted_uv = flipped_uv - vec2(u_eye_offset * shift * u_depth_strength, 0.0);
+        // Enhanced 3D: mild non-linear depth curve boosts perceived pop
+        // for nearer objects without pushing parallax into artifact-heavy ranges.
+        float depth_shaped = depth_inv * (1.0 + 0.35 * (1.0 - depth));
 
-        vec4 color;
-        
-        // Check if this pixel needs inpainting
-        if (is_disoccluded(flipped_uv, shifted_uv, depth)) {
-            // Disoccluded region → use optimized inpainting
-            color = push_pull_inpaint(flipped_uv, depth_inv);
-            // Alternative: color = separable_inpaint(flipped_uv, depth_inv);
-        } else {
-            // Normal sampling
-            color = texture(tex_color, shifted_uv);
+        // Calculate parallax shift with edge-aware border constraint.
+        // Smoothly reduces parallax near left/right edges to prevent sampling
+        // beyond image boundaries (standard DIBR border handling).
+        float shift = (depth_shaped + u_convergence);
+        float edge_margin = 0.05;
+        float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
+                           * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
+        float px = u_eye_offset * shift * u_depth_strength * edge_falloff;
+        vec2 shifted_uv = flipped_uv - vec2(px * c, px * s);
+
+        // Soft disocclusion: blend inpaint in by confidence to hide hard seams
+        float conf = disocclusion_confidence(flipped_uv, shifted_uv);
+
+        // Normal sampling
+        vec4 color = texture(tex_color, shifted_uv);
+        if (conf > 0.001) {
+            // Disoccluded region: optimized inpainting, blended by confidence
+            vec4 filled = push_pull_inpaint(flipped_uv, depth_inv);
+            // Alternative: vec4 filled = separable_inpaint(flipped_uv, depth_inv);
+            color = mix(color, filled, conf);
         }
 
-        // FXAA on the parallax-shifted result (operates in tex_color space).
-        // Compute px here so it works even when u_resolution is unset (XR path).
-        if (u_fxaa_enabled == 1) {
-            vec2 tex_sz = vec2(textureSize(tex_color, 0));
-            vec2 px = 1.0 / max(tex_sz, vec2(1.0));
-            color.rgb = fxaa_blend(tex_color, shifted_uv, px);
-        }
-
-        // Subtle edge fade to hide artifacts
-        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * 
-                      smoothstep(1.0, 0.985, shifted_uv);
+        // Screen-edge alpha clip: keep the out-of-bounds safety net (alpha -> 0
+        // if parallax somehow over-shoots into negative UV) but use a
+        // sub-pixel fade band so the user does not see a visible soft border
+        // between the desktop image and the screen edge. 
+        vec2 border = smoothstep(-0.001, 0.001, shifted_uv) * smoothstep(1.001, 0.999, shifted_uv);
         color.a = min(border.x, border.y);
         frag_color = color;
 
@@ -557,6 +612,20 @@ FRAGMENT_SHADER = """
 
             color.rgb *= falloff;
         }
+
+        // Rounded corners via 2D SDF (screen-space uv, not shifted_uv)
+        // Inigo Quilez rounded-box SDF
+        float corner_r = u_corner_radius;
+        vec2 d = abs(uv - 0.5) - 0.5 + corner_r;
+        float corner_sdf = length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - corner_r;
+
+        // Mask out rounded corners
+        float corner_alpha = 1.0 - smoothstep(0.0, 0.01, corner_sdf);
+        color.a = min(color.a, corner_alpha);
+
+        // Glow outside the screen edge only (sdf > 0 = outside the rounded rect).
+        // Moved to dedicated glow quad in XR view.
+
         frag_color = color;
     }
 """
@@ -605,6 +674,528 @@ DEPTH_FRAGMENT = """
     }
 """
 
+# Anaglyph red-cyan composite shader: samples both eyes and blends.
+ANAGLYPH_FRAGMENT = """
+    #version 330
+    in vec2 uv;
+    out vec4 frag_color;
+    uniform sampler2D tex_color;
+    uniform sampler2D tex_depth;
+    uniform vec2 u_resolution;
+    uniform float u_eye_offset;
+    uniform float u_depth_strength;
+    uniform float u_convergence;
+    uniform float u_roll;
+    uniform float u_search_radius = 12.0;
+    uniform float u_depth_tolerance = 0.012;
+    uniform float u_blur_radius = 2.5;
+    uniform int u_feather_enabled;
+    uniform float u_feather_width;
+    uniform vec4 u_viewport;
+    uniform float u_corner_radius = 0.0;
+
+    vec2 pixel_size = 1.0 / u_resolution;
+
+    bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth, float eye_dir) {
+        if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
+            shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
+            return true;
+        vec2 grad_dir = vec2(cos(u_roll), sin(u_roll)) * eye_dir;
+        float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
+        float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
+        if (abs(d_left - d_right) > 0.08)
+            return true;
+        return false;
+    }
+
+    vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv, float eye_dir) {
+        vec4 best_color = vec4(0.0);
+        float best_weight = 0.0;
+        int search_range = int(u_search_radius);
+        int search_dir = eye_dir > 0.0 ? -1 : 1;
+
+        for (int i = 1; i <= search_range; i++) {
+            float c = cos(u_roll);
+            float s = sin(u_roll);
+            vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+            if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+            float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+            if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                vec4 sample_color = texture(tex_color, sample_uv);
+                float dist_weight = exp(-float(i) * 0.15);
+                float depth_weight = 1.0 + (sample_depth_inv - center_depth_inv) * 10.0;
+                float w = dist_weight * depth_weight;
+                best_color += sample_color * w;
+                best_weight += w;
+                if (best_weight > 5.0) break;
+            }
+        }
+
+        if (best_weight < 2.0) {
+            int opposite_range = search_range;
+            for (int i = 1; i <= opposite_range; i++) {
+                float c = cos(u_roll);
+                float s = sin(u_roll);
+                vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+                if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+                float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+                if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                    vec4 sample_color = texture(tex_color, sample_uv);
+                    float w = exp(-float(i) * 0.2);
+                    best_color += sample_color * w;
+                    best_weight += w;
+                }
+            }
+        }
+
+        if (best_weight > 0.01) {
+            vec4 blurred = best_color / best_weight;
+            vec4 vert_accum = blurred * 0.5;
+            float vert_weight = 0.5;
+            for (int dy = -1; dy <= 1; dy += 2) {
+                vec2 vert_uv = uv_coord + vec2(0.0, dy * pixel_size.y * u_blur_radius);
+                if (vert_uv.y >= 0.0 && vert_uv.y <= 1.0) {
+                    float vert_depth_inv = 1.0 - texture(tex_depth, vert_uv).r;
+                    if (vert_depth_inv > center_depth_inv + u_depth_tolerance * 0.5) {
+                        float w = 0.25;
+                        vert_accum += texture(tex_color, vert_uv) * w;
+                        vert_weight += w;
+                    }
+                }
+            }
+            return vert_accum / vert_weight;
+        }
+        return texture(tex_color, uv_coord);
+    }
+
+    void main() {
+        vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
+        float c = cos(u_roll);
+        float s = sin(u_roll);
+        // DIBR asymmetric depth smoothing along parallax direction
+        vec2 ds_dir = vec2(c, s) * pixel_size * 1.5;
+        float d0 = texture(tex_depth, flipped_uv).r;
+        float dm = texture(tex_depth, flipped_uv - ds_dir).r;
+        float dp = texture(tex_depth, flipped_uv + ds_dir).r;
+        float depth = d0 * 0.7 + dm * 0.15 + dp * 0.15;
+        float depth_inv = -depth;
+        float shift_amount = (depth_inv + u_convergence) * u_depth_strength;
+        // Edge-aware border constraint: both eyes rendered in one pass
+        float edge_margin = 0.02;
+        float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
+                           * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
+        shift_amount *= edge_falloff;
+
+        vec2 left_uv  = flipped_uv + vec2(u_eye_offset * shift_amount * c, u_eye_offset * shift_amount * s);
+        vec2 right_uv = flipped_uv - vec2(u_eye_offset * shift_amount * c, u_eye_offset * shift_amount * s);
+
+        vec4 left_color, right_color;
+        if (is_disoccluded(flipped_uv, left_uv, depth, -1.0))
+            left_color = push_pull_inpaint(flipped_uv, depth_inv, -1.0);
+        else
+            left_color = texture(tex_color, left_uv);
+
+        if (is_disoccluded(flipped_uv, right_uv, depth, 1.0))
+            right_color = push_pull_inpaint(flipped_uv, depth_inv, 1.0);
+        else
+            right_color = texture(tex_color, right_uv);
+
+        frag_color = vec4(left_color.r, right_color.g, right_color.b, 1.0);
+
+        vec2 border = smoothstep(0.0, 0.015, left_uv) * smoothstep(1.0, 0.985, left_uv);
+        vec2 border_r = smoothstep(0.0, 0.015, right_uv) * smoothstep(1.0, 0.985, right_uv);
+        frag_color.a = min(min(border.x, border.y), min(border_r.x, border_r.y));
+
+        vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
+
+        if (u_feather_enabled == 1) {
+            float left   = fuv.x;
+            float right  = 1.0 - fuv.x;
+            float top    = fuv.y;
+            float bottom = 1.0 - fuv.y;
+            float feather = u_feather_width;
+            float fadeL = smoothstep(0.0, feather, left);
+            float fadeR = smoothstep(0.0, feather, right);
+            float fadeT = smoothstep(0.0, feather, top);
+            float fadeB = smoothstep(0.0, feather, bottom);
+            float falloff = fadeL * fadeR * fadeT * fadeB;
+            falloff = pow(falloff, 0.7);
+            frag_color.rgb *= falloff;
+        }
+
+        float corner_r = u_corner_radius;
+        vec2 d = abs(fuv - 0.5) - 0.5 + corner_r;
+        float corner_sdf = length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - corner_r;
+        float corner_alpha = 1.0 - smoothstep(0.0, 0.01, corner_sdf);
+        frag_color.a = min(frag_color.a, corner_alpha);
+    }
+"""
+
+# Row-interleaved stereo shader: eye determined by row parity.
+INTERLEAVED_FRAGMENT = """
+    #version 330
+    in vec2 uv;
+    out vec4 frag_color;
+    uniform sampler2D tex_color;
+    uniform sampler2D tex_depth;
+    uniform vec2 u_resolution;
+    uniform float u_eye_offset;
+    uniform float u_depth_strength;
+    uniform float u_convergence;
+    uniform float u_roll;
+    uniform float u_search_radius = 12.0;
+    uniform float u_depth_tolerance = 0.012;
+    uniform float u_blur_radius = 2.5;
+    uniform int u_feather_enabled;
+    uniform float u_feather_width;
+    uniform vec4 u_viewport;
+    uniform float u_corner_radius = 0.0;
+
+    vec2 pixel_size = 1.0 / u_resolution;
+    float eye_dir;
+
+    bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
+        if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
+            shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
+            return true;
+        vec2 grad_dir = vec2(cos(u_roll), sin(u_roll)) * eye_dir;
+        float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
+        float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
+        if (abs(d_left - d_right) > 0.08)
+            return true;
+        return false;
+    }
+
+    vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
+        vec4 best_color = vec4(0.0);
+        float best_weight = 0.0;
+        int search_range = int(u_search_radius);
+        vec2 sweep = vec2(cos(u_roll), sin(u_roll)) * eye_dir;
+
+        // Phase 1: Directional sweep (most samples here)
+        for (int i = 1; i <= search_range; i++) {
+            vec2 sample_uv = uv_coord + sweep * pixel_size.x * float(i);
+            if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+            float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+            if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                vec4 sample_color = texture(tex_color, sample_uv);
+                float dist_weight = exp(-float(i) * 0.15);
+                float depth_weight = 1.0 + (sample_depth_inv - center_depth_inv) * 10.0;
+                float w = dist_weight * depth_weight;
+                best_color += sample_color * w;
+                best_weight += w;
+                if (best_weight > 5.0) break;
+            }
+        }
+
+        // Phase 2: opposite sweep fallback if not enough background found
+        if (best_weight < 2.0) {
+            for (int i = 1; i <= search_range; i++) {
+                vec2 sample_uv = uv_coord - sweep * pixel_size.x * float(i);
+                if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+                float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+                if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                    vec4 sample_color = texture(tex_color, sample_uv);
+                    float w = exp(-float(i) * 0.2);
+                    best_color += sample_color * w;
+                    best_weight += w;
+                }
+            }
+        }
+
+        // Phase 3: Small vertical blur for smoothness (3 taps)
+        if (best_weight > 0.01) {
+            vec4 blurred = best_color / best_weight;
+            vec4 vert_accum = blurred * 0.5;
+            float vert_weight = 0.5;
+
+            for (int dy = -1; dy <= 1; dy += 2) {
+                vec2 vert_uv = uv_coord + vec2(0.0, dy * pixel_size.y * u_blur_radius);
+                if (vert_uv.y >= 0.0 && vert_uv.y <= 1.0) {
+                    float vert_depth_inv = 1.0 - texture(tex_depth, vert_uv).r;
+                    if (vert_depth_inv > center_depth_inv + u_depth_tolerance * 0.5) {
+                        float w = 0.25;
+                        vert_accum += texture(tex_color, vert_uv) * w;
+                        vert_weight += w;
+                    }
+                }
+            }
+
+            return vert_accum / vert_weight;
+        }
+
+        // Fallback: return original pixel if no background found
+        return texture(tex_color, uv_coord);
+    }
+
+    void main() {
+        eye_dir = (int(mod(gl_FragCoord.y, 2.0)) == 0) ? -1.0 : 1.0;
+        float my_offset = eye_dir * u_eye_offset;
+
+        vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
+
+        // Precompute parallax direction once (perf win: was recomputed per-loop)
+        float c = cos(u_roll);
+        float s = sin(u_roll);
+        vec2 parallax_dir = vec2(c, s) * eye_dir;
+
+        // DIBR asymmetric depth smoothing: 3-tap Gaussian along parallax dir
+        // Per Fehn 2004, smooths sharp depth edges to narrow disocclusion width
+        vec2 ds_dir = parallax_dir * pixel_size * 1.5;
+        float d0 = texture(tex_depth, flipped_uv).r;
+        float dm = texture(tex_depth, flipped_uv - ds_dir).r;
+        float dp = texture(tex_depth, flipped_uv + ds_dir).r;
+        float depth = d0 * 0.7 + dm * 0.15 + dp * 0.15;
+        float depth_inv = -depth;
+
+        // Enhanced 3D: mild non-linear depth curve boosts perceived pop
+        // for nearer objects without pushing parallax into artifact-heavy ranges
+        float depth_shaped = depth_inv * (1.0 + 0.35 * (1.0 - depth));
+
+        // Calculate parallax shift with edge-aware border constraint
+        // Smoothly reduces parallax near left/right edges to prevent sampling
+        // beyond image boundaries (standard DIBR border handling)
+        float shift = (depth_shaped + u_convergence);
+        float edge_margin = 0.02;
+        float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
+                           * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
+        float px = my_offset * shift * u_depth_strength * edge_falloff;
+        vec2 shifted_uv = flipped_uv - vec2(px * c, px * s);
+
+        // Soft disocclusion: blend inpaint in by confidence to hide hard seams
+        float conf = 0.0;
+        if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
+            shifted_uv.y < 0.0 || shifted_uv.y > 1.0) {
+            conf = 1.0;
+        } else {
+            vec2 step2 = parallax_dir * pixel_size * 2.0;
+            float d_left  = texture(tex_depth, flipped_uv - step2).r;
+            float d_right = texture(tex_depth, flipped_uv + step2).r;
+            float jump = abs(d_left - d_right);
+            conf = smoothstep(0.06, 0.12, jump);
+        }
+
+        vec4 color;
+        if (conf > 0.001) {
+            color = push_pull_inpaint(flipped_uv, depth_inv);
+        } else {
+            color = texture(tex_color, shifted_uv);
+        }
+
+        // Screen-edge alpha clip: keep the out-of-bounds safety net (alpha -> 0
+        // if parallax somehow over-shoots into negative UV) but use a
+        // sub-pixel fade band so the user does not see a visible soft border
+        vec2 border = smoothstep(-0.001, 0.001, shifted_uv) * smoothstep(1.001, 0.999, shifted_uv);
+        color.a = min(border.x, border.y);
+        frag_color = color;
+
+        // Natural edge feathering
+        if (u_feather_enabled == 1) {
+            vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
+            float left   = fuv.x;
+            float right  = 1.0 - fuv.x;
+            float top    = fuv.y;
+            float bottom = 1.0 - fuv.y;
+            float feather = u_feather_width;
+            float fadeL = smoothstep(0.0, feather, left);
+            float fadeR = smoothstep(0.0, feather, right);
+            float fadeT = smoothstep(0.0, feather, top);
+            float fadeB = smoothstep(0.0, feather, bottom);
+            float falloff = fadeL * fadeR * fadeT * fadeB;
+            falloff = pow(falloff, 0.7);
+            frag_color.rgb *= falloff;
+        }
+
+        // Rounded corners via 2D SDF
+        float corner_r = u_corner_radius;
+        vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
+        vec2 d = abs(fuv - 0.5) - 0.5 + corner_r;
+        float corner_sdf = length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - corner_r;
+        float corner_alpha = 1.0 - smoothstep(0.0, 0.01, corner_sdf);
+        frag_color.a = min(frag_color.a, corner_alpha);
+    }
+"""
+
+# Interleaved-V: column-interleaved stereo (alternating columns per eye).
+VERTICAL_INTERLEAVED_FRAGMENT = """
+    #version 330
+    in vec2 uv;
+    out vec4 frag_color;
+    uniform sampler2D tex_color;
+    uniform sampler2D tex_depth;
+    uniform vec2 u_resolution;
+    uniform float u_eye_offset;
+    uniform float u_depth_strength;
+    uniform float u_convergence;
+    uniform float u_roll;
+    uniform float u_search_radius = 12.0;
+    uniform float u_depth_tolerance = 0.012;
+    uniform float u_blur_radius = 2.5;
+    uniform int u_feather_enabled;
+    uniform float u_feather_width;
+    uniform vec4 u_viewport;
+    uniform float u_corner_radius = 0.0;
+
+    vec2 pixel_size = 1.0 / u_resolution;
+    float eye_dir;
+
+    bool is_disoccluded(vec2 base_uv, vec2 shifted_uv, float center_depth) {
+        if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
+            shifted_uv.y < 0.0 || shifted_uv.y > 1.0)
+            return true;
+        vec2 grad_dir = vec2(cos(u_roll), sin(u_roll)) * eye_dir;
+        float d_left  = texture(tex_depth, base_uv - grad_dir * pixel_size * 2.0).r;
+        float d_right = texture(tex_depth, base_uv + grad_dir * pixel_size * 2.0).r;
+        if (abs(d_left - d_right) > 0.08)
+            return true;
+        return false;
+    }
+
+    vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
+        vec4 best_color = vec4(0.0);
+        float best_weight = 0.0;
+        int search_range = int(u_search_radius);
+        int search_dir = eye_dir > 0.0 ? -1 : 1;
+
+        for (int i = 1; i <= search_range; i++) {
+            float c = cos(u_roll);
+            float s = sin(u_roll);
+            vec2 sample_uv = uv_coord + vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+            if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+            float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+            if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                vec4 sample_color = texture(tex_color, sample_uv);
+                float dist_weight = exp(-float(i) * 0.15);
+                float depth_weight = 1.0 + (sample_depth_inv - center_depth_inv) * 10.0;
+                float w = dist_weight * depth_weight;
+                best_color += sample_color * w;
+                best_weight += w;
+                if (best_weight > 5.0) break;
+            }
+        }
+
+        if (best_weight < 2.0) {
+            int opposite_range = search_range;
+            for (int i = 1; i <= opposite_range; i++) {
+                float c = cos(u_roll);
+                float s = sin(u_roll);
+                vec2 sample_uv = uv_coord - vec2(search_dir * i * pixel_size.x * c, search_dir * i * pixel_size.x * s);
+                if (sample_uv.x < 0.0 || sample_uv.y < 0.0 || sample_uv.x > 1.0 || sample_uv.y > 1.0) continue;
+                float sample_depth_inv = 1.0 - texture(tex_depth, sample_uv).r;
+                if (sample_depth_inv > center_depth_inv + u_depth_tolerance) {
+                    vec4 sample_color = texture(tex_color, sample_uv);
+                    float w = exp(-float(i) * 0.2);
+                    best_color += sample_color * w;
+                    best_weight += w;
+                }
+            }
+        }
+
+        if (best_weight > 0.01) {
+            vec4 blurred = best_color / best_weight;
+            vec4 vert_accum = blurred * 0.5;
+            float vert_weight = 0.5;
+            for (int dy = -1; dy <= 1; dy += 2) {
+                vec2 vert_uv = uv_coord + vec2(0.0, dy * pixel_size.y * u_blur_radius);
+                if (vert_uv.y >= 0.0 && vert_uv.y <= 1.0) {
+                    float vert_depth_inv = 1.0 - texture(tex_depth, vert_uv).r;
+                    if (vert_depth_inv > center_depth_inv + u_depth_tolerance * 0.5) {
+                        float w = 0.25;
+                        vert_accum += texture(tex_color, vert_uv) * w;
+                        vert_weight += w;
+                    }
+                }
+            }
+            return vert_accum / vert_weight;
+        }
+        return texture(tex_color, uv_coord);
+    }
+
+    void main() {
+        // Interleaved-V: alternate columns by X coordinate (odd cols = left eye, even cols = right eye)
+        eye_dir = (int(mod(gl_FragCoord.x, 2.0)) == 0) ? -1.0 : 1.0;
+        float my_offset = eye_dir * u_eye_offset;
+
+        vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
+
+        // DIBR asymmetric depth smoothing: 3-tap Gaussian along parallax dir
+        // Per Fehn 2004, smooths sharp depth edges to narrow disocclusion width
+        float c = cos(u_roll);
+        float s = sin(u_roll);
+        vec2 parallax_dir = vec2(c, s) * eye_dir;
+        vec2 ds_dir = parallax_dir * pixel_size * 1.5;
+        float d0 = texture(tex_depth, flipped_uv).r;
+        float dm = texture(tex_depth, flipped_uv - ds_dir).r;
+        float dp = texture(tex_depth, flipped_uv + ds_dir).r;
+        float depth = d0 * 0.7 + dm * 0.15 + dp * 0.15;
+        float depth_inv = -depth;
+
+        // Enhanced 3D: mild non-linear depth curve boosts perceived pop
+        // for nearer objects without pushing parallax into artifact-heavy ranges
+        float depth_shaped = depth_inv * (1.0 + 0.35 * (1.0 - depth));
+
+        // Calculate parallax shift with edge-aware border constraint
+        // Smoothly reduces parallax near left/right edges to prevent sampling
+        // beyond image boundaries (standard DIBR border handling)
+        float shift = (depth_shaped + u_convergence);
+        float edge_margin = 0.02;
+        float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
+                           * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
+        float px = my_offset * shift * u_depth_strength * edge_falloff;
+        vec2 shifted_uv = flipped_uv - vec2(px * c, px * s);
+
+        // Soft disocclusion confidence (smooth ramp, hides hard seams)
+        float conf = 0.0;
+        if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 ||
+            shifted_uv.y < 0.0 || shifted_uv.y > 1.0) {
+            conf = 1.0;
+        } else {
+            vec2 step2 = parallax_dir * pixel_size * 2.0;
+            float d_left  = texture(tex_depth, flipped_uv - step2).r;
+            float d_right = texture(tex_depth, flipped_uv + step2).r;
+            float jump = abs(d_left - d_right);
+            conf = smoothstep(0.06, 0.12, jump);
+        }
+
+        vec4 color;
+        if (conf > 0.001) {
+            color = push_pull_inpaint(flipped_uv, depth_inv);
+        } else {
+            color = texture(tex_color, shifted_uv);
+        }
+
+        // Screen-edge alpha clip
+        vec2 border = smoothstep(-0.001, 0.001, shifted_uv) * smoothstep(1.001, 0.999, shifted_uv);
+        color.a = min(border.x, border.y);
+        frag_color = color;
+
+        // Natural edge feathering
+        if (u_feather_enabled == 1) {
+            vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
+            float left   = fuv.x;
+            float right  = 1.0 - fuv.x;
+            float top    = fuv.y;
+            float bottom = 1.0 - fuv.y;
+            float feather = u_feather_width;
+            float fadeL = smoothstep(0.0, feather, left);
+            float fadeR = smoothstep(0.0, feather, right);
+            float fadeT = smoothstep(0.0, feather, top);
+            float fadeB = smoothstep(0.0, feather, bottom);
+            float falloff = fadeL * fadeR * fadeT * fadeB;
+            falloff = pow(falloff, 0.7);
+            frag_color.rgb *= falloff;
+        }
+
+        // Rounded corners via 2D SDF
+        float corner_r = u_corner_radius;
+        vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
+        vec2 d = abs(fuv - 0.5) - 0.5 + corner_r;
+        float corner_sdf = length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - corner_r;
+        float corner_alpha = 1.0 - smoothstep(0.0, 0.01, corner_sdf);
+        frag_color.a = min(frag_color.a, corner_alpha);
+    }
+"""
+
 def add_logo(window):
     """Optimized logo loading with lazy imports"""
     from PIL import Image
@@ -613,10 +1204,126 @@ def add_logo(window):
         glfw_img = crop_icon(glfw_img)
         glfw.set_window_icon(window, 1, [glfw_img])
 
+
+class OverlayTextureRenderer:
+    """Small RGBA overlay rendered as a separate GL texture."""
+
+    VERTEX_SHADER = """
+        #version 330
+        in vec2 in_position;
+        in vec2 in_uv;
+        out vec2 uv;
+        void main() {
+            uv = in_uv;
+            gl_Position = vec4(in_position, 0.0, 1.0);
+        }
+    """
+
+    FRAGMENT_SHADER = """
+        #version 330
+        in vec2 uv;
+        out vec4 frag_color;
+        uniform sampler2D u_overlay;
+        void main() {
+            frag_color = texture(u_overlay, uv);
+        }
+    """
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.prog = ctx.program(
+            vertex_shader=self.VERTEX_SHADER,
+            fragment_shader=self.FRAGMENT_SHADER,
+        )
+        self.prog["u_overlay"].value = 0
+        self.texture = None
+        self.size = None
+        self.vbo = None
+        self.vao = None
+        self._geometry_key = None
+
+    def update_texture(self, rgba):
+        if rgba is None:
+            return False
+        h, w = rgba.shape[:2]
+        if w <= 0 or h <= 0:
+            return False
+        if self.texture is None or self.size != (w, h):
+            if self.texture is not None:
+                self.texture.release()
+            self.texture = self.ctx.texture((w, h), 4, dtype="f1")
+            self.texture.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self.size = (w, h)
+        self.texture.write(np.ascontiguousarray(rgba).tobytes())
+        return True
+
+    def clear(self):
+        if self.texture is not None:
+            try:
+                self.texture.release()
+            except Exception:
+                pass
+        self.texture = None
+        self.size = None
+        self._geometry_key = None
+
+    def render(self, window_size, position):
+        if self.texture is None or self.size is None:
+            return
+        win_w, win_h = window_size
+        tex_w, tex_h = self.size
+        if win_w <= 0 or win_h <= 0:
+            return
+        x, y = position
+        left = (x / win_w) * 2.0 - 1.0
+        right = ((x + tex_w) / win_w) * 2.0 - 1.0
+        top = 1.0 - (y / win_h) * 2.0
+        bottom = 1.0 - ((y + tex_h) / win_h) * 2.0
+        geometry_key = (win_w, win_h, tex_w, tex_h, x, y)
+        if self.vao is None or self._geometry_key != geometry_key:
+            verts = np.array([
+                left, bottom, 0.0, 1.0,
+                right, bottom, 1.0, 1.0,
+                left, top, 0.0, 0.0,
+                right, top, 1.0, 0.0,
+            ], dtype="f4")
+            if self.vbo is None:
+                self.vbo = self.ctx.buffer(verts.tobytes())
+            else:
+                self.vbo.orphan(verts.nbytes)
+                self.vbo.write(verts.tobytes())
+            if self.vao is None:
+                self.vao = self.ctx.vertex_array(
+                    self.prog, [(self.vbo, "2f 2f", "in_position", "in_uv")]
+                )
+            self._geometry_key = geometry_key
+
+        previous_viewport = self.ctx.viewport
+        self.ctx.viewport = (0, 0, win_w, win_h)
+        self.texture.use(location=0)
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self.vao.render(moderngl.TRIANGLE_STRIP)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.viewport = previous_viewport
+
+    def release(self):
+        for obj in (self.vao, self.vbo, self.texture, self.prog):
+            if obj is not None:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+        self.vao = None
+        self.vbo = None
+        self.texture = None
+        self.prog = None
+        self.size = None
+
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
 
-    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, feather_enabled=False, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, **kwargs):
+    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_ratio=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, feather_enabled=False, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, vsync=False, **kwargs):
         # Initialize with default values
         self._has_real_frame = False
         self.use_3d = use_3d
@@ -630,7 +1337,7 @@ class StereoWindow:
         self._fullscreen = False
         self.depth_ratio = depth_ratio
         self.depth_ratio_original = depth_ratio
-        self._modes = ["Full-SBS", "Half-SBS", "TAB", "Depth Map"]
+        self._modes = ["Full-SBS", "Half-SBS", "Half-TAB", "Depth Map", "Full-TAB", "Anaglyph", "Interleaved", "Interleaved-V"]
         # Edge feathering toggle
         self.feather_enabled = feather_enabled
         self.feather_width = 0.02       # 2% of view width
@@ -641,6 +1348,7 @@ class StereoWindow:
         self.aspect = self.frame_size[0] / self.frame_size[1]
         self.fix_aspect = fix_aspect
         self.show_fps = show_fps
+        self.vsync = vsync
         self.stream_mode = stream_mode
         self.window_size = self.frame_size
         self.convergence = convergence
@@ -694,9 +1402,16 @@ class StereoWindow:
         self.overlay_update_interval = 0.5  # seconds, throttle overlay regeneration
         self._overlay_cache = {
             'image': None,         # numpy RGBA image
+            'overlay_rgb_f': None, # cached float32 RGB of overlay (avoids per-frame convert)
+            'alpha_f': None,       # cached float32 alpha (0..1) of overlay
             'fps_text': None,
+            'latency_text': None,
             'depth_text': None,
+            'mouse_text': None,
             'last_update': 0.0,
+            'values_update': 0.0,  # last time the displayed FPS/latency numbers refreshed
+            'disp_fps': None,      # throttled FPS value actually shown
+            'disp_latency': None,  # throttled latency value actually shown
             'pos': (self.text_padding, self.text_padding)
         }
         
@@ -745,7 +1460,7 @@ class StereoWindow:
         # Set up OpenGL context
         glfw.make_context_current(self.window)
         self.ctx = moderngl.create_context()
-        glfw.swap_interval(1) # VSync on
+        glfw.swap_interval(1 if self.vsync else 0)
         
         # Precompile shaders and create VAO
         self.prog = self.ctx.program(
@@ -753,7 +1468,6 @@ class StereoWindow:
             fragment_shader=FRAGMENT_SHADER
         )
         self.prog['u_convergence'].value = self.convergence  # e.g. self.convergence = 0.5
-        self.prog['u_fxaa_enabled'].value = 1
         vertices = np.array([
             -1, -1, 0, 0,
             1, -1, 1, 0,
@@ -771,7 +1485,38 @@ class StereoWindow:
         self.depth_vao = self.ctx.vertex_array(
             self.depth_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
         )
-        
+
+        # Anaglyph shader program
+        self.anaglyph_prog = self.ctx.program(
+            vertex_shader=VERTEX_SHADER,
+            fragment_shader=ANAGLYPH_FRAGMENT
+        )
+        self.anaglyph_prog['u_convergence'].value = self.convergence
+        self.anaglyph_vao = self.ctx.vertex_array(
+            self.anaglyph_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        # Interleaved (row-interleaved) shader program
+        self.interleaved_prog = self.ctx.program(
+            vertex_shader=VERTEX_SHADER,
+            fragment_shader=INTERLEAVED_FRAGMENT
+        )
+        self.interleaved_prog['u_convergence'].value = self.convergence
+        self.interleaved_vao = self.ctx.vertex_array(
+            self.interleaved_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        # Interleaved-V shader program: columns alternate per eye.
+        self.vertical_interleaved_prog = self.ctx.program(
+            vertex_shader=VERTEX_SHADER,
+            fragment_shader=VERTICAL_INTERLEAVED_FRAGMENT
+        )
+        self.vertical_interleaved_prog['u_convergence'].value = self.convergence
+        self.vertical_interleaved_vao = self.ctx.vertex_array(
+            self.vertical_interleaved_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
+        )
+        self.overlay_renderer = OverlayTextureRenderer(self.ctx)
+
         # Initialize textures as None
         self.color_tex = None
         self.depth_tex = None
@@ -796,8 +1541,18 @@ class StereoWindow:
         self._pbo_depth = None        # PBO ID for depth texture
         self._cuda_resource_color = None
         self._cuda_resource_depth = None
+        # Persistent page-locked (pinned) staging buffer for the colour upload.
+        # Reused every frame to avoid per-frame device allocations and to make the
+        # host->PBO copy fast (pinned memory has much higher H2D bandwidth).
+        self._pinned_rgb = None
+        self._pinned_rgb_ptr = None
+        # Whether the active GPU is integrated (APU / unified memory). Selects the
+        # fastest colour-upload strategy (see _upload_color). Set in _init_cuda_pbos.
+        self._cuda_integrated = False
 
     def __del__(self):
+        if hasattr(self, "overlay_renderer") and self.overlay_renderer is not None:
+            self.overlay_renderer.release()
         self.cleanup_cuda()
 
     def _init_cuda_pbos(self, width, height):
@@ -807,26 +1562,94 @@ class StereoWindow:
         try:
             self._cudart = CUDART_GL(self.cuda_device_id)
 
-            # Colour PBO (RGB8, 3 bytes/pixel)
+            # Detect integrated GPUs (APUs with unified memory). On those there is
+            # no PCIe bus, so a pinned Host->Device staging copy for the colour
+            # frame is pure overhead (benchmarked slower than a direct texture
+            # write). We therefore only use the pinned PBO path on discrete GPUs.
+            self._cuda_integrated = False
+            try:
+                props = torch.cuda.get_device_properties(self.cuda_device_id)
+                self._cuda_integrated = bool(getattr(props, "is_integrated", 0))
+            except Exception:
+                self._cuda_integrated = False
+
+            # Colour PBO (RGB8, 3 bytes/pixel): only needed for the discrete-GPU
+            # pinned upload path. Integrated GPUs upload colour via texture.write.
             self._pbo_color = glGenBuffers(1)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
             glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 3, None, GL_STREAM_DRAW)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
             self._cuda_resource_color = self._cudart.register_buffer(self._pbo_color)
 
-            # Depth PBO (float32, 4 bytes/pixel)
+            # Depth PBO (float32, 4 bytes/pixel). Depth always lives on the GPU,
+            # so a device-to-device copy is optimal on every backend/GPU type.
             self._pbo_depth = glGenBuffers(1)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_depth)
             glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 4, None, GL_STREAM_DRAW)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
             self._cuda_resource_depth = self._cudart.register_buffer(self._pbo_depth)
 
-            print(f"[Main] Enabled {BACKEND}-GL interop acceleration ({BACKEND}: {self.cuda_device_id})")
+            # Persistent pinned staging buffer for the (overlay-composited) colour
+            # frame only on discrete GPUs, where pinned H2D bandwidth pays off.
+            if not self._cuda_integrated:
+                try:
+                    self._pinned_rgb = torch.empty(
+                        (height, width, 3), dtype=torch.uint8, pin_memory=True
+                    )
+                    self._pinned_rgb_ptr = self._pinned_rgb.data_ptr()
+                except Exception:
+                    # Pinned allocation can fail on some setups; fall back to no staging
+                    self._pinned_rgb = None
+                    self._pinned_rgb_ptr = None
+
+            gpu_kind = "integrated" if self._cuda_integrated else "discrete"
+            print(f"[Main] Enabled {BACKEND}-GL interop acceleration "
+                  f"({BACKEND}: {self.cuda_device_id}, {gpu_kind} GPU)")
         except Exception as e:
             print(f"[Main] {BACKEND}-GL interop initialization failed: {e}")
             print(f"[Main] Falling back to CPU-GL interop.")
             self.use_cuda = False
             self.cleanup_cuda()   # clean up any partial allocations
+
+    def _upload_color(self, rgb_host):
+        """Adaptive colour upload for the overlay-composited host frame.
+
+        - Discrete GPU: stage into a persistent pinned buffer and do a single fast
+          Host->Device copy into the registered PBO (PCIe-optimal, no per-frame
+          device allocation).
+        - Integrated GPU (APU): there is no PCIe bus, so the pinned/PBO dance is
+          pure overhead; a direct ModernGL texture write is as fast or faster.
+        """
+        # Integrated GPU (or no pinned staging / colour PBO): direct texture write.
+        if self._cuda_integrated or self._pinned_rgb is None or self._cuda_resource_color is None:
+            self.color_tex.write(np.ascontiguousarray(rgb_host).tobytes())
+            return
+
+        h, w, _ = rgb_host.shape
+        nbytes = h * w * 3
+        if self._pinned_rgb.shape[:2] == (h, w):
+            # In-place CPU copy numpy -> pinned torch buffer
+            self._pinned_rgb.copy_(torch.from_numpy(np.ascontiguousarray(rgb_host)))
+            src_ptr = self._pinned_rgb_ptr
+        else:
+            # Size mismatch fallback: copy directly from the (pageable) numpy buffer
+            rgb_c = np.ascontiguousarray(rgb_host)
+            src_ptr = rgb_c.ctypes.data
+            nbytes = rgb_c.nbytes
+
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
+        ptr = self._cudart.map_resource(self._cuda_resource_color)
+        try:
+            self._cudart.memcpy_h2d(ptr, src_ptr, nbytes)
+        finally:
+            self._cudart.unmap_resource(self._cuda_resource_color)
+
+        # Update ModernGL texture from the PBO
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                        GL_RGB, GL_UNSIGNED_BYTE, None)
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
 
     def _upload_color_cuda(self, rgb_gpu):
         """Upload a GPU tensor (H,W,3) uint8 to colour texture using PBO."""
@@ -865,15 +1688,34 @@ class StereoWindow:
     def cleanup_cuda(self):
         """Release CUDA resources and delete PBOs."""
         if self._cudart:
-            if self._cuda_resource_color:
-                self._cudart.unregister_resource(self._cuda_resource_color)
-            if self._cuda_resource_depth:
-                self._cudart.unregister_resource(self._cuda_resource_depth)
-            if self._pbo_color and bool(glDeleteBuffers):
-                glDeleteBuffers(1, [self._pbo_color])
-            if self._pbo_depth and bool(glDeleteBuffers):
-                glDeleteBuffers(1, [self._pbo_depth])
+            try:
+                if self._cuda_resource_color:
+                    self._cudart.unregister_resource(self._cuda_resource_color)
+            except Exception:
+                pass
+            try:
+                if self._cuda_resource_depth:
+                    self._cudart.unregister_resource(self._cuda_resource_depth)
+            except Exception:
+                pass
+            try:
+                if self._pbo_color and bool(glDeleteBuffers):
+                    glDeleteBuffers(1, [self._pbo_color])
+            except Exception:
+                pass
+            try:
+                if self._pbo_depth and bool(glDeleteBuffers):
+                    glDeleteBuffers(1, [self._pbo_depth])
+            except Exception:
+                pass
+            # Release the persistent pinned staging buffer
+            self._pinned_rgb = None
+            self._pinned_rgb_ptr = None
             self._cudart = None
+            self._pbo_color = None
+            self._pbo_depth = None
+            self._cuda_resource_color = None
+            self._cuda_resource_depth = None
     
     def _calculate_depth_map_viewport(self, win_w, win_h, tex_w, tex_h):
         """Cached viewport calculation for depth map mode"""
@@ -999,6 +1841,8 @@ class StereoWindow:
         """Handle window resize events"""
         self.window_size = (width, height)
         self._update_font()
+        self._overlay_cache['image'] = None
+        self._overlay_cache['fps_text'] = None
 
     def _update_font(self):
         """Update font size based on window dimensions"""
@@ -1122,23 +1966,35 @@ class StereoWindow:
         else:
             self.show_mouse_state = False
 
-        # Compose the strings to display
-        fps_text = f"FPS: {self.actual_fps:.1f}" if self.show_fps else ""
-        latency_text = f"Latency: {self.total_latency:.1f} ms" if self.show_fps else ""
+        cache = self._overlay_cache
+
+        # Throttle the *displayed* FPS/latency numbers. These change every frame
+        # (e.g. "FPS: 59.8" -> "FPS: 60.1"), and the live values were previously
+        # forcing a full PIL text re-rasterization on every single frame, which is
+        # the main overlay-induced FPS drop. We only refresh the shown numbers a
+        # couple of times per second; the frame's real FPS is unaffected.
+        if (cache.get('disp_fps') is None or
+                (current_time - cache.get('values_update', 0.0)) >= self.overlay_update_interval):
+            cache['disp_fps'] = self.actual_fps
+            cache['disp_latency'] = self.total_latency
+            cache['values_update'] = current_time
+
+        # Compose the strings to display (from the throttled snapshot values)
+        fps_text = f"FPS: {cache['disp_fps']:.1f}" if self.show_fps else ""
+        latency_text = f"Latency: {cache['disp_latency']:.1f} ms" if self.show_fps else ""
         depth_text = f"Depth: {self.depth_ratio:.1f}" if self.show_depth_ratio else ""
         mouse_text = f"Mouse: {'Pass' if self.mouse_pass_through else 'Normal'}" if self.show_mouse_state else ""
 
-        # Decide whether to regenerate overlay
-        cache = self._overlay_cache
+        # Decide whether to regenerate the rasterized overlay. Because the numbers
+        # above are throttled, the text strings only change a few times per second,
+        # so regeneration (the expensive part) is naturally rate-limited.
         needs_regen = False
         if cache['image'] is None:
             needs_regen = True
-        elif latency_text != cache.get('latency_text'):
-            needs_regen = True
-        elif fps_text != cache.get('fps_text') or depth_text != cache.get('depth_text') or mouse_text != cache.get('mouse_text'):
-            needs_regen = True
-        elif (current_time - cache.get('last_update', 0.0)) >= self.overlay_update_interval:
-            # periodic regen in case font metrics or size changed
+        elif (fps_text != cache.get('fps_text') or
+              latency_text != cache.get('latency_text') or
+              depth_text != cache.get('depth_text') or
+              mouse_text != cache.get('mouse_text')):
             needs_regen = True
 
         if needs_regen:
@@ -1149,6 +2005,14 @@ class StereoWindow:
             cache['depth_text'] = depth_text
             cache['mouse_text'] = mouse_text
             cache['last_update'] = current_time
+            # Pre-convert the overlay to float32 once so the per-frame blend below
+            # doesn't repeat the RGBA->float conversion every frame.
+            if overlay_arr is not None:
+                cache['alpha_f'] = overlay_arr[..., 3:4].astype(np.float32) / 255.0
+                cache['overlay_rgb_f'] = overlay_arr[..., :3].astype(np.float32)
+            else:
+                cache['alpha_f'] = None
+                cache['overlay_rgb_f'] = None
 
         overlay_arr = cache['image']
         if overlay_arr is None:
@@ -1167,20 +2031,114 @@ class StereoWindow:
         if ov_w_clipped <= 0 or ov_h_clipped <= 0:
             return rgb_frame
 
-        # Slice overlay and frame
-        overlay_slice = overlay_arr[0:ov_h_clipped, 0:ov_w_clipped]
+        # Use the cached float32 overlay (already converted at regen time)
+        alpha = cache['alpha_f'][0:ov_h_clipped, 0:ov_w_clipped]
+        overlay_rgb = cache['overlay_rgb_f'][0:ov_h_clipped, 0:ov_w_clipped]
         frame_region = rgb_frame[pos_y:end_y, pos_x:end_x]
 
         # Alpha blending: result = overlay.rgb * alpha + frame * (1 - alpha)
-        alpha = overlay_slice[..., 3:4].astype(np.float32) / 255.0  # H x W x 1
-        overlay_rgb = overlay_slice[..., :3].astype(np.float32)
-        frame_rgb = frame_region.astype(np.float32)
-
-        blended = (overlay_rgb * alpha) + (frame_rgb * (1.0 - alpha))
+        blended = overlay_rgb * alpha + frame_region.astype(np.float32) * (1.0 - alpha)
         # write back blended region into original frame (as uint8)
         rgb_frame[pos_y:end_y, pos_x:end_x] = np.clip(blended, 0, 255).astype(np.uint8)
 
         return rgb_frame
+
+    def _update_overlay_texture(self):
+        """Refresh the small text overlay texture without touching the RGB frame."""
+        if self.font is None:
+            if self.overlay_renderer is not None:
+                self.overlay_renderer.clear()
+            return
+        if not (self.show_fps or self.show_depth_ratio or self.show_mouse_state):
+            if self.overlay_renderer is not None:
+                self.overlay_renderer.clear()
+            return
+
+        current_time = time.perf_counter()
+        self.show_depth_ratio = current_time - self.last_depth_change_time < self.depth_display_duration
+        self.show_mouse_state = current_time - self.last_mouse_toggle_time < self.mouse_display_duration
+        if not (self.show_fps or self.show_depth_ratio or self.show_mouse_state):
+            if self.overlay_renderer is not None:
+                self.overlay_renderer.clear()
+            return
+
+        cache = self._overlay_cache
+        if (cache.get('disp_fps') is None or
+                (current_time - cache.get('values_update', 0.0)) >= self.overlay_update_interval):
+            cache['disp_fps'] = self.actual_fps
+            cache['disp_latency'] = self.total_latency
+            cache['values_update'] = current_time
+
+        fps_text = f"FPS: {cache['disp_fps']:.1f}" if self.show_fps else ""
+        latency_text = f"Latency: {cache['disp_latency']:.1f} ms" if self.show_fps else ""
+        depth_text = f"Depth: {self.depth_ratio:.1f}" if self.show_depth_ratio else ""
+        mouse_text = f"Mouse: {'Pass' if getattr(self, 'mouse_pass_through', False) else 'Normal'}" if self.show_mouse_state else ""
+
+        if (fps_text == cache.get('fps_text') and
+                latency_text == cache.get('latency_text') and
+                depth_text == cache.get('depth_text') and
+                mouse_text == cache.get('mouse_text') and
+                cache.get('image') is not None):
+            return
+
+        overlay_arr = self._generate_overlay_image(fps_text, latency_text, depth_text, mouse_text)
+        cache['image'] = overlay_arr
+        cache['fps_text'] = fps_text
+        cache['latency_text'] = latency_text
+        cache['depth_text'] = depth_text
+        cache['mouse_text'] = mouse_text
+        cache['last_update'] = current_time
+        if overlay_arr is not None and self.overlay_renderer is not None:
+            self.overlay_renderer.update_texture(overlay_arr)
+        elif self.overlay_renderer is not None:
+            self.overlay_renderer.clear()
+
+    def _render_overlay(self):
+        if self.stream_mode is not None or self.overlay_renderer is None:
+            return
+        window_size = glfw.get_framebuffer_size(self.window)
+        win_w, win_h = window_size
+        base_x, base_y = self._overlay_cache.get(
+            'pos', (self.text_padding, self.text_padding)
+        )
+        positions = [(base_x, base_y)]
+
+        if self.display_mode == "Full-SBS" and self._texture_size:
+            tex_w, tex_h = self._texture_size
+            src_w, src_h = tex_w, tex_h
+            max_w, max_h = win_w / 2.0, win_h
+            render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+            center_y = win_h / 2.0
+            left_vp = (
+                int(win_w / 4.0 - render_w / 2),
+                int(center_y - render_h / 2),
+                render_w,
+                render_h,
+            )
+            right_vp = (
+                int(3 * win_w / 4.0 - render_w / 2),
+                int(center_y - render_h / 2),
+                render_w,
+                render_h,
+            )
+            positions = [
+                (left_vp[0] + base_x, win_h - (left_vp[1] + left_vp[3]) + base_y),
+                (right_vp[0] + base_x, win_h - (right_vp[1] + right_vp[3]) + base_y),
+            ]
+        elif self.display_mode == "Half-SBS":
+            positions = [
+                (base_x, base_y),
+                (max(base_x, win_w // 2 + base_x), base_y),
+            ]
+        elif self.display_mode in ("Full-TAB", "Half-TAB"):
+            positions = [
+                (base_x, base_y),
+                (base_x, max(base_y, win_h // 2 + base_y)),
+            ]
+
+        for position in positions:
+            self.overlay_renderer.render(window_size, position)
+
     def position_on_monitor(self, monitor_index=0):
         """Optimized monitor positioning"""
         monitors = glfw.get_monitors()
@@ -1280,7 +2238,7 @@ class StereoWindow:
                         new_w = int(new_h * self.aspect)
 
                     else:
-                        # Screen is taller — fit by width
+                        # Screen is taller: fit by width.
                         new_w = full_w
                         new_h = int(full_w / self.aspect)
 
@@ -1373,42 +2331,25 @@ class StereoWindow:
                 self.show_mouse_state = True
 
     def update_frame(self, rgb, depth, current_fps=None, current_latency=None):
-        """Optimized frame update – tries CUDA zero‑copy, falls back to CPU."""
-        # Convert tensors to numpy for overlay (always CPU)
-        if hasattr(depth, 'detach'):
-            depth_np = depth.detach().cpu().contiguous().float().numpy()
-        else:
-            depth_np = depth
-
-        if hasattr(rgb, 'detach'):
-            try:
-                rgb_np = rgb.permute(1, 2, 0).detach().contiguous().clamp(0, 255).to(torch.uint8).cpu().numpy()
-            except RuntimeError as e:
-                print(f"[update_frame] RuntimeError converting RGB tensor to numpy: {e}")
-                rgb_np = None
-            except Exception as e:
-                print(f"[update_frame] Error converting RGB tensor to numpy: {e}")
-                rgb_np = None
-        else:
-            rgb_np = rgb
-
-        # Add overlay (CPU only)
-        if self.display_mode != "Depth Map":
-            rgb_with_overlay = self._add_overlay(rgb_np)
-        else:
-            rgb_with_overlay = rgb_np
-
-        # Update FPS/Latency
+        """Update frame textures. CUDA tensors stay on GPU when GL interop works."""
         if current_fps is not None:
             self.actual_fps = current_fps
         if current_latency is not None:
             self.total_latency = current_latency * 1000
-        try:
-            h, w, _ = rgb_with_overlay.shape
-        except AttributeError:
-            return
 
-        # Recreate textures and PBOs if size changed
+        if hasattr(rgb, "detach"):
+            rgb_shape = tuple(rgb.shape)
+            if len(rgb_shape) == 3 and rgb_shape[0] in (3, 4):
+                h, w = int(rgb_shape[1]), int(rgb_shape[2])
+            else:
+                h, w = int(rgb_shape[0]), int(rgb_shape[1])
+        else:
+            rgb_np = np.asarray(rgb)
+            h, w = rgb_np.shape[:2]
+
+        if self.stream_mode is None:
+            self._update_overlay_texture()
+
         if self._texture_size != (w, h):
             if self.color_tex:
                 self.color_tex.release()
@@ -1429,44 +2370,71 @@ class StereoWindow:
                     print(f"[update_frame] Error initializing CUDA PBOs: {e}")
                     self.use_cuda = False
 
-        # Try CUDA zero‑copy path first
+        # Try GPU-GL interop path first.
         cuda_success = False
-        if self.use_cuda and self._cudart is not None:
+        if self.stream_mode is None and self.use_cuda and self._cudart is not None:
             try:
-                # Check that tensors are on GPU and compatible
-                if not (hasattr(rgb, 'is_cuda') and rgb.is_cuda and
-                        hasattr(depth, 'is_cuda') and depth.is_cuda):
-                    raise RuntimeError("Tensors not on GPU")
+                if not (hasattr(rgb, 'is_cuda') and rgb.is_cuda):
+                    raise RuntimeError("RGB tensor not on GPU")
+                if not (hasattr(depth, 'is_cuda') and depth.is_cuda):
+                    raise RuntimeError("Depth tensor not on GPU")
+                if self._cuda_resource_color is None or self._pbo_color is None:
+                    raise RuntimeError("Colour PBO not available")
 
-                # Convert overlay (CPU) to GPU tensor (uint8)
-                rgb_gpu = torch.from_numpy(rgb_with_overlay).cuda(self.cuda_device_id).contiguous()
+                rgb_gpu = rgb.detach()
+                if rgb_gpu.ndim == 3 and rgb_gpu.shape[0] in (3, 4):
+                    rgb_gpu = rgb_gpu[:3].permute(1, 2, 0)
+                elif rgb_gpu.ndim == 3 and rgb_gpu.shape[-1] >= 3:
+                    rgb_gpu = rgb_gpu[..., :3]
+                else:
+                    raise RuntimeError(f"Unsupported RGB tensor shape: {tuple(rgb_gpu.shape)}")
+                rgb_gpu = rgb_gpu.contiguous().clamp(0, 255).to(torch.uint8)
                 depth_gpu = depth.contiguous().float()
 
-                # Upload using PBOs
+                torch.cuda.current_stream(self.cuda_device_id).synchronize()
                 self._upload_color_cuda(rgb_gpu)
                 self._upload_depth_cuda(depth_gpu)
                 cuda_success = True
             except Exception as e:
-                self.use_cuda = False   # permanently disable CUDA for this instance
+                print(f"[update_frame] CUDA-GL upload disabled: {e}")
+                self.use_cuda = False
                 self.cleanup_cuda()
 
         # Fallback to CPU path if CUDA failed or not available
         if not cuda_success:
+            if hasattr(depth, 'detach'):
+                depth_np = depth.detach().cpu().contiguous().float().numpy()
+            else:
+                depth_np = np.asarray(depth, dtype=np.float32)
+
+            if hasattr(rgb, 'detach'):
+                try:
+                    rgb_np = rgb.cpu().detach().contiguous().permute(1, 2, 0).clamp(0, 255).to(torch.uint8).numpy()
+                except RuntimeError as e:
+                    print(f"[update_frame] RuntimeError converting RGB tensor to numpy: {e}")
+                    return
+                except Exception as e:
+                    print(f"[update_frame] Error converting RGB tensor to numpy: {e}")
+                    return
+            else:
+                rgb_np = np.asarray(rgb)
+
+            if self.stream_mode is not None and self.display_mode != "Depth Map":
+                rgb_np = self._add_overlay(rgb_np)
+
             if self.display_mode == "Depth Map" and not self.show_original_in_depth_mode:
                 self.depth_tex.write(depth_np.tobytes())
                 if self._last_display_mode != "Depth Map" or self._last_show_original != self.show_original_in_depth_mode:
-                    rgb_u8 = rgb_with_overlay.astype('uint8', copy=False)
-                    self.color_tex.write(rgb_u8.tobytes())
+                    self.color_tex.write(rgb_np.astype('uint8', copy=False).tobytes())
             else:
-                rgb_u8 = rgb_with_overlay.astype('uint8', copy=False)
-                self.color_tex.write(rgb_u8.tobytes())
+                self.color_tex.write(rgb_np.astype('uint8', copy=False).tobytes())
                 self.depth_tex.write(depth_np.tobytes())
 
         # Cache current state
         self._last_display_mode = self.display_mode
         self._last_show_original = self.show_original_in_depth_mode
 
-        # Show window after first frame (unchanged – keep as is)
+        # Show window after first frame.
         if not self._has_real_frame:
             self._has_real_frame = True
             if self.stream_mode != "MJPEG":
@@ -1598,14 +2566,82 @@ class StereoWindow:
                 self.depth_vao.render(moderngl.TRIANGLE_STRIP)
             
             # Skip swap buffers if frame hasn't changed (for headless/streaming modes)
+            self._render_overlay()
             if self.stream_mode is None:
                 glfw.poll_events()
             return
-        
+
+        # Composite display modes (Mono, Anaglyph, Interleaved, Interleaved-V)
+        if self.display_mode in ["Anaglyph", "Interleaved", "Interleaved-V"]:
+            if self.fix_aspect:
+                glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
+            else:
+                glfw.set_window_aspect_ratio(self.window, glfw.DONT_CARE, glfw.DONT_CARE)
+
+            self.ctx.clear(0.0, 0.0, 0.0)
+
+            if self.fill_16_9:
+                render_w, render_h = self._compute_render_size(win_w, win_h, tex_w, tex_h)
+                center_x, center_y = win_w / 2.0, win_h / 2.0
+                viewport = (int(center_x - render_w / 2), int(center_y - render_h / 2), render_w, render_h)
+            else:
+                target_aspect = tex_h / tex_w
+                try:
+                    window_aspect = win_h / win_w
+                except ZeroDivisionError:
+                    window_aspect = 9.0 / 16.0
+                if window_aspect <= target_aspect:
+                    view_h = win_h
+                    view_w = int(view_h / target_aspect)
+                else:
+                    view_w = win_w
+                    view_h = int(view_w * target_aspect)
+                offset_x = (win_w - view_w) // 2
+                offset_y = (win_h - view_h) // 2
+                viewport = (offset_x, offset_y, view_w, view_h)
+
+            self.ctx.viewport = viewport
+            half_ipd = self.ipd_uv / 2.0
+
+            if self.display_mode == "Anaglyph":
+                self.color_tex.use(location=0)
+                self.depth_tex.use(location=1)
+                self.anaglyph_prog['u_eye_offset'].value = half_ipd
+                self.anaglyph_prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+                self.anaglyph_prog['u_feather_enabled'].value = self.feather_enabled
+                self.anaglyph_prog['u_feather_width'].value = self.feather_width
+                self.anaglyph_prog['u_viewport'].value = viewport
+                self.anaglyph_vao.render(moderngl.TRIANGLE_STRIP)
+            elif self.display_mode == "Interleaved":
+                self.color_tex.use(location=0)
+                self.depth_tex.use(location=1)
+                self.interleaved_prog['u_eye_offset'].value = half_ipd
+                self.interleaved_prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+                self.interleaved_prog['u_feather_enabled'].value = self.feather_enabled
+                self.interleaved_prog['u_feather_width'].value = self.feather_width
+                self.interleaved_prog['u_viewport'].value = viewport
+                self.interleaved_vao.render(moderngl.TRIANGLE_STRIP)
+            elif self.display_mode == "Interleaved-V":
+                self.color_tex.use(location=0)
+                self.depth_tex.use(location=1)
+                self.vertical_interleaved_prog['u_eye_offset'].value = half_ipd
+                self.vertical_interleaved_prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+                self.vertical_interleaved_prog['u_feather_enabled'].value = self.feather_enabled
+                self.vertical_interleaved_prog['u_feather_width'].value = self.feather_width
+                self.vertical_interleaved_prog['u_viewport'].value = viewport
+                self.vertical_interleaved_vao.render(moderngl.TRIANGLE_STRIP)
+
+            self._render_overlay()
+            if self.stream_mode is None:
+                glfw.poll_events()
+            return
+
         # Rest of the rendering for other modes...
         if self.fix_aspect:
             if self.display_mode == "Full-SBS":
                 glfw.set_window_aspect_ratio(self.window, 2*tex_w, tex_h)
+            elif self.display_mode == "Full-TAB":
+                glfw.set_window_aspect_ratio(self.window, tex_w, 2*tex_h)
             else:
                 glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
         else:
@@ -1616,7 +2652,7 @@ class StereoWindow:
         
         # Handle other display modes (non-depth map)
         if self.fill_16_9:
-            if self.display_mode in ["Full-SBS", "Half-SBS", "TAB"]:
+            if self.display_mode in ["Full-SBS", "Half-SBS", "Half-TAB", "Full-TAB"]:
                 self.color_tex.use(location=0)
                 self.depth_tex.use(location=1)
                 self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
@@ -1686,7 +2722,7 @@ class StereoWindow:
                     self._last_eye_offset_set = self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-                elif self.display_mode == "TAB":
+                elif self.display_mode in ["Half-TAB"]:
                     src_w, src_h = tex_w, tex_h / 2.0
                     max_w, max_h = win_w, win_h / 2.0
                     render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
@@ -1716,15 +2752,48 @@ class StereoWindow:
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = bottom_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
-        
+
+                elif self.display_mode == "Full-TAB":
+                    src_w, src_h = tex_w, tex_h
+                    max_w, max_h = win_w, win_h / 2.0
+                    render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
+
+                    # Top view (left eye)
+                    top_vp = (
+                        int(win_w / 2.0 - render_w / 2),
+                        int(win_h / 4.0 - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.ctx.viewport = top_vp
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = top_vp
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                    # Bottom view (right eye)
+                    bottom_vp = (
+                        int(win_w / 2.0 - render_w / 2),
+                        int(3 * win_h / 4.0 - render_h / 2),
+                        render_w, render_h
+                    )
+                    self.ctx.viewport = bottom_vp
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = bottom_vp
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
         else:
             # Determine effective stereo frame size by display mode
             if self.display_mode == "Full-SBS":
                 disp_w, disp_h = 2 * tex_w, tex_h
             elif self.display_mode == "Half-SBS":
                 disp_w, disp_h = tex_w, tex_h
-            elif self.display_mode == "TAB":
+            elif self.display_mode in ["Half-TAB"]:
                 disp_w, disp_h = tex_w, tex_h
+            elif self.display_mode == "Full-TAB":
+                disp_w, disp_h = tex_w, 2 * tex_h
             elif self.display_mode == "Depth Map":
                 disp_w, disp_h = tex_w, tex_h
             else:
@@ -1749,7 +2818,7 @@ class StereoWindow:
             offset_x = (win_w - view_w) // 2
             offset_y = (win_h - view_h) // 2
 
-            if self.display_mode in ["Full-SBS", "Half-SBS", "TAB"]:
+            if self.display_mode in ["Full-SBS", "Half-SBS", "Half-TAB", "Full-TAB"]:
                 self.color_tex.use(0)
                 self.depth_tex.use(1)
                 self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
@@ -1792,7 +2861,26 @@ class StereoWindow:
                     self.prog['u_viewport'].value = right_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
-                elif self.display_mode == "TAB":
+                elif self.display_mode == "Half-TAB":
+                    # Top eye (left)
+                    top_vp = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
+                    self.ctx.viewport = top_vp
+                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = top_vp
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                    # Bottom eye (right)
+                    bottom_vp = (offset_x, offset_y, view_w, view_h // 2)
+                    self.ctx.viewport = bottom_vp
+                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_feather_enabled'].value = self.feather_enabled
+                    self.prog['u_feather_width'].value = self.feather_width
+                    self.prog['u_viewport'].value = bottom_vp
+                    self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+
+                elif self.display_mode == "Full-TAB":
                     # Top eye (left)
                     top_vp = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
                     self.ctx.viewport = top_vp
@@ -1812,5 +2900,6 @@ class StereoWindow:
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
         # Skip swap buffers if window is not visible (for headless/streaming)
+        self._render_overlay()
         if self.stream_mode is None:
             glfw.poll_events()

@@ -17,11 +17,11 @@ import torch
 from einops import einsum, rearrange, repeat
 from torch import nn
 
-from models.depth_anything_3.model.utils.transform import cam_quat_xyzw_to_world_quat_wxyz
-from models.depth_anything_3.specs import Gaussians
-from models.depth_anything_3.utils.geometry import affine_inverse, get_world_rays, sample_image_grid
-from models.depth_anything_3.utils.pose_align import batch_align_poses_umeyama
-from models.depth_anything_3.utils.sh_helpers import rotate_sh
+from depth_anything_3.model.utils.transform import cam_quat_xyzw_to_world_quat_wxyz
+from depth_anything_3.specs import Gaussians
+from depth_anything_3.utils.geometry import affine_inverse, get_world_rays, sample_image_grid
+from depth_anything_3.utils.pose_align import batch_align_poses_umeyama
+from depth_anything_3.utils.sh_helpers import rotate_sh
 
 
 class GaussianAdapter(nn.Module):

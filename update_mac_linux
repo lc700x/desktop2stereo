@@ -97,7 +97,7 @@ source "${VIRTUAL_ENV}/bin/activate" || error_exit "Failed to activate virtual e
 if [ -f "requirements.txt" ]; then
     echo "Installing dependencies..."
     "$PYTHON_EXE" -m pip uninstall pyaudio -y || echo "pyaudio not installed, skipping uninstall."
-    "$PYTHON_EXE" -m pip install -r requirements.txt --no-cache-dir --trusted-host mirrors.aliyun.com \
+    "$PYTHON_EXE" -m pip install -r requirements.txt --no-cache-dir -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/ \
         || error_exit "Failed to install requirements."
 else
     echo "No requirements.txt found. Skipping dependency installation."

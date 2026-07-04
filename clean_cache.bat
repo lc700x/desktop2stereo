@@ -10,6 +10,7 @@ echo - ZLUDA ComputeCache
 echo - MIOpen cache
 echo - Triton cache
 echo - TorchInductor temp files
+echo - Desktop2Stereo torch.compile cache
 echo - Torch/Triton/MIOpen/ZLUDA related cache subdirectories
 echo - ComfyUI Triton and Inductor directories
 echo.
@@ -66,6 +67,37 @@ echo Removing TorchInductor temp files...
 for /d %%i in ("!TORCH_TEMP!\torchinductor_*") do (
     echo   Removing: %%i
     rd /s /q "%%i" 2>nul
+)
+
+REM Desktop2Stereo torch.compile cache
+echo.
+echo Removing Desktop2Stereo torch.compile cache...
+if defined DESKTOP2STEREO_TORCH_CACHE (
+    set "D2S_TORCH_CACHE=%DESKTOP2STEREO_TORCH_CACHE%"
+    if exist "!D2S_TORCH_CACHE!" (
+        echo   Removing override cache: !D2S_TORCH_CACHE!
+        rd /s /q "!D2S_TORCH_CACHE!" 2>nul
+        if exist "!D2S_TORCH_CACHE!" (
+            echo   Warning: Could not remove !D2S_TORCH_CACHE!
+        ) else (
+            echo   Successfully removed !D2S_TORCH_CACHE!
+        )
+    ) else (
+        echo   Override cache not found: !D2S_TORCH_CACHE!
+    )
+)
+
+set "D2S_TORCH_CACHE=%TEMP%\torch_%USERNAME%"
+if exist "!D2S_TORCH_CACHE!" (
+    echo   Removing temp cache: !D2S_TORCH_CACHE!
+    rd /s /q "!D2S_TORCH_CACHE!" 2>nul
+    if exist "!D2S_TORCH_CACHE!" (
+        echo   Warning: Could not remove !D2S_TORCH_CACHE!
+    ) else (
+        echo   Successfully removed !D2S_TORCH_CACHE!
+    )
+) else (
+    echo   Temp cache not found: !D2S_TORCH_CACHE!
 )
 
 echo.

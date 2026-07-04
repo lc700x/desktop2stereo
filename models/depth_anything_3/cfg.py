@@ -16,22 +16,27 @@
 Configuration utility functions
 """
 
+import sys, os
+
+# Allow "import depth_anything_3" to resolve to "models.depth_anything_3"
+# so that HuggingFace config YAML __object__ paths work without modification.
+_models_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _models_root not in sys.path:
+    sys.path.insert(0, _models_root)
+
 import importlib
 from pathlib import Path
 from typing import Any, Callable, List, Union
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-try:
+if not OmegaConf.has_resolver("eval"):
     OmegaConf.register_new_resolver("eval", eval)
-except Exception as e:
-    # if eval is not available, we can just pass
-    print(f"Error registering eval resolver: {e}")
 
 
 def load_config(path: str, argv: List[str] = None) -> Union[DictConfig, ListConfig]:
     """
     Load a configuration. Will resolve inheritance.
-    Supports both file paths and module paths (e.g., models.depth_anything_3.configs.giant).
+    Supports both file paths and module paths (e.g., depth_anything_3.configs.giant).
     """
     # Check if path is a module path (contains dots but no slashes and doesn't end with .yaml)
     if "." in path and "/" not in path and not path.endswith(".yaml"):
@@ -102,7 +107,13 @@ def import_item(path: str, name: str) -> Any:
     """
     Import a python item. Example: import_item("path.to.file", "MyClass") -> MyClass
     """
-    return getattr(importlib.import_module(path), name)
+    try:
+        return getattr(importlib.import_module(path), name)
+    except ModuleNotFoundError:
+        # HuggingFace configs use "depth_anything_3.*"; remap to "models.depth_anything_3.*"
+        if path.startswith("depth_anything_3"):
+            return getattr(importlib.import_module("models." + path), name)
+        raise
 
 
 def create_object(config: DictConfig) -> Any:

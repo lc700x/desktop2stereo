@@ -29,3 +29,7 @@ bundle_scripts
 CLAUDE.md
 rtmp
 scripts/CHANGELOG.md
+*.log
+./logs
+*codex*
+*claude*

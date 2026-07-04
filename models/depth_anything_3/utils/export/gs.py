@@ -17,11 +17,11 @@ from typing import Literal, Optional
 import moviepy.editor as mpy
 import torch
 
-from models.depth_anything_3.model.utils.gs_renderer import run_renderer_in_chunk_w_trj_mode
-from models.depth_anything_3.specs import Prediction
-from models.depth_anything_3.utils.gsply_helpers import save_gaussian_ply
-from models.depth_anything_3.utils.layout_helpers import hcat, vcat
-from models.depth_anything_3.utils.visualize import vis_depth_map_tensor
+from depth_anything_3.model.utils.gs_renderer import run_renderer_in_chunk_w_trj_mode
+from depth_anything_3.specs import Prediction
+from depth_anything_3.utils.gsply_helpers import save_gaussian_ply
+from depth_anything_3.utils.layout_helpers import hcat, vcat
+from depth_anything_3.utils.visualize import vis_depth_map_tensor
 
 VIDEO_QUALITY_MAP = {
     "low": {"crf": "28", "preset": "veryfast"},

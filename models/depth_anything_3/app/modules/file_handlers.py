@@ -233,7 +233,7 @@ class FileHandler:
         Returns:
             Tuple of (reconstruction_output, target_dir, image_paths, log_message)
         """
-        from models.depth_anything_3.app.modules.utils import get_scene_info
+        from depth_anything_3.app.modules.utils import get_scene_info
 
         scenes = get_scene_info(examples_dir)
 

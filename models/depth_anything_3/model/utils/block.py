@@ -14,9 +14,19 @@
 
 
 from typing import Callable
+import torch
 from torch import Tensor, nn
 
 from .attention import Attention, LayerScale, Mlp
+
+
+def _finite_fp16(x: Tensor) -> Tensor:
+    if x.dtype == torch.float16:
+        if torch.onnx.is_in_onnx_export():
+            return x
+        x = x.clamp(-65504.0, 65504.0)
+        x = torch.nan_to_num(x, nan=0.0, posinf=65504.0, neginf=-65504.0)
+    return x
 
 
 class Block(nn.Module):
@@ -76,6 +86,6 @@ class Block(nn.Module):
             return self.ls2(self.mlp(self.norm2(x)))
 
         # drop_path is always 0, so always take the else branch
-        x = x + attn_residual_func(x, pos=pos, attn_mask=attn_mask)
-        x = x + ffn_residual_func(x)
+        x = _finite_fp16(x + attn_residual_func(x, pos=pos, attn_mask=attn_mask))
+        x = _finite_fp16(x + ffn_residual_func(x))
         return x
