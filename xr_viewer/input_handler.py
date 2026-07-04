@@ -881,35 +881,46 @@ class InputHandlerMixin:
             setattr(self, accum_attr, accum)
 
     def _accum_arrow_keys(self, x_axis, y_axis, dt):
-        """Accumulate thumbstick deflection into repeated arrow-key taps."""
+        """Accumulate thumbstick deflection into repeated arrow-key taps.
+
+        Matches Xbox/XInput arrow-key timing: one key on first deflection,
+        ~250 ms initial delay, then ~5 keys/s repeat.
+        """
         VK_LEFT = 0x25
         VK_UP = 0x26
         VK_RIGHT = 0x27
         VK_DOWN = 0x28
 
+        ARROW_THRESHOLD = 0.50
+        INITIAL_DELAY   = 0.25
+        REPEAT_RATE     = 5.0
+
         mag_x = abs(x_axis)
         mag_y = abs(y_axis)
-        if mag_x <= DEAD and mag_y <= DEAD:
+        if mag_x <= ARROW_THRESHOLD and mag_y <= ARROW_THRESHOLD:
             self._arrow_repeat_accum = 0.0
+            self._arrow_delay_elapsed = 0.0
             self._arrow_last_vk = None
             return
 
         if mag_x >= mag_y:
             vk = VK_RIGHT if x_axis > 0.0 else VK_LEFT
-            mag = mag_x
         else:
             vk = VK_UP if y_axis > 0.0 else VK_DOWN
-            mag = mag_y
 
-        t = (mag - DEAD) / max(1.0 - DEAD, 1e-6)
-        t = max(0.0, min(1.0, t))
-        rate = 4.0 + 18.0 * (t ** 1.6)
         if vk != getattr(self, '_arrow_last_vk', None):
-            self._arrow_repeat_accum = 1.0
+            _send_key(vk)
             self._arrow_last_vk = vk
+            self._arrow_delay_elapsed = 0.0
+            self._arrow_repeat_accum = 0.0
+            return
 
-        self._arrow_repeat_accum += rate * dt
-        count = min(int(self._arrow_repeat_accum), 3)
+        self._arrow_delay_elapsed = getattr(self, '_arrow_delay_elapsed', 0.0) + dt
+        if self._arrow_delay_elapsed < INITIAL_DELAY:
+            return
+
+        self._arrow_repeat_accum += REPEAT_RATE * dt
+        count = min(int(self._arrow_repeat_accum), 2)
         if count:
             for _ in range(count):
                 _send_key(vk)
@@ -1644,10 +1655,10 @@ class InputHandlerMixin:
                         self._light_osd_show_t = time.perf_counter()
                         self._mark_runtime_settings_dirty()
             # Don't send desktop key events while screen grabbed/manipulated
-            if not (self._grabbed or grip_l or grip_r):
+            if not (self._grabbed or grip_l or grip_r) and laser_l_on_screen:
                 self._accum_arrow_keys(lx, 0.0, dt)
         else:
-            if not (self._grabbed or grip_l or grip_r) and not self._crop_adjust_active:
+            if not (self._grabbed or grip_l or grip_r) and not self._crop_adjust_active and laser_l_on_screen:
                 self._accum_arrow_keys(lx, ly, dt)
 
         # Right grip + right stick X: resize screen width
