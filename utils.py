@@ -112,7 +112,7 @@ configure_torch_compile_cache()
 # Debug Mode
 DEBUG = False
 # App Version
-VERSION = "2.5.0Beta"
+VERSION = "2.5.0"
 # Get OS name
 OS_NAME = platform.system()
 # Define StereoMix devices
@@ -927,6 +927,7 @@ else:
         ("Left trigger (laser off screen)", "Hold 3s", "Cycle Crop: Auto/Manual/Off", False),
         ("Left trigger (off screen, Manual)", "Double-tap", "Toggle crop-adjust pause", False),
         ("Left stick (crop-adjust, no grip)", "L/R or U/D", "Crop sides (X) or top/bottom (Y), dominant axis", False),
+        ("Right Grip + left stick L/R", "Hold & push", "Adjust veil transparency", False),
         ("Right A button", "Laser on screen click", "Left mouse click", False),
         ("Right B button", "Laser on screen click", "Right mouse click", False),
         ("Left stick press", "Short press", "Cycle environment model", False),

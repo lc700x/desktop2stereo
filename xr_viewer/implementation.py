@@ -63,11 +63,11 @@ from .constants import (
     DEAD, _VIVE_TB_Y, _KB_UNITS_WIDE, _KB_ROWS, _KeyEntry, _KB_TEX_W, _KB_TEX_H,
 )
 from .glsl import (
-    _WORLD_VERT, _OVERLAY_FRAG, _BLIT_FRAG, _SOLID_VERT, _SOLID_FRAG,
+    _WORLD_VERT, _GLOW_VERT, _OVERLAY_FRAG, _BLIT_FRAG, _SOLID_VERT, _SOLID_FRAG,
     _BEAM_VERT, _BEAM_FRAG, _CURVED_VERT, _CTRL_VERT, _CTRL_FRAG,
     _ENV_VERT, _ENV_FRAG, _GLOW_FRAG, _FROST_GLOW_VERT,
     _FROST_CURVED_VERT, _FROST_GLOW_FRAG, _FROST_VEIL_FRAG,
-    _MIST_FRAG, _PANORAMA_VERT, _PANORAMA_FRAG,
+    _PANORAMA_VERT, _PANORAMA_FRAG,
 )
 from .input import (
     _MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP,
@@ -117,69 +117,12 @@ def _make_xr_fragment_shader(src):
             "    uniform vec4 u_source_crop;    // xy = source top-left, zw = source size",
             1,
         )
-    if "uniform float u_screen_edge_feather;" not in src:
-        src = src.replace(
-            "uniform vec4 u_source_crop;    // xy = source top-left, zw = source size",
-            "uniform vec4 u_source_crop;    // xy = source top-left, zw = source size\n"
-            "    uniform float u_screen_edge_feather; // XR-only alpha fade at screen border\n"
-            "    uniform float u_screen_edge_alpha;",
-            1,
-        )
     src = src.replace(
         "vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);",
         "vec2 screen_flipped_uv = vec2(uv.x, 1.0 - uv.y);\n"
         "        vec2 flipped_uv = u_source_crop.xy + screen_flipped_uv * u_source_crop.zw;",
         1,
     )
-    if "u_screen_edge_feather" in src and "XR-only mist transition" not in src:
-        src = src.replace(
-            "        color.a = min(color.a, corner_alpha);\n\n"
-            "        // Glow outside the screen edge only (sdf > 0 = outside the rounded rect).\n"
-            "        // Moved to dedicated glow quad in XR view.\n\n"
-            "        frag_color = color;",
-            "        color.a = min(color.a, corner_alpha);\n\n"
-            "        // XR-only mist transition: blur and fade the physical screen\n"
-            "        // border so mist blends into the panel smoothly.\n"
-            "        float edge_feather = max(u_screen_edge_feather, 0.0);\n"
-            "        if (edge_feather > 0.0) {\n"
-            "            float edge_dist = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));\n"
-            "            float edge_blur = 1.0 - smoothstep(edge_feather, edge_feather * 2.75, edge_dist);\n"
-            "            if (edge_blur > 0.001) {\n"
-            "                vec2 src_px = 1.0 / vec2(textureSize(tex_color, 0));\n"
-            "                float blur_radius = max(2.0, edge_feather * 180.0);\n"
-            "                vec2 crop_min = u_source_crop.xy + src_px;\n"
-            "                vec2 crop_max = u_source_crop.xy + u_source_crop.zw - src_px;\n"
-            "                vec2 src_margin = src_px * (blur_radius + 1.0);\n"
-            "                vec2 crop_mid = (crop_min + crop_max) * 0.5;\n"
-            "                vec2 safe_min = min(crop_min + src_margin, crop_mid);\n"
-            "                vec2 safe_max = max(crop_max - src_margin, crop_mid);\n"
-            "                vec2 src_uv = clamp(shifted_uv, safe_min, safe_max);\n"
-            "                vec2 radial = uv - vec2(0.5);\n"
-            "                radial /= max(length(radial), 1e-5);\n"
-            "                if (u_screen_edge_alpha > 0.5) {\n"
-            "                    vec2 src_radial = vec2(radial.x, -radial.y) * src_px * blur_radius;\n"
-            "                    vec2 src_tangent = vec2(-src_radial.y, src_radial.x) * 0.38;\n"
-            "                    vec3 blurred = texture(tex_color, src_uv).rgb * 0.20;\n"
-            "                    blurred += (texture(tex_color, clamp(src_uv - src_radial * 0.45, crop_min, crop_max)).rgb + texture(tex_color, clamp(src_uv - src_radial * 1.05, crop_min, crop_max)).rgb) * 0.16;\n"
-            "                    blurred += (texture(tex_color, clamp(src_uv + src_tangent, crop_min, crop_max)).rgb + texture(tex_color, clamp(src_uv - src_tangent, crop_min, crop_max)).rgb) * 0.10;\n"
-            "                    blurred += (texture(tex_color, clamp(src_uv - src_radial * 1.65 + src_tangent * 0.7, crop_min, crop_max)).rgb + texture(tex_color, clamp(src_uv - src_radial * 1.65 - src_tangent * 0.7, crop_min, crop_max)).rgb) * 0.08;\n"
-            "                    blurred += texture(tex_color, clamp(src_uv - src_radial * 2.30, crop_min, crop_max)).rgb * 0.10;\n"
-            "                    color.rgb = mix(color.rgb, blurred * mix(1.0, 0.72, edge_blur), min(edge_blur * 0.72, 1.0));\n"
-            "                } else {\n"
-            "                    vec3 glow_blurred = textureLod(tex_color, src_uv, 6.8).rgb;\n"
-            "                    color.rgb = mix(color.rgb, glow_blurred, min(edge_blur * 1.15, 1.0));\n"
-            "                }\n"
-            "            }\n"
-            "            if (u_screen_edge_alpha > 0.5) {\n"
-            "                float edge_alpha = smoothstep(0.0, edge_feather, edge_dist);\n"
-            "                color.a = min(color.a, pow(edge_alpha, 0.72));\n"
-            "            }\n"
-            "        }\n\n"
-            "        // Glow outside the screen edge only (sdf > 0 = outside the rounded rect).\n"
-            "        // Moved to dedicated glow quad in XR view.\n\n"
-            "        frag_color = color;",
-            1,
-        )
     return src
 
 
@@ -392,10 +335,10 @@ class OpenXRViewer(
         self._glow_default_multiplier = 1.5
         self._glow_intensity_multiplier = 0.0     # 0 = no glow (Default), default = "Default with Glow"
         self._glow_ref_screen = 2.4               # reference screen long edge (meters)
-        self._glow_inner_edge_fraction = 0.05     # visual glow overlap into the screen edge
+        self._glow_inner_edge_fraction = 0.075     # visual glow overlap into the screen edge
         self._glow_target_color = (0.3, 0.6, 1.0)  # latest sampled frame average
         self._glow_color_counter = 0              # reserved for future tuning
-        self._glow_mode = 'off'                   # glow | veil | frosted | mist | off
+        self._glow_mode = 'off'                   # glow | glow2 | veil | frosted | off
         requested_glow_mode = glow_mode if glow_mode is not None else kwargs.get('glow_mode', None)
         if requested_glow_mode is not None:
             mode = str(requested_glow_mode or 'off').strip().lower()
@@ -421,18 +364,6 @@ class OpenXRViewer(
         self._frost_veil_alpha = 1.00
         self._frost_veil_threshold = 0.0
         self._frost_veil_lod = 0.0
-        # "Mist" atmospheric effect tunables (rendered on frost wall geometry).
-        # Diffusion is driven by u_lod as a manual blur radius along the screen edge.
-        self._mist_intensity = 1.9
-        self._mist_alpha = 0.98
-        self._mist_lod = 15.0
-        self._mist_threshold = 0.28
-        self._mist_noise_scale = 11.0
-        self._mist_noise_strength = 1.55
-        self._mist_softness = 0.92   # feather radius: how far the mist reaches (0..1)
-        self._mist_thickness = 2.1   # feather softness (x0.35 in shader) -> broad, soft edge
-        self._mist_scatter = 1.35
-        self._mist_screen_edge_feather = 0.035
         self._glow_mipmap_interval = 5
         self._glow_mipmap_last_frame = -999999
         self._glow_mipmap_pending = False
@@ -842,11 +773,14 @@ class OpenXRViewer(
         self._glow_vbo = None
         self._glow_band_params = None
         self._glow_model_params = None
-        self._glow_model_mat = None
+        self._glow_model_bytes = None
         self._curved_glow_prog = None
         self._curved_glow_vbo = None
         self._curved_glow_vao = None
         self._curved_glow_verts_params = None
+        self._curved_glow_outer_count = 0
+        self._curved_glow_inner_first = 0
+        self._curved_glow_inner_count = 0
         self._frost_glow_prog = None
         self._frost_glow_vbo = None
         self._frost_glow_vao = None
@@ -859,10 +793,6 @@ class OpenXRViewer(
         self._curved_veil_prog = None
         self._curved_veil_vao = None
         self._curved_frost_verts_params = None
-        self._mist_prog = None
-        self._mist_vao = None
-        self._curved_mist_prog = None
-        self._curved_mist_vao = None
         self._blit_prog = None
         self._blit_vao  = None
         self._panorama_prog = None
@@ -1124,8 +1054,6 @@ class OpenXRViewer(
         self.prog['tex_color'].value = 0
         self.prog['tex_depth'].value = 1
         self.prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
-        self.prog['u_screen_edge_feather'].value = 0.0
-        self.prog['u_screen_edge_alpha'].value = 1.0
 
         vertices = np.array([
             -1, -1, 0, 0,
@@ -1150,7 +1078,7 @@ class OpenXRViewer(
 
         # Glow quad (soft glow rendered behind the screen beyond the border)
         self._glow_prog = self.ctx.program(
-            vertex_shader=_WORLD_VERT,
+            vertex_shader=_GLOW_VERT,
             fragment_shader=_GLOW_FRAG,
         )
         self._glow_prog['u_source'].value = 0
@@ -1158,6 +1086,7 @@ class OpenXRViewer(
         self._glow_prog['u_glow_use_source'].value = 0
         self._glow_prog['u_glow_inner'].value = 0.0
         self._glow_prog['u_glow_inner_only'].value = 0
+        self._glow_prog['u_glow_alpha_cap'].value = 1.0
         self._glow_vbo = self.ctx.buffer(reserve=48 * 4 * 4, dynamic=True)
         self._glow_vao = self.ctx.vertex_array(
             self._glow_prog, [(self._glow_vbo, '2f 2f', 'in_position', 'in_uv')]
@@ -1186,20 +1115,6 @@ class OpenXRViewer(
             self._frost_veil_prog,
             [(self._frost_glow_vbo, '3f 2f', 'in_position', 'in_uv')],
         )
-
-        # "Mist" atmospheric effect: same wall geometry as veil/frosted (moves
-        # with the screen, samples the movie edge color), separate fragment.
-        self._mist_prog = self.ctx.program(
-            vertex_shader=_FROST_GLOW_VERT,
-            fragment_shader=_MIST_FRAG,
-        )
-        self._mist_prog['u_source'].value = 0
-        self._mist_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
-        self._mist_vao = self.ctx.vertex_array(
-            self._mist_prog,
-            [(self._frost_glow_vbo, '3f 2f', 'in_position', 'in_uv')],
-        )
-        # Curved mist VAO is created after the curved frost VBO exists (below).
 
         # Laser beam: a very thin elongated quad (width=0.003 m, length=5 m)
         # in local space X=[-0.5,0.5], Y=[-1,1]; we scale X to beam_w, Y to half-length
@@ -1394,8 +1309,6 @@ class OpenXRViewer(
         self._curved_prog['tex_color'].value = 0
         self._curved_prog['tex_depth'].value  = 1
         self._curved_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
-        self._curved_prog['u_screen_edge_feather'].value = 0.0
-        self._curved_prog['u_screen_edge_alpha'].value = 1.0
         # Allocate dynamic VBO large enough for N=48 segments × 2 verts × (3+2) floats.
         _CURVED_N = 48
         _curved_buf_bytes = (_CURVED_N + 1) * 2 * (3 + 2) * 4   # f4
@@ -1428,7 +1341,9 @@ class OpenXRViewer(
         self._curved_glow_prog['u_glow_use_source'].value = 0
         self._curved_glow_prog['u_glow_inner'].value = 0.0
         self._curved_glow_prog['u_glow_inner_only'].value = 0
-        self._curved_glow_vbo = self.ctx.buffer(reserve=_curved_buf_bytes, dynamic=True)
+        self._curved_glow_prog['u_glow_alpha_cap'].value = 1.0
+        _curved_glow_buf_bytes = 12 * _CURVED_N * 6 * (3 + 2) * 4
+        self._curved_glow_vbo = self.ctx.buffer(reserve=_curved_glow_buf_bytes, dynamic=True)
         self._curved_glow_vao = self.ctx.vertex_array(
             self._curved_glow_prog,
             [(self._curved_glow_vbo, '3f 2f', 'in_position', 'in_uv')],
@@ -1455,17 +1370,6 @@ class OpenXRViewer(
             self._curved_veil_prog,
             [(self._curved_frost_vbo, '3f 2f 3f', 'in_position', 'in_uv', 'in_local')],
         )
-        self._curved_mist_prog = self.ctx.program(
-            vertex_shader=_FROST_CURVED_VERT,
-            fragment_shader=_MIST_FRAG,
-        )
-        self._curved_mist_prog['u_source'].value = 0
-        self._curved_mist_prog['u_source_crop'].value = (0.0, 0.0, 1.0, 1.0)
-        self._curved_mist_vao = self.ctx.vertex_array(
-            self._curved_mist_prog,
-            [(self._curved_frost_vbo, '3f 2f 3f', 'in_position', 'in_uv', 'in_local')],
-        )
-
         # VR controller 3D model shader
         self._controller_prog = self.ctx.program(
             vertex_shader=_CTRL_VERT,
@@ -1621,58 +1525,55 @@ class OpenXRViewer(
                 rgb_gpu.copy_(rgb_hwc, non_blocking=True)
             else:
                 rgb_gpu = rgb_hwc.contiguous().clamp(0, 255).to(torch.uint8)
-            if not self._crop_adjust_active:
-                try:
-                    stream_ptr = int(getattr(torch.cuda.current_stream(rgb_gpu.device), "cuda_stream", 0) or 0)
-                except Exception:
-                    stream_ptr = 0
-                copy_async = getattr(self._cuda_gl, "memcpy_d2d_async", None)
+            try:
+                stream_ptr = int(getattr(torch.cuda.current_stream(rgb_gpu.device), "cuda_stream", 0) or 0)
+            except Exception:
+                stream_ptr = 0
+            copy_async = getattr(self._cuda_gl, "memcpy_d2d_async", None)
 
-                color_ring = getattr(self, '_pbo_color_ring', []) or [self._pbo_color]
-                depth_ring = getattr(self, '_pbo_depth_ring', []) or [self._pbo_depth]
-                color_res_ring = getattr(self, '_cuda_res_color_ring', []) or [self._cuda_res_color]
-                depth_res_ring = getattr(self, '_cuda_res_depth_ring', []) or [self._cuda_res_depth]
-                ring_count = min(len(color_ring), len(depth_ring), len(color_res_ring), len(depth_res_ring))
-                if ring_count <= 0:
-                    raise RuntimeError("GPU interop PBO ring is empty")
-                ring_i = int(getattr(self, '_gpu_pbo_index', 0) or 0) % ring_count
-                pbo_color = color_ring[ring_i]
-                pbo_depth = depth_ring[ring_i]
-                res_color = color_res_ring[ring_i]
-                res_depth = depth_res_ring[ring_i]
-                self._gpu_pbo_index = (ring_i + 1) % ring_count
-                self._pbo_color = pbo_color
-                self._pbo_depth = pbo_depth
-                self._cuda_res_color = res_color
-                self._cuda_res_depth = res_depth
+            color_ring = getattr(self, '_pbo_color_ring', []) or [self._pbo_color]
+            depth_ring = getattr(self, '_pbo_depth_ring', []) or [self._pbo_depth]
+            color_res_ring = getattr(self, '_cuda_res_color_ring', []) or [self._cuda_res_color]
+            depth_res_ring = getattr(self, '_cuda_res_depth_ring', []) or [self._cuda_res_depth]
+            ring_count = min(len(color_ring), len(depth_ring), len(color_res_ring), len(depth_res_ring))
+            if ring_count <= 0:
+                raise RuntimeError("GPU interop PBO ring is empty")
+            ring_i = int(getattr(self, '_gpu_pbo_index', 0) or 0) % ring_count
+            pbo_color = color_ring[ring_i]
+            pbo_depth = depth_ring[ring_i]
+            res_color = color_res_ring[ring_i]
+            res_depth = depth_res_ring[ring_i]
+            self._gpu_pbo_index = (ring_i + 1) % ring_count
+            self._pbo_color = pbo_color
+            self._pbo_depth = pbo_depth
+            self._cuda_res_color = res_color
+            self._cuda_res_depth = res_depth
 
-                ptr = self._cuda_gl.map_resource(res_color, stream_ptr)
-                if copy_async is not None and stream_ptr:
-                    copy_async(ptr, rgb_gpu.data_ptr(), rgb_gpu.nbytes, stream_ptr)
-                else:
-                    self._cuda_gl.memcpy_d2d(ptr, rgb_gpu.data_ptr(), rgb_gpu.nbytes)
-                self._cuda_gl.unmap_resource(res_color, stream_ptr)
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_color)
-                glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
-                if update_color_mips:
-                    self._maybe_generate_color_mipmaps(active_glow_mode)
-                glBindTexture(GL_TEXTURE_2D, 0)
+            ptr = self._cuda_gl.map_resource(res_color, stream_ptr)
+            if copy_async is not None and stream_ptr:
+                copy_async(ptr, rgb_gpu.data_ptr(), rgb_gpu.nbytes, stream_ptr)
+            else:
+                self._cuda_gl.memcpy_d2d(ptr, rgb_gpu.data_ptr(), rgb_gpu.nbytes)
+            self._cuda_gl.unmap_resource(res_color, stream_ptr)
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_color)
+            glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
+            if update_color_mips:
+                self._maybe_generate_color_mipmaps(active_glow_mode)
+            glBindTexture(GL_TEXTURE_2D, 0)
 
-                depth_upload = depth_gpu.contiguous()
-                ptr = self._cuda_gl.map_resource(res_depth, stream_ptr)
-                if copy_async is not None and stream_ptr:
-                    copy_async(ptr, depth_upload.data_ptr(), depth_upload.nbytes, stream_ptr)
-                else:
-                    self._cuda_gl.memcpy_d2d(ptr, depth_upload.data_ptr(), depth_upload.nbytes)
-                self._cuda_gl.unmap_resource(res_depth, stream_ptr)
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_depth)
-                glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, ctypes.c_void_p(0))
-                # No glGenerateMipmap for depth: keep DIBR sampling at full-res
-                # to match viewer.py FullSBS numerics.
-                glBindTexture(GL_TEXTURE_2D, 0)
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+            depth_upload = depth_gpu.contiguous()
+            ptr = self._cuda_gl.map_resource(res_depth, stream_ptr)
+            if copy_async is not None and stream_ptr:
+                copy_async(ptr, depth_upload.data_ptr(), depth_upload.nbytes, stream_ptr)
+            else:
+                self._cuda_gl.memcpy_d2d(ptr, depth_upload.data_ptr(), depth_upload.nbytes)
+            self._cuda_gl.unmap_resource(res_depth, stream_ptr)
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_depth)
+            glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, ctypes.c_void_p(0))
+            glBindTexture(GL_TEXTURE_2D, 0)
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
         else:
             # CPU fallback - use PBO for async DMA when available
             if hasattr(rgb, 'detach'):
@@ -1687,46 +1588,43 @@ class OpenXRViewer(
             self._maybe_update_movie_crop(rgb_np, False, w, h)
             if depth_np is None:
                 depth_np = depth_gpu.cpu().numpy()
-            if not self._crop_adjust_active:
-                rgb_bytes = rgb_np.astype('uint8', copy=False).tobytes()
-                depth_bytes = depth_np.tobytes()
-                if getattr(self, '_cpu_pbo_size', (0, 0)) != (w, h) or not getattr(self, '_cpu_pbo_color_ring', None):
-                    self._init_cpu_pbos(w, h)
-                color_ring = getattr(self, '_cpu_pbo_color_ring', []) or []
-                depth_ring = getattr(self, '_cpu_pbo_depth_ring', []) or []
-                ring_count = min(len(color_ring), len(depth_ring))
-                if ring_count > 0 and self._cpu_pbo_size == (w, h):
-                    ring_i = int(getattr(self, '_cpu_pbo_index', 0) or 0) % ring_count
-                    pbo_color = color_ring[ring_i]
-                    pbo_depth = depth_ring[ring_i]
-                    self._cpu_pbo_index = (ring_i + 1) % ring_count
-                    self._cpu_pbo_color = pbo_color
-                    self._cpu_pbo_depth = pbo_depth
+            rgb_bytes = rgb_np.astype('uint8', copy=False).tobytes()
+            depth_bytes = depth_np.tobytes()
+            if getattr(self, '_cpu_pbo_size', (0, 0)) != (w, h) or not getattr(self, '_cpu_pbo_color_ring', None):
+                self._init_cpu_pbos(w, h)
+            color_ring = getattr(self, '_cpu_pbo_color_ring', []) or []
+            depth_ring = getattr(self, '_cpu_pbo_depth_ring', []) or []
+            ring_count = min(len(color_ring), len(depth_ring))
+            if ring_count > 0 and self._cpu_pbo_size == (w, h):
+                ring_i = int(getattr(self, '_cpu_pbo_index', 0) or 0) % ring_count
+                pbo_color = color_ring[ring_i]
+                pbo_depth = depth_ring[ring_i]
+                self._cpu_pbo_index = (ring_i + 1) % ring_count
+                self._cpu_pbo_color = pbo_color
+                self._cpu_pbo_depth = pbo_depth
 
-                    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_color)
-                    glBufferData(GL_PIXEL_UNPACK_BUFFER, len(rgb_bytes), None, GL_STREAM_DRAW)
-                    glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(rgb_bytes), rgb_bytes)
-                    glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
-                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
-                    if update_color_mips:
-                        self._maybe_generate_color_mipmaps(active_glow_mode)
-                    glBindTexture(GL_TEXTURE_2D, 0)
-                    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_depth)
-                    glBufferData(GL_PIXEL_UNPACK_BUFFER, len(depth_bytes), None, GL_STREAM_DRAW)
-                    glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(depth_bytes), depth_bytes)
-                    glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
-                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, ctypes.c_void_p(0))
-                    glBindTexture(GL_TEXTURE_2D, 0)
-                    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
-                else:
-                    self.color_tex.write(rgb_bytes)
-                    glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
-                    if update_color_mips:
-                        self._maybe_generate_color_mipmaps(active_glow_mode)
-                    glBindTexture(GL_TEXTURE_2D, 0)
-                    self.depth_tex.write(depth_bytes)
-                # No glGenerateMipmap for depth: keep DIBR sampling at full-res
-                # to match viewer.py FullSBS numerics.
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_color)
+                glBufferData(GL_PIXEL_UNPACK_BUFFER, len(rgb_bytes), None, GL_STREAM_DRAW)
+                glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(rgb_bytes), rgb_bytes)
+                glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
+                if update_color_mips:
+                    self._maybe_generate_color_mipmaps(active_glow_mode)
+                glBindTexture(GL_TEXTURE_2D, 0)
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_depth)
+                glBufferData(GL_PIXEL_UNPACK_BUFFER, len(depth_bytes), None, GL_STREAM_DRAW)
+                glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(depth_bytes), depth_bytes)
+                glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, ctypes.c_void_p(0))
+                glBindTexture(GL_TEXTURE_2D, 0)
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+            else:
+                self.color_tex.write(rgb_bytes)
+                glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
+                if update_color_mips:
+                    self._maybe_generate_color_mipmaps(active_glow_mode)
+                glBindTexture(GL_TEXTURE_2D, 0)
+                self.depth_tex.write(depth_bytes)
 
         # Sample screen-colour lighting only when an active effect consumes it.
         # Veil/frost sample the source texture directly in the shader, so they

@@ -1352,7 +1352,7 @@ class EnvironmentMixin:
 
     def _cycle_light_from_x(self):
         """Cycle screen glow mode from the left X long-press release."""
-        modes = ('glow', 'veil', 'frosted', 'mist', 'off')
+        modes = ('glow', 'glow2', 'veil', 'frosted', 'off')
         if hasattr(self, '_active_glow_mode'):
             current = self._active_glow_mode()
         else:
@@ -1369,9 +1369,9 @@ class EnvironmentMixin:
             self._refresh_active_glow_mode_cache()
         self._light_osd_value = {
             'glow': 'Glow',
+            'glow2': 'Glow2',
             'veil': 'Veil',
             'frosted': 'Frosted',
-            'mist': 'Mist',
             'off': 'Off',
         }.get(next_mode, next_mode.capitalize())
         self._light_osd_last_key = None

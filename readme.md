@@ -212,13 +212,14 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 | Left X button (hold >4s) | Toggle | VDXR Passthrough mode |
 | Left menu button (short press) | Toggle | FPS overlay |
 | Left menu button (long press) | Reset | Reset depth ratio to default |
+| Right grip + Left stick L/R | Left/Right | Adjust effect transparency (0–1) |
 | **Manual Crop** |||
 | Left trigger (laser off screen, hold 3s) | Cycle | Crop mode: Auto / Manual / Off |
 | Left trigger (off screen, Manual mode, double-tap) | Toggle | Crop-adjust pause (freeze frame + OSD) |
 | Left stick (crop-adjust active, no grip) | Direction | Crop sides (X) or top/bottom (Y), dominant axis only |
 | **Depth Adjustment** |||
 | Right grip + Left stick Y | Up/Down | Adjust depth scale (0–10) |
-| Right grip + Left stick X | Left/Right | Adjust light effect opacity |
+| Right grip + Left stick X | Left/Right | Adjust effect transparency (0–1) |
 | Right grip + Left stick button (short press) | Toggle | Reset depth intensity to zero / restore |
 | Right grip + Right stick button (short press) | Reset | Reset depth scale to 2.0 |
 | Right grip + A/B (hold) | Increase/Decrease | Fine-tune depth ratio |

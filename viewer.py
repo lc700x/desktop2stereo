@@ -431,7 +431,7 @@ FRAGMENT_SHADER = """
         float jump = abs(d_left - d_right);
 
         // Smooth ramp instead of hard threshold (soft edges -> fewer seams)
-        return smoothstep(0.06, 0.12, jump);
+        return smoothstep(0.04, 0.10, jump);
     }
 
     vec4 push_pull_inpaint(vec2 uv_coord, float center_depth_inv) {
@@ -557,7 +557,7 @@ FRAGMENT_SHADER = """
         // Smoothly reduces parallax near left/right edges to prevent sampling
         // beyond image boundaries (standard DIBR border handling).
         float shift = (depth_shaped + u_convergence);
-        float edge_margin = 0.02;
+        float edge_margin = 0.05;
         float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
                            * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
         float px = u_eye_offset * shift * u_depth_strength * edge_falloff;

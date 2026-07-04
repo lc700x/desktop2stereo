@@ -1081,6 +1081,7 @@ class InputHandlerMixin:
             self._ltrig_hold_start = 0.0
         self._ltrig_gesture_pressed_prev = ltrig_pressed
 
+
         active = (grip_l or grip_r) and laser_on_screen and not self._environment_screen_locked()
         self._grabbed  = active
         self._resizing = False
@@ -1639,17 +1640,6 @@ class InputHandlerMixin:
                     if new_a != old_a:
                         self._glow_intensity_multiplier = new_a * base
                         self._light_osd_value = f"Glow {int(round(new_a * 100.0))}%"
-                        self._light_osd_last_key = None
-                        self._light_osd_show_t = time.perf_counter()
-                        self._mark_runtime_settings_dirty()
-                elif _gm == 'mist':
-                    MIST_ALPHA_SPEED = 0.8
-                    old_a = float(getattr(self, '_mist_alpha', 0.9))
-                    new_a = max(0.0, min(1.0, old_a + lx * MIST_ALPHA_SPEED * dt))
-                    if new_a != old_a:
-                        self._mist_alpha = new_a
-                        self._frost_uniform_cache = {}
-                        self._light_osd_value = f"Mist {int(round(new_a * 100.0))}%"
                         self._light_osd_last_key = None
                         self._light_osd_show_t = time.perf_counter()
                         self._mark_runtime_settings_dirty()

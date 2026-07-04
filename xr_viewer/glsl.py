@@ -12,6 +12,19 @@ void main() {
 }
 """
 
+_GLOW_VERT = """
+#version 330
+in vec2 in_position;
+in vec2 in_uv;
+out vec2 uv;
+uniform mat4 u_vp;
+uniform mat4 u_model;
+void main() {
+    uv = in_uv;
+    gl_Position = u_vp * u_model * vec4(in_position, 0.0, 1.0);
+}
+"""
+
 # World-space overlay fragment shader (plain RGBA texture, no parallax)
 # u_alpha scales the output alpha; defaults to 1.0 (fully opaque per texture).
 _OVERLAY_FRAG = """
@@ -577,8 +590,9 @@ uniform float u_glow_inv_range;
 uniform float u_glow_inner;
 uniform int u_glow_inner_only;
 uniform int u_glow_use_source;
+uniform float u_glow_alpha_cap; // max alpha (1.0 for glow, 0.618 for glow2)
 
-const float GLOW_SOURCE_LOD = 10.2;
+const float GLOW_SOURCE_LOD = 7.0;
 
 vec2 source_uv(vec2 screen_uv) {
     return clamp(u_source_crop.xy + clamp(screen_uv, vec2(0.0), vec2(1.0)) * u_source_crop.zw,
@@ -595,19 +609,18 @@ vec3 extended_screen_color(vec2 raw_uv, float edge_t) {
     vec2 base_dir = normalize(raw_uv - 0.5 + vec2(1e-5, 0.0));
     vec2 edge_uv = edge_point_for_dir(base_dir);
     float blur_t = smoothstep(0.0, 1.0, edge_t);
-    vec2 light_uv = edge_uv - base_dir * mix(0.030, 0.090, blur_t);
-    vec3 local_light = textureLod(u_source, source_uv(light_uv),
-                                  mix(GLOW_SOURCE_LOD, GLOW_SOURCE_LOD + 3.0, blur_t)).rgb;
-    return local_light;
+    vec2 light_uv = edge_uv - base_dir * mix(0.015, 0.060, blur_t);
+    float lod = mix(GLOW_SOURCE_LOD, GLOW_SOURCE_LOD + 2.0, blur_t);
+    vec3 local_light = textureLod(u_source, source_uv(light_uv), lod).rgb;
+    vec3 edge_light = textureLod(u_source, source_uv(edge_uv), lod + 1.0).rgb;
+    return mix(local_light, edge_light, blur_t * 0.5);
 }
 
 void main() {
-    // Rectangle SDF in UV space: negative inside, positive outside.
+    // Chebyshev (L-inf) SDF: rectangular falloff matching screen aspect ratio.
     vec2 centered = uv - 0.5;
     vec2 p = abs(centered) - u_screen_half;
-    float outside_dist = length(max(p, vec2(0.0)));
-    float inside_dist = min(max(p.x, p.y), 0.0);
-    float signed_dist = outside_dist + inside_dist;
+    float signed_dist = max(p.x, p.y);
 
     float inv_range = max(u_glow_inv_range, 0.001);
 
@@ -646,7 +659,8 @@ void main() {
         color = extended;
     }
 
-    glow = min(glow, 1.0);
+    float alpha_cap = max(u_glow_alpha_cap, 0.0);
+    glow = min(glow, alpha_cap);
     frag_color = vec4(color * glow, glow);
 }
 """
@@ -733,159 +747,6 @@ void main() {
     frost = frost * (0.55 + u_frost_blend * 0.35) + src * bright * 0.35;
     alpha = min(alpha, 1.0);
     frag_color = vec4(frost * alpha, alpha);
-}
-"""
-
-_MIST_FRAG = """
-#version 330
-// Atmospheric-mist effect rendered on the same wall geometry as veil/frosted,
-// so it moves with the screen and samples the movie's EDGE colors. Instead of a
-// frosted copy of the frame, it dissolves the screen border into illuminated
-// blue/cyan atmosphere: the movie's edge color, heavily diffused (high mip LOD),
-// tinted and fogged with drifting fbm, glowing on bright areas, fading out with
-// beam depth. Premultiplied-alpha output for ONE / ONE_MINUS_SRC_ALPHA blend.
-uniform sampler2D u_source;      // live movie texture (mipmapped)
-uniform float u_lod;             // diffusion: blur radius along the nearest edge
-uniform float u_threshold;       // luminance where glow/scatter kicks in
-uniform float u_intensity;       // master strength
-uniform float u_frost_alpha;     // overall opacity
-uniform float u_noise_scale;     // fbm frequency
-uniform float u_noise_strength;  // fbm opacity/color contrast
-uniform float u_beam_softness;   // how far the mist reaches outward
-uniform float u_beam_thickness;  // outward falloff shape
-uniform float u_diffuse_scatter; // extra light scattering from bright pixels
-uniform float u_time;
-uniform vec4  u_source_crop;     // xy = source top-left, zw = source size
-
-in vec2 v_uv;
-in vec3 v_local;
-out vec4 frag_color;
-
-const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
-
-float hash12(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-float value_noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash12(i);
-    float b = hash12(i + vec2(1.0, 0.0));
-    float c = hash12(i + vec2(0.0, 1.0));
-    float d = hash12(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float fbm(vec2 p) {
-    return 0.65 * value_noise(p) + 0.35 * value_noise(p * 2.03 + 11.7);
-}
-
-// [FEATHERING] Soft radial mask, same model as a feathered vignette window but
-// driven by beam DEPTH (0 = screen seam, 1 = outer tail) instead of screen-space
-// radius. smoothstep ramps the mask 1 -> 0 across a feather band, so the mist
-// dissolves into the interior/environment behind it with NO hard cut.
-//   depth < radius - smoothness  -> 1  (full mist near the screen)
-//   depth > radius + smoothness  -> 0  (fully transparent -> interior shows)
-//   in between                   -> the feathered gradient
-float feather_mask(float depth) {
-    float radius = clamp(u_beam_softness, 0.0, 1.15);       // window size (reach)
-    float smoothness = max(u_beam_thickness * 0.35, 1e-3);  // feather softness
-    float mask = 1.0 - smoothstep(radius - smoothness, radius + smoothness, depth);
-    return pow(clamp(mask, 0.0, 1.0), 0.72);
-}
-
-void nearest_edge(vec2 uv, out vec2 edge_uv, out vec2 tangent) {
-    float left = uv.x;
-    float right = 1.0 - uv.x;
-    float top = uv.y;
-    float bottom = 1.0 - uv.y;
-
-    float best = left;
-    edge_uv = vec2(0.0, uv.y);
-    tangent = vec2(0.0, 1.0);
-    if (right < best) {
-        best = right;
-        edge_uv = vec2(1.0, uv.y);
-        tangent = vec2(0.0, 1.0);
-    }
-    if (top < best) {
-        best = top;
-        edge_uv = vec2(uv.x, 0.0);
-        tangent = vec2(1.0, 0.0);
-    }
-    if (bottom < best) {
-        edge_uv = vec2(uv.x, 1.0);
-        tangent = vec2(1.0, 0.0);
-    }
-}
-
-vec3 sample_edge(vec2 edge_uv, vec2 tangent, float offset_px) {
-    vec2 texel = 1.0 / vec2(textureSize(u_source, 0));
-    vec2 uv = clamp(edge_uv + tangent * texel * offset_px, vec2(0.0), vec2(1.0));
-    return texture(u_source, uv).rgb;
-}
-
-// Movie edge color, diffused by DEPTH. This deliberately avoids textureLod:
-// high mip levels are whole-frame averages, which look like the whole desktop
-// reflected in the mist. Instead, clamp to the nearest border and blur only
-// along that border's tangent.
-vec3 diffused_edge_color(vec2 sample_uv, float depth) {
-    vec2 edge_uv;
-    vec2 tangent;
-    nearest_edge(sample_uv, edge_uv, tangent);
-
-    float radius_px = max(u_lod, 0.0) * mix(0.45, 2.15, pow(clamp(depth, 0.0, 1.0), 0.55));
-    float jitter = (hash12(sample_uv * 149.7 + vec2(u_time * 0.017, depth * 13.1)) - 0.5) * radius_px * 0.32;
-    vec3 col = sample_edge(edge_uv, tangent, jitter) * 0.16;
-    col += (sample_edge(edge_uv, tangent, jitter - 0.22 * radius_px)
-          + sample_edge(edge_uv, tangent, jitter + 0.22 * radius_px)) * 0.18;
-    col += (sample_edge(edge_uv, tangent, jitter - 0.48 * radius_px)
-          + sample_edge(edge_uv, tangent, jitter + 0.48 * radius_px)) * 0.13;
-    col += (sample_edge(edge_uv, tangent, jitter - 0.78 * radius_px)
-          + sample_edge(edge_uv, tangent, jitter + 0.78 * radius_px)) * 0.08;
-    col += (sample_edge(edge_uv, tangent, jitter - 1.15 * radius_px)
-          + sample_edge(edge_uv, tangent, jitter + 1.15 * radius_px)) * 0.03;
-    return col;
-}
-
-void main() {
-    vec2 sample_uv = clamp(u_source_crop.xy + v_uv * u_source_crop.zw,
-                           vec2(0.0), vec2(1.0));
-    float depth = clamp(v_local.z, 0.0, 1.0);
-    float beam = feather_mask(depth);   // soft feathered radial mask
-
-    vec3 edge_col = diffused_edge_color(sample_uv, depth);
-    float luma = dot(edge_col, LUMA);
-
-    // No tint: keep the true movie edge color, just diffused + fogged.
-    float n = fbm(sample_uv * max(u_noise_scale, 0.001)
-                  + vec2(u_time * 0.03, -u_time * 0.021));
-    float noise_amount = max(u_noise_strength, 0.0);
-    float turbulence = clamp(0.5 + (n - 0.5) * noise_amount, 0.0, 1.0);
-
-    // Light scattering / glow: bright edge pixels bleed a little brighter.
-    float bright = smoothstep(u_threshold, 1.0, luma);
-    float scatter = max(bright, luma * clamp(u_diffuse_scatter, 0.0, 2.0) * 0.35);
-    vec3 fogged = mix(edge_col, vec3(luma), 0.18 + 0.22 * turbulence);
-    vec3 col = fogged * (0.78 + 0.62 * turbulence)
-             * (1.0 + scatter * (0.45 + 0.45 * depth));
-
-    // Translucent haze everywhere (never a solid film -> no veil-like frame).
-    // Alpha is driven by content noise + scene luminance at ALL depths, so the
-    // mist reads as thin atmosphere, not an opaque band hugging the screen.
-    float content = 0.32 + 1.05 * turbulence;
-    float lit = 0.42 + 1.00 * luma + 0.75 * scatter;
-    float alpha = beam * u_frost_alpha * u_intensity * content * lit;
-    if (alpha <= 0.002) {
-        discard;
-    }
-    alpha = min(alpha, 1.0);
-    col *= mix(0.12, 1.0, pow(beam, 0.65));
-    frag_color = vec4(col * alpha, alpha);
 }
 """
 

@@ -641,9 +641,9 @@ class OverlayMixin:
             if not value:
                 value = {
                     'glow': 'Glow',
+                    'glow2': 'Glow2',
                     'veil': 'Veil',
                     'frosted': 'Frosted',
-                    'mist': 'Mist',
                     'off': 'Off',
                 }.get(mode, mode.capitalize() if mode else 'Off')
             cur_key = (mode, value)

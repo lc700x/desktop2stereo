@@ -15,7 +15,7 @@ from OpenGL.GL import (
 )
 
 from .render import _view_mat_inv
-from .constants import _BG_COLORS, _SCREEN_ENV_DEPTH_BIAS_M
+from .constants import _BG_COLORS, _SCREEN_ENV_DEPTH_BIAS_M, _CURVED_HALF_ANGLE_RAD
 from .glsl import (
     _GLOW_FRAG, _FROST_GLOW_VERT, _FROST_CURVED_VERT,
     _FROST_GLOW_FRAG, _FROST_VEIL_FRAG,
@@ -49,9 +49,7 @@ class EffectsMixin:
             'frosted': 'frosted',
             'veil': 'veil',
             'glow': 'glow',
-            'mist': 'mist',
-            'fog': 'mist',
-            'dream': 'mist',
+            'glow2': 'glow2',
             'off': 'off',
             'none': 'off',
         }
@@ -257,45 +255,165 @@ class EffectsMixin:
 
     def _render_screen_background_effects(self, mgl_fbo, vp_mat, env_model_active=False,
                                           passthrough_active=False):
-        mode = self._active_glow_mode()
-        if mode != 'glow' or passthrough_active:
+        mode = getattr(self, '_active_glow_mode_cached', None) or self._active_glow_mode()
+        if mode not in ('glow', 'glow2') or passthrough_active:
             return
         if env_model_active:
             return
-        self._render_glow(mgl_fbo, vp_mat, inner_only=False)
+        self._render_glow(mgl_fbo, vp_mat, inner_only=False, glow2=(mode == 'glow2'))
 
     def _render_screen_foreground_effects(self, mgl_fbo, vp_mat, passthrough_active=False,
                                           env_model_active=False):
         if passthrough_active:
             return
-        mode = self._active_glow_mode()
+        mode = getattr(self, '_active_glow_mode_cached', None) or self._active_glow_mode()
         if mode == 'glow':
             if not env_model_active:
                 self._render_glow(mgl_fbo, vp_mat, inner_only=True)
+        elif mode == 'glow2':
+            pass
         elif mode == 'veil':
             self._render_frost_veil(mgl_fbo, vp_mat)
         elif mode == 'frosted':
             self._render_frost_glow(mgl_fbo, vp_mat)
-        elif mode == 'mist':
-            self._render_mist(mgl_fbo, vp_mat)
 
     def _glow_range_m(self):
+        head = getattr(self, '_head_pos_w', None)
+        px = round(float(getattr(self, 'screen_pan_x', 0.0) or 0.0), 1)
+        py = round(float(getattr(self, 'screen_pan_y', 0.0) or 0.0), 1)
+        sd = round(float(getattr(self, 'screen_distance', 2.0) or 2.0), 1)
+        sw = round(float(getattr(self, 'screen_width', 0.0) or 0.0), 2)
+        sh = round(float(getattr(self, 'screen_height', 0.0) or 0.0), 2)
+        if head is not None:
+            hk = (round(float(head[0]), 1), round(float(head[1]), 1), round(float(head[2]), 1))
+        else:
+            hk = None
+        key = (px, py, sd, sw, sh, hk)
+        cached = getattr(self, '_glow_range_cache', None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
         base_width = max(float(getattr(self, '_glow_width_m', 0.75) or 0.75), 0.75)
         ref_screen = max(float(getattr(self, '_glow_ref_screen', 2.4) or 2.4), 1e-6)
-        screen_long = max(
-            float(getattr(self, 'screen_width', 0.0) or 0.0),
-            float(getattr(self, 'screen_height', 0.0) or 0.0),
-            ref_screen,
-        )
-        return base_width * (screen_long / ref_screen) * 8.0
+        ref_dist = 2.0
+        screen_long = max(sw, sh, ref_screen)
+        pz = -sd
+        if head is not None:
+            dx = float(head[0]) - float(getattr(self, 'screen_pan_x', 0.0) or 0.0)
+            dy = float(head[1]) - float(getattr(self, 'screen_pan_y', 0.0) or 0.0)
+            dz = float(head[2]) - pz
+        else:
+            dx = -float(getattr(self, 'screen_pan_x', 0.0) or 0.0)
+            dy = -float(getattr(self, 'screen_pan_y', 0.0) or 0.0)
+            dz = -pz
+        dist = max(math.sqrt(dx * dx + dy * dy + dz * dz), 0.5)
+        result = base_width * (screen_long / ref_screen) * (dist / ref_dist) * 20.0
+        self._glow_range_cache = (key, result)
+        return result
 
-    def _render_curved_glow(self, mgl_fbo, vp_mat, glow_intensity, inner_only=False):
+    def _build_curved_glow_band_verts(self, glow_w, glow_h, inner_w, inner_h, inner_uv, N=48):
+        half_w = max(float(self.screen_width) * 0.5, 1e-6)
+        half_h = max(float(self.screen_height) * 0.5, 1e-6)
+        R, _center = self._screen_effect_basis()
+        rot = R[:3, :3].astype(np.float32)
+        right = rot[:, 0]
+        up = rot[:, 1]
+        half_ang = min(_CURVED_HALF_ANGLE_RAD, math.pi / 2)
+        curve_axis = self._screen_curve_mode()
+
+        def _unit(vec, fallback):
+            length = float(np.linalg.norm(vec))
+            if length <= 1e-6:
+                return fallback
+            return (vec / length).astype(np.float32)
+
+        def _local_axes(screen_u, screen_v):
+            if curve_axis == 'vertical':
+                ang = -half_ang + 2.0 * half_ang * float(screen_v)
+                tangent_v = rot @ np.array([0.0, math.cos(ang), math.sin(ang)], dtype=np.float32)
+                return right, _unit(tangent_v, up)
+            ang = -half_ang + 2.0 * half_ang * float(screen_u)
+            tangent_u = rot @ np.array([math.cos(ang), 0.0, math.sin(ang)], dtype=np.float32)
+            return _unit(tangent_u, right), up
+
+        def _world(raw_u, raw_v):
+            lx = (float(raw_u) - 0.5) * float(glow_w)
+            ly = (float(raw_v) - 0.5) * float(glow_h)
+            clamped_x = min(max(lx, -half_w), half_w)
+            clamped_y = min(max(ly, -half_h), half_h)
+            screen_u = clamped_x / max(float(self.screen_width), 1e-6) + 0.5
+            screen_v = clamped_y / max(float(self.screen_height), 1e-6) + 0.5
+            base = self._screen_uv_to_world(screen_u, screen_v).astype(np.float32)
+            local_right, local_up = _local_axes(screen_u, screen_v)
+            return base + local_right * (lx - clamped_x) + local_up * (ly - clamped_y)
+
+        def _append_vertex(out, raw_u, raw_v):
+            pos = _world(raw_u, raw_v)
+            out.extend((float(pos[0]), float(pos[1]), float(pos[2]), float(raw_u), float(raw_v)))
+
+        def _append_quad(out, au, av, bu, bv, cu, cv, du, dv):
+            _append_vertex(out, au, av)
+            _append_vertex(out, bu, bv)
+            _append_vertex(out, cu, cv)
+            _append_vertex(out, bu, bv)
+            _append_vertex(out, du, dv)
+            _append_vertex(out, cu, cv)
+
+        def _append_band(out, u0, u1, v0, v1, along_u=True, steps=None):
+            if abs(u1 - u0) <= 1e-8 or abs(v1 - v0) <= 1e-8:
+                return
+            steps = max(int(N if steps is None else steps), 1)
+            if along_u:
+                for i in range(steps):
+                    a = i / steps
+                    b = (i + 1) / steps
+                    ua = u0 + (u1 - u0) * a
+                    ub = u0 + (u1 - u0) * b
+                    _append_quad(out, ua, v0, ub, v0, ua, v1, ub, v1)
+            else:
+                for i in range(steps):
+                    a = i / steps
+                    b = (i + 1) / steps
+                    va = v0 + (v1 - v0) * a
+                    vb = v0 + (v1 - v0) * b
+                    _append_quad(out, u0, va, u1, va, u0, vb, u1, vb)
+
+        u0 = 0.5 - inner_w * 0.5
+        u1 = 0.5 + inner_w * 0.5
+        v0 = 0.5 - inner_h * 0.5
+        v1 = 0.5 + inner_h * 0.5
+        u0i = min(0.5, u0 + inner_uv)
+        u1i = max(0.5, u1 - inner_uv)
+        v0i = min(0.5, v0 + inner_uv)
+        v1i = max(0.5, v1 - inner_uv)
+
+        verts = []
+        margin_steps = max(int(N) // 2, 8)
+        _append_band(verts, 0.0, u0, 0.0, v0, along_u=True, steps=margin_steps)
+        _append_band(verts, u0, u1, 0.0, v0, along_u=True, steps=N)
+        _append_band(verts, u1, 1.0, 0.0, v0, along_u=True, steps=margin_steps)
+        _append_band(verts, 0.0, u0, v1, 1.0, along_u=True, steps=margin_steps)
+        _append_band(verts, u0, u1, v1, 1.0, along_u=True, steps=N)
+        _append_band(verts, u1, 1.0, v1, 1.0, along_u=True, steps=margin_steps)
+        _append_band(verts, 0.0, u0, v0, v1, along_u=False)
+        _append_band(verts, u1, 1.0, v0, v1, along_u=False)
+        outer_count = len(verts) // 5
+        _append_band(verts, u0, u1, v0, v0i, along_u=True)
+        _append_band(verts, u0, u1, v1i, v1, along_u=True)
+        _append_band(verts, u0, u0i, v0i, v1i, along_u=False)
+        _append_band(verts, u1i, u1, v0i, v1i, along_u=False)
+        inner_count = len(verts) // 5 - outer_count
+        return np.array(verts, dtype='f4'), outer_count, outer_count, inner_count
+
+    def _render_curved_glow(self, mgl_fbo, vp_mat, glow_intensity, inner_only=False, glow2=False):
         if self.screen_height is None:
             return
         if self._curved_glow_prog is None or self._curved_glow_vao is None:
             return
 
         glow_range = max(self._glow_range_m(), 1e-4)
+        if glow2:
+            glow_range *= 0.5
         glow_margin = glow_range
         glow_w = self.screen_width + 2 * glow_margin
         glow_h = self.screen_height + 2 * glow_margin
@@ -306,17 +424,19 @@ class EffectsMixin:
 
         params = (
             round(float(glow_w), 6), round(float(glow_h), 6),
+            round(float(inner_w), 6), round(float(inner_h), 6), round(float(inner_uv), 6),
             float(self.screen_distance), float(self.screen_pan_x), float(self.screen_pan_y),
             float(self.screen_yaw), float(self.screen_pitch), float(self.screen_roll),
             self._screen_curve_mode(),
         )
         if params != self._curved_glow_verts_params:
-            verts = self._build_curved_screen_verts(
-                width_override=glow_w,
-                height_override=glow_h,
-                normal_offset=0.0,
+            verts, outer_count, inner_first, inner_count = self._build_curved_glow_band_verts(
+                glow_w, glow_h, inner_w, inner_h, inner_uv
             )
             self._curved_glow_vbo.write(verts.tobytes())
+            self._curved_glow_outer_count = outer_count
+            self._curved_glow_inner_first = inner_first
+            self._curved_glow_inner_count = inner_count
             self._curved_glow_verts_params = params
 
         self.ctx.depth_mask = False
@@ -331,36 +451,48 @@ class EffectsMixin:
             self._curved_glow_prog['u_glow_use_source'].value = 1
         else:
             self._curved_glow_prog['u_glow_use_source'].value = 0
-        self._curved_glow_prog['u_mvp'].write(vp_mat.T.astype('f4').tobytes())
+        vp_t = vp_mat.T
+        if vp_t.dtype != np.float32 or not vp_t.flags['C_CONTIGUOUS']:
+            vp_t = vp_t.astype('f4')
+        self._curved_glow_prog['u_mvp'].write(vp_t.tobytes())
         self._curved_glow_prog['u_screen_half'].value = (inner_w * 0.5, inner_h * 0.5)
         self._curved_glow_prog['u_glow_color'].value = self._glow_color
         self._curved_glow_prog['u_glow_inv_range'].value = 1.0 / max(uv_glow_range, 1e-6)
         self._curved_glow_prog['u_glow_inner'].value = inner_uv
         self._curved_glow_prog['u_glow_inner_only'].value = 1 if inner_only else 0
-        self._curved_glow_vao.render(moderngl.TRIANGLE_STRIP, vertices=(48 + 1) * 2)
+        self._curved_glow_prog['u_glow_alpha_cap'].value = 1.0
+        if inner_only:
+            first = int(getattr(self, '_curved_glow_inner_first', 0) or 0)
+            vertices = int(getattr(self, '_curved_glow_inner_count', 0) or 0)
+        else:
+            first = 0
+            vertices = int(getattr(self, '_curved_glow_outer_count', 0) or 0)
+        if vertices > 0:
+            self._curved_glow_vao.render(moderngl.TRIANGLES, vertices=vertices, first=first)
         self.ctx.disable(moderngl.BLEND)
         self.ctx.depth_mask = True
         self.ctx.enable(moderngl.DEPTH_TEST)
 
-    def _render_glow(self, mgl_fbo, vp_mat, inner_only=False):
-        """Render a soft glow outside the screen edges using a larger quad."""
+    def _render_glow(self, mgl_fbo, vp_mat, inner_only=False, glow2=False):
         glow_intensity = self._glow_intensity * self._glow_intensity_multiplier
         if glow_intensity <= 0.0:
             return
         if self.screen_height is None:
             self.screen_width, self.screen_height = self._crop_screen_dims(self._screen_ref_size)
         if self._screen_curved:
-            self._render_curved_glow(mgl_fbo, vp_mat, glow_intensity, inner_only=inner_only)
+            self._render_curved_glow(mgl_fbo, vp_mat, glow_intensity, inner_only=inner_only, glow2=glow2)
             return
 
         glow_range = max(self._glow_range_m(), 1e-4)
+        if glow2:
+            glow_range *= 0.5
         glow_margin = glow_range
         glow_w = self.screen_width  + 2 * glow_margin
         glow_h = self.screen_height + 2 * glow_margin
         uv_glow_range = glow_range / max(glow_w, glow_h)
         inner_w = self.screen_width / glow_w
         inner_h = self.screen_height / glow_h
-        inner_uv = min(inner_w, inner_h) * max(float(getattr(self, '_glow_inner_edge_fraction', 0.0)), 0.0)
+        inner_uv = 0.0 if glow2 else min(inner_w, inner_h) * max(float(getattr(self, '_glow_inner_edge_fraction', 0.0)), 0.0)
 
         band_params = (round(float(inner_w), 6), round(float(inner_h), 6), round(float(inner_uv), 6))
         if self._glow_band_params != band_params and self._glow_vbo is not None:
@@ -408,8 +540,6 @@ class EffectsMixin:
         # Smoothly interpolate glow color towards sampled frame average.
         self._advance_glow_color()
 
-        # Flat glow bands include a narrow inward edge band for the foreground
-        # overlay; the screen centre is still skipped to avoid wasted fill-rate.
         sx = glow_w / 2.0
         sy = glow_h / 2.0
         model_params = (
@@ -430,10 +560,9 @@ class EffectsMixin:
             T[0, 3] = self.screen_pan_x
             T[1, 3] = self.screen_pan_y
             T[2, 3] = -self.screen_distance
-            self._glow_model_mat = T @ R @ S
+            model = T @ R @ S
+            self._glow_model_bytes = model.T.astype('f4').tobytes()
             self._glow_model_params = model_params
-        glow_model = self._glow_model_mat
-        mvp = vp_mat @ glow_model
         source_tex = self._frost_source_texture()
         if source_tex is not None:
             source_tex.use(location=0)
@@ -441,12 +570,14 @@ class EffectsMixin:
             self._glow_prog['u_glow_use_source'].value = 1
         else:
             self._glow_prog['u_glow_use_source'].value = 0
-        self._glow_prog['u_mvp'].write(mvp.T.astype('f4').tobytes())
+        self._glow_prog['u_model'].write(self._glow_model_bytes)
+        self._glow_prog['u_vp'].write(self._mat4_uniform_bytes(vp_mat))
         self._glow_prog['u_screen_half'].value = (inner_w * 0.5, inner_h * 0.5)
         self._glow_prog['u_glow_color'].value  = self._glow_color
         self._glow_prog['u_glow_inv_range'].value  = 1.0 / max(uv_glow_range, 1e-6)
         self._glow_prog['u_glow_inner'].value = inner_uv
         self._glow_prog['u_glow_inner_only'].value = 1 if inner_only else 0
+        self._glow_prog['u_glow_alpha_cap'].value = 1.0
         self._glow_vao.render(moderngl.TRIANGLES, vertices=24, first=24 if inner_only else 0)
 
         self.ctx.disable(moderngl.BLEND)
@@ -461,7 +592,7 @@ class EffectsMixin:
             mode = self._active_glow_mode()
         if mode == 'veil':
             return float(getattr(self, '_frost_veil_lod', 0.0) or 0.0) > 0.001
-        return mode in ('frosted', 'glow')
+        return mode in ('frosted', 'glow', 'glow2')
 
     def _maybe_generate_color_mipmaps(self, mode=None):
         if self.color_tex is None:
@@ -479,7 +610,7 @@ class EffectsMixin:
             self._glow_mipmap_pending = False
             self._glow_mipmap_ready = False
             return
-        if mode == 'glow':
+        if mode in ('glow', 'glow2'):
             frame = int(getattr(self, '_frame_count', 0) or 0)
             if filter_changed or not bool(getattr(self, '_glow_mipmap_ready', False)):
                 glGenerateMipmap(GL_TEXTURE_2D)
@@ -498,7 +629,7 @@ class EffectsMixin:
         if self.color_tex is None:
             self._glow_mipmap_pending = False
             return
-        if not force and getattr(self, '_active_glow_mode_cached', None) != 'glow':
+        if not force and getattr(self, '_active_glow_mode_cached', None) not in ('glow', 'glow2'):
             self._glow_mipmap_pending = False
             return
 
@@ -971,12 +1102,6 @@ class EffectsMixin:
         self.color_tex.use(location=0)
         self.depth_tex.use(location=1)
         source_crop = self._movie_crop_render_uv_fast()
-        screen_edge_feather = 0.0
-        screen_edge_alpha = 1.0
-        active_mode = self._active_glow_mode()
-        if not passthrough_active and active_mode == 'mist':
-            screen_edge_feather = float(getattr(self, '_mist_screen_edge_feather', 0.035))
-
         eye_sign = -1.0 if eye_index == 0 else 1.0
 
         if self._screen_curved and self._curved_prog is not None:
@@ -998,8 +1123,6 @@ class EffectsMixin:
             prog['u_roll'].value           = self.screen_roll
             prog['u_corner_radius'].value  = self._corner_radius
             self._set_source_crop_uniform(prog, source_crop)
-            prog['u_screen_edge_feather'].value = screen_edge_feather
-            prog['u_screen_edge_alpha'].value = screen_edge_alpha
             n_verts = (48 + 1) * 2
             self._curved_vao.render(moderngl.TRIANGLE_STRIP, vertices=n_verts)
         else:
@@ -1016,8 +1139,6 @@ class EffectsMixin:
             self.prog['u_roll'].value      = self.screen_roll
             self.prog['u_corner_radius'].value = self._corner_radius
             self._set_source_crop_uniform(self.prog, source_crop)
-            self.prog['u_screen_edge_feather'].value = screen_edge_feather
-            self.prog['u_screen_edge_alpha'].value = screen_edge_alpha
             # Render screen WITHOUT alpha blending so the shader's edge alpha is written
             # directly into the swapchain framebuffer. The XR compositor composites those
             # near-zero-alpha edge pixels against the VR background producing a clean soft
@@ -1114,65 +1235,5 @@ class EffectsMixin:
             self._render_help_panel(mgl_fbo, vp_mat)
 
         self.ctx.screen.use()
-
-    def _set_mist_uniforms(self, prog, source_tex, intensity):
-        source_tex.use(location=0)
-        crop = self._movie_crop_render_uv_fast()
-        values = (
-            crop,
-            float(getattr(self, '_mist_lod', 15.0)),
-            float(getattr(self, '_mist_threshold', 0.35)),
-            float(intensity),
-            float(getattr(self, '_mist_alpha', 0.98)),
-            float(getattr(self, '_mist_noise_scale', 11.0)),
-            float(getattr(self, '_mist_noise_strength', 1.55)),
-            float(getattr(self, '_mist_softness', 0.92)),
-            float(getattr(self, '_mist_thickness', 2.1)),
-            float(getattr(self, '_mist_scatter', 1.35)),
-        )
-        time_value = float(getattr(self, '_frame_now', 0.0) or time.perf_counter())
-        cache = getattr(self, '_frost_uniform_cache', None)
-        if not isinstance(cache, dict):
-            cache = {}
-            self._frost_uniform_cache = cache
-        key = id(prog)
-        cached = cache.get(key)
-        if cached is None or cached[0] != values:
-            self._set_source_crop_uniform(prog, crop)
-            prog['u_lod'].value = values[1]
-            prog['u_threshold'].value = values[2]
-            prog['u_intensity'].value = values[3]
-            prog['u_frost_alpha'].value = values[4]
-            prog['u_noise_scale'].value = values[5]
-            prog['u_noise_strength'].value = values[6]
-            prog['u_beam_softness'].value = values[7]
-            prog['u_beam_thickness'].value = values[8]
-            prog['u_diffuse_scatter'].value = values[9]
-            cached = (values, None)
-        if cached[1] != time_value:
-            prog['u_time'].value = time_value
-            cached = (values, time_value)
-        cache[key] = cached
-
-    def _render_mist(self, mgl_fbo, vp_mat):
-        intensity = float(getattr(self, '_mist_intensity', 1.6))
-        intensity *= max(float(getattr(self, '_glow_intensity_multiplier', 0.0)), 0.0)
-        if intensity <= 0.0 or self.screen_height is None:
-            return
-        source_tex = self._frost_source_texture()
-        if source_tex is None:
-            return
-        if self._screen_curved:
-            self._render_curved_frost_with_uniforms(
-                mgl_fbo, vp_mat, source_tex, intensity, self._set_mist_uniforms,
-                prog=self._curved_mist_prog,
-                vao=self._curved_mist_vao,
-            )
-        else:
-            self._render_flat_frost_with_uniforms(
-                mgl_fbo, vp_mat, source_tex, intensity, self._set_mist_uniforms,
-                prog=self._mist_prog,
-                vao=self._mist_vao,
-            )
 
     # OpenXR event loop

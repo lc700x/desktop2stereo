@@ -5,7 +5,7 @@
   },
   "glow_intensity": 0.175,
   "glow_width": 0.5,
-  "glow_intensity_multiplier": 1.5,
+  "glow_intensity_multiplier": 0.0,
   "screen_light_intensity": 3.5,
   "lighting_presets": [
     {
@@ -23,11 +23,11 @@
     "width": 2.4,
     "distance": 2.0,
     "pan_x": 0.0,
-    "pan_y": 1.32,
+    "pan_y": 0.0,
     "yaw": 0.0,
     "pitch": 0.0,
     "curve_axis": "none",
     "preset_index": 3
   },
-  "glow_mode": "glow"
+  "glow_mode": "off"
 }

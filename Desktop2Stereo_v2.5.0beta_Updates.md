@@ -50,6 +50,15 @@
 - **ROCM 路径配置修复** — 修复 ROCm 环境变量路径检测。
 - **README 修正** — 更新文档和安装说明。
 
+### 最近更新 (Post02)
+
+- **Mist 改名为 Veil2** — 将 "Mist" 雾效重命名为 "Veil2"，统一命名规范。
+- **Glow 圆角羽化** — Glow 光效 SDF 改为圆角矩形，光晕边缘自然平滑。
+- **Glow 性能优化** — Glow 模式下 MVP 矩阵避免冗余 astype 拷贝，glow mode 缓存减少 getattr 调用，整体降低每帧 CPU 开销。
+- **Veil 性能优化** — Veil alpha ≤ 0 时跳过全部 GL 状态切换和绘制调用，mat4 bytes 加 id 缓存。
+- **implementation.py 拆分** — 7800 行拆为 7 个 Mixin 文件（frame/xr_session/crop/screen/laser/effects/input_handler），主文件降至 ~2150 行。
+- **快捷键更新** — readme.md 和 utils.py 快捷键表新增 veil 透明度调节。
+
 ---
 
 ### XR 查看器键盘快捷键 (v2.5.0 Beta)
