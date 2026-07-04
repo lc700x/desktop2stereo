@@ -569,37 +569,85 @@ _GLOW_FRAG = """
 in vec2 uv;
 out vec4 frag_color;
 
+uniform sampler2D u_source;
+uniform vec4 u_source_crop;   // source crop: xy = top-left, zw = size
 uniform vec2 u_screen_half;   // screen half-size in UV space
 uniform vec3 u_glow_color;
 uniform float u_glow_inv_range;
-uniform float u_glow_intensity;
+uniform float u_glow_inner;
+uniform int u_glow_inner_only;
+uniform int u_glow_use_source;
+
+const float GLOW_SOURCE_LOD = 10.2;
+
+vec2 source_uv(vec2 screen_uv) {
+    return clamp(u_source_crop.xy + clamp(screen_uv, vec2(0.0), vec2(1.0)) * u_source_crop.zw,
+                 vec2(0.0), vec2(1.0));
+}
+
+vec2 edge_point_for_dir(vec2 out_dir) {
+    vec2 denom = max(abs(out_dir), vec2(1e-5));
+    float edge_scale = min(0.5 / denom.x, 0.5 / denom.y);
+    return clamp(0.5 + out_dir * edge_scale, vec2(0.0), vec2(1.0));
+}
+
+vec3 extended_screen_color(vec2 raw_uv, float edge_t) {
+    vec2 base_dir = normalize(raw_uv - 0.5 + vec2(1e-5, 0.0));
+    vec2 edge_uv = edge_point_for_dir(base_dir);
+    float blur_t = smoothstep(0.0, 1.0, edge_t);
+    vec2 light_uv = edge_uv - base_dir * mix(0.030, 0.090, blur_t);
+    vec3 local_light = textureLod(u_source, source_uv(light_uv),
+                                  mix(GLOW_SOURCE_LOD, GLOW_SOURCE_LOD + 3.0, blur_t)).rgb;
+    return local_light;
+}
 
 void main() {
     // Rectangle SDF in UV space: negative inside, positive outside.
-    vec2 p = abs(uv - 0.5) - u_screen_half;
-    float dist = length(max(p, vec2(0.0)));
-
-    if (dist <= 0.0) {
-        discard;
-    }
+    vec2 centered = uv - 0.5;
+    vec2 p = abs(centered) - u_screen_half;
+    float outside_dist = length(max(p, vec2(0.0)));
+    float inside_dist = min(max(p.x, p.y), 0.0);
+    float signed_dist = outside_dist + inside_dist;
 
     float inv_range = max(u_glow_inv_range, 0.001);
 
-    // 2x wider soft transition.
-    float feather = max(0.003, 1.20 / inv_range);
-    float shoulder = 1.0 - smoothstep(0.0, feather, dist);
+    float inner = max(u_glow_inner, 0.0);
+    if (u_glow_inner_only != 0) {
+        if (inner <= 0.0 || signed_dist > 0.0 || signed_dist < -inner) {
+            discard;
+        }
+    } else if (signed_dist <= 0.0) {
+        discard;
+    }
 
-    // 2x more spread than before (~8x wider than the original shader).
-    float nd = max(dist - feather, 0.0) * inv_range * 0.125;
+    float edge_pos = (u_glow_inner_only != 0) ? signed_dist + inner : signed_dist;
+    float edge_t = clamp(edge_pos * inv_range, 0.0, 1.0);
+    float tail = 1.0 - smoothstep(0.0, 1.0, edge_t);
+    tail = pow(max(tail, 0.0), 0.58);
+    float glow = tail;
 
-    float glow = shoulder * exp(-0.5 * nd * nd) * u_glow_intensity * 0.75;
+    if (u_glow_inner_only != 0) {
+        float inner_density = smoothstep(0.0, max(inner, 1e-6), signed_dist + inner);
+        inner_density = inner_density * inner_density * (3.0 - 2.0 * inner_density);
+        glow *= inner_density;
+    }
 
     if (glow <= 0.001) {
         discard;
     }
 
+    vec3 color = u_glow_color;
+    if (u_glow_use_source != 0) {
+        vec2 raw_screen_uv = (uv - (0.5 - u_screen_half)) /
+                         max(u_screen_half * 2.0, vec2(1e-5));
+        vec2 content_uv = vec2(raw_screen_uv.x, 1.0 - raw_screen_uv.y);
+        float sample_t = (u_glow_inner_only != 0) ? 0.0 : edge_t;
+        vec3 extended = extended_screen_color(content_uv, sample_t);
+        color = extended;
+    }
+
     glow = min(glow, 1.0);
-    frag_color = vec4(u_glow_color * glow, glow);
+    frag_color = vec4(color * glow, glow);
 }
 """
 

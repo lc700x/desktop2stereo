@@ -880,14 +880,49 @@ class InputHandlerMixin:
                 accum -= whole
             setattr(self, accum_attr, accum)
 
+    def _accum_arrow_keys(self, x_axis, y_axis, dt):
+        """Accumulate thumbstick deflection into repeated arrow-key taps."""
+        VK_LEFT = 0x25
+        VK_UP = 0x26
+        VK_RIGHT = 0x27
+        VK_DOWN = 0x28
+
+        mag_x = abs(x_axis)
+        mag_y = abs(y_axis)
+        if mag_x <= DEAD and mag_y <= DEAD:
+            self._arrow_repeat_accum = 0.0
+            self._arrow_last_vk = None
+            return
+
+        if mag_x >= mag_y:
+            vk = VK_RIGHT if x_axis > 0.0 else VK_LEFT
+            mag = mag_x
+        else:
+            vk = VK_UP if y_axis > 0.0 else VK_DOWN
+            mag = mag_y
+
+        t = (mag - DEAD) / max(1.0 - DEAD, 1e-6)
+        t = max(0.0, min(1.0, t))
+        rate = 4.0 + 18.0 * (t ** 1.6)
+        if vk != getattr(self, '_arrow_last_vk', None):
+            self._arrow_repeat_accum = 1.0
+            self._arrow_last_vk = vk
+
+        self._arrow_repeat_accum += rate * dt
+        count = min(int(self._arrow_repeat_accum), 3)
+        if count:
+            for _ in range(count):
+                _send_key(vk)
+            self._arrow_repeat_accum -= count
+
     def _poll_controller_input(self, dt):
         """Controller interaction mapping:
-        Left stick (no grip)       Mouse wheel
+        Left stick (no grip)       Keyboard arrow keys
         Left grip + Left stick X/Y Screen pan horizontally/vertically (always parallel to ground)
         Left grip + Right stick X  Screen yaw rotation around its center
         Left grip + Right stick Y  Screen pitch tilt forward/backward
         Right grip + Left stick Y  Depth intensity
-        Right stick (no grip)      Mouse wheel
+        Right stick (no grip)      Mouse wheel / horizontal scroll
         Right grip + Right stick X Screen width adjustment
         Right grip + Right stick Y Screen distance (with acceleration curve)
         Left grip + Left stick (when keyboard visible) Keyboard pan (preserved)
@@ -1581,8 +1616,7 @@ class InputHandlerMixin:
                 if self.depth_ratio != old_val:
                     self._depth_osd_show_t = time.perf_counter()
                     self._mark_runtime_settings_dirty()
-            # Right grip + left stick X: transparency of the current edge
-            # effect (veil or mist).
+            # Right grip + left stick X: transparency of the current edge effect.
             if abs(lx) > DEAD and x_dominant:
                 _gm = self._active_glow_mode()
                 if _gm == 'veil':
@@ -1592,6 +1626,21 @@ class InputHandlerMixin:
                     if new_a != old_a:
                         self._frost_veil_alpha = new_a
                         self._frost_uniform_cache = {}
+                        self._light_osd_value = f"Veil {int(round(new_a * 100.0))}%"
+                        self._light_osd_last_key = None
+                        self._light_osd_show_t = time.perf_counter()
+                        self._mark_runtime_settings_dirty()
+                elif _gm == 'glow':
+                    GLOW_ALPHA_SPEED = 0.8
+                    base = max(float(getattr(self, '_glow_default_multiplier', 1.5) or 1.5), 1e-6)
+                    old_m = max(0.0, float(getattr(self, '_glow_intensity_multiplier', 0.0) or 0.0))
+                    old_a = max(0.0, min(1.0, old_m / base))
+                    new_a = max(0.0, min(1.0, old_a + lx * GLOW_ALPHA_SPEED * dt))
+                    if new_a != old_a:
+                        self._glow_intensity_multiplier = new_a * base
+                        self._light_osd_value = f"Glow {int(round(new_a * 100.0))}%"
+                        self._light_osd_last_key = None
+                        self._light_osd_show_t = time.perf_counter()
                         self._mark_runtime_settings_dirty()
                 elif _gm == 'mist':
                     MIST_ALPHA_SPEED = 0.8
@@ -1600,13 +1649,16 @@ class InputHandlerMixin:
                     if new_a != old_a:
                         self._mist_alpha = new_a
                         self._frost_uniform_cache = {}
+                        self._light_osd_value = f"Mist {int(round(new_a * 100.0))}%"
+                        self._light_osd_last_key = None
+                        self._light_osd_show_t = time.perf_counter()
                         self._mark_runtime_settings_dirty()
-            # Don't send desktop scroll events while screen grabbed/manipulated
+            # Don't send desktop key events while screen grabbed/manipulated
             if not (self._grabbed or grip_l or grip_r):
-                self._accum_scroll(lx, 0.0, dt)
+                self._accum_arrow_keys(lx, 0.0, dt)
         else:
             if not (self._grabbed or grip_l or grip_r) and not self._crop_adjust_active:
-                self._accum_scroll(lx, ly, dt)
+                self._accum_arrow_keys(lx, ly, dt)
 
         # Right grip + right stick X: resize screen width
         # Right grip + right stick Y: screen distance (acceleration curve) 

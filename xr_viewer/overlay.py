@@ -47,6 +47,8 @@ class OverlayMixin:
       self._preset_index, self._screen_presets,
       self._screen_osd_tex, self._screen_osd_vao, self._screen_osd_tex_size,
       self._screen_osd_show_t, self._screen_osd_last_key,
+      self._light_osd_tex, self._light_osd_vao, self._light_osd_tex_size,
+      self._light_osd_show_t, self._light_osd_last_key, self._light_osd_value,
       self.screen_width, self.screen_height, self.screen_distance,
       self._screen_curved, self._preset_name_overlay,
       self._brand_osd_tex, self._brand_osd_vao, self._brand_osd_tex_size,
@@ -624,6 +626,89 @@ class OverlayMixin:
         self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
         self._overlay_prog['u_alpha'].value = alpha
         self._crop_mode_osd_vao.render(moderngl.TRIANGLE_STRIP)
+        self._overlay_prog['u_alpha'].value = 1.0
+        self.ctx.disable(moderngl.BLEND)
+
+    def _render_light_osd(self, eye_index, mgl_fbo, vp_mat):
+        if self._light_osd_tex is None or self.screen_height is None:
+            return
+
+        now = self._frame_now
+
+        if eye_index == 0 and self.font is not None:
+            mode = self._active_glow_mode() if hasattr(self, '_active_glow_mode') else str(getattr(self, '_glow_mode', 'off') or 'off')
+            value = str(getattr(self, '_light_osd_value', '') or '').strip()
+            if not value:
+                value = {
+                    'glow': 'Glow',
+                    'veil': 'Veil',
+                    'frosted': 'Frosted',
+                    'mist': 'Mist',
+                    'off': 'Off',
+                }.get(mode, mode.capitalize() if mode else 'Off')
+            cur_key = (mode, value)
+            if cur_key != self._light_osd_last_key:
+                self._light_osd_last_key = cur_key
+                lw, lh = self._light_osd_tex_size
+                img = Image.new('RGBA', (lw, lh), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+                draw.rounded_rectangle(
+                    [0, 0, lw - 1, lh - 1],
+                    radius=12,
+                    fill=(32, 32, 36, 210),
+                )
+                bfont = self.bold_font or self.font
+                C_LABEL = (150, 158, 185, 255)
+                C_VALUE = (0, 210, 230, 255)
+                PAD = 12
+                GAP = 8
+                cy = (lh - 32) // 2
+                label = "Light"
+                draw.text((PAD, cy), label, font=bfont, fill=C_LABEL)
+                try:
+                    x = PAD + int(draw.textlength(label, font=bfont)) + GAP
+                except AttributeError:
+                    x = PAD + (int(bfont.getsize(label)[0]) if hasattr(bfont, 'getsize') else 60) + GAP
+                draw.text((x, cy), value, font=self.font, fill=C_VALUE)
+                data = np.flipud(np.array(img, dtype=np.uint8))
+                self._light_osd_tex.write(data.tobytes())
+
+        HOLD = 1.5
+        DECAY = 0.8
+        elapsed = now - self._light_osd_show_t
+        if elapsed < HOLD:
+            alpha = 1.0
+        elif elapsed < HOLD + DECAY:
+            alpha = 1.0 - (elapsed - HOLD) / DECAY
+        else:
+            alpha = 0.0
+
+        if alpha <= 0.0:
+            return
+
+        OSD_H = self.screen_width * 0.03
+        lw, lh = self._light_osd_tex_size
+        OSD_W = OSD_H * (lw / lh)
+
+        cy_ = math.cos(self.screen_yaw);   sy_ = math.sin(self.screen_yaw)
+        cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
+        rot_y = np.array([[ cy_, 0, sy_, 0], [0, 1, 0, 0], [-sy_, 0, cy_, 0], [0, 0, 0, 1]], dtype=np.float32)
+        rot_x = np.array([[1, 0, 0, 0], [0, cp, -sp, 0], [0, sp, cp, 0], [0, 0, 0, 1]], dtype=np.float32)
+
+        y_pos = self.screen_pan_y + self.screen_height / 2.0 + self.screen_width * 0.016 + OSD_H / 2.0
+        S = np.diag([OSD_W / 2.0, OSD_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        R = rot_y @ rot_x
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x; T[1, 3] = y_pos; T[2, 3] = -self.screen_distance
+        mvp = vp_mat @ T @ R @ S
+
+        mgl_fbo.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+        self._light_osd_tex.use(location=2)
+        self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = alpha
+        self._light_osd_vao.render(moderngl.TRIANGLE_STRIP)
         self._overlay_prog['u_alpha'].value = 1.0
         self.ctx.disable(moderngl.BLEND)
 

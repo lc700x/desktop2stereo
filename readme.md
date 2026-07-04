@@ -218,14 +218,16 @@ A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/A
 | Left stick (crop-adjust active, no grip) | Direction | Crop sides (X) or top/bottom (Y), dominant axis only |
 | **Depth Adjustment** |||
 | Right grip + Left stick Y | Up/Down | Adjust depth scale (0–10) |
-| Right grip + Left stick X | Left/Right | Adjust veil transparency (0–1) |
+| Right grip + Left stick X | Left/Right | Adjust light effect opacity |
 | Right grip + Left stick button (short press) | Toggle | Reset depth intensity to zero / restore |
 | Right grip + Right stick button (short press) | Reset | Reset depth scale to 2.0 |
 | Right grip + A/B (hold) | Increase/Decrease | Fine-tune depth ratio |
 | **Mouse Control** |||
 | Left/Right laser point at screen | Move | Control mouse cursor (right priority) |
 | Left/Right trigger (on screen) | Click | Left mouse button click |
-| Left/Right stick (on screen) | Direction | Scroll (mouse wheel) |
+| Right stick X/Y | Left/Right / Up/Down | Horizontal / vertical mouse scroll |
+| Left stick Y | Up/Down | Keyboard Up / Down arrows |
+| Left stick X | Left/Right | Keyboard Left / Right arrows |
 | Right A button (short press) | Click | Left mouse button click |
 | Right B button (short press) | Click | Right mouse button click |
 | A double press | Toggle | Hide / Show all overlays |

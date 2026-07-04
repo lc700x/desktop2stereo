@@ -1297,6 +1297,9 @@ class EnvironmentMixin:
         if hasattr(self, '_refresh_active_glow_mode_cache'):
             self._refresh_active_glow_mode_cache()
         name = p.get('name', f'Preset {self._lighting_preset_index}')
+        self._light_osd_value = str(name)
+        self._light_osd_last_key = None
+        self._light_osd_show_t = time.perf_counter()
         print(f"[OpenXRViewer] Lighting preset: {name}")
 
     def _cycle_view_pose(self):
@@ -1361,9 +1364,18 @@ class EnvironmentMixin:
         if next_mode == 'off':
             self._glow_intensity_multiplier = 0.0
         elif float(getattr(self, '_glow_intensity_multiplier', 0.0)) <= 0.0:
-            self._glow_intensity_multiplier = 1.5
+            self._glow_intensity_multiplier = float(getattr(self, '_glow_default_multiplier', 1.5) or 1.5)
         if hasattr(self, '_refresh_active_glow_mode_cache'):
             self._refresh_active_glow_mode_cache()
+        self._light_osd_value = {
+            'glow': 'Glow',
+            'veil': 'Veil',
+            'frosted': 'Frosted',
+            'mist': 'Mist',
+            'off': 'Off',
+        }.get(next_mode, next_mode.capitalize())
+        self._light_osd_last_key = None
+        self._light_osd_show_t = time.perf_counter()
         print(f"[OpenXRViewer] Glow mode: {next_mode}")
         self._save_glow_to_active_profile()
         return True

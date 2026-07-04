@@ -477,17 +477,33 @@ class D3D11BackendMixin:
     def _get_or_create_d3d11_pbo(self, eye_index, img_index, w, h):
         """Return a GL PBO id sized for (w, h) RGBA readback, creating/resizing as needed."""
         key = (eye_index, img_index)
+        ring_count = max(int(getattr(self, '_d3d11_pbo_ring_size', 2) or 2), 1)
         cached = self._d3d11_pbo_cache.get(key)
-        if cached and cached[1] == w and cached[2] == h:
-            return cached[0]
+        cached_ids = None
         if cached:
-            glDeleteBuffers(1, [cached[0]])
-        pbo_id = int(glGenBuffers(1))
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
-        glBufferData(GL_PIXEL_PACK_BUFFER, w * h * 4, None, GL_STREAM_READ)
+            cached_ids = cached[0] if isinstance(cached[0], (list, tuple)) else [cached[0]]
+        if cached and cached[1] == w and cached[2] == h and len(cached_ids) == ring_count:
+            pbo_ids = cached_ids
+            next_i = cached[3] if len(cached) > 3 else 0
+            idx = int(next_i or 0) % ring_count
+            self._d3d11_pbo_cache[key] = (pbo_ids, w, h, (idx + 1) % ring_count)
+            return pbo_ids[idx]
+        if cached:
+            try:
+                glDeleteBuffers(len(cached_ids), cached_ids)
+            except Exception:
+                pass
+        ids = glGenBuffers(ring_count)
+        try:
+            pbo_ids = [int(x) for x in ids]
+        except TypeError:
+            pbo_ids = [int(ids)]
+        for pbo_id in pbo_ids:
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
+            glBufferData(GL_PIXEL_PACK_BUFFER, w * h * 4, None, GL_STREAM_READ)
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
-        self._d3d11_pbo_cache[key] = (pbo_id, w, h)
-        return pbo_id
+        self._d3d11_pbo_cache[key] = (pbo_ids, w, h, 1 % ring_count)
+        return pbo_ids[0]
 
     def _submit_pbo_readback(self, raw_fbo_id, pbo_id, w, h):
         """Submit an async glReadPixels into pbo_id and flush to kick off DMA immediately.
@@ -497,6 +513,7 @@ class D3D11BackendMixin:
         pixel_fmt = GL_BGRA if self._swapchain_is_bgra else GL_RGBA
         glBindFramebuffer(GL_FRAMEBUFFER, raw_fbo_id)
         glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
+        glBufferData(GL_PIXEL_PACK_BUFFER, w * h * 4, None, GL_STREAM_READ)
         glReadPixels(0, 0, w, h, pixel_fmt, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
         glFlush()  # push the DMA command to the GPU so it starts while we render eye 1
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)

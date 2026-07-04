@@ -33,6 +33,9 @@ class FrameMixin:
         self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
         self.color_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
         self._color_tex_mipmap_filter_active = True
+        self._glow_mipmap_pending = False
+        self._glow_mipmap_pending_frame = -999999
+        self._glow_mipmap_ready = False
         self.color_tex.repeat_x = False
         self.color_tex.repeat_y = False
         self.color_tex.build_mipmaps()
@@ -60,51 +63,101 @@ class FrameMixin:
         """Create or recreate PBOs and register them with CUDA/HIP."""
         if not self._cuda_gl or BACKEND not in ("CUDA", "HIP"):
             return
-        # Unregister old resources before deleting PBOs
-        if self._pbo_color is not None:
+        old_resources = list(getattr(self, '_cuda_res_color_ring', []) or [])
+        old_resources += list(getattr(self, '_cuda_res_depth_ring', []) or [])
+        for res in (getattr(self, '_cuda_res_color', None), getattr(self, '_cuda_res_depth', None)):
+            if res is not None and res not in old_resources:
+                old_resources.append(res)
+        for res in old_resources:
             try:
-                self._cuda_gl.unregister_resource(self._cuda_res_color)
-                self._cuda_gl.unregister_resource(self._cuda_res_depth)
-                glDeleteBuffers(2, [self._pbo_color, self._pbo_depth])
+                self._cuda_gl.unregister_resource(res)
             except Exception:
                 pass
 
-        ids = glGenBuffers(2)
-        self._pbo_color = int(ids[0])
-        self._pbo_depth = int(ids[1])
+        old_ids = list(getattr(self, '_pbo_color_ring', []) or [])
+        old_ids += list(getattr(self, '_pbo_depth_ring', []) or [])
+        for pbo_id in (getattr(self, '_pbo_color', None), getattr(self, '_pbo_depth', None)):
+            if pbo_id is not None and pbo_id not in old_ids:
+                old_ids.append(pbo_id)
+        if old_ids:
+            try:
+                glDeleteBuffers(len(old_ids), old_ids)
+            except Exception:
+                pass
 
-        for pbo_id, nbytes in [
-            (self._pbo_color, w * h * 3),   # RGB uint8
-            (self._pbo_depth, w * h * 4),   # float32
-        ]:
+        ring_count = max(int(getattr(self, '_gpu_pbo_ring_size', 2) or 2), 1)
+        ids = glGenBuffers(ring_count * 2)
+        try:
+            ids = [int(x) for x in ids]
+        except TypeError:
+            ids = [int(ids)]
+        color_ids = ids[:ring_count]
+        depth_ids = ids[ring_count:ring_count * 2]
+
+        for pbo_id in color_ids:
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_id)
-            glBufferData(GL_PIXEL_UNPACK_BUFFER, nbytes, None, GL_DYNAMIC_DRAW)
+            glBufferData(GL_PIXEL_UNPACK_BUFFER, w * h * 3, None, GL_DYNAMIC_DRAW)
+        for pbo_id in depth_ids:
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_id)
+            glBufferData(GL_PIXEL_UNPACK_BUFFER, w * h * 4, None, GL_DYNAMIC_DRAW)
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
 
-        self._cuda_res_color = self._cuda_gl.register_buffer(self._pbo_color)
-        self._cuda_res_depth = self._cuda_gl.register_buffer(self._pbo_depth)
+        self._pbo_color_ring = color_ids
+        self._pbo_depth_ring = depth_ids
+        self._cuda_res_color_ring = [self._cuda_gl.register_buffer(pbo_id) for pbo_id in color_ids]
+        self._cuda_res_depth_ring = [self._cuda_gl.register_buffer(pbo_id) for pbo_id in depth_ids]
+        self._gpu_pbo_index = 0
+        self._pbo_color = color_ids[0] if color_ids else None
+        self._pbo_depth = depth_ids[0] if depth_ids else None
+        self._cuda_res_color = self._cuda_res_color_ring[0] if self._cuda_res_color_ring else None
+        self._cuda_res_depth = self._cuda_res_depth_ring[0] if self._cuda_res_depth_ring else None
         self._pbo_texture_size = (w, h)
-        print(f"[OpenXRViewer] GPU interop PBOs created ({BACKEND}) {w}x{h}")
+        print(f"[OpenXRViewer] GPU interop PBO ring created ({BACKEND}) {w}x{h} x{ring_count}")
 
     def _init_cpu_pbos(self, w, h):
         """Create unpack PBOs for CPU-path texture upload (async DMA)."""
         try:
-            ids = glGenBuffers(2)
-            self._cpu_pbo_color = int(ids[0])
-            self._cpu_pbo_depth = int(ids[1])
+            old_ids = list(getattr(self, '_cpu_pbo_color_ring', []) or [])
+            old_ids += list(getattr(self, '_cpu_pbo_depth_ring', []) or [])
+            for pbo_id in (getattr(self, '_cpu_pbo_color', None), getattr(self, '_cpu_pbo_depth', None)):
+                if pbo_id is not None and pbo_id not in old_ids:
+                    old_ids.append(pbo_id)
+            if old_ids:
+                try:
+                    glDeleteBuffers(len(old_ids), old_ids)
+                except Exception:
+                    pass
+
+            ring_count = max(int(getattr(self, '_cpu_pbo_ring_size', 3) or 3), 1)
+            ids = glGenBuffers(ring_count * 2)
+            try:
+                ids = [int(x) for x in ids]
+            except TypeError:
+                ids = [int(ids)]
+            color_ids = ids[:ring_count]
+            depth_ids = ids[ring_count:ring_count * 2]
             color_bytes = w * h * 3
             depth_bytes = w * h * 4
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._cpu_pbo_color)
-            glBufferData(GL_PIXEL_UNPACK_BUFFER, color_bytes, None, GL_STREAM_DRAW)
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._cpu_pbo_depth)
-            glBufferData(GL_PIXEL_UNPACK_BUFFER, depth_bytes, None, GL_STREAM_DRAW)
+            for pbo_id in color_ids:
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_id)
+                glBufferData(GL_PIXEL_UNPACK_BUFFER, color_bytes, None, GL_STREAM_DRAW)
+            for pbo_id in depth_ids:
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_id)
+                glBufferData(GL_PIXEL_UNPACK_BUFFER, depth_bytes, None, GL_STREAM_DRAW)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+            self._cpu_pbo_color_ring = color_ids
+            self._cpu_pbo_depth_ring = depth_ids
+            self._cpu_pbo_index = 0
+            self._cpu_pbo_color = color_ids[0] if color_ids else None
+            self._cpu_pbo_depth = depth_ids[0] if depth_ids else None
             self._cpu_pbo_size = (w, h)
-            print(f"[OpenXRViewer] CPU-path PBOs created {w}x{h}")
+            print(f"[OpenXRViewer] CPU-path PBO ring created {w}x{h} x{ring_count}")
         except Exception as exc:
             print(f"[OpenXRViewer] CPU PBO init failed, using direct upload: {exc}")
             self._cpu_pbo_color = None
             self._cpu_pbo_depth = None
+            self._cpu_pbo_color_ring = []
+            self._cpu_pbo_depth_ring = []
             self._cpu_pbo_size = (0, 0)
 
     def _sample_glow_target_color(self, rgb, is_tensor):
