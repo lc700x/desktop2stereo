@@ -1,5 +1,5 @@
 # depth.py
-import os, warnings
+import os, sys, importlib, warnings
 import contextlib
 from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, USE_MIGRAPHX, RECOMPILE_MIGRAPHX, DISABLE_TRT_KEYWORDS, DISABLE_MIGRAPHX_KEYWORDS,  DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_GFX, DISABLE_TRITON_GFX, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, FORCE_FP32_KEYWORDS, CAPTURE_MODE, enable_torch_compile_fallback, torch_compile_or_original, torch_compile_with_runtime_fallback
 import torch
@@ -33,7 +33,7 @@ FOREGROUND_SCALE = 0
 
 USE_TORCH_COMPILE = False
 
-USE_TENSORRT = True
+USE_TENSORRT = False
 RECOMPILE_TRT = False
 
 USE_MIGRAPHX = True
@@ -64,7 +64,7 @@ RECOMPILE_OPENVINO = True
 # MODEL_ID = "lc700x/dpt-large-redesign-hf"
 # MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 # MODEL_ID = "Intel/dpt-beit-base-384"
-MODEL_ID = "lc700x/InfiniDepth-Base"
+MODEL_ID = "lc700x/InfiniDepth-Small"
 # MODEL_ID = "xingyang1/Distill-Any-Depth-Small-hf"
 
 IS_CUDA = "CUDA" in DEVICE_INFO
@@ -335,17 +335,180 @@ if IS_AMD_ROCM:
     if any(x in MODEL_ID.lower() for x in DISABLE_MIGRAPHX_KEYWORDS):
         USE_MIGRAPHX = False
 
-# Try INT8 by default when TensorRT supports it. The INT8 engine uses a
-# separate *_int8.trt cache and falls back to FP16/FP8 if calibration is not
-# representative enough to build safely.
-USE_TENSORRT_INT8 = False
-try:
-    import tensorrt as _trt_int8
-    USE_TENSORRT_INT8 = hasattr(_trt_int8.BuilderFlag, "INT8")
-    del _trt_int8
-except ImportError:
-    pass
+# Model configuration
+DTYPE = torch.float16 if FP16 else torch.float32
+
+# Engine input shape, set lazily by _ensure_engine_built() on the first frame.
+ENGINE_H, ENGINE_W = None, None
+
 # Get huggingface repo and filename for a given model_id, with some sanity checks
+_DIRECTML_MODEL_PATCHES_INSTALLED = False
+_MODEL_COMPAT_PATCH_DEVICE_TYPES = ("privateuseone", "xpu")
+
+
+def _directml_nan_to_num(
+    x: torch.Tensor,
+    nan: float = 0.0,
+    posinf: float = 65504.0,
+    neginf: float = -65504.0,
+) -> torch.Tensor:
+    nan_mask = torch.isnan(x)
+    x = x.clamp(min=neginf, max=posinf)
+    nan_value = torch.zeros_like(x) if nan == 0.0 else torch.full_like(x, nan)
+    return torch.where(nan_mask, nan_value, x)
+
+
+def _directml_quantile(values: torch.Tensor, q) -> torch.Tensor:
+    flat = values.flatten()
+    if flat.numel() == 0:
+        return torch.empty((), device=values.device, dtype=values.dtype).fill_(float("nan"))
+
+    if isinstance(q, torch.Tensor):
+        if q.numel() != 1:
+            return torch.quantile(values, q)
+        q_value = float(q.detach().cpu().reshape(-1)[0])
+    else:
+        q_value = float(q)
+
+    sorted_values = torch.sort(flat).values
+    idx = min(sorted_values.numel() - 1, max(0, int(round(q_value * (sorted_values.numel() - 1)))))
+    return sorted_values[idx]
+
+
+def _directml_affine_inverse(A: torch.Tensor) -> torch.Tensor:
+    R = A[..., :3, :3]
+    T = A[..., :3, 3:]
+    RT = R.mT
+    upper = torch.cat([RT, -RT @ T], dim=-1)
+    if A.size(-2) == 3:
+        return upper
+    P = A[..., 3:, :]
+    return torch.cat([upper, P], dim=-2)
+
+
+class _DirectMLTorchCompatProxy:
+    def __init__(self, torch_module):
+        self._torch = torch_module
+
+    def __getattr__(self, name):
+        return getattr(self._torch, name)
+
+    def nan_to_num(self, input, nan=0.0, posinf=None, neginf=None, *, out=None):
+        if (
+            out is not None
+            or not isinstance(input, torch.Tensor)
+            or input.device.type not in _MODEL_COMPAT_PATCH_DEVICE_TYPES
+        ):
+            return self._torch.nan_to_num(
+                input, nan=nan, posinf=posinf, neginf=neginf, out=out
+            )
+
+        pos = 65504.0 if posinf is None else posinf
+        neg = -65504.0 if neginf is None else neginf
+        return _directml_nan_to_num(input, nan=nan, posinf=pos, neginf=neg)
+
+    def quantile(
+        self,
+        input,
+        q,
+        dim=None,
+        keepdim=False,
+        *,
+        interpolation="linear",
+        out=None,
+    ):
+        if (
+            out is not None
+            or dim is not None
+            or keepdim
+            or interpolation != "linear"
+            or not isinstance(input, torch.Tensor)
+            or input.device.type not in _MODEL_COMPAT_PATCH_DEVICE_TYPES
+        ):
+            return self._torch.quantile(
+                input,
+                q,
+                dim=dim,
+                keepdim=keepdim,
+                interpolation=interpolation,
+                out=out,
+            )
+        return _directml_quantile(input, q)
+
+
+def _ensure_models_package_path():
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    package_roots = (
+        os.path.join(project_root, "models"),
+        os.path.join(
+            project_root,
+            "models",
+            "InfiniDepth",
+            "model",
+            "block",
+            "torchhub",
+            "dinov3",
+        ),
+    )
+    for package_root in package_roots:
+        if os.path.isdir(package_root) and package_root not in sys.path:
+            sys.path.insert(0, package_root)
+
+
+def _try_import_module(module_name: str):
+    try:
+        return importlib.import_module(module_name)
+    except Exception as e:
+        if DEBUG:
+            print(f"[DML/XPU compat] Skipped {module_name}: {e}")
+        return None
+
+
+def _install_directml_model_compat_patches():
+    global _DIRECTML_MODEL_PATCHES_INSTALLED
+    if not (IS_DIRECTML or IS_XPU) or _DIRECTML_MODEL_PATCHES_INSTALLED:
+        return
+
+    _ensure_models_package_path()
+    torch_proxy = _DirectMLTorchCompatProxy(torch)
+
+    torch_module_names = (
+        "models.depth_anything_3.api_n",
+        "depth_anything_3.api_n",
+        "depth_anything_3.model.da3",
+        "depth_anything_3.model.dpt",
+        "depth_anything_3.model.dualdpt",
+        "depth_anything_3.model.dinov2.layers.attention",
+        "depth_anything_3.model.dinov2.layers.block",
+        "depth_anything_3.model.utils.attention",
+        "depth_anything_3.model.utils.block",
+        "models.InfiniDepth.api",
+        "dinov3.layers.attention",
+        "dinov3.layers.block",
+        "models.InfiniDepth.model.block.torchhub.dinov3.dinov3.layers.attention",
+        "models.InfiniDepth.model.block.torchhub.dinov3.dinov3.layers.block",
+    )
+    for module_name in torch_module_names:
+        module = _try_import_module(module_name)
+        if module is not None and hasattr(module, "torch"):
+            module.torch = torch_proxy
+
+    geometry_modules = (
+        "depth_anything_3.utils.geometry",
+        "models.depth_anything_3.utils.geometry",
+    )
+    for module_name in geometry_modules:
+        module = _try_import_module(module_name)
+        if module is not None:
+            module.affine_inverse = _directml_affine_inverse
+
+    da3_module = _try_import_module("depth_anything_3.model.da3")
+    if da3_module is not None:
+        da3_module.affine_inverse = _directml_affine_inverse
+
+    _DIRECTML_MODEL_PATCHES_INSTALLED = True
+
+
 def get_model_path(model_id, cache_dir):
     from huggingface_hub import hf_hub_download
     CKPT_NAMES = ["model.safetensors", "model.pt", "model.ckpt"]
@@ -387,59 +550,6 @@ def get_patch_size():
     if "da3" in MODEL_ID.lower() or "any" in MODEL_ID.lower() or "dinov2" in MODEL_ID.lower():
         return 14
     return None
-
-def _capture_trt_int8_calibration_frame(frame, max_frames: int = 64):
-    """Collect representative real RGB frames for TensorRT INT8 calibration."""
-    if not (IS_NVIDIA and USE_TENSORRT and USE_TENSORRT_INT8):
-        return
-
-    try:
-        calib_dir = os.path.join(MODEL_FOLDER, "calibration_images")
-        os.makedirs(calib_dir, exist_ok=True)
-        existing = [
-            f for f in os.listdir(calib_dir)
-            if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp"))
-        ]
-        if len(existing) >= max_frames:
-            return
-
-        if isinstance(frame, torch.Tensor):
-            t = frame.detach()
-            if t.ndim == 3 and t.shape[0] in (3, 4):
-                arr = t[:3].permute(1, 2, 0).to("cpu").numpy()
-            elif t.ndim == 3 and t.shape[-1] >= 3:
-                arr = t[..., :3].to("cpu").numpy()
-            else:
-                return
-        elif isinstance(frame, np.ndarray) and frame.ndim == 3:
-            arr = frame[..., :3]
-        else:
-            return
-
-        if arr.dtype != np.uint8:
-            arr_f = arr.astype(np.float32)
-            if np.nanmax(arr_f) <= 1.0:
-                arr_f = arr_f * 255.0
-            arr = np.clip(arr_f, 0, 255).astype(np.uint8)
-
-        mean = float(arr.mean())
-        std = float(arr.std())
-        dynamic_range = int(arr.max()) - int(arr.min())
-        if mean < 4.0 or mean > 251.0 or std < 8.0 or dynamic_range < 32:
-            return
-
-        # Keep calibration storage bounded and cheap; TensorRT resizes later.
-        h, w = arr.shape[:2]
-        longest = max(h, w)
-        if longest > 960:
-            scale = 960.0 / float(longest)
-            arr = cv2.resize(arr, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
-
-        out_path = os.path.join(calib_dir, f"real_{len(existing):04d}.png")
-        Image.fromarray(arr).save(out_path)
-    except Exception as e:
-        if DEBUG:
-            print(f"[TRT-INT8] Calibration frame capture skipped: {e}")
 
 if IS_CUDA:
 
@@ -544,10 +654,6 @@ else:
 
 # Folder to store compiled model / cache
 MODEL_FOLDER = os.path.join(CACHE_PATH, "models--"+MODEL_ID.replace("/", "--"))
-
-# Model configuration
-DTYPE = torch.float16 if FP16 else torch.float32
-
 # Load depth model - either original or ONNX
 DTYPE_INFO = "fp16" if FP16 else "fp32"
 # Engine paths embed the shape; set lazily in _ensure_engine_built().
@@ -804,6 +910,7 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 # Load InfiniDepth Model
 def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
     """ Load InfiniDepth model from HuggingFace hub. """
+    _install_directml_model_compat_patches()
     # Load depth model without network warning when local cache exists
     model_path = get_model_path(model_id, cache_dir=CACHE_PATH)
     # Preparation for video depth anything models
@@ -820,6 +927,7 @@ def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
 
 # Load Depth-Anything-V3 Model
 def get_da3_model(model_id=MODEL_ID, dtype=DTYPE):
+    _install_directml_model_compat_patches()
     from models.depth_anything_3.api_n import DepthAnything3
     # Load depth model without network warning when local cache exists
     try:
@@ -940,150 +1048,18 @@ class MIGraphXEngine:
 # TensorRT Optimization
 def optimize_with_tensorrt(onnx_path, trt_path):
     """
-    Convert ONNX model to TensorRT engine with fixed input size.
-    INT8 is attempted by default when supported; FP8/FP16/TF32 is the fallback path.
-    INT8 calibration uses Torch CUDA tensors directly, so pycuda is not required.
+    Convert ONNX model to TensorRT engine with fixed square input size.
+    FP8 enabled, no pycuda required.
     """
     try:
-        import shutil
+        if os.path.exists(trt_path) and not RECOMPILE_TRT:
+            print(f"Loaded existing TensorRT engine: {trt_path}")
+            return trt_path
+
         import tensorrt as trt
 
         logger = trt.Logger(trt.Logger.ERROR)
         builder = trt.Builder(logger)
-
-        def _fp_trt_path(path):
-            if path.endswith("_int8.trt"):
-                fp_path = path[:-9] + "_fp.trt"
-                if "model_fp32_" in fp_path and FP16:
-                    fp_path = fp_path.replace("model_fp32_", "model_fp16_", 1)
-                return fp_path
-            return path
-
-        def _current_frame_uint8():
-            source = globals().get("image_rgb", None)
-            if not isinstance(source, np.ndarray) or source.ndim != 3:
-                return None
-            base = source
-            if base.dtype != np.uint8:
-                if np.issubdtype(base.dtype, np.floating) and float(np.nanmax(base)) <= 1.0:
-                    base = np.clip(base * 255.0, 0, 255).astype(np.uint8)
-                else:
-                    base = np.clip(base, 0, 255).astype(np.uint8)
-            return base
-
-        def _generate_calibration_from_frame(calib_dir, base, count=64):
-            if os.path.exists(calib_dir):
-                shutil.rmtree(calib_dir)
-            os.makedirs(calib_dir, exist_ok=True)
-            rng = np.random.default_rng(12345)
-            base_f = base.astype(np.float32)
-            for i in range(count):
-                # Preserve real scene structure but cover nearby activation ranges.
-                gain = float(rng.uniform(0.75, 1.25))
-                bias = float(rng.uniform(-18.0, 18.0))
-                noise_sigma = float(rng.uniform(0.0, 4.0))
-                sample = base_f * gain + bias
-                if noise_sigma > 0:
-                    sample += rng.normal(0.0, noise_sigma, base_f.shape).astype(np.float32)
-                if i % 8 == 0:
-                    sample = cv2.GaussianBlur(sample, (0, 0), sigmaX=0.6)
-                if i % 8 == 1:
-                    # Mild sharpening keeps edge activations represented without
-                    # inventing the extreme synthetic edges that destabilized INT8.
-                    blur = cv2.GaussianBlur(sample, (0, 0), sigmaX=1.0)
-                    sample = sample * 1.25 - blur * 0.25
-                Image.fromarray(np.clip(sample, 0, 255).astype(np.uint8)).save(
-                    os.path.join(calib_dir, f"calib_{i:04d}.png")
-                )
-
-        def _calibration_quality(image_paths):
-            sample_stats = []
-            for path in image_paths[: min(len(image_paths), 64)]:
-                img = cv2.imread(path, cv2.IMREAD_COLOR)
-                if img is None:
-                    continue
-                sample_stats.append((float(img.mean()), float(img.std()), int(img.min()), int(img.max())))
-
-            if len(sample_stats) < 8:
-                return False, f"too few readable calibration images ({len(sample_stats)})"
-
-            stats = np.array(sample_stats, dtype=np.float32)
-            mean_of_means = float(stats[:, 0].mean())
-            mean_std = float(stats[:, 1].mean())
-            global_min = float(stats[:, 2].min())
-            global_max = float(stats[:, 3].max())
-            dynamic_range = global_max - global_min
-
-            if mean_of_means < 8.0 or mean_of_means > 247.0:
-                return False, f"bad brightness mean={mean_of_means:.2f}"
-            if mean_std < 12.0:
-                return False, f"too little texture std={mean_std:.2f}"
-            if dynamic_range < 64.0:
-                return False, f"too little dynamic range={dynamic_range:.1f}"
-
-            return True, (
-                f"mean={mean_of_means:.2f}, std={mean_std:.2f}, "
-                f"range={dynamic_range:.1f}, count={len(image_paths)}"
-            )
-
-        def _calibration_images_and_quality():
-            calib_dir = os.path.join(MODEL_FOLDER, "calibration_images")
-            os.makedirs(calib_dir, exist_ok=True)
-
-            def list_images():
-                return sorted([
-                    os.path.join(calib_dir, f)
-                    for f in os.listdir(calib_dir)
-                    if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp"))
-                ])
-
-            image_paths = list_images()
-            if image_paths:
-                ok, reason = _calibration_quality(image_paths)
-                if ok:
-                    return image_paths, True, reason
-
-                base = _current_frame_uint8()
-                if base is None:
-                    return image_paths, False, reason
-
-                print(f"[TRT-INT8] Existing calibration rejected ({reason}); regenerating from current frame...")
-                cache_path = os.path.join(MODEL_FOLDER, "calibration.cache")
-                if os.path.exists(cache_path):
-                    try:
-                        os.remove(cache_path)
-                    except OSError:
-                        pass
-                _generate_calibration_from_frame(calib_dir, base)
-                image_paths = list_images()
-                ok, reason = _calibration_quality(image_paths)
-                return image_paths, ok, reason
-
-            base = _current_frame_uint8()
-            if base is None:
-                return [], False, "no representative calibration images"
-
-            print("[TRT-INT8] Generating calibration samples from the current frame...")
-            _generate_calibration_from_frame(calib_dir, base)
-            image_paths = list_images()
-            ok, reason = _calibration_quality(image_paths)
-            return image_paths, ok, reason
-
-        effective_trt_path = trt_path
-        int8_enabled = USE_TENSORRT_INT8
-        calib_images = []
-        if int8_enabled:
-            calib_images, calib_ok, calib_reason = _calibration_images_and_quality()
-            if calib_ok:
-                print(f"[TRT-INT8] Calibration accepted: {calib_reason}")
-            else:
-                print(f"[TRT-INT8] Calibration rejected ({calib_reason}); using FP16/FP8 TensorRT")
-                int8_enabled = False
-                effective_trt_path = _fp_trt_path(trt_path)
-
-        if os.path.exists(effective_trt_path) and not RECOMPILE_TRT:
-            print(f"Loaded existing TensorRT engine: {effective_trt_path}")
-            return effective_trt_path
 
         network = builder.create_network(
             1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
@@ -1098,106 +1074,27 @@ def optimize_with_tensorrt(onnx_path, trt_path):
 
         config = builder.create_builder_config()
 
-        if int8_enabled:
-            print("[TRT-INT8] Building INT8 engine...")
-            config.set_flag(trt.BuilderFlag.INT8)
-            config.set_flag(trt.BuilderFlag.FP16)
-            config.set_flag(trt.BuilderFlag.PREFER_PRECISION_CONSTRAINTS)
-
-            profile = builder.create_optimization_profile()
-            input_tensor = network.get_input(0)
-            input_name = input_tensor.name
-            fixed_size = (1, 3, ENGINE_H, ENGINE_W)
-            profile.set_shape(input_name, fixed_size, fixed_size, fixed_size)
-            config.add_optimization_profile(profile)
-            config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 << 30)
-
-            class _Int8Calibrator(trt.IInt8EntropyCalibrator2):
-                def __init__(self, image_paths, input_dtype, batch_size=1):
-                    trt.IInt8EntropyCalibrator2.__init__(self)
-                    self.image_paths = image_paths
-                    self.input_dtype = input_dtype
-                    self.batch_size = batch_size
-                    self.current = 0
-                    self.cache_path = os.path.join(MODEL_FOLDER, "calibration.cache")
-                    self.torch_dtype = torch.float16 if input_dtype == trt.float16 else torch.float32
-                    self._device_batch = torch.empty(
-                        (batch_size, 3, ENGINE_H, ENGINE_W),
-                        device=DEVICE,
-                        dtype=self.torch_dtype,
-                    )
-
-                def get_batch_size(self):
-                    return self.batch_size
-
-                def _preprocess_image(self, path):
-                    img = cv2.imread(path, cv2.IMREAD_COLOR)
-                    if img is None:
-                        img = np.zeros((ENGINE_H, ENGINE_W, 3), dtype=np.uint8)
-                    else:
-                        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                        if img.shape[:2] != (ENGINE_H, ENGINE_W):
-                            img = cv2.resize(img, (ENGINE_W, ENGINE_H), interpolation=cv2.INTER_CUBIC)
-
-                    img = img.astype(np.float32) / 255.0
-                    if "infinidepth" not in MODEL_ID.lower():
-                        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 1, 3)
-                        std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 1, 3)
-                        img = (img - mean) / std
-                    return np.ascontiguousarray(img.transpose(2, 0, 1))
-
-                def get_batch(self, names):
-                    if self.current + self.batch_size > len(self.image_paths):
-                        return None
-
-                    batch = []
-                    for _ in range(self.batch_size):
-                        batch.append(self._preprocess_image(self.image_paths[self.current]))
-                        self.current += 1
-
-                    host_batch = np.stack(batch, axis=0)
-                    tensor = torch.from_numpy(host_batch).to(device=DEVICE, dtype=self.torch_dtype)
-                    self._device_batch.copy_(tensor, non_blocking=False)
-                    return [int(self._device_batch.data_ptr())]
-
-                def read_calibration_cache(self):
-                    if os.path.exists(self.cache_path):
-                        with open(self.cache_path, "rb") as f:
-                            return f.read()
-                    return None
-
-                def write_calibration_cache(self, cache):
-                    with open(self.cache_path, "wb") as f:
-                        f.write(cache)
-
-            config.int8_calibrator = _Int8Calibrator(calib_images, input_tensor.dtype, batch_size=1)
-            serialized_engine = builder.build_serialized_network(network, config)
-
-            if serialized_engine is None:
-                print("[Error] TensorRT INT8 build failed")
-                return None
-
-            with open(effective_trt_path, "wb") as f:
-                f.write(serialized_engine)
-
-            print(f"[TRT-INT8] INT8 engine saved to {effective_trt_path}")
-            return effective_trt_path
-
-        # FP8/FP16/TF32 path
         if MODEL_ID in FORCE_FP32_KEYWORDS or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512):
+            # Transformer-based model: use TF32 only. 
             config.set_flag(trt.BuilderFlag.TF32)
         else:
-            if not IS_LEGACY_NVIDIA:
+            # FP4, FP8, FP16 ENABLED
+            if not is_legacy_nvidia:
                 config.set_flag(trt.BuilderFlag.FP4)
                 config.set_flag(trt.BuilderFlag.FP8)
             config.set_flag(trt.BuilderFlag.FP16)
             config.set_flag(trt.BuilderFlag.TF32)
-
+        # Optional but recommended
         config.set_flag(trt.BuilderFlag.PREFER_PRECISION_CONSTRAINTS)
         config.set_flag(trt.BuilderFlag.SPARSE_WEIGHTS)
         config.set_flag(trt.BuilderFlag.REJECT_EMPTY_ALGORITHMS)
-        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 << 30)
 
+        # Workspace
+        config.set_memory_pool_limit(
+            trt.MemoryPoolType.WORKSPACE, 4 << 30
+        )
+
+        # Fixed input profile
         profile = builder.create_optimization_profile()
         input_name = network.get_input(0).name
         fixed_size = (1, 3, ENGINE_H, ENGINE_W)
@@ -1205,16 +1102,16 @@ def optimize_with_tensorrt(onnx_path, trt_path):
         config.add_optimization_profile(profile)
 
         serialized_engine = builder.build_serialized_network(network, config)
-
+        
         if serialized_engine is None:
             print("[Error] TensorRT FP8 build failed")
             return None
 
-        with open(effective_trt_path, "wb") as f:
+        with open(trt_path, "wb") as f:
             f.write(serialized_engine)
 
-        print(f"[Main] TensorRT engine saved to {effective_trt_path}")
-        return effective_trt_path
+        print(f"[Main] TensorRT engine saved to {trt_path}")
+        return trt_path
 
     except Exception as e:
         print(f"[Error] TensorRT optimization failed: {e}")
@@ -1555,85 +1452,70 @@ class OpenVINOEngine:
 class TensorRTEngine:
     def __init__(self, engine_path, device, dtype):
         """
-        Initialize TensorRT engine using tensor names and TensorRT-reported dtypes.
+        Initialize TensorRT engine using binding names instead of deprecated methods.
         """
         self.device = device
         self.dtype = dtype
-
+        
         try:
             import tensorrt as trt
-
+            
+            # Load TensorRT engine
             with open(engine_path, "rb") as f:
                 engine_data = f.read()
-
+            
             logger = trt.Logger(trt.Logger.ERROR)
             runtime = trt.Runtime(logger)
             self.engine = runtime.deserialize_cuda_engine(engine_data)
             self.context = self.engine.create_execution_context()
-
+            
+            # Get binding information using names instead of deprecated methods
             self.input_binding_indices = []
             self.output_binding_indices = []
-            self._tensor_dtypes = {}
-            self._trt_to_torch = {
-                trt.DataType.FLOAT: torch.float32,
-                trt.DataType.HALF: torch.float16,
-                trt.DataType.INT8: torch.int8,
-                trt.DataType.INT32: torch.int32,
-                trt.DataType.BOOL: torch.bool,
-            }
-            if hasattr(trt.DataType, "BF16"):
-                self._trt_to_torch[trt.DataType.BF16] = torch.bfloat16
-
+            
             for binding in range(self.engine.num_io_tensors):
                 name = self.engine.get_tensor_name(binding)
-                self._tensor_dtypes[name] = self._trt_to_torch.get(
-                    self.engine.get_tensor_dtype(name),
-                    self.dtype,
-                )
-
-                if self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                
+                # Use name pattern matching to identify inputs/outputs
+                if "input" in name.lower() or "pixel_values" in name.lower():
                     self.input_binding_indices.append(binding)
                 else:
                     self.output_binding_indices.append(binding)
-
-            if not self.input_binding_indices:
-                raise RuntimeError("TensorRT engine has no input tensors")
-            if not self.output_binding_indices:
-                raise RuntimeError("TensorRT engine has no output tensors")
-
-            self.input_name = self.engine.get_tensor_name(self.input_binding_indices[0])
-            self.output_names = [self.engine.get_tensor_name(i) for i in self.output_binding_indices]
-            self.output_shapes = {
-                name: self.engine.get_tensor_shape(name)
-                for name in self.output_names
-            }
-
+            
+            # Pre-allocate output tensors
+            self.output_shapes = {}
+            for binding in self.output_binding_indices:
+                name = self.engine.get_tensor_name(binding)
+                self.output_shapes[name] = self.engine.get_tensor_shape(name)
+            
         except ImportError:
             raise ImportError("TensorRT not available")
 
     def __call__(self, tensor):
         """Execute inference with TensorRT using the TRT 10 native API."""
-        input_dtype = self._tensor_dtypes.get(self.input_name, self.dtype)
-        tensor = tensor.contiguous().to(device=self.device, dtype=input_dtype)
+        # Input must be contiguous on the correct device
+        tensor = tensor.contiguous().to(device=self.device, dtype=self.dtype)
 
-        self.context.set_input_shape(self.input_name, tuple(tensor.shape))
-        self.context.set_tensor_address(self.input_name, tensor.data_ptr())
+        # Set input shape and address
+        input_name = self.engine.get_tensor_name(0)
+        self.context.set_input_shape(input_name, tuple(tensor.shape))
+        self.context.set_tensor_address(input_name, tensor.data_ptr())
 
+        # Allocate output tensors and set their addresses
         outputs = {}
-        for name in self.output_names:
+        for binding in self.output_binding_indices:
+            name = self.engine.get_tensor_name(binding)
             dims = self.context.get_tensor_shape(name)
-            out_dtype = self._tensor_dtypes.get(name, self.dtype)
-            out = torch.empty(tuple(dims), device=self.device, dtype=out_dtype)
+            out = torch.empty(tuple(dims), device=self.device, dtype=self.dtype)
             outputs[name] = out
             self.context.set_tensor_address(name, out.data_ptr())
 
+        # Execute on the current CUDA stream and wait for completion
         stream = torch.cuda.current_stream(self.device)
         self.context.execute_async_v3(stream_handle=stream.cuda_stream)
         stream.synchronize()
 
-        if "predicted_depth" in outputs:
-            return outputs["predicted_depth"]
-        return outputs[self.output_names[0]]
+        return outputs['predicted_depth']
 
     def close(self):
         for attr in ("context", "engine"):
@@ -1647,158 +1529,6 @@ class TensorRTEngine:
                 setattr(self, attr, None)
             except Exception:
                 pass
-
-def _validate_tensorrt_int8_engine(int8_path, fp_path, device, dtype, max_samples: int = 8):
-    """Accept INT8 only when it is close to FP TensorRT and measurably faster."""
-    import time
-
-    if not (os.path.exists(int8_path) and os.path.exists(fp_path)):
-        return False, "missing INT8 or FP reference engine"
-
-    calib_dir = os.path.join(MODEL_FOLDER, "calibration_images")
-    if not os.path.isdir(calib_dir):
-        return False, "missing calibration_images for validation"
-
-    image_paths = sorted([
-        os.path.join(calib_dir, f)
-        for f in os.listdir(calib_dir)
-        if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp"))
-    ])[:max_samples]
-    if len(image_paths) < 3:
-        return False, f"too few validation frames ({len(image_paths)})"
-
-    def _input_from_image(path):
-        img = cv2.imread(path, cv2.IMREAD_COLOR)
-        if img is None:
-            return None
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = cv2.resize(img, (ENGINE_W, ENGINE_H), interpolation=cv2.INTER_CUBIC)
-        arr = img.astype(np.float32) / 255.0
-        tensor = torch.from_numpy(np.ascontiguousarray(arr.transpose(2, 0, 1))).unsqueeze(0).to(device=device)
-        if "infinidepth" not in MODEL_ID.lower():
-            mean = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32, device=device).view(1, 3, 1, 1)
-            std = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32, device=device).view(1, 3, 1, 1)
-            tensor = (tensor - mean) / std
-        return tensor.contiguous()
-
-    samples = [x for x in (_input_from_image(p) for p in image_paths) if x is not None]
-    if len(samples) < 3:
-        return False, f"too few readable validation frames ({len(samples)})"
-
-    try:
-        fp_engine = TensorRTEngine(fp_path, device, dtype)
-        int8_engine = TensorRTEngine(int8_path, device, dtype)
-    except Exception as e:
-        return False, f"engine load failed: {e}"
-
-    def _depth_gradient(tensor):
-        if tensor.ndim == 4 and tensor.shape[1] == 1:
-            z = tensor[:, 0]
-        elif tensor.ndim == 4:
-            z = tensor.mean(dim=1)
-        else:
-            z = tensor
-        grad = torch.zeros_like(z)
-        grad[..., :, 1:] += (z[..., :, 1:] - z[..., :, :-1]).abs()
-        grad[..., 1:, :] += (z[..., 1:, :] - z[..., :-1, :]).abs()
-        return grad
-
-    rel_errors = []
-    edge_rel_errors = []
-    range_drifts = []
-    corrs = []
-    max_errors = []
-    finite_error = None
-    with torch.no_grad():
-        for x in samples:
-            y_fp = fp_engine(x)
-            y_i8 = int8_engine(x)
-            torch.cuda.synchronize()
-            yf = y_fp.float()
-            yi = y_i8.float()
-            if not torch.isfinite(yf).all() or not torch.isfinite(yi).all():
-                finite_error = "non-finite FP or INT8 output"
-                break
-
-            diff = (yi - yf).abs()
-            rel_errors.append(float(diff.mean() / yf.abs().mean().clamp_min(1e-6)))
-            max_errors.append(float(diff.max()))
-            yc = yi - yi.mean()
-            fc = yf - yf.mean()
-            corrs.append(float((yc * fc).mean() / (yc.std().clamp_min(1e-6) * fc.std().clamp_min(1e-6))))
-
-            # Edge halos can be visually obvious while global error remains low.
-            # Compare only the strongest FP depth gradients to catch those rims.
-            grad = _depth_gradient(yf).flatten()
-            diff_flat = diff.flatten()
-            ref_flat = yf.abs().flatten()
-            if grad.numel() == diff_flat.numel() and grad.numel() > 32:
-                threshold = torch.quantile(grad, 0.85)
-                edge_mask = grad >= threshold
-                if int(edge_mask.sum()) < 32:
-                    edge_mask = torch.ones_like(grad, dtype=torch.bool)
-                edge_rel_errors.append(
-                    float(diff_flat[edge_mask].mean() / ref_flat[edge_mask].mean().clamp_min(1e-6))
-                )
-            else:
-                edge_rel_errors.append(float(diff.mean() / yf.abs().mean().clamp_min(1e-6)))
-
-            fp_range = (yf.max() - yf.min()).clamp_min(1e-6)
-            int8_range = yi.max() - yi.min()
-            range_drifts.append(float((int8_range - fp_range).abs() / fp_range))
-
-        if finite_error is not None:
-            fp_engine.close()
-            int8_engine.close()
-            return False, finite_error
-
-        speed_sample = samples[0]
-        for _ in range(20):
-            fp_engine(speed_sample)
-            int8_engine(speed_sample)
-        torch.cuda.synchronize()
-
-        n = 120
-        t0 = time.perf_counter()
-        for _ in range(n):
-            fp_engine(speed_sample)
-        torch.cuda.synchronize()
-        fp_fps = n / (time.perf_counter() - t0)
-
-        t0 = time.perf_counter()
-        for _ in range(n):
-            int8_engine(speed_sample)
-        torch.cuda.synchronize()
-        int8_fps = n / (time.perf_counter() - t0)
-
-    rel_mean = float(np.mean(rel_errors))
-    rel_max = float(np.max(rel_errors))
-    edge_rel_mean = float(np.mean(edge_rel_errors))
-    edge_rel_max = float(np.max(edge_rel_errors))
-    range_drift_max = float(np.max(range_drifts))
-    corr_min = float(np.min(corrs))
-    max_abs = float(np.max(max_errors))
-    speedup = int8_fps / max(fp_fps, 1e-6)
-    summary = (
-        f"rel_mean={rel_mean:.4%}, rel_max={rel_max:.4%}, "
-        f"edge_rel_mean={edge_rel_mean:.4%}, edge_rel_max={edge_rel_max:.4%}, "
-        f"range_drift_max={range_drift_max:.4%}, corr_min={corr_min:.5f}, "
-        f"max_abs={max_abs:.4f}, fp_fps={fp_fps:.1f}, int8_fps={int8_fps:.1f}, "
-        f"speedup={speedup:.3f}x"
-    )
-
-    fp_engine.close()
-    int8_engine.close()
-
-    if rel_mean > 0.03 or rel_max > 0.08 or corr_min < 0.99:
-        return False, summary
-    if edge_rel_mean > 0.05 or edge_rel_max > 0.12 or range_drift_max > 0.08:
-        return False, summary
-    # Small raw-engine gains disappear in the full depth pipeline because
-    # resize/normalization/upsampling still run outside TensorRT.
-    if speedup < 1.10:
-        return False, summary
-    return True, summary
 
 # Model Wrapper Class
 class DepthModelWrapper:
@@ -1970,75 +1700,17 @@ class DepthModelWrapper:
     
     def _load_tensorrt_engine(self):
         """Load or create TensorRT engine."""
-        global USE_TENSORRT_INT8
-
-        def _fp_reference_paths():
-            fp_onnx_path = self.onnx_path
-            fp_trt_path = self.trt_path
-
-            if USE_TENSORRT_INT8:
-                if "model_fp32_" in fp_onnx_path and FP16:
-                    fp_onnx_path = fp_onnx_path.replace("model_fp32_", "model_fp16_", 1)
-                if fp_trt_path.endswith("_int8.trt"):
-                    fp_trt_path = fp_trt_path[:-9] + "_fp.trt"
-                if "model_fp32_" in fp_trt_path and FP16:
-                    fp_trt_path = fp_trt_path.replace("model_fp32_", "model_fp16_", 1)
-
-            return fp_onnx_path, fp_trt_path
-
-        def _ensure_fp_reference_engine():
-            global USE_TENSORRT_INT8
-            fp_onnx_path, fp_trt_path = _fp_reference_paths()
-            original_int8 = USE_TENSORRT_INT8
-            try:
-                USE_TENSORRT_INT8 = False
-                if RECOMPILE_TRT or not os.path.exists(fp_onnx_path):
-                    fp_model = self._load_pytorch_model()
-                    export_to_onnx(fp_model, fp_onnx_path, self.device, self.dtype)
-                return optimize_with_tensorrt(fp_onnx_path, fp_trt_path)
-            finally:
-                USE_TENSORRT_INT8 = original_int8
-
-        export_dtype = torch.float32 if USE_TENSORRT_INT8 else self.dtype
-
-        # First, load PyTorch model to export ONNX. INT8 uses an FP32 ONNX for
-        # more stable TensorRT calibration; runtime still accepts app tensors and
-        # TensorRTEngine casts to the engine-reported input dtype.
-        original_dtype = self.dtype
-        try:
-            self.dtype = export_dtype
-            pytorch_model = self._load_pytorch_model()
-        finally:
-            self.dtype = original_dtype
-            globals()["DTYPE"] = original_dtype
-
+        # First, load PyTorch model to export ONNX
+        pytorch_model = self._load_pytorch_model()
+        
         # Export to ONNX if not exists
         if RECOMPILE_TRT or not os.path.exists(self.onnx_path):
-            export_to_onnx(pytorch_model, self.onnx_path, self.device, export_dtype)
-
+            export_to_onnx(pytorch_model, self.onnx_path, self.device, self.dtype)
+        
         # Build or load TensorRT engine
         trt_engine_path = optimize_with_tensorrt(self.onnx_path, self.trt_path)
         if trt_engine_path is None:
             return None
-
-        if USE_TENSORRT_INT8 and trt_engine_path == self.trt_path and trt_engine_path.endswith("_int8.trt"):
-            fp_engine_path = _ensure_fp_reference_engine()
-            if fp_engine_path is None:
-                print("[TRT-INT8] Could not build FP TensorRT reference; refusing unchecked INT8")
-                return None
-
-            ok, reason = _validate_tensorrt_int8_engine(
-                trt_engine_path,
-                fp_engine_path,
-                self.device,
-                self.dtype,
-            )
-            if ok:
-                print(f"[TRT-INT8] Validation accepted: {reason}")
-            else:
-                print(f"[TRT-INT8] Validation rejected ({reason}); using FP TensorRT")
-                trt_engine_path = fp_engine_path
-
         try:
             return TensorRTEngine(trt_engine_path, self.device, self.dtype)
         except Exception as e:
@@ -2133,18 +1805,14 @@ def _ensure_engine_built(engine_h, engine_w):
         if _engine_ready:
             return
         ENGINE_H, ENGINE_W = engine_h, engine_w
-        # TensorRT INT8 calibrates more reliably from an FP32 ONNX graph. Keep
-        # FP16/FP8 and INT8 artifacts separate so stale engines cannot mix.
-        trt_dtype_info = "fp32" if USE_TENSORRT_INT8 else DTYPE_INFO
-        trt_suffix = "_int8" if USE_TENSORRT_INT8 else "_fp"
         if engine_h == DEPTH_RESOLUTION and engine_w == DEPTH_RESOLUTION:
-            ONNX_PATH       = os.path.join(MODEL_FOLDER, f"model_{trt_dtype_info}_{DEPTH_RESOLUTION}.onnx")
-            TRT_PATH        = os.path.join(MODEL_FOLDER, f"model_{trt_dtype_info}_{DEPTH_RESOLUTION}{trt_suffix}.trt")
+            ONNX_PATH       = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.onnx")
+            TRT_PATH        = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.trt")
             COREML_PATH     = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}.mlpackage")
             MIGRAPHX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{DEPTH_RESOLUTION}_gpu.mgx")
         else:
-            ONNX_PATH       = os.path.join(MODEL_FOLDER, f"model_{trt_dtype_info}_{engine_h}x{engine_w}.onnx")
-            TRT_PATH        = os.path.join(MODEL_FOLDER, f"model_{trt_dtype_info}_{engine_h}x{engine_w}{trt_suffix}.trt")
+            ONNX_PATH       = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.onnx")
+            TRT_PATH        = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.trt")
             COREML_PATH     = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}.mlpackage")
             MIGRAPHX_PATH   = os.path.join(MODEL_FOLDER, f"model_{DTYPE_INFO}_{engine_h}x{engine_w}_gpu.mgx")
         model_wraper.build_accelerated_backend(engine_h, engine_w, ONNX_PATH, TRT_PATH, COREML_PATH, MIGRAPHX_PATH)
@@ -2182,11 +1850,7 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
     """
     Returns depth in [0,1] using fixed square input.
     """
-    # Expose the current real frame to the TensorRT INT8 calibrator. This keeps
-    # calibration tied to actual app content instead of the import-time sample.
-    globals()["image_rgb"] = image_rgb
-    _capture_trt_int8_calibration_frame(image_rgb)
-
+    
     # Use fixed square size
     target_size = DEPTH_RESOLUTION
     patch = get_patch_size()

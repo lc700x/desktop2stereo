@@ -1,5 +1,5 @@
 # depth.py
-import os, warnings
+import os, sys, importlib, warnings
 import contextlib
 from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, USE_MIGRAPHX, RECOMPILE_MIGRAPHX, DISABLE_TRT_KEYWORDS, DISABLE_MIGRAPHX_KEYWORDS,  DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_GFX, DISABLE_TRITON_GFX, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, FORCE_FP32_KEYWORDS, CAPTURE_MODE, enable_torch_compile_fallback, torch_compile_or_original, torch_compile_with_runtime_fallback
 import torch
@@ -292,6 +292,173 @@ DTYPE = torch.float16 if FP16 else torch.float32
 ENGINE_H, ENGINE_W = None, None
 
 # Get huggingface repo and filename for a given model_id, with some sanity checks
+_DIRECTML_MODEL_PATCHES_INSTALLED = False
+_MODEL_COMPAT_PATCH_DEVICE_TYPES = ("privateuseone", "xpu")
+
+
+def _directml_nan_to_num(
+    x: torch.Tensor,
+    nan: float = 0.0,
+    posinf: float = 65504.0,
+    neginf: float = -65504.0,
+) -> torch.Tensor:
+    nan_mask = torch.isnan(x)
+    x = x.clamp(min=neginf, max=posinf)
+    nan_value = torch.zeros_like(x) if nan == 0.0 else torch.full_like(x, nan)
+    return torch.where(nan_mask, nan_value, x)
+
+
+def _directml_quantile(values: torch.Tensor, q) -> torch.Tensor:
+    flat = values.flatten()
+    if flat.numel() == 0:
+        return torch.empty((), device=values.device, dtype=values.dtype).fill_(float("nan"))
+
+    if isinstance(q, torch.Tensor):
+        if q.numel() != 1:
+            return torch.quantile(values, q)
+        q_value = float(q.detach().cpu().reshape(-1)[0])
+    else:
+        q_value = float(q)
+
+    sorted_values = torch.sort(flat).values
+    idx = min(sorted_values.numel() - 1, max(0, int(round(q_value * (sorted_values.numel() - 1)))))
+    return sorted_values[idx]
+
+
+def _directml_affine_inverse(A: torch.Tensor) -> torch.Tensor:
+    R = A[..., :3, :3]
+    T = A[..., :3, 3:]
+    RT = R.mT
+    upper = torch.cat([RT, -RT @ T], dim=-1)
+    if A.size(-2) == 3:
+        return upper
+    P = A[..., 3:, :]
+    return torch.cat([upper, P], dim=-2)
+
+
+class _DirectMLTorchCompatProxy:
+    def __init__(self, torch_module):
+        self._torch = torch_module
+
+    def __getattr__(self, name):
+        return getattr(self._torch, name)
+
+    def nan_to_num(self, input, nan=0.0, posinf=None, neginf=None, *, out=None):
+        if (
+            out is not None
+            or not isinstance(input, torch.Tensor)
+            or input.device.type not in _MODEL_COMPAT_PATCH_DEVICE_TYPES
+        ):
+            return self._torch.nan_to_num(
+                input, nan=nan, posinf=posinf, neginf=neginf, out=out
+            )
+
+        pos = 65504.0 if posinf is None else posinf
+        neg = -65504.0 if neginf is None else neginf
+        return _directml_nan_to_num(input, nan=nan, posinf=pos, neginf=neg)
+
+    def quantile(
+        self,
+        input,
+        q,
+        dim=None,
+        keepdim=False,
+        *,
+        interpolation="linear",
+        out=None,
+    ):
+        if (
+            out is not None
+            or dim is not None
+            or keepdim
+            or interpolation != "linear"
+            or not isinstance(input, torch.Tensor)
+            or input.device.type not in _MODEL_COMPAT_PATCH_DEVICE_TYPES
+        ):
+            return self._torch.quantile(
+                input,
+                q,
+                dim=dim,
+                keepdim=keepdim,
+                interpolation=interpolation,
+                out=out,
+            )
+        return _directml_quantile(input, q)
+
+
+def _ensure_models_package_path():
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    package_roots = (
+        os.path.join(project_root, "models"),
+        os.path.join(
+            project_root,
+            "models",
+            "InfiniDepth",
+            "model",
+            "block",
+            "torchhub",
+            "dinov3",
+        ),
+    )
+    for package_root in package_roots:
+        if os.path.isdir(package_root) and package_root not in sys.path:
+            sys.path.insert(0, package_root)
+
+
+def _try_import_module(module_name: str):
+    try:
+        return importlib.import_module(module_name)
+    except Exception as e:
+        if DEBUG:
+            print(f"[DML/XPU compat] Skipped {module_name}: {e}")
+        return None
+
+
+def _install_directml_model_compat_patches():
+    global _DIRECTML_MODEL_PATCHES_INSTALLED
+    if not (IS_DIRECTML or IS_XPU) or _DIRECTML_MODEL_PATCHES_INSTALLED:
+        return
+
+    _ensure_models_package_path()
+    torch_proxy = _DirectMLTorchCompatProxy(torch)
+
+    torch_module_names = (
+        "models.depth_anything_3.api_n",
+        "depth_anything_3.api_n",
+        "depth_anything_3.model.da3",
+        "depth_anything_3.model.dpt",
+        "depth_anything_3.model.dualdpt",
+        "depth_anything_3.model.dinov2.layers.attention",
+        "depth_anything_3.model.dinov2.layers.block",
+        "depth_anything_3.model.utils.attention",
+        "depth_anything_3.model.utils.block",
+        "models.InfiniDepth.api",
+        "dinov3.layers.attention",
+        "dinov3.layers.block",
+        "models.InfiniDepth.model.block.torchhub.dinov3.dinov3.layers.attention",
+        "models.InfiniDepth.model.block.torchhub.dinov3.dinov3.layers.block",
+    )
+    for module_name in torch_module_names:
+        module = _try_import_module(module_name)
+        if module is not None and hasattr(module, "torch"):
+            module.torch = torch_proxy
+
+    geometry_modules = (
+        "depth_anything_3.utils.geometry",
+        "models.depth_anything_3.utils.geometry",
+    )
+    for module_name in geometry_modules:
+        module = _try_import_module(module_name)
+        if module is not None:
+            module.affine_inverse = _directml_affine_inverse
+
+    da3_module = _try_import_module("depth_anything_3.model.da3")
+    if da3_module is not None:
+        da3_module.affine_inverse = _directml_affine_inverse
+
+    _DIRECTML_MODEL_PATCHES_INSTALLED = True
+
+
 def get_model_path(model_id, cache_dir):
     from huggingface_hub import hf_hub_download
     CKPT_NAMES = ["model.safetensors", "model.pt", "model.ckpt"]
@@ -693,6 +860,7 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 # Load InfiniDepth Model
 def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
     """ Load InfiniDepth model from HuggingFace hub. """
+    _install_directml_model_compat_patches()
     # Load depth model without network warning when local cache exists
     model_path = get_model_path(model_id, cache_dir=CACHE_PATH)
     # Preparation for video depth anything models
@@ -709,6 +877,7 @@ def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
 
 # Load Depth-Anything-V3 Model
 def get_da3_model(model_id=MODEL_ID, dtype=DTYPE):
+    _install_directml_model_compat_patches()
     from models.depth_anything_3.api_n import DepthAnything3
     # Load depth model without network warning when local cache exists
     try:
