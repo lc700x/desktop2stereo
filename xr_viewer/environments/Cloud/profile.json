@@ -1,0 +1,18 @@
+{
+  "display_name": {
+    "EN": "Cloud",
+    "CN": "云端"
+  },
+  "environment_type": "panorama",
+  "background": {
+    "type": "equirectangular",
+    "image": "background.png",
+    "exposure": 1.0,
+    "yaw_offset_deg": 0.0
+  },
+  "glow_mode": "frosted",
+  "glow_intensity": 0.175,
+  "glow_width": 0.5,
+  "glow_intensity_multiplier": 1.5,
+  "screen_light_intensity": 3.5
+}

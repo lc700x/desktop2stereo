@@ -54,6 +54,11 @@ class Attention(nn.Module):
         q, k = self.q_norm(q), self.k_norm(k)
         q = self.rope(q, pos) if self.rope is not None else q
         k = self.rope(k, pos) if self.rope is not None else k
+        out_dtype = v.dtype
+        if q.dtype in (torch.float16, torch.bfloat16):
+            q = torch.nan_to_num(q.float(), nan=0.0, posinf=64.0, neginf=-64.0).clamp(-64.0, 64.0)
+            k = torch.nan_to_num(k.float(), nan=0.0, posinf=64.0, neginf=-64.0).clamp(-64.0, 64.0)
+            v = torch.nan_to_num(v.float(), nan=0.0, posinf=65504.0, neginf=-65504.0).clamp(-65504.0, 65504.0)
         x = F.scaled_dot_product_attention(
             q,
             k,
@@ -61,6 +66,7 @@ class Attention(nn.Module):
             dropout_p=self.attn_drop.p if self.training else 0.0,
             attn_mask=attn_mask,
         )
+        x = x.to(dtype=out_dtype)
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)

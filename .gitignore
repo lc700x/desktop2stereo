@@ -33,3 +33,7 @@ scripts/CHANGELOG.md
 output
 *.log
 *.jpg
+*claude*
+*codegraph*
+*codex*
+*serena*

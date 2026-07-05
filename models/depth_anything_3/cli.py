@@ -22,10 +22,10 @@ from __future__ import annotations
 import os
 import typer
 
-from models.depth_anything_3.services import start_server
-from models.depth_anything_3.services.gallery import gallery as gallery_main
-from models.depth_anything_3.services.inference_service import run_inference
-from models.depth_anything_3.services.input_handlers import (
+from depth_anything_3.services import start_server
+from depth_anything_3.services.gallery import gallery as gallery_main
+from depth_anything_3.services.inference_service import run_inference
+from depth_anything_3.services.input_handlers import (
     ColmapHandler,
     ImageHandler,
     ImagesHandler,
@@ -33,7 +33,7 @@ from models.depth_anything_3.services.input_handlers import (
     VideoHandler,
     parse_export_feat,
 )
-from models.depth_anything_3.utils.constants import (
+from depth_anything_3.utils.constants import (
     DEFAULT_EXPORT_DIR,
     DEFAULT_GALLERY_DIR,
     DEFAULT_GRADIO_DIR,
@@ -700,7 +700,7 @@ def gradio(
     ),
 ):
     """Launch Depth Anything 3 Gradio interactive web application"""
-    from models.depth_anything_3.app.gradio_app import DepthAnything3App
+    from depth_anything_3.app.gradio_app import DepthAnything3App
 
     # Create necessary directories
     os.makedirs(workspace_dir, exist_ok=True)

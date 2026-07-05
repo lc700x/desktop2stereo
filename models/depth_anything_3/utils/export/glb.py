@@ -18,8 +18,8 @@ import os
 import numpy as np
 import trimesh
 
-from models.depth_anything_3.specs import Prediction
-from models.depth_anything_3.utils.logger import logger
+from depth_anything_3.specs import Prediction
+from depth_anything_3.utils.logger import logger
 
 from .depth_vis import export_to_depth_vis
 

@@ -1,6 +1,7 @@
 ﻿# AMD Radeon RX 7000 Series Graphics Cards (GFX110X)
---index-url https://rocm.nightlies.amd.com/v2/gfx110X-all/
-torch==2.10.0+rocm7.13.0a20260313
-torchvision==0.25.0+rocm7.13.0a20260313
-# torchaudio==2.10.0+rocm7.13.0a20260313
-rocm_sdk_devel==7.13.0a20260313
+--index-url https://rocm.nightlies.amd.com/whl-multi-arch/
+# torchaudio
+rocm[libraries,device-gfx1100,device-gfx1101,device-gfx1102,device-gfx1103]==7.14.0a20260615
+torch[device-gfx1100,device-gfx1101,device-gfx1102,device-gfx1103]==2.10.0+rocm7.14.0a20260615
+torchvision[device-gfx1100,device-gfx1101,device-gfx1102,device-gfx1103]==0.25.0+rocm7.14.0a20260615
+rocm_sdk_devel==7.14.0a20260615

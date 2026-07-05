@@ -24,9 +24,9 @@ import os
 from typing import Any, Dict, List
 import gradio as gr
 
-from models.depth_anything_3.app.css_and_html import GRADIO_CSS, get_gradio_theme
-from models.depth_anything_3.app.modules.event_handlers import EventHandlers
-from models.depth_anything_3.app.modules.ui_components import UIComponents
+from depth_anything_3.app.css_and_html import GRADIO_CSS, get_gradio_theme
+from depth_anything_3.app.modules.event_handlers import EventHandlers
+from depth_anything_3.app.modules.ui_components import UIComponents
 
 # Set environment variables
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -85,7 +85,7 @@ class DepthAnything3App:
             gs_trj_mode: Trajectory mode for 3DGS
             gs_video_quality: Video quality for 3DGS
         """
-        from models.depth_anything_3.app.modules.utils import get_scene_info
+        from depth_anything_3.app.modules.utils import get_scene_info
 
         examples_dir = os.path.join(self.workspace_dir, "examples")
         if not os.path.exists(examples_dir):

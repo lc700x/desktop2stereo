@@ -18,8 +18,8 @@ import imageio
 import numpy as np
 from tqdm.auto import tqdm
 
-from models.depth_anything_3.utils.parallel_utils import async_call
-from models.depth_anything_3.utils.pca_utils import PCARGBVisualizer
+from depth_anything_3.utils.parallel_utils import async_call
+from depth_anything_3.utils.pca_utils import PCARGBVisualizer
 
 
 @async_call

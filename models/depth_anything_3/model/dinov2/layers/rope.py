@@ -184,8 +184,10 @@ class RotaryPositionEmbedding2D(nn.Module):
         # Compute feature dimension for each spatial direction
         feature_dim = tokens.size(-1) // 2
 
-        # Get frequency components
-        max_position = int(positions.max()) + 1
+        # Export-safe upper bound. `int(positions.max())` is data-dependent and
+        # breaks torch.export/ONNX for MIGraphX; sequence length is static and
+        # safely larger than every 2D grid coordinate, including special tokens.
+        max_position = positions.shape[-2]
         cos_comp, sin_comp = self._compute_frequency_components(
             feature_dim, max_position, tokens.device, tokens.dtype
         )

@@ -32,10 +32,10 @@ import torch
 from addict import Dict
 from tqdm import tqdm
 
-from models.depth_anything_3.bench.print_metrics import MetricsPrinter
-from models.depth_anything_3.utils.parallel_utils import parallel_execution
-from models.depth_anything_3.bench.registries import MV_REGISTRY
-from models.depth_anything_3.utils.constants import EVAL_REF_VIEW_STRATEGY
+from depth_anything_3.bench.print_metrics import MetricsPrinter
+from depth_anything_3.utils.parallel_utils import parallel_execution
+from depth_anything_3.bench.registries import MV_REGISTRY
+from depth_anything_3.utils.constants import EVAL_REF_VIEW_STRATEGY
 
 
 class Evaluator:
@@ -413,9 +413,9 @@ class Evaluator:
         Returns:
             Dict with pose metrics
         """
-        from models.depth_anything_3.bench.dataset import _wait_for_file_ready
-        from models.depth_anything_3.bench.utils import compute_pose
-        from models.depth_anything_3.utils.geometry import as_homogeneous
+        from depth_anything_3.bench.dataset import _wait_for_file_ready
+        from depth_anything_3.bench.utils import compute_pose
+        from depth_anything_3.utils.geometry import as_homogeneous
 
         _wait_for_file_ready(result_path)
         pred = np.load(result_path)
@@ -535,7 +535,7 @@ class Evaluator:
 if __name__ == "__main__":
     import sys
     from omegaconf import OmegaConf
-    from models.depth_anything_3.cfg import load_config
+    from depth_anything_3.cfg import load_config
 
     # Get default config path (relative to this file)
     _default_config = os.path.join(
@@ -564,7 +564,7 @@ if __name__ == "__main__":
 DepthAnything3 Benchmark Evaluation
 
 Usage:
-  python -m models.depth_anything_3.bench.evaluator [OPTIONS] [KEY=VALUE ...]
+  python -m depth_anything_3.bench.evaluator [OPTIONS] [KEY=VALUE ...]
 
 Configuration:
   --config PATH                      Config YAML file (default: bench/configs/eval_bench.yaml)
@@ -590,36 +590,36 @@ Multi-GPU:
 
 Examples:
   # Use default config
-  python -m models.depth_anything_3.bench.evaluator
+  python -m depth_anything_3.bench.evaluator
 
   # Override model path
-  python -m models.depth_anything_3.bench.evaluator model.path=depth-anything/DA3-LARGE
+  python -m depth_anything_3.bench.evaluator model.path=depth-anything/DA3-LARGE
 
   # Evaluate specific datasets and modes
-  python -m models.depth_anything_3.bench.evaluator \\
+  python -m depth_anything_3.bench.evaluator \\
       eval.datasets=[eth3d,hiroom] \\
       eval.modes=[pose]
 
   # Use custom config with overrides
-  python -m models.depth_anything_3.bench.evaluator \\
+  python -m depth_anything_3.bench.evaluator \\
       --config my_config.yaml \\
       model.path=/path/to/model \\
       eval.max_frames=50
 
   # Multi-GPU inference (auto-distributed)
-  CUDA_VISIBLE_DEVICES=0,1,2,3 python -m models.depth_anything_3.bench.evaluator
+  CUDA_VISIBLE_DEVICES=0,1,2,3 python -m depth_anything_3.bench.evaluator
 
   # Debug specific scenes
-  python -m models.depth_anything_3.bench.evaluator \\
+  python -m depth_anything_3.bench.evaluator \\
       eval.datasets=[eth3d] \\
       eval.scenes=[courtyard] \\
       inference.debug=true
 
   # Only evaluate (skip inference)
-  python -m models.depth_anything_3.bench.evaluator eval.eval_only=true
+  python -m depth_anything_3.bench.evaluator eval.eval_only=true
 
   # Only print saved metrics
-  python -m models.depth_anything_3.bench.evaluator eval.print_only=true
+  python -m depth_anything_3.bench.evaluator eval.print_only=true
 
           """)
         sys.exit(0)
@@ -696,7 +696,7 @@ Examples:
             print(f"[INFO] Launching {num_gpus} workers...")
 
             # Build base command
-            base_cmd = [sys.executable, "-m", "models.depth_anything_3.bench.evaluator"]
+            base_cmd = [sys.executable, "-m", "depth_anything_3.bench.evaluator"]
             # Pass config via dotlist instead of CLI args
             if config_path != _default_config:
                 base_cmd += ["--config", config_path]
@@ -737,7 +737,7 @@ Examples:
             evaluator.print_metrics(metrics)
         else:
             # Single GPU or worker process
-            from models.depth_anything_3.api import DepthAnything3
+            from depth_anything_3.api import DepthAnything3
 
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             api = DepthAnything3.from_pretrained(model_path)

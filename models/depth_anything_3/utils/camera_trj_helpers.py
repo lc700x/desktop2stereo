@@ -21,11 +21,11 @@ from einops import einsum, rearrange, reduce
 try:
     from scipy.spatial.transform import Rotation as R
 except ImportError:
-    from models.depth_anything_3.utils.logger import logger
+    from depth_anything_3.utils.logger import logger
 
     logger.warn("Dependency 'scipy' not found. Required for interpolating camera trajectory.")
 
-from models.depth_anything_3.utils.geometry import as_homogeneous
+from depth_anything_3.utils.geometry import as_homogeneous
 
 
 @torch.no_grad()

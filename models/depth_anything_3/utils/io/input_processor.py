@@ -28,8 +28,8 @@ import torch
 import torchvision.transforms as T
 from PIL import Image
 
-from models.depth_anything_3.utils.logger import logger
-from models.depth_anything_3.utils.parallel_utils import parallel_execution
+from depth_anything_3.utils.logger import logger
+from depth_anything_3.utils.parallel_utils import parallel_execution
 
 
 class InputProcessor:

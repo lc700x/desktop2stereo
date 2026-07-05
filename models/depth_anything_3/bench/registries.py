@@ -23,7 +23,7 @@ import importlib
 import pkgutil
 import threading
 
-from models.depth_anything_3.utils.registry import Registry
+from depth_anything_3.utils.registry import Registry
 
 __all__ = ["METRIC_REGISTRY", "MONO_REGISTRY", "MV_REGISTRY", "NVS_REGISTRY"]
 
@@ -34,7 +34,7 @@ _lock = threading.Lock()
 
 def _import_all_datasets_once():
     """
-    Scan and import all .py submodules under models.depth_anything_3.bench.datasets
+    Scan and import all .py submodules under depth_anything_3.bench.datasets
     (skip files/packages starting with underscore), to trigger @REGISTRY.register(...) in each module.
     """
     global _loaded
@@ -45,7 +45,7 @@ def _import_all_datasets_once():
         if _loaded:
             return
 
-        pkg_name = "models.depth_anything_3.bench.datasets"
+        pkg_name = "depth_anything_3.bench.datasets"
         pkg = importlib.import_module(pkg_name)
         pkg_paths = list(getattr(pkg, "__path__", []))
 

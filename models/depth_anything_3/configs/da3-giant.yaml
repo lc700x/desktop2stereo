@@ -1,11 +1,11 @@
 __object__:
-  path: models.depth_anything_3.model.da3
+  path: depth_anything_3.model.da3
   name: DepthAnything3Net
   args: as_params
 
 net:
   __object__:
-    path: models.depth_anything_3.model.dinov2.dinov2
+    path: depth_anything_3.model.dinov2.dinov2
     name: DinoV2
     args: as_params
 
@@ -18,7 +18,7 @@ net:
 
 head:
   __object__:
-    path: models.depth_anything_3.model.dualdpt
+    path: depth_anything_3.model.dualdpt
     name: DualDPT
     args: as_params
 
@@ -30,7 +30,7 @@ head:
 
 cam_enc:
   __object__:
-    path: models.depth_anything_3.model.cam_enc
+    path: depth_anything_3.model.cam_enc
     name: CameraEnc
     args: as_params
 
@@ -38,7 +38,7 @@ cam_enc:
 
 cam_dec:
   __object__:
-    path: models.depth_anything_3.model.cam_dec
+    path: depth_anything_3.model.cam_dec
     name: CameraDec
     args: as_params
 
@@ -47,7 +47,7 @@ cam_dec:
 
 gs_head:
   __object__:
-    path: models.depth_anything_3.model.gsdpt
+    path: depth_anything_3.model.gsdpt
     name: GSDPT
     args: as_params
 
@@ -59,7 +59,7 @@ gs_head:
 
 gs_adapter:
   __object__:
-    path: models.depth_anything_3.model.gs_adapter
+    path: depth_anything_3.model.gs_adapter
     name: GaussianAdapter
     args: as_params
 

@@ -19,7 +19,7 @@ from einops import einsum
 try:
     from e3nn.o3 import matrix_to_angles, wigner_D
 except ImportError:
-    from models.depth_anything_3.utils.logger import logger
+    from depth_anything_3.utils.logger import logger
 
     logger.warn("Dependency 'e3nn' not found. Required for rotating the camera space SH coeff")
 

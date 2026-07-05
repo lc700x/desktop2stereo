@@ -1,6 +1,7 @@
-﻿# AMD Radeon RX 6000 Series Graphics Cards (GFX103X)
---index-url https://rocm.nightlies.amd.com/v2-staging/gfx101X-dgpu/
-torch==2.10.0+rocm7.12.0a20260311
-torchvision==0.25.0+rocm7.12.0a20260311
-# torchaudio==2.10.0+rocm7.12.0a20260311
-rocm_sdk_devel==7.12.0a20260311
+﻿# AMD Radeon RX 5000 Series Graphics Cards (GFX101X)
+--index-url https://rocm.nightlies.amd.com/whl-multi-arch/
+# torchaudio
+rocm[libraries,device-gfx1010,device-gfx1011,device-gfx1012]==7.14.0a20260615
+torch[device-gfx1010,device-gfx1011,device-gfx1012]==2.10.0+rocm7.14.0a20260615
+torchvision[device-gfx1010,device-gfx1011,device-gfx1012]==0.25.0+rocm7.14.0a20260615
+rocm_sdk_devel==7.14.0a20260615

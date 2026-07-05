@@ -6,8 +6,41 @@ import time
 import signal
 import sys
 import subprocess
+import os
+from collections import deque
 
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, CONTROLLER_MODEL
+# Force UTF-8 stdout/stderr on Windows
+try:
+    if sys.stdout and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.stderr and sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+# When launched via GUI stdout/stderr are PIPEs: tqdm uses \r to redraw
+# the bar in-place, but the GUI reads lines (readline), so \r updates
+# buffer until the final \n and the bar "suddenly appears" complete.
+# Wrap stdout to convert \r -> \n so each tqdm tick becomes a new line,
+# and spoof isatty() so tqdm/HF Hub actually render bars at all.
+class _CrToLf:
+    def __init__(self, stream):
+        self._s = stream
+    def write(self, text):
+        self._s.write(text.replace('\r', '\n'))
+    def flush(self):
+        self._s.flush()
+    def isatty(self):
+        return True
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+if not sys.stdout.isatty():
+    sys.stdout = _CrToLf(sys.stdout)
+if not sys.stderr.isatty():
+    sys.stderr = _CrToLf(sys.stderr)
+
+from utils import (OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, XR_PREVIEW_WINDOW, CROP_MODE, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, CONTROLLER_MODEL, ENVIRONMENT_MODEL, VSYNC)
 from depth import process, predict_depth
 
 if "CUDA" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO:
@@ -19,6 +52,9 @@ global_processes = {
     'ffmpeg': None,
     'rtmp_server': None
 }
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STOP_REQUEST_FILE = os.path.join(BASE_DIR, "logs", "stop.request")
 
 # Track current stream size + restart lock
 current_stream_size = None
@@ -155,24 +191,32 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
                 raw = frame.frame_buffer.copy()
             else:
                 raw = frame.frame_buffer.clone()
-
             raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
 
         @cap.event
         def on_closed():
-            print("[capture_loop] Capture session closed")
+            if not shutdown_event.is_set():
+                    print("[capture_loop] Capture session closed")
 
         cap.start()
 else:
     # DXCamera based wincam
     from capture import DesktopGrabber
+    _USE_MAC_TENSOR_CAPTURE = (
+        OS_NAME == "Darwin"
+        and CAPTURE_TOOL in ("ScreenCaptureKit", "Quartz")
+        and "CPU" not in DEVICE_INFO
+    )
     
     def capture_loop():
         cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX)
         while not shutdown_event.is_set():
             try:
                 capture_start_time = time.perf_counter()
-                frame_raw, size = cap.grab()
+                if _USE_MAC_TENSOR_CAPTURE:
+                    frame_raw, size = cap.grab(output_format="rgb_tensor")
+                else:
+                    frame_raw, size = cap.grab()
                 
                 if shutdown_event.is_set():
                     break
@@ -280,17 +324,68 @@ def cleanup_all_resources():
     
     print("[Cleanup] All resources cleaned up")
 
+def _force_exit_watchdog(delay):
+    """Fallback: hard-exit if a graceful shutdown hangs.
+
+    OpenXR / GLFW / GPU-driver native threads sometimes refuse to join, which
+    would leave this process alive as an orphan still holding the GPU context +
+    model caches (e.g. ~/.miopen) - that makes the *next* launch of any mode
+    crash until a reboot.  If the main loop hasn't unwound and exited within
+    `delay` seconds of a shutdown signal, force the process to die.
+    """
+    time.sleep(delay)
+    try:
+        sys.stdout.flush(); sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(0)
+
+_shutdown_watchdog_started = False
+
+def _watch_stop_request_file():
+    """GUI-to-child graceful stop channel that avoids Windows CTRL_BREAK."""
+    while not shutdown_event.is_set():
+        try:
+            if os.path.exists(STOP_REQUEST_FILE):
+                print("[Signal] Stop requested by GUI, shutting down gracefully...")
+                shutdown_event.set()
+                try:
+                    os.remove(STOP_REQUEST_FILE)
+                except Exception:
+                    pass
+                break
+        except Exception:
+            pass
+        time.sleep(0.1)
+
 def signal_handler(signum, frame):
-    """Handle Ctrl+C and other termination signals"""
-    print(f"\n[Signal] Received signal {signum}, shutting down...")
+    """Handle Ctrl+C / CTRL_BREAK / termination signals.
+
+    We intentionally do NOT exit here.  Instead we set shutdown_event and let
+    the main render/stream loop unwind naturally so the viewer's own cleanup
+    runs - in OpenXR mode that means xr.end_session/destroy_session plus release
+    of the D3D11/GL GPU interop.  Skipping that (a hard kill mid-GPU-frame) can
+    wedge the GPU/compute driver until reboot and break the next launch of any
+    mode.  A watchdog thread force-exits if the graceful unwind ever hangs.
+    """
+    global _shutdown_watchdog_started
+    print(f"\n[Signal] Received signal {signum}, shutting down gracefully...")
     shutdown_event.set()
-    cleanup_all_resources()
-    sys.exit(0)
+    if not _shutdown_watchdog_started:
+        _shutdown_watchdog_started = True
+        threading.Thread(target=_force_exit_watchdog, args=(8.0,),
+                         name="ShutdownWatchdog", daemon=True).start()
 
 # Register signal handlers
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
-if OS_NAME != "Windows":
+if OS_NAME == "Windows":
+    # CTRL_BREAK_EVENT (sent by the GUI to this process group) arrives as
+    # SIGBREAK on Windows: route it through the same graceful handler so the
+    # OpenXR/GPU teardown runs before we exit.
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, signal_handler)
+else:
     signal.signal(signal.SIGQUIT, signal_handler)
 
 # get ffmpeg command
@@ -508,7 +603,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             # Alternatively: full window including borders/title bar
             # window_left, window_top, window_right, window_bottom = win32gui.GetWindowRect(hwnd)
 
-            print(f"✅ Stereo Viewer window found on monitor {monitor_idx}")
+            print(f"Stereo Viewer window found on monitor {monitor_idx}")
             print(f"Monitor bounds: X={monitor['left']} Y={monitor['top']} W={monitor['width']} H={monitor['height']}")
             print(f"Window client area: X={window_left} Y={window_top} -> {window_right}x{window_bottom}")
 
@@ -981,20 +1076,34 @@ def main(mode="Viewer"):
     streamer, window = None, None
     
     # FPS statistics tracking
-    fps_values = []  # Store recent FPS values for 1% percentile calculation
+    fps_values = deque(maxlen=300)  # Recent FPS values (O(1) bounded; for 1% low)
     max_fps_history = 300  # Keep last 300 FPS values (5 seconds at 60 FPS)
     avg_fps = 0.0
     low_fps_1_percent_avg = float('inf')  # Average of FPS below 1% percentile
     fps_update_interval = 5.0  # Update statistics every 5 seconds
-    
-    # Latency statistics tracking
-    latency_history = []  # Store recent latency values for average calculation
+
+    # Latency statistics tracking.
+    # Use a deque + running sum so per-frame collection is O(1) (the old list
+    # used .append()+.pop(0), and .pop(0) is O(n) on every single frame), and the
+    # sliding-window average is O(1) instead of summing the whole history.
     max_latency_history = 300  # Keep same amount as FPS
+    latency_history = deque()   # bounded manually to keep the running sum in sync
+    latency_sum = 0.0           # running sum of latency_history for O(1) average
     avg_total_latency = 0.0
     
     try:
         if mode == "Viewer":
-            from viewer import StereoWindow
+            using_metal_viewer = False
+            if OS_NAME == "Darwin" and STREAM_MODE != "MJPEG":
+                try:
+                    from metal_viewer import StereoWindow
+                    using_metal_viewer = True
+                    print("[Main] Using Metal Accelerated Local Viewer")
+                except Exception as e:
+                    print(f"[Main] Metal viewer unavailable ({e}); falling back to OpenGL viewer")
+                    from viewer import StereoWindow
+            else:
+                from viewer import StereoWindow
             # Get initial frame to determine window size (block until first frame arrives)
             rgb, depth, capture_start_time = depth_q.get()
             import torch
@@ -1009,23 +1118,34 @@ def main(mode="Viewer"):
                 h = int(1280 / w * h)
                 w = 1280
                 
-            window = StereoWindow(
-                capture_mode=CAPTURE_MODE, 
-                monitor_index=MONITOR_INDEX, 
-                ipd=IPD, depth_ratio=DEPTH_STRENGTH, 
-                convergence=CONVERGENCE, 
-                display_mode=DISPLAY_MODE, 
-                fill_16_9=FILL_16_9, 
-                show_fps=SHOW_FPS, 
-                use_3d=USE_3D_MONITOR, 
-                fix_aspect=FIX_VIEWER_ASPECT, 
-                stream_mode=STREAM_MODE, 
-                lossless_scaling=LOSSLESS_SCALING_SUPPORT, 
-                specify_display=STEREO_DISPLAY_SELECTION, 
-                stereo_display_index=STEREO_DISPLAY_INDEX, 
-                frame_size=(w,h),
+            viewer_kwargs = dict(
+                capture_mode=CAPTURE_MODE,
+                monitor_index=MONITOR_INDEX,
+                ipd=IPD,
+                depth_ratio=DEPTH_STRENGTH,
+                convergence=CONVERGENCE,
+                display_mode=DISPLAY_MODE,
+                fill_16_9=FILL_16_9,
+                show_fps=SHOW_FPS,
+                use_3d=USE_3D_MONITOR,
+                fix_aspect=FIX_VIEWER_ASPECT,
+                stream_mode=STREAM_MODE,
+                lossless_scaling=LOSSLESS_SCALING_SUPPORT,
+                specify_display=STEREO_DISPLAY_SELECTION,
+                stereo_display_index=STEREO_DISPLAY_INDEX,
+                frame_size=(w, h),
                 use_cuda=USE_CUDART,
-                cuda_device_id=DEVICE_ID)
+                cuda_device_id=DEVICE_ID,
+                vsync=VSYNC,
+            )
+            try:
+                window = StereoWindow(**viewer_kwargs)
+            except Exception as e:
+                if not using_metal_viewer:
+                    raise
+                print(f"[Main] Metal viewer init failed ({e}); falling back to OpenGL viewer")
+                from viewer import StereoWindow
+                window = StereoWindow(**viewer_kwargs)
 
             if STREAM_MODE == "RTMP":
                 if OS_NAME == "Windows":
@@ -1070,24 +1190,25 @@ def main(mode="Viewer"):
                     # Calculate total latency for this frame
                     current_time = time.perf_counter()
                     total_latency = current_time - capture_start_time
-                    
-                    # Update latencies for statistics (still collected)
+
+                    # Update latencies for statistics (O(1) sliding window via
+                    # running sum; popleft() is O(1), unlike list.pop(0)).
                     latency_history.append(total_latency)
+                    latency_sum += total_latency
                     if len(latency_history) > max_latency_history:
-                        latency_history.pop(0)
-                    
+                        latency_sum -= latency_history.popleft()
+
                     # Update FPS every second
                     frame_count += 1
+                    total_frames += 1
                     elapsed = current_time - last_time
                     if elapsed >= 1.0:
                         current_fps = frame_count / elapsed
                         frame_count = 0
                         last_time = current_time
                         
-                        # Store FPS value for statistics
+                        # Store FPS value for statistics (deque auto-evicts oldest)
                         fps_values.append(current_fps)
-                        if len(fps_values) > max_fps_history:
-                            fps_values.pop(0)
                         
                         # Update FPS and latency statistics every 5 seconds
                         if current_time - last_fps_update_time >= fps_update_interval:
@@ -1106,9 +1227,9 @@ def main(mode="Viewer"):
                                 else:
                                     low_fps_1_percent_avg = sorted_fps[0] if sorted_fps else 0.0
                             
-                            # Calculate average latency
+                            # Calculate average latency (O(1) from running sum)
                             if latency_history:
-                                avg_total_latency = sum(latency_history) / len(latency_history)
+                                avg_total_latency = latency_sum / len(latency_history)
                             
                             last_fps_update_time = current_time
                         
@@ -1162,7 +1283,8 @@ def main(mode="Viewer"):
                     next_render_time += TIME_SLEEP
                 
                 window.render()
-                glfw.swap_buffers(window.window)
+                if not getattr(window, "uses_metal", False):
+                    glfw.swap_buffers(window.window)
                 glfw.poll_events()
             
             glfw.terminate()
@@ -1170,13 +1292,19 @@ def main(mode="Viewer"):
         elif mode == "OpenXR":
             from xrviewer import OpenXRViewer, OPENXR_AVAILABLE
             if not OPENXR_AVAILABLE:
-                raise ImportError("pyopenxr not installed — run: pip install pyopenxr")
+                raise ImportError("pyopenxr not installed - run: pip install pyopenxr")
             rgb, depth, capture_start_time = depth_q.get()
             import torch
             if isinstance(rgb, torch.Tensor):
                 w, h = rgb.shape[2], rgb.shape[1]
             else:
                 w, h = rgb.shape[1], rgb.shape[0]
+            print(f"[Main] Capture source: {CAPTURE_MODE}")
+            if CAPTURE_MODE == 'Monitor':
+                print(f"[Main] Input monitor: {MONITOR_INDEX}")
+            print(f"[Main] Desktop resolution: {w}x{h}")
+            print(f"[Main] Depth strength: {DEPTH_STRENGTH}, IPD: {IPD}")
+            print(f"[Main] Environment: {ENVIRONMENT_MODEL}")
             try:
                 viewer = OpenXRViewer(
                     ipd=IPD,
@@ -1189,10 +1317,15 @@ def main(mode="Viewer"):
                     controller_model=CONTROLLER_MODEL,
                     capture_mode=CAPTURE_MODE,
                     monitor_index=MONITOR_INDEX,
+                    environment_name=ENVIRONMENT_MODEL,
+                    show_preview_window=XR_PREVIEW_WINDOW,
+                    crop_mode=CROP_MODE,
                 )
                 viewer.run(first_rgb=rgb, first_depth=depth)
             except Exception as e:
+                import traceback
                 print(f"[Main] OpenXR Link error: {e}")
+                print(traceback.format_exc())
 
         else:
             from depth import make_sbs, DEVICE_INFO
@@ -1204,7 +1337,7 @@ def main(mode="Viewer"):
             print(f"[Main] Legacy Streamer Started")
             
             # FPS and latency tracking for legacy mode
-            fps_values = []
+            fps_values = deque(maxlen=300)  # O(1) bounded history
             max_fps_history = 300
             avg_fps = 0.0
             low_fps_1_percent_avg = float('inf')
@@ -1219,14 +1352,13 @@ def main(mode="Viewer"):
                     
                     # Calculate FPS
                     frame_count += 1
+                    total_frames += 1
                     current_time = time.perf_counter()
                     if current_time - last_time >= 1.0:
                         current_fps = frame_count / (current_time - last_time)
                         
-                        # Store FPS value for statistics
+                        # Store FPS value for statistics (deque auto-evicts oldest)
                         fps_values.append(current_fps)
-                        if len(fps_values) > max_fps_history:
-                            fps_values.pop(0)
                         
                         # Update FPS statistics every 5 seconds
                         if current_time - last_fps_update_time >= fps_update_interval:
@@ -1280,4 +1412,12 @@ def main(mode="Viewer"):
         print(f"[Main] Stopped")
 
 if __name__ == "__main__":
+    threading.Thread(target=_watch_stop_request_file,
+                     name="StopRequestWatcher", daemon=True).start()
     main(mode=RUN_MODE)
+    # main() has returned, so cleanup_all_resources() already ran in its finally block.  
+    try:
+        sys.stdout.flush(); sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(0)

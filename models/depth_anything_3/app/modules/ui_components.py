@@ -22,7 +22,7 @@ import os
 from typing import Any, Dict, List, Tuple
 import gradio as gr
 
-from models.depth_anything_3.app.modules.utils import get_logo_base64, get_scene_info
+from depth_anything_3.app.modules.utils import get_logo_base64, get_scene_info
 
 
 class UIComponents:
@@ -145,7 +145,7 @@ class UIComponents:
             A tuple of (prev_measure_btn, measure_view_selector, next_measure_btn, measure_image,
             measure_depth_image, measure_text)
         """
-        from models.depth_anything_3.app.css_and_html import MEASURE_INSTRUCTIONS_HTML
+        from depth_anything_3.app.css_and_html import MEASURE_INSTRUCTIONS_HTML
 
         gr.Markdown(MEASURE_INSTRUCTIONS_HTML)
         with gr.Row(elem_classes=["navigation-row"]):
@@ -450,7 +450,7 @@ class UIComponents:
         Returns:
             Header HTML component
         """
-        from models.depth_anything_3.app.css_and_html import get_header_html
+        from depth_anything_3.app.css_and_html import get_header_html
 
         return gr.HTML(get_header_html(get_logo_base64()))
 
@@ -461,7 +461,7 @@ class UIComponents:
         Returns:
             Description HTML component
         """
-        from models.depth_anything_3.app.css_and_html import get_description_html
+        from depth_anything_3.app.css_and_html import get_description_html
 
         return gr.HTML(get_description_html())
 
@@ -472,6 +472,6 @@ class UIComponents:
         Returns:
             Acknowledgements HTML component
         """
-        from models.depth_anything_3.app.css_and_html import get_acknowledgements_html
+        from depth_anything_3.app.css_and_html import get_acknowledgements_html
 
         return gr.HTML(get_acknowledgements_html())
