@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 2
+Monitor Index: none
 Window Title: ''
 Show FPS: false
 Model List:
@@ -321,8 +321,8 @@ IPD: 0.064
 Convergence: 0.0
 Display Mode: Half-SBS
 FP16: true
-torch.compile: true
-TensorRT: true
+torch.compile: null
+TensorRT: null
 Recompile TensorRT: false
 CoreML: null
 Recompile CoreML: false
@@ -346,7 +346,7 @@ Audio Delay: -0.15
 Controller Model: PICO
 Environment Model: Default
 Lossless Scaling Support: false
-Capture Tool: WindowsCaptureCUDA
+Capture Tool: none
 Fill 16:9: true
 Fix Viewer Aspect: false
-Stereo Output: 1
+Stereo Output: null

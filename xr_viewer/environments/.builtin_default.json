@@ -23,7 +23,7 @@
     "width": 2.4,
     "distance": 2.0,
     "pan_x": 0.0,
-    "pan_y": 0.0,
+    "pan_y": 1.0,
     "yaw": 0.0,
     "pitch": 0.0,
     "curve_axis": "none",
