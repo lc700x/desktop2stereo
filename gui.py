@@ -456,6 +456,8 @@ UI_TEXTS = {
         "invalid_url_scheme": "Invalid URL scheme: {}",
         "error_preview": "Failed to preview: {}",
         "url_copied": "URL copied to clipboard",
+        "Log Folder": "Log Folder",
+        "tooltip_open_log": "Please send the log file for debugging.",
     },
     "CN": {
         "Monitor": "输入屏幕",
@@ -591,6 +593,8 @@ UI_TEXTS = {
         "invalid_url_scheme": "无效 URL 协议: {}",
         "error_preview": "打开浏览器失败: {}",
         "url_copied": "已复制网址到剪贴板",
+        "Log Folder": "日志文件夹",
+        "tooltip_open_log": "请将日志文件发送用于排查bug。",
     }
 }
 # ─────────────────────────────────────────────
@@ -1565,6 +1569,7 @@ class Desktop2StereoGUI:
             value="system", on_select=self.on_theme_change,
             width=S(130))
         self.reset_btn = ft.Button(content=ft.Text("Reset", size=FONT_SIZE), width=S(130), on_click=self.reset_defaults)
+        self.open_log_btn = ft.Button(content=ft.Text("Log Folder", size=FONT_SIZE), width=S(130), on_click=self.open_log, tooltip="Please send the log file for debugging.")
         self.stop_btn = ft.Button(content=ft.Text("Stop", size=FONT_SIZE), width=S(130), on_click=self.stop_process)
         self.run_btn = ft.Button(content=ft.Text("Run", size=FONT_SIZE), width=S(150), on_click=self.save_and_run)
         lang_row = ft.Row([
@@ -1609,7 +1614,7 @@ class Desktop2StereoGUI:
         ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=S(8))
 
         btn_row = ft.Row([
-            self.reset_btn,
+            ft.Row([self.reset_btn, self.open_log_btn], spacing=S(10)),
             ft.Container(expand=True),
             ft.Row([self.stop_btn, self.run_btn], spacing=S(20)),
         ])
@@ -2574,6 +2579,8 @@ class Desktop2StereoGUI:
         self.preview_btn.content.value = t["Preview"]
         self.refresh_btn.content.value = t["Refresh"]
         self.reset_btn.content.value = t["Reset"]
+        self.open_log_btn.content.value = t["Log Folder"]
+        self.open_log_btn.tooltip = t["tooltip_open_log"]
         self.stop_btn.content.value = t["Stop"]
         self.run_btn.content.value = t["Run"]
         # Update tooltips
@@ -3348,7 +3355,18 @@ class Desktop2StereoGUI:
         self.auto_enable_optimizers_based_on_device()
         self.page.update()
 
-	
+    def open_log(self, _):
+        """Open the log folder in the system file explorer."""
+        try:
+            if sys.platform == "win32":
+                os.startfile(LOG_DIR)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", LOG_DIR], check=False)
+            else:
+                subprocess.run(["xdg-open", LOG_DIR], check=False)
+        except Exception:
+            pass
+
     # ESC long-press monitoring
 
     VK_ESC = 0x1B
