@@ -494,7 +494,7 @@ class OpenXRViewer(
         # Crop-mode OSD: shows Auto/Manual/Off after the left-trigger 3s-hold cycle
         self._crop_mode_osd_tex      = None
         self._crop_mode_osd_vao      = None
-        self._crop_mode_osd_tex_size = (512, 78)
+        self._crop_mode_osd_tex_size = (256, 78)
         self._crop_mode_osd_show_t   = -999.0
         self._crop_mode_osd_last_key = None
 
