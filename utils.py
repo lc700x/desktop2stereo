@@ -166,7 +166,10 @@ def torch_compile_with_runtime_fallback(torch_module, target, label, **compile_k
             return target(*args, **kwargs)
 
     # Preserve module attributes so code like model.predict_depth(...) still works
-    for attr in ("predict_depth", "parameters", "eval", "half", "float", "train", "forward"):
+    for attr in ("predict_depth", "parameters", "eval", "half", "float", "train", "forward", "hint",
+                 "forward_features", "forward_depth", "to", "load_state_dict", "state_dict",
+                 "named_parameters", "children", "modules", "apply", "requires_grad",
+                 "double", "bfloat16", "cpu", "cuda"):
         if hasattr(target, attr):
             setattr(wrapper, attr, getattr(target, attr))
 
