@@ -2088,7 +2088,7 @@ class Desktop2StereoGUI:
         mps = "MPS" in device_label
         xpu = "XPU" in device_label
         other = not (cuda or dml or mps or xpu)
-        self.torch_compile_cb.visible = cuda
+        self.torch_compile_cb.visible = cuda or xpu
         self.tensorrt_cb.visible = cuda and not IS_ROCM
         self.tensorrt_cb.disabled = False
         self.recompile_trt_cb.visible = self.tensorrt_cb.value if self.tensorrt_cb.visible else False
@@ -2102,7 +2102,7 @@ class Desktop2StereoGUI:
         self.migraphx_cb.visible = rocm
         self.migraphx_cb.disabled = False
         self.recompile_migraphx_cb.visible = self.migraphx_cb.value if self.migraphx_cb.visible else False
-        self.fp16_cb.visible = not (dml or mps)
+        self.fp16_cb.visible = not (dml or mps or xpu)
         self.r4_label.visible = not (dml or other)
         is_windows_or_mac = OS_NAME in ("Windows", "Darwin")
         self.r6_label.visible = is_windows_or_mac
