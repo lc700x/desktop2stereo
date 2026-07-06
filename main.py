@@ -63,20 +63,9 @@ ffmpeg_restart_lock = threading.Lock()
 # Use precise frame interval
 TIME_SLEEP = 1.0 / FPS
 
-# Latest-frame-only queues: producers drain stale frames before pushing,
-# so the consumer always gets the most recent capture / depth result
-# and the producer never blocks.
-raw_q = queue.Queue(maxsize=2)
-depth_q = queue.Queue(maxsize=2)
-
-def _put_latest(q, item):
-    """Non-blocking put that discards stale frames."""
-    while True:
-        try:
-            q.get_nowait()
-        except queue.Empty:
-            break
-    q.put(item)
+# Queues with size=1 (latest-frame-only logic)
+raw_q = queue.Queue(maxsize=1)
+depth_q = queue.Queue(maxsize=1)
 
 # Thread latency tracking dictionaries
 thread_latencies = {
@@ -202,7 +191,7 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
                 raw = frame.frame_buffer.copy()
             else:
                 raw = frame.frame_buffer.clone()
-            _put_latest(raw_q, (raw, OUTPUT_RESOLUTION, capture_start_time))
+            raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
 
         @cap.event
         def on_closed():
@@ -232,7 +221,7 @@ else:
                 if shutdown_event.is_set():
                     break
                 
-                _put_latest(raw_q, (frame_raw, size, capture_start_time))
+                raw_q.put((frame_raw, size, capture_start_time))
             except queue.Empty:
                 continue
             except Exception as e:
@@ -261,10 +250,11 @@ def process_depth_loop():
             depth_latency = _perf() - depth_start
             _latencies['resize'] = process_latency
             _latencies['depth'] = depth_latency
+            
+            # Send to render queue
+            depth_q.put((frame_rgb, depth, capture_start_time))
 
-            _put_latest(depth_q, (frame_rgb, depth, capture_start_time))
-
-            sleep = target_time - _perf()
+            sleep = target_time - time.perf_counter()
             if sleep > 0:
                 time.sleep(sleep)
 
