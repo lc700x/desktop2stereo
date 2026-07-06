@@ -63,9 +63,20 @@ ffmpeg_restart_lock = threading.Lock()
 # Use precise frame interval
 TIME_SLEEP = 1.0 / FPS
 
-# Queues with size=1 (latest-frame-only logic)
-raw_q = queue.Queue(maxsize=1)
-depth_q = queue.Queue(maxsize=1)
+# Latest-frame-only queues: producers drain stale frames before pushing,
+# so the consumer always gets the most recent capture / depth result
+# and the producer never blocks.
+raw_q = queue.Queue(maxsize=2)
+depth_q = queue.Queue(maxsize=2)
+
+def _put_latest(q, item):
+    """Non-blocking put that discards stale frames."""
+    while True:
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            break
+    q.put(item)
 
 # Thread latency tracking dictionaries
 thread_latencies = {
@@ -191,7 +202,7 @@ if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"
                 raw = frame.frame_buffer.copy()
             else:
                 raw = frame.frame_buffer.clone()
-            raw_q.put((raw, OUTPUT_RESOLUTION, capture_start_time))
+            _put_latest(raw_q, (raw, OUTPUT_RESOLUTION, capture_start_time))
 
         @cap.event
         def on_closed():
@@ -221,7 +232,7 @@ else:
                 if shutdown_event.is_set():
                     break
                 
-                raw_q.put((frame_raw, size, capture_start_time))
+                _put_latest(raw_q, (frame_raw, size, capture_start_time))
             except queue.Empty:
                 continue
             except Exception as e:
@@ -230,33 +241,30 @@ else:
 
 # Combined processing + depth thread (replaces process_loop and depth_loop)
 def process_depth_loop():
-    target_time = time.perf_counter()
-    while not shutdown_event.is_set():
+    _is_set = shutdown_event.is_set
+    _get = raw_q.get
+    _latencies = thread_latencies
+    _perf = time.perf_counter
+    target_time = _perf()
+    while not _is_set():
         target_time += TIME_SLEEP
         try:
-            if shutdown_event.is_set():
-                break
-            
-            # Get raw frame with capture timestamp
-            frame_raw, size, capture_start_time = raw_q.get(timeout=TIME_SLEEP)
-            
-            # Process: resize / color conversion
-            process_start_time = time.perf_counter()
-            frame_rgb = process(frame_raw, size)
-            process_latency = process_start_time - capture_start_time
-            thread_latencies['capture'] = process_latency  # capture latency
-            
-            # Depth inference
-            depth_start_time = time.perf_counter()
-            depth = predict_depth(frame_rgb)
-            depth_latency = time.perf_counter() - depth_start_time
-            thread_latencies['resize'] = process_latency   # resize latency
-            thread_latencies['depth'] = depth_latency      # depth latency
-            
-            # Send to render queue
-            depth_q.put((frame_rgb, depth, capture_start_time))
+            frame_raw, size, capture_start_time = _get(timeout=TIME_SLEEP)
 
-            sleep = target_time - time.perf_counter()
+            process_start = _perf()
+            frame_rgb = process(frame_raw, size)
+            process_latency = process_start - capture_start_time
+            _latencies['capture'] = process_latency
+
+            depth_start = _perf()
+            depth = predict_depth(frame_rgb)
+            depth_latency = _perf() - depth_start
+            _latencies['resize'] = process_latency
+            _latencies['depth'] = depth_latency
+
+            _put_latest(depth_q, (frame_rgb, depth, capture_start_time))
+
+            sleep = target_time - _perf()
             if sleep > 0:
                 time.sleep(sleep)
 
@@ -1180,25 +1188,28 @@ def main(mode="Viewer"):
             # Variables for latency update at 1Hz
             last_latency_display = 0.0    # last latency value shown
             last_fps_time = time.perf_counter()
-            while (not glfw.window_should_close(window.window) and 
-                   not shutdown_event.is_set()):
+            _win = window.window
+            _should_close = glfw.window_should_close
+            _is_set = shutdown_event.is_set
+            _dq_get = depth_q.get_nowait
+            _perf = time.perf_counter
+            _latencies = thread_latencies
+            _is_3d = USE_3D_MONITOR
+            _is_mjpeg = STREAM_MODE == "MJPEG"
+            _uses_metal = getattr(window, "uses_metal", False)
+            while not _should_close(_win) and not _is_set():
 
                 try:
-                    # Get next frame (already processed + depth)
-                    rgb, depth, capture_start_time = depth_q.get(timeout=0.001)
-                    
-                    # Calculate total latency for this frame
-                    current_time = time.perf_counter()
+                    rgb, depth, capture_start_time = _dq_get()
+
+                    current_time = _perf()
                     total_latency = current_time - capture_start_time
 
-                    # Update latencies for statistics (O(1) sliding window via
-                    # running sum; popleft() is O(1), unlike list.pop(0)).
                     latency_history.append(total_latency)
                     latency_sum += total_latency
                     if len(latency_history) > max_latency_history:
                         latency_sum -= latency_history.popleft()
 
-                    # Update FPS every second
                     frame_count += 1
                     total_frames += 1
                     elapsed = current_time - last_time
@@ -1206,37 +1217,25 @@ def main(mode="Viewer"):
                         current_fps = frame_count / elapsed
                         frame_count = 0
                         last_time = current_time
-                        
-                        # Store FPS value for statistics (deque auto-evicts oldest)
+
                         fps_values.append(current_fps)
-                        
-                        # Update FPS and latency statistics every 5 seconds
+
                         if current_time - last_fps_update_time >= fps_update_interval:
-                            # Calculate average FPS
                             if fps_values:
                                 avg_fps = sum(fps_values) / len(fps_values)
                             if fps_values and len(fps_values) >= 20:
-                                # Calculate 1% low average
                                 sorted_fps = sorted(fps_values)
-                                one_percent_index = int(len(sorted_fps) * 0.1)
-                                if one_percent_index == 0 and len(sorted_fps) > 0:
-                                    one_percent_index = 1
+                                one_percent_index = max(1, int(len(sorted_fps) * 0.1))
                                 fps_below_1_percent = sorted_fps[:one_percent_index]
-                                if fps_below_1_percent:
-                                    low_fps_1_percent_avg = sum(fps_below_1_percent) / len(fps_below_1_percent)
-                                else:
-                                    low_fps_1_percent_avg = sorted_fps[0] if sorted_fps else 0.0
-                            
-                            # Calculate average latency (O(1) from running sum)
+                                low_fps_1_percent_avg = sum(fps_below_1_percent) / len(fps_below_1_percent) if fps_below_1_percent else (sorted_fps[0] if sorted_fps else 0.0)
+
                             if latency_history:
                                 avg_total_latency = latency_sum / len(latency_history)
-                            
+
                             last_fps_update_time = current_time
-                        
-                        # Display current latency (update once per second)
+
                         last_latency_display = total_latency
-                        
-                        # Create window title with detailed FPS and latency statistics
+
                         if SHOW_FPS:
                             title_text = (
                                 f"{current_fps:.1f}FPS | "
@@ -1244,47 +1243,44 @@ def main(mode="Viewer"):
                                 f"1% Low Avg: {low_fps_1_percent_avg:.1f} | "
                                 f"Latency: {last_latency_display*1000:.0f}ms | "
                                 f"Avg Latency: {avg_total_latency*1000:.0f}ms "
-                                f"(Capture:{thread_latencies['capture']*1000:.0f}ms "
-                                f"Resize:{thread_latencies['resize']*1000:.0f}ms "
-                                f"Depth:{thread_latencies['depth']*1000:.0f}ms "
+                                f"(Capture:{_latencies['capture']*1000:.0f}ms "
+                                f"Resize:{_latencies['resize']*1000:.0f}ms "
+                                f"Depth:{_latencies['depth']*1000:.0f}ms "
                                 f"Render:{render_latency*1000:.0f}ms)"
                             )
                         else:
                             title_text = f"{current_fps:.0f}FPS {last_latency_display*1000:.0f}ms"
-                        
-                        if STREAM_MODE == "MJPEG":
+
+                        if _is_mjpeg:
                             print(title_text)
-                        
-                        glfw.set_window_title(window.window, f"Stereo Viewer {title_text}")
-                        
-                        # Update the viewer OSD with new FPS and latency (once per second)
+
+                        glfw.set_window_title(_win, f"Stereo Viewer {title_text}")
+
                         window.update_frame(rgb, depth, current_fps, last_latency_display)
                     else:
-                        # Update only frame, keep previous stats (no FPS/latency change)
                         window.update_frame(rgb, depth)
 
-                    # Render latency and MJPEG frame capture
-                    render_start_time = time.perf_counter()
-                    if STREAM_MODE == "MJPEG":
+                    render_start_time = _perf()
+                    if _is_mjpeg:
                         frame = window.capture_glfw_image()
                         streamer.set_frame(frame)
-                    
-                    render_latency = time.perf_counter() - render_start_time
-                    thread_latencies['render'] = render_latency
-                    thread_latencies['total'] = total_latency
-                    
+
+                    render_latency = _perf() - render_start_time
+                    _latencies['render'] = render_latency
+                    _latencies['total'] = total_latency
+
                 except queue.Empty:
                     pass
-                
-                now = time.perf_counter()
-                if not USE_3D_MONITOR and now < next_render_time:
-                    time.sleep(next_render_time - now)
-                if not USE_3D_MONITOR:
+
+                if not _is_3d:
+                    now = _perf()
+                    if now < next_render_time:
+                        time.sleep(next_render_time - now)
                     next_render_time += TIME_SLEEP
-                
+
                 window.render()
-                if not getattr(window, "uses_metal", False):
-                    glfw.swap_buffers(window.window)
+                if not _uses_metal:
+                    glfw.swap_buffers(_win)
                 glfw.poll_events()
             
             glfw.terminate()

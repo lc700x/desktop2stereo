@@ -1517,6 +1517,32 @@ class StereoWindow:
         )
         self.overlay_renderer = OverlayTextureRenderer(self.ctx)
 
+        # Cache uniform objects to avoid per-frame dict lookups.
+        # prog (SBS/stereo)
+        self._u_eye_offset = self.prog['u_eye_offset']
+        self._u_depth_strength = self.prog['u_depth_strength']
+        self._u_feather_enabled = self.prog['u_feather_enabled']
+        self._u_feather_width = self.prog['u_feather_width']
+        self._u_viewport = self.prog['u_viewport']
+        # anaglyph
+        self._u_ana_eye_offset = self.anaglyph_prog['u_eye_offset']
+        self._u_ana_depth_strength = self.anaglyph_prog['u_depth_strength']
+        self._u_ana_feather_enabled = self.anaglyph_prog['u_feather_enabled']
+        self._u_ana_feather_width = self.anaglyph_prog['u_feather_width']
+        self._u_ana_viewport = self.anaglyph_prog['u_viewport']
+        # interleaved
+        self._u_int_eye_offset = self.interleaved_prog['u_eye_offset']
+        self._u_int_depth_strength = self.interleaved_prog['u_depth_strength']
+        self._u_int_feather_enabled = self.interleaved_prog['u_feather_enabled']
+        self._u_int_feather_width = self.interleaved_prog['u_feather_width']
+        self._u_int_viewport = self.interleaved_prog['u_viewport']
+        # vertical interleaved
+        self._u_vint_eye_offset = self.vertical_interleaved_prog['u_eye_offset']
+        self._u_vint_depth_strength = self.vertical_interleaved_prog['u_depth_strength']
+        self._u_vint_feather_enabled = self.vertical_interleaved_prog['u_feather_enabled']
+        self._u_vint_feather_width = self.vertical_interleaved_prog['u_feather_width']
+        self._u_vint_viewport = self.vertical_interleaved_prog['u_viewport']
+
         # Initialize textures as None
         self.color_tex = None
         self.depth_tex = None
@@ -2337,15 +2363,16 @@ class StereoWindow:
         if current_latency is not None:
             self.total_latency = current_latency * 1000
 
-        if hasattr(rgb, "detach"):
-            rgb_shape = tuple(rgb.shape)
-            if len(rgb_shape) == 3 and rgb_shape[0] in (3, 4):
-                h, w = int(rgb_shape[1]), int(rgb_shape[2])
+        is_tensor = hasattr(rgb, 'data_ptr')
+        if is_tensor:
+            rgb_shape = rgb.shape
+            if rgb_shape[0] in (3, 4):
+                h, w = rgb_shape[1], rgb_shape[2]
             else:
-                h, w = int(rgb_shape[0]), int(rgb_shape[1])
+                h, w = rgb_shape[0], rgb_shape[1]
         else:
             rgb_np = np.asarray(rgb)
-            h, w = rgb_np.shape[:2]
+            h, w = rgb_np.shape[0], rgb_np.shape[1]
 
         if self.stream_mode is None:
             self._update_overlay_texture()
@@ -2361,7 +2388,6 @@ class StereoWindow:
             self.prog['tex_depth'].value = 1
             self._texture_size = (w, h)
 
-            # Reinit CUDA PBOs if needed (may disable CUDA on failure)
             if self.use_cuda:
                 try:
                     self.cleanup_cuda()
@@ -2370,21 +2396,22 @@ class StereoWindow:
                     print(f"[update_frame] Error initializing CUDA PBOs: {e}")
                     self.use_cuda = False
 
-        # Try GPU-GL interop path first.
+        # GPU-GL interop path
         cuda_success = False
         if self.stream_mode is None and self.use_cuda and self._cudart is not None:
             try:
-                if not (hasattr(rgb, 'is_cuda') and rgb.is_cuda):
+                if not (is_tensor and rgb.is_cuda):
                     raise RuntimeError("RGB tensor not on GPU")
-                if not (hasattr(depth, 'is_cuda') and depth.is_cuda):
+                depth_is_tensor = hasattr(depth, 'data_ptr')
+                if not (depth_is_tensor and depth.is_cuda):
                     raise RuntimeError("Depth tensor not on GPU")
                 if self._cuda_resource_color is None or self._pbo_color is None:
                     raise RuntimeError("Colour PBO not available")
 
                 rgb_gpu = rgb.detach()
-                if rgb_gpu.ndim == 3 and rgb_gpu.shape[0] in (3, 4):
+                if rgb_gpu.shape[0] in (3, 4):
                     rgb_gpu = rgb_gpu[:3].permute(1, 2, 0)
-                elif rgb_gpu.ndim == 3 and rgb_gpu.shape[-1] >= 3:
+                elif rgb_gpu.shape[-1] >= 3:
                     rgb_gpu = rgb_gpu[..., :3]
                 else:
                     raise RuntimeError(f"Unsupported RGB tensor shape: {tuple(rgb_gpu.shape)}")
@@ -2400,21 +2427,21 @@ class StereoWindow:
                 self.use_cuda = False
                 self.cleanup_cuda()
 
-        # Fallback to CPU path if CUDA failed or not available
+        # CPU fallback
         if not cuda_success:
-            if hasattr(depth, 'detach'):
+            if hasattr(depth, 'data_ptr'):
                 depth_np = depth.detach().cpu().contiguous().float().numpy()
             else:
                 depth_np = np.asarray(depth, dtype=np.float32)
 
-            if hasattr(rgb, 'detach'):
+            if is_tensor:
                 try:
-                    rgb_np = rgb.cpu().detach().contiguous().permute(1, 2, 0).clamp(0, 255).to(torch.uint8).numpy()
-                except RuntimeError as e:
-                    print(f"[update_frame] RuntimeError converting RGB tensor to numpy: {e}")
-                    return
+                    rgb_cpu = rgb.detach().cpu()
+                    if rgb_cpu.shape[0] in (3, 4):
+                        rgb_cpu = rgb_cpu[:3].permute(1, 2, 0)
+                    rgb_np = rgb_cpu.contiguous().clamp(0, 255).to(torch.uint8).numpy()
                 except Exception as e:
-                    print(f"[update_frame] Error converting RGB tensor to numpy: {e}")
+                    print(f"[update_frame] Error converting RGB tensor: {e}")
                     return
             else:
                 rgb_np = np.asarray(rgb)
@@ -2422,13 +2449,16 @@ class StereoWindow:
             if self.stream_mode is not None and self.display_mode != "Depth Map":
                 rgb_np = self._add_overlay(rgb_np)
 
+            rgb_bytes = rgb_np.astype('uint8', copy=False).tobytes()
+            depth_bytes = depth_np.tobytes()
+
             if self.display_mode == "Depth Map" and not self.show_original_in_depth_mode:
-                self.depth_tex.write(depth_np.tobytes())
+                self.depth_tex.write(depth_bytes)
                 if self._last_display_mode != "Depth Map" or self._last_show_original != self.show_original_in_depth_mode:
-                    self.color_tex.write(rgb_np.astype('uint8', copy=False).tobytes())
+                    self.color_tex.write(rgb_bytes)
             else:
-                self.color_tex.write(rgb_np.astype('uint8', copy=False).tobytes())
-                self.depth_tex.write(depth_np.tobytes())
+                self.color_tex.write(rgb_bytes)
+                self.depth_tex.write(depth_bytes)
 
         # Cache current state
         self._last_display_mode = self.display_mode
@@ -2549,11 +2579,11 @@ class StereoWindow:
                 
                 # Update uniforms only if changed
                 if self._last_eye_offset_set != 0.0:
-                    self.prog['u_eye_offset'].value = 0.0
+                    self._u_eye_offset.value = 0.0
                     self._last_eye_offset_set = 0.0
-                
+
                 if self._last_depth_strength_set != 0.0:
-                    self.prog['u_depth_strength'].value = 0.0
+                    self._u_depth_strength.value = 0.0
                     self._last_depth_strength_set = 0.0
                 
                 # Direct render call without extra state changes
@@ -2603,32 +2633,30 @@ class StereoWindow:
             self.ctx.viewport = viewport
             half_ipd = self.ipd_uv / 2.0
 
+            self.color_tex.use(location=0)
+            self.depth_tex.use(location=1)
+            depth_val = self.depth_strength * self.depth_ratio
+
             if self.display_mode == "Anaglyph":
-                self.color_tex.use(location=0)
-                self.depth_tex.use(location=1)
-                self.anaglyph_prog['u_eye_offset'].value = half_ipd
-                self.anaglyph_prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
-                self.anaglyph_prog['u_feather_enabled'].value = self.feather_enabled
-                self.anaglyph_prog['u_feather_width'].value = self.feather_width
-                self.anaglyph_prog['u_viewport'].value = viewport
+                self._u_ana_eye_offset.value = half_ipd
+                self._u_ana_depth_strength.value = depth_val
+                self._u_ana_feather_enabled.value = self.feather_enabled
+                self._u_ana_feather_width.value = self.feather_width
+                self._u_ana_viewport.value = viewport
                 self.anaglyph_vao.render(moderngl.TRIANGLE_STRIP)
             elif self.display_mode == "Interleaved":
-                self.color_tex.use(location=0)
-                self.depth_tex.use(location=1)
-                self.interleaved_prog['u_eye_offset'].value = half_ipd
-                self.interleaved_prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
-                self.interleaved_prog['u_feather_enabled'].value = self.feather_enabled
-                self.interleaved_prog['u_feather_width'].value = self.feather_width
-                self.interleaved_prog['u_viewport'].value = viewport
+                self._u_int_eye_offset.value = half_ipd
+                self._u_int_depth_strength.value = depth_val
+                self._u_int_feather_enabled.value = self.feather_enabled
+                self._u_int_feather_width.value = self.feather_width
+                self._u_int_viewport.value = viewport
                 self.interleaved_vao.render(moderngl.TRIANGLE_STRIP)
-            elif self.display_mode == "Interleaved-V":
-                self.color_tex.use(location=0)
-                self.depth_tex.use(location=1)
-                self.vertical_interleaved_prog['u_eye_offset'].value = half_ipd
-                self.vertical_interleaved_prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
-                self.vertical_interleaved_prog['u_feather_enabled'].value = self.feather_enabled
-                self.vertical_interleaved_prog['u_feather_width'].value = self.feather_width
-                self.vertical_interleaved_prog['u_viewport'].value = viewport
+            else:
+                self._u_vint_eye_offset.value = half_ipd
+                self._u_vint_depth_strength.value = depth_val
+                self._u_vint_feather_enabled.value = self.feather_enabled
+                self._u_vint_feather_width.value = self.feather_width
+                self._u_vint_viewport.value = viewport
                 self.vertical_interleaved_vao.render(moderngl.TRIANGLE_STRIP)
 
             self._render_overlay()
@@ -2655,7 +2683,7 @@ class StereoWindow:
             if self.display_mode in ["Full-SBS", "Half-SBS", "Half-TAB", "Full-TAB"]:
                 self.color_tex.use(location=0)
                 self.depth_tex.use(location=1)
-                self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+                self._u_depth_strength.value = self.depth_strength * self.depth_ratio
 
                 if self.display_mode == "Full-SBS":
                     src_w, src_h = tex_w, tex_h
@@ -2670,10 +2698,10 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = left_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = left_vp
+                    self._u_eye_offset.value = -self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =left_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     # Right view
@@ -2683,10 +2711,10 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = right_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = right_vp
+                    self._u_eye_offset.value = self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =right_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "Half-SBS":
@@ -2702,10 +2730,10 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = left_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = left_vp
+                    self._u_eye_offset.value = -self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =left_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     # Right view
@@ -2715,10 +2743,10 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = right_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = right_vp
+                    self._u_eye_offset.value = self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =right_vp
                     self._last_eye_offset_set = self.ipd_uv / 2.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
@@ -2734,10 +2762,10 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = top_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = top_vp
+                    self._u_eye_offset.value = -self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =top_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     # Bottom view (right eye)
@@ -2747,10 +2775,10 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = bottom_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = bottom_vp
+                    self._u_eye_offset.value = self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =bottom_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "Full-TAB":
@@ -2765,10 +2793,10 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = top_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = top_vp
+                    self._u_eye_offset.value = -self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =top_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     # Bottom view (right eye)
@@ -2778,10 +2806,10 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = bottom_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = bottom_vp
+                    self._u_eye_offset.value = self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =bottom_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
         else:
@@ -2821,82 +2849,82 @@ class StereoWindow:
             if self.display_mode in ["Full-SBS", "Half-SBS", "Half-TAB", "Full-TAB"]:
                 self.color_tex.use(0)
                 self.depth_tex.use(1)
-                self.prog['u_depth_strength'].value = self.depth_strength * self.depth_ratio
+                self._u_depth_strength.value = self.depth_strength * self.depth_ratio
 
                 if self.display_mode == "Full-SBS":
                     # Left eye
                     left_vp = (offset_x, offset_y, view_w // 2, view_h)
                     self.ctx.viewport = left_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = left_vp
+                    self._u_eye_offset.value = -self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =left_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     # Right eye
                     right_vp = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
                     self.ctx.viewport = right_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = right_vp
+                    self._u_eye_offset.value = self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =right_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "Half-SBS":
                     # Left eye
                     left_vp = (offset_x, offset_y, view_w // 2, view_h)
                     self.ctx.viewport = left_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = left_vp
+                    self._u_eye_offset.value = -self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =left_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     # Right eye
                     right_vp = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
                     self.ctx.viewport = right_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = right_vp
+                    self._u_eye_offset.value = self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =right_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "Half-TAB":
                     # Top eye (left)
                     top_vp = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
                     self.ctx.viewport = top_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = top_vp
+                    self._u_eye_offset.value = -self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =top_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     # Bottom eye (right)
                     bottom_vp = (offset_x, offset_y, view_w, view_h // 2)
                     self.ctx.viewport = bottom_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = bottom_vp
+                    self._u_eye_offset.value = self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =bottom_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode == "Full-TAB":
                     # Top eye (left)
                     top_vp = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
                     self.ctx.viewport = top_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = top_vp
+                    self._u_eye_offset.value = -self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =top_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                     # Bottom eye (right)
                     bottom_vp = (offset_x, offset_y, view_w, view_h // 2)
                     self.ctx.viewport = bottom_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
-                    self.prog['u_feather_enabled'].value = self.feather_enabled
-                    self.prog['u_feather_width'].value = self.feather_width
-                    self.prog['u_viewport'].value = bottom_vp
+                    self._u_eye_offset.value = self.ipd_uv / 2.0
+                    self._u_feather_enabled.value = self.feather_enabled
+                    self._u_feather_width.value = self.feather_width
+                    self._u_viewport.value =bottom_vp
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
         # Skip swap buffers if window is not visible (for headless/streaming)
