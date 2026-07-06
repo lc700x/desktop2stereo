@@ -541,39 +541,29 @@ if IS_CUDA:
 
     def process(img_uint8: torch.Tensor, target_height: int) -> torch.Tensor:
         """
-        Memory-efficient version for uint8 tensors.
-        Minimizes temporary memory allocations during processing.
-        img_uint8: Input image tensor (HWC format)
-        target_height: Desired height for the output tensor
-        output: Processed tensor (CHW format)
+        GPU-accelerated resize for uint8 tensors (HWC BGRA/BGR input → CHW RGB).
         """
-        # check if input is numpy
         if isinstance(img_uint8, np.ndarray):
             img_uint8 = torch.from_numpy(img_uint8).to(DEVICE)
 
-        img_uint8 = img_uint8[..., [2, 1, 0]].permute(2, 0, 1).contiguous()
+        # BGRA/BGR → RGB: slice to 3 channels then flip (avoids fancy-index tensor alloc)
+        img_uint8 = img_uint8[..., :3].flip(-1).permute(2, 0, 1).contiguous()
         _, H0, W0 = img_uint8.shape
-        
+
         if target_height >= H0:
             return img_uint8.to(DEVICE, dtype=DTYPE)
-        
-        new_width = int(W0 * target_height / H0)
+
         new_height = (target_height // 2) * 2
-        new_width = (new_width // 2) * 2
-        
-        # Use in-place operations where possible to reduce memory usage
-        with torch.no_grad():  # Disable gradient computation for inference
-            img_float = img_uint8.to(DEVICE, dtype=DTYPE)
-            
-            # Resize
-            result = F.interpolate(
-                img_float.unsqueeze(0),
+        new_width = (int(W0 * target_height / H0) // 2) * 2
+
+        with torch.no_grad():
+            return F.interpolate(
+                img_uint8.to(DEVICE, dtype=DTYPE).unsqueeze(0),
                 size=(new_height, new_width),
                 mode='bilinear',
                 align_corners=False,
                 antialias=new_height < H0
             ).squeeze(0)
-        return result
     
 
 else:
@@ -673,12 +663,10 @@ def maybe_autocast(device, dtype=DTYPE):
         return contextlib.nullcontext()
     return torch.autocast(device_type=device.type, enabled=True)
 
-# check if it is metric model
+_IS_METRIC = any(k in MODEL_ID.lower() for k in ('metric', 'kitti', 'nyu', 'depth-ai', 'da3'))
+
 def is_metric():
-    if 'metric'  in MODEL_ID.lower() or 'kitti'  in MODEL_ID.lower() or 'nyu' in MODEL_ID.lower() or 'depth-ai' in MODEL_ID.lower() or 'da3' in MODEL_ID.lower():
-        return True
-    else:
-        return False
+    return _IS_METRIC
 
 # GPU resize (torch F.interpolate). Longest side -> target keeping aspect, then
 # each dim aligned to the patch grid, fused into ONE interpolate (one less
@@ -747,41 +735,37 @@ def apply_foreground_scale(depth: torch.Tensor, scale: float, mid: float = 0.5, 
     out = mid + torch.sign(dist) * torch.pow(torch.abs(dist), exponent)
     return out.clamp(0.0, 1.0)
        
-def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
-    """
-    Apply anti-aliasing to reduce jagged edges in depth maps.
-    
-    Args:
-        depth (torch.Tensor): Normalized depth map tensor [H,W] or [B,1,H,W] with values in [0,1].
-        strength (float): Blur strength; higher = smoother edges. Recommended range [0.5, 2.0].
-    
-    Returns:
-        torch.Tensor: Smoothed depth map with same shape.
-    """
-    if depth.dim() == 2:
-        depth = depth.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
-    elif depth.dim() == 3:
-        depth = depth.unsqueeze(1)  # [B,1,H,W]
+_aa_kernel_cache = {}
 
-    # Kernel size scales with strength
-    k = int(3 * strength) | 1  # force odd number
+def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
+    if depth.dim() == 2:
+        depth = depth.unsqueeze(0).unsqueeze(0)
+    elif depth.dim() == 3:
+        depth = depth.unsqueeze(1)
+
+    k = int(3 * strength) | 1
     if k < 3:
         return depth.squeeze()
 
-    # Gaussian blur kernel
-    sigma = 0.5 * strength
-    coords = torch.arange(k, device=depth.device, dtype=depth.dtype) - k // 2
-    gauss = torch.exp(-(coords**2) / (2 * sigma**2))
-    gauss /= gauss.sum()
+    cache_key = (k, depth.device, depth.dtype)
+    cached = _aa_kernel_cache.get(cache_key)
+    if cached is not None:
+        kx, ky = cached
+    else:
+        sigma = 0.5 * strength
+        coords = torch.arange(k, device=depth.device, dtype=depth.dtype) - k // 2
+        gauss = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
+        gauss /= gauss.sum()
+        kx = gauss.view(1, 1, 1, -1)
+        ky = gauss.view(1, 1, -1, 1)
+        _aa_kernel_cache[cache_key] = (kx, ky)
 
-    # Separable convolution (X then Y)
-    depth = F.conv2d(depth, gauss.view(1,1,1,-1), padding=(0, k//2), groups=1)
-    depth = F.conv2d(depth, gauss.view(1,1,-1,1), padding=(k//2, 0), groups=1)
-
+    depth = F.conv2d(depth, kx, padding=(0, k // 2), groups=1)
+    depth = F.conv2d(depth, ky, padding=(k // 2, 0), groups=1)
     return depth.squeeze()
 
 def chw_tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
-    hwc_tensor = tensor.float().permute(1, 2, 0).detach().cpu()
+    hwc_tensor = tensor.detach().cpu().float().permute(1, 2, 0)
     # torch.compile can return tensor subclasses on recent PyTorch builds.
     # NumPy export only supports plain Tensor instances, so unwrap last.
     if type(hwc_tensor) is not torch.Tensor and hasattr(hwc_tensor, "as_subclass"):
@@ -843,18 +827,17 @@ def normalize(depth, percentile=2.0, subsample_cap=6_144):
         if is_metric():
             valid = d > 0
             inv = torch.where(valid, d.clamp(min=1e-12).reciprocal(), d)
-            lo_src = torch.where(valid, inv, torch.full_like(inv, float("inf")))
-            hi_src = torch.where(valid, inv, torch.full_like(inv, float("-inf")))
+            if valid.any():
+                v = inv[valid]
+                dmin = v.min()
+                dmax = v.max()
+            else:
+                dmin = torch.zeros((), device=d.device, dtype=d.dtype)
+                dmax = torch.ones((), device=d.device, dtype=d.dtype)
         else:
             inv = d
-            lo_src = inv
-            hi_src = inv
-
-        reduce_dims = tuple(range(inv.dim()))
-        dmin = torch.amin(lo_src, dim=reduce_dims, keepdim=True)
-        dmax = torch.amax(hi_src, dim=reduce_dims, keepdim=True)
-        dmin = torch.nan_to_num(dmin, nan=0.0, posinf=0.0, neginf=0.0)
-        dmax = torch.nan_to_num(dmax, nan=1.0, posinf=1.0, neginf=1.0)
+            dmin = inv.min()
+            dmax = inv.max()
         denom = (dmax - dmin).clamp_min(1e-6)
         return ((inv - dmin) / denom).clamp(0.0, 1.0)
 
@@ -1815,19 +1798,19 @@ else:
     MEAN = torch.tensor([0.485,0.456,0.406], dtype=MODEL_TENSOR_DTYPE, device=MODEL_TENSOR_DEVICE).view(1,3,1,1)
     STD = torch.tensor([0.229,0.224,0.225], dtype=MODEL_TENSOR_DTYPE, device=MODEL_TENSOR_DEVICE).view(1,3,1,1)
 
+_norm_tensor_cache = {}
+
 def _normalization_tensors_for(tensor: torch.Tensor):
     if tensor.device == MEAN.device and tensor.dtype == MEAN.dtype:
         return MEAN, STD
-    if tensor.device.type == "xpu":
-        if "depthpro" in MODEL_ID.lower() or "zoedepth" in MODEL_ID.lower() or "dpt" in MODEL_ID.lower():
-            mean_vals, std_vals = [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]
-        else:
-            mean_vals, std_vals = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
-        return (
-            torch.tensor(mean_vals, device=tensor.device, dtype=tensor.dtype).view(1, 3, 1, 1),
-            torch.tensor(std_vals, device=tensor.device, dtype=tensor.dtype).view(1, 3, 1, 1),
-        )
-    return MEAN.to(device=tensor.device, dtype=tensor.dtype), STD.to(device=tensor.device, dtype=tensor.dtype)
+    cache_key = (tensor.device, tensor.dtype)
+    cached = _norm_tensor_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    m = MEAN.to(device=tensor.device, dtype=tensor.dtype)
+    s = STD.to(device=tensor.device, dtype=tensor.dtype)
+    _norm_tensor_cache[cache_key] = (m, s)
+    return m, s
     
 if USE_TORCH_COMPILE and (IS_CUDA or IS_XPU):
     try:
@@ -1885,6 +1868,7 @@ class DepthStabilizer:
         self.prev = None
         self.enabled = True
         self.lock = Lock()
+        self._xpu_alpha_t = None
 
     def __call__(self, depth: torch.Tensor):
         if not self.enabled:
@@ -1892,14 +1876,15 @@ class DepthStabilizer:
         with self.lock:
             if self.prev is None or self.prev.shape != depth.shape or self.prev.device != depth.device:
                 self.prev = depth.detach().clone()
+                self._xpu_alpha_t = None
                 return depth
             if depth.device.type == "xpu":
-                alpha = torch.full_like(depth, self.alpha)
-                out = depth + alpha * (self.prev - depth)
+                if self._xpu_alpha_t is None or self._xpu_alpha_t.shape != depth.shape:
+                    self._xpu_alpha_t = torch.full_like(depth, self.alpha)
+                self.prev.mul_(self._xpu_alpha_t).add_(depth * (1.0 - self.alpha))
             else:
-                out = self.alpha * self.prev + (1.0 - self.alpha) * depth
-            self.prev = out.detach().clone()
-            return out
+                self.prev.lerp_(depth, 1.0 - self.alpha)
+            return self.prev
 
 depth_stabilizer = DepthStabilizer(alpha=0.9)  # increase alpha for more stability
 if USE_TORCH_COMPILE and IS_CUDA:

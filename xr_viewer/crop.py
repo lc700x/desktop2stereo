@@ -233,45 +233,67 @@ class CropMixin:
         return False
 
     def _movie_crop_from_stats(self, stats, y_rows, w, h):
-        top_i_f, bottom_count_f, center_mean, center_bright = stats
+        top_i_f, bottom_count_f, center_mean, center_bright = stats[:4]
+        left_i_f = float(stats[4]) if len(stats) > 4 else 0.0
+        right_count_f = float(stats[5]) if len(stats) > 5 else 0.0
         n_rows = int(y_rows.shape[0])
         top_i = int(round(float(top_i_f)))
         bottom_count = int(round(float(bottom_count_f)))
-        if top_i <= 0 or bottom_count <= 0 or top_i + bottom_count >= n_rows:
+        left_i = int(round(left_i_f))
+        right_count = int(round(right_count_f))
+
+        has_tb = top_i > 0 and bottom_count > 0 and top_i + bottom_count < n_rows
+        x_cols = getattr(self, '_crop_x_cols', None)
+        n_cols = int(x_cols.shape[0]) if x_cols is not None else 0
+        has_lr = left_i > 0 and right_count > 0 and left_i + right_count < n_cols
+
+        if not has_tb and not has_lr:
             return (0.0, 0.0, 1.0, 1.0)
 
-        bottom_anchor_i = n_rows - bottom_count - 1
-        if bottom_anchor_i < top_i:
-            return (0.0, 0.0, 1.0, 1.0)
-        top = int(y_rows[min(top_i, n_rows - 1)])
-        bottom = int(h) - min(int(h), int(y_rows[bottom_anchor_i]) + 1)
+        crop_u0, crop_v0, crop_uw, crop_vh = 0.0, 0.0, 1.0, 1.0
 
-        min_bar = max(8, int(h * 0.035))
-        if top < min_bar or bottom < min_bar:
-            return (0.0, 0.0, 1.0, 1.0)
+        if has_tb:
+            bottom_anchor_i = n_rows - bottom_count - 1
+            if bottom_anchor_i >= top_i:
+                top = int(y_rows[min(top_i, n_rows - 1)])
+                bottom = int(h) - min(int(h), int(y_rows[bottom_anchor_i]) + 1)
+                min_bar = max(8, int(h * 0.035))
+                if top >= min_bar and bottom >= min_bar:
+                    bigger = max(top, bottom)
+                    smaller = min(top, bottom)
+                    if bigger - smaller <= max(18, int(bigger * 0.25)):
+                        edge_trim = max(2, min(8, int(round(h * 0.004))))
+                        crop_top = max(0, min(top + edge_trim, h - 2))
+                        crop_bottom = max(crop_top + 1, h - bottom - edge_trim)
+                        crop_h = crop_bottom - crop_top
+                        removed = h - crop_h
+                        if removed >= max(16, int(h * 0.07)):
+                            if float(center_mean) >= 14.0 or float(center_bright) >= 0.035:
+                                crop_v0 = crop_top / float(h)
+                                crop_vh = crop_h / float(h)
 
-        bigger = max(top, bottom)
-        smaller = min(top, bottom)
-        if bigger - smaller > max(18, int(bigger * 0.25)):
-            return (0.0, 0.0, 1.0, 1.0)
+        if has_lr and x_cols is not None:
+            right_anchor_i = n_cols - right_count - 1
+            if right_anchor_i >= left_i:
+                left = int(x_cols[min(left_i, n_cols - 1)])
+                right = int(w) - min(int(w), int(x_cols[right_anchor_i]) + 1)
+                min_bar = max(8, int(w * 0.035))
+                if left >= min_bar and right >= min_bar:
+                    bigger = max(left, right)
+                    smaller = min(left, right)
+                    if bigger - smaller <= max(18, int(bigger * 0.25)):
+                        edge_trim = max(2, min(8, int(round(w * 0.004))))
+                        crop_left = max(0, min(left + edge_trim, w - 2))
+                        crop_right = max(crop_left + 1, w - right - edge_trim)
+                        crop_w = crop_right - crop_left
+                        removed = w - crop_w
+                        if removed >= max(16, int(w * 0.07)):
+                            crop_u0 = crop_left / float(w)
+                            crop_uw = crop_w / float(w)
 
-        edge_trim = max(2, min(8, int(round(h * 0.004))))
-        crop_top = max(0, min(top + edge_trim, h - 2))
-        crop_bottom = max(crop_top + 1, h - bottom - edge_trim)
-        crop_h = crop_bottom - crop_top
-        removed = h - crop_h
-        if removed < max(16, int(h * 0.07)):
+        if crop_u0 == 0.0 and crop_uw == 1.0 and crop_v0 == 0.0 and crop_vh == 1.0:
             return (0.0, 0.0, 1.0, 1.0)
-
-        full_aspect = w / max(float(h), 1.0)
-        movie_aspect = w / max(float(crop_h), 1.0)
-        if movie_aspect < full_aspect * 1.12:
-            return (0.0, 0.0, 1.0, 1.0)
-
-        if float(center_mean) < 14.0 or float(center_bright) < 0.035:
-            return (0.0, 0.0, 1.0, 1.0)
-
-        return (0.0, crop_top / float(h), 1.0, crop_h / float(h))
+        return (crop_u0, crop_v0, crop_uw, crop_vh)
 
     def _movie_crop_sample_plan(self, w, h, device=None, torch_mod=None):
         device_type = getattr(device, 'type', None)
@@ -290,6 +312,16 @@ class CropMixin:
         step_x = max(1, (x1 - x0) // 128)
         center_mask_np = (y_rows >= int(h * 0.35)) & (y_rows < int(h * 0.65))
 
+        # Column sampling for left/right pillarbox detection
+        y0_col = int(h * 0.10)
+        y1_col = max(y0_col + 1, int(h * 0.90))
+        col_stride = max(1, (int(w) + 359) // 360)
+        x_cols = np.arange(0, int(w), col_stride, dtype=np.int64)
+        if x_cols.size == 0 or int(x_cols[-1]) != int(w) - 1:
+            x_cols = np.append(x_cols, int(w) - 1)
+        step_y = max(1, (y1_col - y0_col) // 128)
+        self._crop_x_cols = x_cols
+
         plan = {
             'key': key,
             'x0': x0,
@@ -298,6 +330,10 @@ class CropMixin:
             'y_rows': y_rows,
             'center_mask_np': center_mask_np,
             'center_has_rows': bool(np.any(center_mask_np)),
+            'y0_col': y0_col,
+            'y1_col': y1_col,
+            'step_y': step_y,
+            'x_cols': x_cols,
         }
         if torch_mod is not None and device is not None:
             plan['y_idx'] = torch_mod.as_tensor(y_rows, device=device, dtype=torch_mod.long)
@@ -316,12 +352,22 @@ class CropMixin:
         self._movie_crop_sample_cache = plan
         return plan
 
+    @staticmethod
+    def _uniform_rows(luma):
+        """Detect uniform-color rows: low std dev (solid bar of any color)."""
+        row_std = luma.std(axis=1) if hasattr(luma, 'std') else np.std(luma, axis=1)
+        row_mean = luma.mean(axis=1) if hasattr(luma, 'mean') else np.mean(luma, axis=1)
+        return row_std < 6.0, row_mean
+
+    @staticmethod
+    def _uniform_cols(luma):
+        """Detect uniform-color columns."""
+        col_std = luma.std(axis=0) if hasattr(luma, 'std') else np.std(luma, axis=0)
+        return col_std < 6.0
+
     def _detect_movie_letterbox_crop(self, rgb, is_tensor, w, h, async_gpu=False):
         if w < 64 or h < 64:
             return (0.0, 0.0, 1.0, 1.0)
-
-        dark_luma = 13.0
-        dark_bright_frac = 0.040
 
         if is_tensor:
             torch = getattr(self, '_torch_mod', None)
@@ -336,22 +382,40 @@ class CropMixin:
                 x0 = plan['x0']
                 x1 = plan['x1']
                 step_x = plan['step_x']
+                # Row scan (top/bottom)
                 sample = rgb.index_select(1, y_idx)[:, :, x0:x1:step_x].detach().float()
                 luma = sample[0] * 0.2126 + sample[1] * 0.7152 + sample[2] * 0.0722
                 row_mean = luma.mean(dim=1)
-                bright_frac = (luma > 20.0).float().mean(dim=1)
-                dark_i = ((row_mean < dark_luma) & (bright_frac < dark_bright_frac)).to(torch.int32)
-                top_i_t = torch.cumprod(dark_i, dim=0).sum().float()
-                bottom_count_t = torch.cumprod(torch.flip(dark_i, dims=(0,)), dim=0).sum().float()
+                row_std = luma.std(dim=1)
+                uniform_row = (row_std < 6.0).to(torch.int32)
+                top_i_t = torch.cumprod(uniform_row, dim=0).sum().float()
+                bottom_count_t = torch.cumprod(torch.flip(uniform_row, dims=(0,)), dim=0).sum().float()
                 center_mask = plan['center_mask']
                 center_count = plan['center_count']
+                bright_frac = (luma > 20.0).float().mean(dim=1)
                 center_mean_t = (row_mean * center_mask).sum() / center_count
                 center_bright_t = (bright_frac * center_mask).sum() / center_count
-                stats_t = torch.stack((top_i_t, bottom_count_t, center_mean_t, center_bright_t))
+                # Column scan (left/right)
+                y0_col = plan['y0_col']
+                y1_col = plan['y1_col']
+                step_y = plan['step_y']
+                x_cols = plan['x_cols']
+                x_idx = plan.get('x_idx')
+                if x_idx is None:
+                    x_idx = torch.as_tensor(x_cols, device=device, dtype=torch.long)
+                    plan['x_idx'] = x_idx
+                col_sample = rgb[:, y0_col:y1_col:step_y, :].index_select(2, x_idx).detach().float()
+                col_luma = col_sample[0] * 0.2126 + col_sample[1] * 0.7152 + col_sample[2] * 0.0722
+                col_std = col_luma.std(dim=0)
+                uniform_col = (col_std < 6.0).to(torch.int32)
+                left_i_t = torch.cumprod(uniform_col, dim=0).sum().float()
+                right_count_t = torch.cumprod(torch.flip(uniform_col, dims=(0,)), dim=0).sum().float()
+                stats_t = torch.stack((top_i_t, bottom_count_t, center_mean_t, center_bright_t,
+                                       left_i_t, right_count_t))
                 if async_gpu and getattr(device, 'type', '') == 'cuda':
                     host = plan.get('host')
-                    if host is None:
-                        host = torch.empty((4,), dtype=torch.float32, pin_memory=True)
+                    if host is None or host.shape[0] < 6:
+                        host = torch.empty((6,), dtype=torch.float32, pin_memory=True)
                         plan['host'] = host
                     host.copy_(stats_t.detach(), non_blocking=True)
                     event = plan.get('event')
@@ -376,17 +440,17 @@ class CropMixin:
         x1 = plan['x1']
         step_x = plan['step_x']
         arr = np.asarray(rgb, dtype=np.uint8)
+        # Row scan
         sample = arr[y_rows, x0:x1:step_x, :].astype(np.float32, copy=False)
         luma = sample[:, :, 0] * 0.2126 + sample[:, :, 1] * 0.7152 + sample[:, :, 2] * 0.0722
-        row_mean_np = luma.mean(axis=1)
+        uniform_rows, row_mean_np = self._uniform_rows(luma)
         bright_frac_np = (luma > 20.0).mean(axis=1)
-        dark_rows = (row_mean_np < dark_luma) & (bright_frac_np < dark_bright_frac)
         top_i = 0
-        n_rows = int(dark_rows.shape[0])
-        while top_i < n_rows and bool(dark_rows[top_i]):
+        n_rows = int(uniform_rows.shape[0])
+        while top_i < n_rows and bool(uniform_rows[top_i]):
             top_i += 1
         bottom_count = 0
-        while bottom_count < n_rows - top_i and bool(dark_rows[n_rows - 1 - bottom_count]):
+        while bottom_count < n_rows - top_i and bool(uniform_rows[n_rows - 1 - bottom_count]):
             bottom_count += 1
         center_mask = plan['center_mask_np']
         if plan.get('center_has_rows', False):
@@ -395,8 +459,25 @@ class CropMixin:
         else:
             center_mean = 0.0
             center_bright = 0.0
+        # Column scan
+        x_cols = plan['x_cols']
+        y0_col = plan['y0_col']
+        y1_col = plan['y1_col']
+        step_y = plan['step_y']
+        col_sample = arr[y0_col:y1_col:step_y, :, :].astype(np.float32, copy=False)
+        col_sample = col_sample[:, x_cols, :]
+        col_luma = col_sample[:, :, 0] * 0.2126 + col_sample[:, :, 1] * 0.7152 + col_sample[:, :, 2] * 0.0722
+        uniform_cols = self._uniform_cols(col_luma)
+        left_i = 0
+        n_cols = int(uniform_cols.shape[0])
+        while left_i < n_cols and bool(uniform_cols[left_i]):
+            left_i += 1
+        right_count = 0
+        while right_count < n_cols - left_i and bool(uniform_cols[n_cols - 1 - right_count]):
+            right_count += 1
         return self._movie_crop_from_stats(
-            (float(top_i), float(bottom_count), center_mean, center_bright),
+            (float(top_i), float(bottom_count), center_mean, center_bright,
+             float(left_i), float(right_count)),
             y_rows,
             w,
             h,
