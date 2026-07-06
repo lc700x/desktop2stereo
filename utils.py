@@ -165,6 +165,11 @@ def torch_compile_with_runtime_fallback(torch_module, target, label, **compile_k
             print(f"[Warning] torch.compile disabled for {label}: {_format_exception(exc)}; running without it.")
             return target(*args, **kwargs)
 
+    # Preserve module attributes so code like model.predict_depth(...) still works
+    for attr in ("predict_depth", "parameters", "eval", "half", "float", "train", "forward"):
+        if hasattr(target, attr):
+            setattr(wrapper, attr, getattr(target, attr))
+
     return wrapper
 
 
