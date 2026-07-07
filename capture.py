@@ -440,11 +440,10 @@ if OS_NAME == "Windows":
                     frame = self.session.acquire_frame(timeout_ms=timeout_ms)
 
                     if frame is not None:
-                        # Use to_bgr() method for proper color format handling
+                        # to_numpy(copy=True) already returns an owned array; cache it
+                        # directly instead of copying a second time per frame.
                         image_rgb = frame.to_numpy(copy=True)  # Returns BGR uint8 format
-
-                        # Cache the frame
-                        self.last_frame = image_rgb.copy()
+                        self.last_frame = image_rgb
                         self._frame_count += 1
                         return image_rgb, self.scaled_height
                     else:

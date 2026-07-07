@@ -494,7 +494,7 @@ class OpenXRViewer(
         # Crop-mode OSD: shows Auto/Manual/Off after the left-trigger 3s-hold cycle
         self._crop_mode_osd_tex      = None
         self._crop_mode_osd_vao      = None
-        self._crop_mode_osd_tex_size = (512, 78)
+        self._crop_mode_osd_tex_size = (256, 78)
         self._crop_mode_osd_show_t   = -999.0
         self._crop_mode_osd_last_key = None
 
@@ -522,10 +522,12 @@ class OpenXRViewer(
         self._a_last         = False  # A-button previous frame state
         self._a_last_t       = 0.0   # timestamp of last A press (double-press detection)
         self._b_last              = False  # B-button previous frame state
-        self._ltrig_state   = 'idle'  # 'idle' | 'pressed' | 'dragging'
-        self._rtrig_state   = 'idle'
-        self._ltrig_press_t = 0.0    # perf_counter of last rising edge left
-        self._rtrig_press_t = 0.0    # perf_counter of last rising edge right
+        self._ltrig_state    = 'idle'  # 'idle' | 'pressed' | 'dragging' | 'consumed'
+        self._rtrig_state    = 'idle'
+        self._ltrig_press_t  = 0.0
+        self._rtrig_press_t  = 0.0
+        self._ltrig_press_px = None
+        self._rtrig_press_px = None
         self._ov_ltrig_held = False  # overlay panel trigger state (separate from normal)
         self._ov_rtrig_held = False
         self._status_panel_alpha = 1.0  # animated alpha: fades when trigger held on panel

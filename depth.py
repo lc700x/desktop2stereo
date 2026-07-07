@@ -1,5 +1,5 @@
 # depth.py
-import os, warnings
+import os, sys, importlib, warnings
 import contextlib
 from utils import DEVICE_ID, MODEL_ID, CACHE_PATH, FP16, DEPTH_RESOLUTION, AA_STRENGTH, FOREGROUND_SCALE, USE_TORCH_COMPILE, USE_TENSORRT, RECOMPILE_TRT, USE_COREML, RECOMPILE_COREML, USE_OPENVINO, RECOMPILE_OPENVINO, USE_MIGRAPHX, RECOMPILE_MIGRAPHX, DISABLE_TRT_KEYWORDS, DISABLE_MIGRAPHX_KEYWORDS,  DISABLE_COREML_KEYWORDS, DISABLE_CUDNN_GFX, DISABLE_TRITON_GFX, DISABLE_OPENVINO_KEYWORDS, DEBUG, DEVICE_ID, DEVICE_INFO, DEVICE, TRT_FIX_KEYWORDS, FORCE_FP32_KEYWORDS, CAPTURE_MODE, enable_torch_compile_fallback, torch_compile_or_original, torch_compile_with_runtime_fallback
 import torch
@@ -27,11 +27,24 @@ IS_XPU = "XPU" in DEVICE_INFO
 IS_MPS = "MPS" in DEVICE_INFO
 IS_CPU = "CPU" in DEVICE_INFO
 
-USE_TORCH_COMPILE = False if not IS_CUDA else USE_TORCH_COMPILE
+def _to_device_for_backend(value, device=DEVICE, dtype=None, **kwargs):
+    if IS_XPU:
+        return value.to(device=device, **kwargs)
+    if dtype is not None:
+        return value.to(device=device, dtype=dtype, **kwargs)
+    return value.to(device=device, **kwargs)
+
+def _to_dtype_for_backend(value, dtype):
+    if IS_XPU and getattr(value, "device", None) is not None and value.device.type == "xpu":
+        return value
+    return value.to(dtype=dtype)
+
+USE_TORCH_COMPILE = False if not (IS_CUDA or IS_XPU) else USE_TORCH_COMPILE
 USE_TENSORRT = False if not IS_NVIDIA else USE_TENSORRT
 USE_COREML = False if not IS_MPS else USE_COREML
 USE_OPENVINO = False if not IS_XPU else USE_OPENVINO
 USE_MIGRAPHX = False if not IS_AMD_ROCM else USE_MIGRAPHX
+XPU_POSTPROCESS_AVAILABLE = IS_XPU
 
 print(f"[Main] Using HF Endpoint: {os.environ.get('HF_ENDPOINT')}")
 print(f"{DEVICE_INFO}")
@@ -47,13 +60,26 @@ warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
 
 # Try import OpenVINO runtime
 if IS_XPU:
+    if USE_TORCH_COMPILE:
+        # Auto-discover C++ compiler and set CXX before
+        from utils import find_msvc_cl, find_linux_compiler, OS_NAME
+        if OS_NAME == "Windows":
+            _cl_path = find_msvc_cl()
+        else:
+            _cl_path = find_linux_compiler()
+
+        if _cl_path:
+            os.environ["CXX"] = _cl_path
+            print(f"[Info] CXX set to {_cl_path}")
+        else:
+            print("[Warning] C++ compiler not found; torch.compile disabled. ")
+            USE_TORCH_COMPILE = False
     if USE_OPENVINO:
         try:
             import openvino as ov
             OPENVINO_AVAILABLE = True
             # Disable OpenVivo
             USE_OPENVINO = False if any(x in MODEL_ID.lower()  for x in DISABLE_OPENVINO_KEYWORDS) else True
-            USE_TORCH_COMPILE = False
         except Exception:
             ov = None
             OPENVINO_AVAILABLE = False
@@ -127,7 +153,8 @@ if USE_COREML and IS_MPS:
             finally:
                 F.interpolate = orig_interpolate
                 
-# disable FP16 on DirectML and MPS without coreml          
+# disable FP16 on DirectML and MPS without coreml 
+FP16 = True if USE_OPENVINO and IS_XPU else FP16         
 if IS_DIRECTML or IS_MPS or ((USE_TENSORRT or USE_COREML or USE_OPENVINO or USE_MIGRAPHX) and MODEL_ID in TRT_FIX_KEYWORDS) or (MODEL_ID == "Intel/dpt-beit-large-512" and DEPTH_RESOLUTION != 512) or (MODEL_ID in FORCE_FP32_KEYWORDS):
     FP16 = False
     # print("FP16 disabled")
@@ -270,13 +297,22 @@ if IS_AMD_ROCM:
     if GPU_ARCH in DISABLE_CUDNN_GFX:
         torch.backends.cudnn.enabled = False  # Disable cuDNN for known problematic AMD RX6000 GPUs
         print(f"[Main] Disabled cuDNN for {DEVICE_INFO}. ")
-        
     # disable trition for RX5000 series and older AMD GPUs
     is_legacy_amd = GPU_ARCH in DISABLE_TRITON_GFX   
     if is_legacy_amd:
         USE_TORCH_COMPILE = False  # Disable Triton for known problematic AMD GPUs
         print(f"[Main] Disabled torch.compile for {DEVICE_INFO}. ")
     else:
+        # Auto-discover C++ compiler and set CXX before
+        if USE_TORCH_COMPILE:
+            from utils import find_msvc_cl, find_linux_compiler, OS_NAME
+            if OS_NAME == "Windows":
+                _cl_path = find_msvc_cl()
+            else:
+                _cl_path = find_linux_compiler()
+            if not _cl_path:    
+                print(f"[Warning] C++ compiler not found; torch.compile disabled. ")
+                USE_TORCH_COMPILE = False
         os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE" # Enable flash attention for
         os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "TRUE" # Enable flash attention autotune for AMD ROCm
     os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1" # Enable AOTriton for ROCm
@@ -292,6 +328,173 @@ DTYPE = torch.float16 if FP16 else torch.float32
 ENGINE_H, ENGINE_W = None, None
 
 # Get huggingface repo and filename for a given model_id, with some sanity checks
+_DIRECTML_MODEL_PATCHES_INSTALLED = False
+_MODEL_COMPAT_PATCH_DEVICE_TYPES = ("privateuseone", "xpu")
+
+
+def _directml_nan_to_num(
+    x: torch.Tensor,
+    nan: float = 0.0,
+    posinf: float = 65504.0,
+    neginf: float = -65504.0,
+) -> torch.Tensor:
+    nan_mask = torch.isnan(x)
+    x = x.clamp(min=neginf, max=posinf)
+    nan_value = torch.zeros_like(x) if nan == 0.0 else torch.full_like(x, nan)
+    return torch.where(nan_mask, nan_value, x)
+
+
+def _directml_quantile(values: torch.Tensor, q) -> torch.Tensor:
+    flat = values.flatten()
+    if flat.numel() == 0:
+        return torch.empty((), device=values.device, dtype=values.dtype).fill_(float("nan"))
+
+    if isinstance(q, torch.Tensor):
+        if q.numel() != 1:
+            return torch.quantile(values, q)
+        q_value = float(q.detach().cpu().reshape(-1)[0])
+    else:
+        q_value = float(q)
+
+    sorted_values = torch.sort(flat).values
+    idx = min(sorted_values.numel() - 1, max(0, int(round(q_value * (sorted_values.numel() - 1)))))
+    return sorted_values[idx]
+
+
+def _directml_affine_inverse(A: torch.Tensor) -> torch.Tensor:
+    R = A[..., :3, :3]
+    T = A[..., :3, 3:]
+    RT = R.mT
+    upper = torch.cat([RT, -RT @ T], dim=-1)
+    if A.size(-2) == 3:
+        return upper
+    P = A[..., 3:, :]
+    return torch.cat([upper, P], dim=-2)
+
+
+class _DirectMLTorchCompatProxy:
+    def __init__(self, torch_module):
+        self._torch = torch_module
+
+    def __getattr__(self, name):
+        return getattr(self._torch, name)
+
+    def nan_to_num(self, input, nan=0.0, posinf=None, neginf=None, *, out=None):
+        if (
+            out is not None
+            or not isinstance(input, torch.Tensor)
+            or input.device.type not in _MODEL_COMPAT_PATCH_DEVICE_TYPES
+        ):
+            return self._torch.nan_to_num(
+                input, nan=nan, posinf=posinf, neginf=neginf, out=out
+            )
+
+        pos = 65504.0 if posinf is None else posinf
+        neg = -65504.0 if neginf is None else neginf
+        return _directml_nan_to_num(input, nan=nan, posinf=pos, neginf=neg)
+
+    def quantile(
+        self,
+        input,
+        q,
+        dim=None,
+        keepdim=False,
+        *,
+        interpolation="linear",
+        out=None,
+    ):
+        if (
+            out is not None
+            or dim is not None
+            or keepdim
+            or interpolation != "linear"
+            or not isinstance(input, torch.Tensor)
+            or input.device.type not in _MODEL_COMPAT_PATCH_DEVICE_TYPES
+        ):
+            return self._torch.quantile(
+                input,
+                q,
+                dim=dim,
+                keepdim=keepdim,
+                interpolation=interpolation,
+                out=out,
+            )
+        return _directml_quantile(input, q)
+
+
+def _ensure_models_package_path():
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    package_roots = (
+        os.path.join(project_root, "models"),
+        os.path.join(
+            project_root,
+            "models",
+            "InfiniDepth",
+            "model",
+            "block",
+            "torchhub",
+            "dinov3",
+        ),
+    )
+    for package_root in package_roots:
+        if os.path.isdir(package_root) and package_root not in sys.path:
+            sys.path.insert(0, package_root)
+
+
+def _try_import_module(module_name: str):
+    try:
+        return importlib.import_module(module_name)
+    except Exception as e:
+        if DEBUG:
+            print(f"[DML/XPU compat] Skipped {module_name}: {e}")
+        return None
+
+
+def _install_directml_model_compat_patches():
+    global _DIRECTML_MODEL_PATCHES_INSTALLED
+    if not (IS_DIRECTML or IS_XPU) or _DIRECTML_MODEL_PATCHES_INSTALLED:
+        return
+
+    _ensure_models_package_path()
+    torch_proxy = _DirectMLTorchCompatProxy(torch)
+
+    torch_module_names = (
+        "models.depth_anything_3.api_n",
+        "depth_anything_3.api_n",
+        "depth_anything_3.model.da3",
+        "depth_anything_3.model.dpt",
+        "depth_anything_3.model.dualdpt",
+        "depth_anything_3.model.dinov2.layers.attention",
+        "depth_anything_3.model.dinov2.layers.block",
+        "depth_anything_3.model.utils.attention",
+        "depth_anything_3.model.utils.block",
+        "models.InfiniDepth.api",
+        "dinov3.layers.attention",
+        "dinov3.layers.block",
+        "models.InfiniDepth.model.block.torchhub.dinov3.dinov3.layers.attention",
+        "models.InfiniDepth.model.block.torchhub.dinov3.dinov3.layers.block",
+    )
+    for module_name in torch_module_names:
+        module = _try_import_module(module_name)
+        if module is not None and hasattr(module, "torch"):
+            module.torch = torch_proxy
+
+    geometry_modules = (
+        "depth_anything_3.utils.geometry",
+        "models.depth_anything_3.utils.geometry",
+    )
+    for module_name in geometry_modules:
+        module = _try_import_module(module_name)
+        if module is not None:
+            module.affine_inverse = _directml_affine_inverse
+
+    da3_module = _try_import_module("depth_anything_3.model.da3")
+    if da3_module is not None:
+        da3_module.affine_inverse = _directml_affine_inverse
+
+    _DIRECTML_MODEL_PATCHES_INSTALLED = True
+
+
 def get_model_path(model_id, cache_dir):
     from huggingface_hub import hf_hub_download
     CKPT_NAMES = ["model.safetensors", "model.pt", "model.ckpt"]
@@ -338,39 +541,29 @@ if IS_CUDA:
 
     def process(img_uint8: torch.Tensor, target_height: int) -> torch.Tensor:
         """
-        Memory-efficient version for uint8 tensors.
-        Minimizes temporary memory allocations during processing.
-        img_uint8: Input image tensor (HWC format)
-        target_height: Desired height for the output tensor
-        output: Processed tensor (CHW format)
+        GPU-accelerated resize for uint8 tensors (HWC BGRA/BGR input → CHW RGB).
         """
-        # check if input is numpy
         if isinstance(img_uint8, np.ndarray):
             img_uint8 = torch.from_numpy(img_uint8).to(DEVICE)
 
-        img_uint8 = img_uint8[..., [2, 1, 0]].permute(2, 0, 1).contiguous()
+        # BGRA/BGR → RGB: slice to 3 channels then flip (avoids fancy-index tensor alloc)
+        img_uint8 = img_uint8[..., :3].flip(-1).permute(2, 0, 1).contiguous()
         _, H0, W0 = img_uint8.shape
-        
+
         if target_height >= H0:
             return img_uint8.to(DEVICE, dtype=DTYPE)
-        
-        new_width = int(W0 * target_height / H0)
+
         new_height = (target_height // 2) * 2
-        new_width = (new_width // 2) * 2
-        
-        # Use in-place operations where possible to reduce memory usage
-        with torch.no_grad():  # Disable gradient computation for inference
-            img_float = img_uint8.to(DEVICE, dtype=DTYPE)
-            
-            # Resize
-            result = F.interpolate(
-                img_float.unsqueeze(0),
+        new_width = (int(W0 * target_height / H0) // 2) * 2
+
+        with torch.no_grad():
+            return F.interpolate(
+                img_uint8.to(DEVICE, dtype=DTYPE).unsqueeze(0),
                 size=(new_height, new_width),
                 mode='bilinear',
                 align_corners=False,
                 antialias=new_height < H0
             ).squeeze(0)
-        return result
     
 
 else:
@@ -400,7 +593,7 @@ else:
 
             with torch.no_grad(), coreml_safe_interpolate():
                 return F.interpolate(
-                    img_rgb.to(dtype=DTYPE).unsqueeze(0),
+                    _to_dtype_for_backend(img_rgb, DTYPE).unsqueeze(0),
                     size=(height, width),
                     mode='bilinear',
                     align_corners=False,
@@ -465,19 +658,15 @@ font_dict = {
 }
 
 # Model casting helper
-def maybe_autocast(device):
-    return (
-        torch.autocast(device_type=device.type, enabled=True)
-        if device.type != "privateuseone"
-        else contextlib.nullcontext()
-    )
+def maybe_autocast(device, dtype=DTYPE):
+    if device.type in ("privateuseone", "xpu"):
+        return contextlib.nullcontext()
+    return torch.autocast(device_type=device.type, enabled=True)
 
-# check if it is metric model
+_IS_METRIC = any(k in MODEL_ID.lower() for k in ('metric', 'kitti', 'nyu', 'depth-ai', 'da3'))
+
 def is_metric():
-    if 'metric'  in MODEL_ID.lower() or 'kitti'  in MODEL_ID.lower() or 'nyu' in MODEL_ID.lower() or 'depth-ai' in MODEL_ID.lower() or 'da3' in MODEL_ID.lower():
-        return True
-    else:
-        return False
+    return _IS_METRIC
 
 # GPU resize (torch F.interpolate). Longest side -> target keeping aspect, then
 # each dim aligned to the patch grid, fused into ONE interpolate (one less
@@ -500,6 +689,11 @@ def _resize_patch_aligned_t(tensor: torch.Tensor, target: int, patch: int) -> to
     new_w = max(1, nearest_multiple(sw, patch))
     if new_h == h and new_w == w:
         return tensor
+    if IS_XPU and tensor.device.type == "xpu":
+        dtype = torch.float32 if not tensor.dtype.is_floating_point else tensor.dtype
+        tensor = F.interpolate(tensor.to(dtype), size=(new_h, new_w), mode='bilinear', align_corners=False)
+        return tensor.to(DEVICE)
+
     dtype = tensor.dtype if tensor.dtype.is_floating_point else torch.float32
     if IS_CUDA:
         return F.interpolate(tensor.to(dtype), size=(new_h, new_w), mode='bicubic', align_corners=False, antialias=True)
@@ -532,7 +726,7 @@ def apply_foreground_scale(depth: torch.Tensor, scale: float, mid: float = 0.5, 
     if not (-1.0 + 1e-12 < scale):  # avoid scale <= -1
         raise ValueError("scale must be greater than -1.0")
 
-    depth.clamp_(0.0, 1.0)
+    depth = depth.clamp(0.0, 1.0)
     if abs(scale) < eps:
         return depth  # identity for scale ~ 0
 
@@ -541,41 +735,37 @@ def apply_foreground_scale(depth: torch.Tensor, scale: float, mid: float = 0.5, 
     out = mid + torch.sign(dist) * torch.pow(torch.abs(dist), exponent)
     return out.clamp(0.0, 1.0)
        
-def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
-    """
-    Apply anti-aliasing to reduce jagged edges in depth maps.
-    
-    Args:
-        depth (torch.Tensor): Normalized depth map tensor [H,W] or [B,1,H,W] with values in [0,1].
-        strength (float): Blur strength; higher = smoother edges. Recommended range [0.5, 2.0].
-    
-    Returns:
-        torch.Tensor: Smoothed depth map with same shape.
-    """
-    if depth.dim() == 2:
-        depth = depth.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
-    elif depth.dim() == 3:
-        depth = depth.unsqueeze(1)  # [B,1,H,W]
+_aa_kernel_cache = {}
 
-    # Kernel size scales with strength
-    k = int(3 * strength) | 1  # force odd number
+def anti_alias(depth: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
+    if depth.dim() == 2:
+        depth = depth.unsqueeze(0).unsqueeze(0)
+    elif depth.dim() == 3:
+        depth = depth.unsqueeze(1)
+
+    k = int(3 * strength) | 1
     if k < 3:
         return depth.squeeze()
 
-    # Gaussian blur kernel
-    sigma = 0.5 * strength
-    coords = torch.arange(k, device=depth.device, dtype=depth.dtype) - k // 2
-    gauss = torch.exp(-(coords**2) / (2 * sigma**2))
-    gauss /= gauss.sum()
+    cache_key = (k, depth.device, depth.dtype)
+    cached = _aa_kernel_cache.get(cache_key)
+    if cached is not None:
+        kx, ky = cached
+    else:
+        sigma = 0.5 * strength
+        coords = torch.arange(k, device=depth.device, dtype=depth.dtype) - k // 2
+        gauss = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
+        gauss /= gauss.sum()
+        kx = gauss.view(1, 1, 1, -1)
+        ky = gauss.view(1, 1, -1, 1)
+        _aa_kernel_cache[cache_key] = (kx, ky)
 
-    # Separable convolution (X then Y)
-    depth = F.conv2d(depth, gauss.view(1,1,1,-1), padding=(0, k//2), groups=1)
-    depth = F.conv2d(depth, gauss.view(1,1,-1,1), padding=(k//2, 0), groups=1)
-
+    depth = F.conv2d(depth, kx, padding=(0, k // 2), groups=1)
+    depth = F.conv2d(depth, ky, padding=(k // 2, 0), groups=1)
     return depth.squeeze()
 
 def chw_tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
-    hwc_tensor = tensor.permute(1, 2, 0).contiguous().detach().cpu().float()
+    hwc_tensor = tensor.detach().cpu().float().permute(1, 2, 0)
     # torch.compile can return tensor subclasses on recent PyTorch builds.
     # NumPy export only supports plain Tensor instances, so unwrap last.
     if type(hwc_tensor) is not torch.Tensor and hasattr(hwc_tensor, "as_subclass"):
@@ -631,7 +821,26 @@ def normalize(depth, percentile=2.0, subsample_cap=6_144):
     inversion is gated on is_metric() so non-metric disparity models (already
     near=high) keep correct near/far orientation. Returns [H,W] in [0,1] oriented
     near~1, far~0 (i.e. BEFORE the official final `1-depth`)."""
-    d = depth.detach().float().squeeze()
+    d = depth.squeeze()
+
+    if d.device.type == "xpu":
+        if is_metric():
+            valid = d > 0
+            inv = torch.where(valid, d.clamp(min=1e-12).reciprocal(), d)
+            if valid.any():
+                v = inv[valid]
+                dmin = v.min()
+                dmax = v.max()
+            else:
+                dmin = torch.zeros((), device=d.device, dtype=d.dtype)
+                dmax = torch.ones((), device=d.device, dtype=d.dtype)
+        else:
+            inv = d
+            dmin = inv.min()
+            dmax = inv.max()
+        denom = (dmax - dmin).clamp_min(1e-6)
+        return ((inv - dmin) / denom).clamp(0.0, 1.0)
+
     if is_metric():
         valid = d > 0
         inv = torch.where(valid, 1.0 / d.clamp(min=1e-12), d)
@@ -639,6 +848,7 @@ def normalize(depth, percentile=2.0, subsample_cap=6_144):
     else:
         inv = d
         v = inv.flatten()
+
     if v.numel() <= 10:
         dmin = torch.zeros((), device=d.device)
         dmax = torch.zeros((), device=d.device)
@@ -651,12 +861,13 @@ def normalize(depth, percentile=2.0, subsample_cap=6_144):
             dmin, dmax = _percentile_bounds_no_lerp(vv, percentile)
         except (RuntimeError, ValueError):
             dmin, dmax = _percentile_bounds_sort(vv, percentile)
+
     denom = (dmax - dmin).clamp_min(1e-6)
-    norm = ((inv - dmin) / denom).clamp(0.0, 1.0)  # near~1, far~0
+    norm = ((inv - dmin) / denom).clamp(0.0, 1.0)
     return norm
 
 # Load Video Depth Anything Model
-def get_video_depth_anything_model(model_id=MODEL_ID):
+def get_video_depth_anything_model(model_id=MODEL_ID, device=DEVICE):
     """ Load Video Depth Anything model from HuggingFace hub. """
     from huggingface_hub import hf_hub_download
     from models.video_depth_anything.vda2_s import VideoDepthAnything
@@ -688,11 +899,12 @@ def get_video_depth_anything_model(model_id=MODEL_ID):
 
     model = VideoDepthAnything(**model_configs[encoder])
     model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True), strict=True)
-    return model.to(DEVICE, dtype=DTYPE)
+    return _to_device_for_backend(model, device, DTYPE)
 
 # Load InfiniDepth Model
-def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
+def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE, device=DEVICE):
     """ Load InfiniDepth model from HuggingFace hub. """
+    _install_directml_model_compat_patches()
     # Load depth model without network warning when local cache exists
     model_path = get_model_path(model_id, cache_dir=CACHE_PATH)
     # Preparation for video depth anything models
@@ -705,17 +917,24 @@ def get_infinidepth_model(model_id=MODEL_ID, dtype=DTYPE):
     model = InfiniDepthModel(model_path=model_path, encoder=encoder_dict.get(model_id, 'vitl16'))
     # Honor the configured dtype. InfiniDepthModel keeps inputs consistent with
     # the loaded parameter dtype so FP16 exports do not hit input/bias mismatches.
-    return model.to(DEVICE, dtype=DTYPE)
+    return _to_device_for_backend(model, device, DTYPE)
 
 # Load Depth-Anything-V3 Model
-def get_da3_model(model_id=MODEL_ID, dtype=DTYPE):
+def get_da3_model(model_id=MODEL_ID, dtype=DTYPE, device=DEVICE):
+    _install_directml_model_compat_patches()
     from models.depth_anything_3.api_n import DepthAnything3
     # Load depth model without network warning when local cache exists
     try:
-        model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH, dtype=dtype, local_files_only=True)
+        if IS_XPU:
+            model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH, local_files_only=True)
+        else:
+            model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH, dtype=dtype, local_files_only=True)
     except:
-        model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH, dtype=dtype)
-    return model.to(DEVICE)
+        if IS_XPU:
+            model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH)
+        else:
+            model = DepthAnything3.from_pretrained(model_id, cache_dir=CACHE_PATH, dtype=dtype)
+    return model.to(device)
 
 # MIGraphX Optimization and Engine (ROCm7)
 def _ensure_migraphx_available():
@@ -907,7 +1126,10 @@ class ModelForONNX(torch.nn.Module):
 
     def forward(self, x):
         if hasattr(self.model, "predict_depth"):
-            return self.model.predict_depth(x)
+            try:
+                return self.model.predict_depth(x, fp32=True)
+            except TypeError:
+                return self.model.predict_depth(x)
 
         if (
             "video-depth-anything" in MODEL_ID.lower()
@@ -977,7 +1199,7 @@ def export_to_onnx(model, output_path="depth_model.onnx", device=DEVICE, dtype=D
     
     model.eval()
     export_model = ModelForONNX(model).eval()
-    with torch.no_grad(), _onnx_export_safe_attention():
+    with torch.no_grad(), _onnx_export_safe_attention(), torch.autocast(device_type=device.type, enabled=False):
         torch.onnx.export(
             export_model,
             dummy_input,
@@ -1219,13 +1441,15 @@ class OpenVINOEngine:
             except Exception:
                 raise RuntimeError("Unexpected OpenVINO compiled model output type")
 
-        # Convert to torch and move to your DEVICE with MODEL_DTYPE
+        # Convert to torch. OpenVINO owns GPU execution; keep tensors on CPU for
+        # post-processing to avoid XPU transfer/cast failures.
         out_torch = torch.from_numpy(out_np.copy())
-        try:
-            out_torch = out_torch.to(device=DEVICE, dtype=MODEL_DTYPE)
-        except Exception:
-            # If moving to device fails, return CPU tensor
-            pass
+        if not IS_XPU:
+            try:
+                out_torch = out_torch.to(device=DEVICE, dtype=MODEL_DTYPE)
+            except Exception:
+                # If moving to device fails, return CPU tensor
+                pass
 
         return out_torch
 
@@ -1395,23 +1619,29 @@ class DepthModelWrapper:
                 self.backend = "CoreML"
         except Exception as e:
             print(f"[Error] {self._pending_backend} initialization failed: {str(e)}, falling back to PyTorch")
+            if self.is_xpu and self._pending_backend == "OpenVINO":
+                try:
+                    torch.xpu.synchronize()
+                    torch.xpu.empty_cache()
+                except Exception:
+                    pass
             self.backend = "PyTorch"
 
         print(f"Using backend: {self.backend}")
         self._built = True
 
-    def _load_pytorch_model(self, enable_trt=USE_TENSORRT, enable_migraphx=USE_MIGRAPHX):
+    def _load_pytorch_model(self, enable_trt=USE_TENSORRT, enable_migraphx=USE_MIGRAPHX, enable_openvino=USE_OPENVINO):
         """Load the original PyTorch model."""
         global DTYPE
         DTYPE = self.dtype
 
         # Load model
         if 'video-depth-anything' in MODEL_ID.lower():
-            model = get_video_depth_anything_model(MODEL_ID)
+            model = get_video_depth_anything_model(MODEL_ID, device=self.device)
         elif 'da3' in MODEL_ID.lower():
-            model = get_da3_model(MODEL_ID, dtype=self.dtype)
+            model = get_da3_model(MODEL_ID, dtype=self.dtype, device=self.device)
         elif 'infinidepth' in MODEL_ID.lower():
-            model = get_infinidepth_model(MODEL_ID, dtype=self.dtype)
+            model = get_infinidepth_model(MODEL_ID, dtype=self.dtype, device=self.device)
         else:
             try:
                 # Load depth model without network warning when local cache exists
@@ -1422,18 +1652,18 @@ class DepthModelWrapper:
                         cache_dir=CACHE_PATH,
                         weights_only=True,
                         local_files_only=True
-                    ).to(DEVICE)
+                    ).to(self.device)
                 except Exception:
                     model = AutoModelForDepthEstimation.from_pretrained(
                         MODEL_ID,
                         dtype=self.dtype,
                         cache_dir=CACHE_PATH,
                         weights_only=True
-                    ).to(DEVICE)
+                    ).to(self.device)
             except Exception as e:
                 print(f"[Error]: Failed to load model, please check your local model file and network connection. Details: {e}")
 
-        if self.dtype == torch.float16:
+        if self.dtype == torch.float16 and not USE_OPENVINO:
             model.half()
 
         model = model.eval()
@@ -1446,6 +1676,13 @@ class DepthModelWrapper:
         elif self.is_rocm and self.use_torch_compile and not enable_migraphx:
             enable_torch_compile_fallback(torch)
             compiled_model = torch_compile_or_original(torch, model, "depth model")
+            if compiled_model is not model:
+                print("Processing torch.compile with Triton, it may take a while...")
+            model = compiled_model
+
+        elif self.is_xpu and self.use_torch_compile and not enable_openvino:
+            enable_torch_compile_fallback(torch)
+            compiled_model = torch_compile_with_runtime_fallback(torch, model, "depth model")
             if compiled_model is not model:
                 print("Processing torch.compile with Triton, it may take a while...")
             model = compiled_model
@@ -1472,8 +1709,14 @@ class DepthModelWrapper:
         # export to ONNX if not exists
         if RECOMPILE_OPENVINO or not os.path.exists(self.onnx_path):
             # need a PyTorch model to export
-            pytorch_model = self._load_pytorch_model()
-            export_to_onnx(pytorch_model, self.onnx_path, self.device, self.dtype)
+            export_device = torch.device("cpu") if self.is_xpu else self.device
+            original_device = self.device
+            try:
+                self.device = export_device
+                pytorch_model = self._load_pytorch_model()
+            finally:
+                self.device = original_device
+            export_to_onnx(pytorch_model, self.onnx_path, export_device, self.dtype)
         
         device_name = OPENVINO_DEVICE or "CPU"
         compiled = optimize_with_openvino(self.onnx_path, device=device_name)
@@ -1525,7 +1768,7 @@ class DepthModelWrapper:
 
         """Run inference using the active backend."""
         with torch.no_grad():
-            with maybe_autocast(self.device):
+            with maybe_autocast(self.device, self.dtype):
                 if self.backend == "PyTorch":
                     if "video-depth-anything" in MODEL_ID.lower():
                         return self.model(pixel_values=tensor, fp32=not FP16)
@@ -1546,14 +1789,30 @@ model_wraper = DepthModelWrapper(
 )
 
 MODEL_DTYPE = next(model_wraper.model.parameters()).dtype if hasattr(model_wraper.model, 'parameters') else DTYPE
+MODEL_TENSOR_DEVICE = torch.device("cpu") if USE_OPENVINO else DEVICE
+MODEL_TENSOR_DTYPE = None if IS_XPU else MODEL_DTYPE
 if "depthpro"  in MODEL_ID.lower() or "zoedepth" in MODEL_ID.lower() or "dpt" in MODEL_ID.lower():
-    MEAN = torch.tensor([0.5,0.5,0.5], dtype=MODEL_DTYPE, device=DEVICE).view(1,3,1,1)
-    STD = torch.tensor([0.5,0.5,0.5], dtype=MODEL_DTYPE, device=DEVICE).view(1,3,1,1)
+    MEAN = torch.tensor([0.5,0.5,0.5], dtype=MODEL_TENSOR_DTYPE, device=MODEL_TENSOR_DEVICE).view(1,3,1,1)
+    STD = torch.tensor([0.5,0.5,0.5], dtype=MODEL_TENSOR_DTYPE, device=MODEL_TENSOR_DEVICE).view(1,3,1,1)
 else:    
-    MEAN = torch.tensor([0.485,0.456,0.406], dtype=MODEL_DTYPE, device=DEVICE).view(1,3,1,1)
-    STD = torch.tensor([0.229,0.224,0.225], dtype=MODEL_DTYPE, device=DEVICE).view(1,3,1,1)
+    MEAN = torch.tensor([0.485,0.456,0.406], dtype=MODEL_TENSOR_DTYPE, device=MODEL_TENSOR_DEVICE).view(1,3,1,1)
+    STD = torch.tensor([0.229,0.224,0.225], dtype=MODEL_TENSOR_DTYPE, device=MODEL_TENSOR_DEVICE).view(1,3,1,1)
+
+_norm_tensor_cache = {}
+
+def _normalization_tensors_for(tensor: torch.Tensor):
+    if tensor.device == MEAN.device and tensor.dtype == MEAN.dtype:
+        return MEAN, STD
+    cache_key = (tensor.device, tensor.dtype)
+    cached = _norm_tensor_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    m = MEAN.to(device=tensor.device, dtype=tensor.dtype)
+    s = STD.to(device=tensor.device, dtype=tensor.dtype)
+    _norm_tensor_cache[cache_key] = (m, s)
+    return m, s
     
-if USE_TORCH_COMPILE and IS_CUDA:
+if USE_TORCH_COMPILE and (IS_CUDA or IS_XPU):
     try:
         # Compile the model as before, but SKIP compiling lightweight post-processing functions，avoid FX re-tracing conflicts. These are fast without it.  
         enable_torch_compile_fallback(torch)
@@ -1567,10 +1826,12 @@ if USE_TORCH_COMPILE and IS_CUDA:
 # Initialize with dummy input for warmup
 def warmup_model(model_wraper, engine_h, engine_w, steps: int = 3):
     """Warmup with the fixed model-input shape (engine_h, engine_w)."""
-    with maybe_autocast(DEVICE):
+    if IS_XPU and getattr(model_wraper, "backend", None) != "OpenVINO":
+        return True
+    warmup_device = torch.device("cpu") if getattr(model_wraper, "backend", None) == "OpenVINO" else DEVICE
+    with maybe_autocast(warmup_device):
         for i in range(steps):
-            dummy = torch.randn(1, 3, engine_h, engine_w,
-                               device=DEVICE)
+            dummy = torch.zeros(1, 3, engine_h, engine_w, device=warmup_device)
             model_wraper(dummy)
     return True
 
@@ -1607,6 +1868,7 @@ class DepthStabilizer:
         self.prev = None
         self.enabled = True
         self.lock = Lock()
+        self._xpu_alpha_t = None
 
     def __call__(self, depth: torch.Tensor):
         if not self.enabled:
@@ -1614,10 +1876,15 @@ class DepthStabilizer:
         with self.lock:
             if self.prev is None or self.prev.shape != depth.shape or self.prev.device != depth.device:
                 self.prev = depth.detach().clone()
+                self._xpu_alpha_t = None
                 return depth
-            out = self.alpha * self.prev + (1.0 - self.alpha) * depth
-            self.prev = out.detach().clone()
-            return out
+            if depth.device.type == "xpu":
+                if self._xpu_alpha_t is None or self._xpu_alpha_t.shape != depth.shape:
+                    self._xpu_alpha_t = torch.full_like(depth, self.alpha)
+                self.prev.mul_(self._xpu_alpha_t).add_(depth * (1.0 - self.alpha))
+            else:
+                self.prev.lerp_(depth, 1.0 - self.alpha)
+            return self.prev
 
 depth_stabilizer = DepthStabilizer(alpha=0.9)  # increase alpha for more stability
 if USE_TORCH_COMPILE and IS_CUDA:
@@ -1627,7 +1894,7 @@ if USE_TORCH_COMPILE and IS_CUDA:
     )
 
 # Modified predict_depth function with improved TRT integration
-def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = True, dtype=DTYPE):
+def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = True, dtype=DTYPE, _backend_retry: bool = False):
     """
     Returns depth in [0,1] using fixed square input.
     """
@@ -1635,15 +1902,24 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
     # Use fixed square size
     target_size = DEPTH_RESOLUTION
     patch = get_patch_size()
+    use_openvino_input = (
+        getattr(model_wraper, "backend", None) == "OpenVINO"
+        or (
+            not _engine_ready
+            and not _backend_retry
+            and getattr(model_wraper, "_pending_backend", None) == "OpenVINO"
+        )
+    )
+    input_device = torch.device("cpu") if use_openvino_input else DEVICE
 
     # Check image_rgb is a tensor or numpy array
     if isinstance(image_rgb, torch.Tensor):
-        rgb_tensor = image_rgb.to(device=DEVICE)
+        rgb_tensor = image_rgb.to(device=input_device)
         h, w = rgb_tensor.shape[1:]
     else:
         # Convert NumPy -> Torch tensor and move to device early
         h, w = image_rgb.shape[:2]
-        rgb_tensor = torch.from_numpy(image_rgb).to(device=DEVICE, non_blocking=True).permute(2, 0, 1).contiguous()  # [C, H, W]
+        rgb_tensor = torch.from_numpy(image_rgb).to(device=input_device, non_blocking=True).permute(2, 0, 1)  # [C, H, W]
 
     tensor = rgb_tensor.unsqueeze(0)  # [1, C, H, W], still uint8
 
@@ -1652,40 +1928,71 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
         # _resize_patch_aligned_t casts to float, so downstream math runs on the
         # small model-input tensor, not the full-res frame.
         tensor = _resize_patch_aligned_t(tensor, target_size, patch)
-        tensor = tensor.to(dtype=MODEL_DTYPE) / 255.0
+        tensor = _to_dtype_for_backend(tensor, MODEL_DTYPE) / 255.0
     else:
         # Fixed square resize for models hardcoded to a square input (DepthPro).
         if (h, w) != (target_size, target_size):
             with coreml_safe_interpolate():
                 tensor = F.interpolate(
-                    tensor.to(dtype=MODEL_DTYPE),
+                    _to_dtype_for_backend(tensor, MODEL_DTYPE),
                     size=(target_size, target_size),
                     mode='bilinear',
                     align_corners=False
                 ) / 255.0
         else:
-            tensor = tensor.to(dtype=MODEL_DTYPE) / 255.0
+            tensor = _to_dtype_for_backend(tensor, MODEL_DTYPE) / 255.0
 
     # InfiniDepth normalizes internally.
     if "infinidepth" not in MODEL_ID.lower():
-        tensor = (tensor - MEAN) / STD
-    tensor = tensor.contiguous()
+        mean, std = _normalization_tensors_for(tensor)
+        tensor = (tensor - mean) / std
 
     # Tensor now has the final model-input shape; build engine + warmup once.
     if not _engine_ready:
         _, _, eh, ew = tensor.shape
         _ensure_engine_built(eh, ew)
+        if getattr(model_wraper, "backend", None) == "PyTorch" and tensor.device != model_wraper.device:
+            if IS_XPU and not _backend_retry:
+                return predict_depth(
+                    image_rgb,
+                    return_tuple=return_tuple,
+                    use_temporal_smooth=use_temporal_smooth,
+                    dtype=dtype,
+                    _backend_retry=True,
+                )
+            tensor = tensor.to(device=model_wraper.device)
 
     # Model inference with appropriate autocast context
     depth = model_wraper(tensor)
+    depth_cpu_fallback = depth
+    global XPU_POSTPROCESS_AVAILABLE
+    if IS_XPU and XPU_POSTPROCESS_AVAILABLE and depth.device != DEVICE:
+        try:
+            # OpenVINO Python returns host tensors; upload once for XPU post/SBS.
+            depth = depth.to(device=DEVICE)
+        except RuntimeError as e:
+            XPU_POSTPROCESS_AVAILABLE = False
+            if DEBUG:
+                print(f"[XPU] Post-process handoff failed, using CPU: {e}")
             
     # POST-PROCESSING
     with torch.no_grad():
-        depth = post_process_depth(depth)
-
-        # Optional temporal stabilization (EMA)
-        if use_temporal_smooth:
-            depth = depth_stabilizer(depth)
+        try:
+            depth = post_process_depth(depth)
+            # Optional temporal stabilization (EMA)
+            if use_temporal_smooth:
+                depth = depth_stabilizer(depth)
+        except RuntimeError as e:
+            if IS_XPU and depth.device.type == "xpu":
+                XPU_POSTPROCESS_AVAILABLE = False
+                if DEBUG:
+                    print(f"[XPU] Post-process kernel failed, using CPU: {e}")
+                depth_stabilizer.prev = None
+                depth = post_process_depth(depth_cpu_fallback)
+                if use_temporal_smooth:
+                    depth = depth_stabilizer(depth)
+            else:
+                raise
 
     # Resize depth back to original input resolution (on GPU)# Resize depth back to original input resolution (on GPU)
     with coreml_safe_interpolate():
@@ -1695,6 +2002,21 @@ def predict_depth(image_rgb, return_tuple=False, use_temporal_smooth: bool = Tru
             mode='bilinear',
             align_corners=False
         ).squeeze(0).squeeze(0)
+    if IS_XPU and depth.device.type == "xpu":
+        try:
+            depth = depth.detach().cpu()
+        except RuntimeError as e:
+            XPU_POSTPROCESS_AVAILABLE = False
+            if DEBUG:
+                print(f"[XPU] Final depth download failed, using CPU: {e}")
+            depth = post_process_depth(depth_cpu_fallback)
+            with coreml_safe_interpolate():
+                depth = F.interpolate(
+                    depth.unsqueeze(0).unsqueeze(0),
+                    size=(h, w),
+                    mode='bilinear',
+                    align_corners=False
+                ).squeeze(0).squeeze(0)
 
     # Return
     if return_tuple:
@@ -1815,6 +2137,7 @@ def make_sbs_core(rgb: torch.Tensor,
     Returns:
         SBS image [C,H,W] float tensor (0-255 range)
     """
+    device = rgb.device
     C, H, W = rgb.shape
     img = rgb.unsqueeze(0).clamp(0, 255)  # [1,C,H,W]
     depth_strength = 0.05
@@ -1865,23 +2188,31 @@ def make_sbs(rgb_c, depth, ipd_uv=0.064, depth_ratio=2.0, convergence=0.0, fill_
     Full function: adds optional FPS overlay and converts output to numpy uint8.
     Calls `make_sbs_core` for tensor computations (torch.compile compatible).
     """
+    if isinstance(depth, torch.Tensor):
+        sbs_device = depth.device
+    else:
+        sbs_device = DEVICE if IS_XPU and XPU_POSTPROCESS_AVAILABLE else torch.device("cpu")
     if USE_COREML:
-        device = DEVICE
+        sbs_device = DEVICE
         if isinstance(depth, np.ndarray):
-            depth = torch.from_numpy(depth).to(device=DEVICE, dtype=DTYPE)
+            depth = _to_device_for_backend(torch.from_numpy(depth), sbs_device, DTYPE)
         else:
-            depth = depth.to(device=device)
+            depth = depth.to(device=sbs_device)
+    elif isinstance(depth, np.ndarray):
+        depth = _to_device_for_backend(torch.from_numpy(depth), sbs_device, DTYPE)
+    else:
+        depth = depth.to(device=sbs_device)
     
     # Handle input type conversion
     if isinstance(rgb_c, np.ndarray):
         # Convert numpy array to tensor with matching device/dtype
-        rgb = torch.from_numpy(rgb_c).to(device=depth.device, dtype=depth.dtype)
+        rgb = _to_device_for_backend(torch.from_numpy(rgb_c), sbs_device, depth.dtype)
         # Convert from HWC to CHW format
         if rgb.ndim == 3 and rgb.shape[2] == 3:
             rgb = rgb.permute(2, 0, 1).contiguous()
     else:
         # Ensure tensor is on correct device and dtype
-        rgb = rgb_c.to(device=depth.device, dtype=depth.dtype)
+        rgb = _to_device_for_backend(rgb_c, sbs_device, depth.dtype)
 
     # Optional FPS overlay can stay in Python side (avoids torch.compile recompiles)
     if fps is not None:
