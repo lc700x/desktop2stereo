@@ -8,7 +8,7 @@
 A universal real-time 2D to 3D App that supports AMD/NVIDIA/Intel/Qualcomm GPU/Apple Silicon devices on Windows/Mac/Ubuntu, powered by Depth Estimation AI Models
 
 ## Alternative Download Link
-
+- [Hugging Face Bucket](https://huggingface.co/buckets/lc700x/desktop2stereo_release )  
 - [Quark NetDrive](https://pan.quark.cn/s/9d2bcf039b96)  
     Access code: `1vcn`  
 - [Baidu Netdisk](https://pan.baidu.com/s/1JfMpcrdplPTQSNB6rExh6A?pwd=mr64 )  
