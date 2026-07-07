@@ -98,20 +98,21 @@ class InputHandlerMixin:
         # suppress VR cursor control unconditionally so the user can use the
         # physical mouse without fighting the VR cursor.  VR resumes after a
         # quiet period with no physical mouse movement.
-        # Check FIRST before expensive ray casting to skip work when mouse is active.
+        # Skip detection entirely when a touch contact is active — Windows
+        # moves the OS cursor to follow the touch point, which would falsely
+        # trigger the physical-mouse detector and freeze VR cursor control.
         if sys.platform == "win32":
-            if (time.perf_counter() - self._phys_mouse_last_move) < PHYS_TIMEOUT:
+            any_touch_active = (self._touch_state_l == 'down'
+                                or self._touch_state_r == 'down')
+            if (not any_touch_active
+                    and (time.perf_counter() - self._phys_mouse_last_move) < PHYS_TIMEOUT):
                 self._cursor_ctrl = None
                 self._cursor_smooth_uv = None
-                # Invalidate touch positions so any held contact is released by
-                # _handle_triggers when physical mouse takes over.
                 self._touch_valid_l = False
                 self._touch_valid_r = False
                 return
-            # Throttle GetCursorPos to every ~50ms (3-4 frames at 72Hz) 
-            # per-frame polling is wasteful; physical mouse detection doesn't need sub-frame precision.
             _now = time.perf_counter()
-            if _now - getattr(self, '_last_get_cursor_pos_time', 0.0) >= 0.05:
+            if not any_touch_active and _now - getattr(self, '_last_get_cursor_pos_time', 0.0) >= 0.05:
                 class _POINT(ctypes.Structure):
                     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
                 _pt = _POINT()
@@ -123,7 +124,8 @@ class InputHandlerMixin:
                     if vcp is None or abs(_cur_pos[0] - vcp[0]) > 4 or abs(_cur_pos[1] - vcp[1]) > 4:
                         self._phys_mouse_last_move = _now
                 self._phys_mouse_pos = _cur_pos
-            if (time.perf_counter() - self._phys_mouse_last_move) < PHYS_TIMEOUT:
+            if (not any_touch_active
+                    and (time.perf_counter() - self._phys_mouse_last_move) < PHYS_TIMEOUT):
                 self._cursor_ctrl = None
                 self._cursor_smooth_uv = None
                 self._touch_valid_l = False
@@ -379,6 +381,10 @@ class InputHandlerMixin:
                            and self._touch_state_r == 'down')
         if not self._grabbed and not both_touch_down:
             _set_cursor_pos(px, py)
+            # Sync physical-mouse tracker so GetCursorPos on the next poll
+            # doesn't misattribute VR cursor movement as a physical mouse
+            # event (which would freeze VR cursor for PHYS_TIMEOUT seconds).
+            self._phys_mouse_pos = (px, py)
 
     def _emit_left_click(self):
         """Send a left click, snapping to the previous click pixel so rapid
@@ -404,9 +410,11 @@ class InputHandlerMixin:
         last_px = getattr(self, '_last_click_px', None)
         if (last_px is not None and px is not None
                 and (now - self._last_click_ts) <= dclick_s):
-            # Snap to the first click's pixel so the OS pairs the two clicks.
             _set_cursor_pos(last_px[0], last_px[1])
             px, py = last_px
+            # Keep physical-mouse detector in sync after the snap so the
+            # position change isn't misread as a physical mouse movement.
+            self._phys_mouse_pos = (px, py)
         _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
         _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
         self._last_click_ts = now
@@ -455,11 +463,6 @@ class InputHandlerMixin:
                     self._touch_state_r = 'idle'
                     self._touch_smooth_r = None
                 _touch_injector.flush()
-            # Seed the per-hand prior-trigger trackers to the current readings so
-            # that on the frame the user releases the grip, the rising-edge gate
-            # in the touch path still requires a true release-then-press before
-            # firing a new touch DOWN (avoids "drop the grip instant phantom
-            # click" if the trigger happens to be high at grip-release time).
             self._touch_trig_prev_l = self._read_float_action(
                 self._act_left_trigger,  "/user/hand/left")
             self._touch_trig_prev_r = self._read_float_action(
@@ -650,7 +653,16 @@ class InputHandlerMixin:
             if _touch_injector.available:
                 return
 
-        # ▶Mouse fallback: original click+drag state machine ▶
+        # ▶Mouse fallback: VR remote standard click state machine ▶
+        # Click fires on RELEASE (not press) so tap/double-tap/long-press/drag
+        # are cleanly separated — no accidental right-click after a slow tap.
+        #   tap (quick release)      → left click
+        #   double-tap               → OS double-click (pixel-snap via _emit_left_click)
+        #   hold + stationary ≥0.45s → right click (context menu)
+        #   hold + move ≥12px        → left drag
+        LONG_PRESS_TIME = 0.45
+        DRAG_THRESH_PX  = 12
+
         left_laser_usable  = (not left_on_kb and not ov_claim_l and
                             (self._cursor_uv_l is not None or
                             self._cursor_ctrl == 'left'))
@@ -659,32 +671,43 @@ class InputHandlerMixin:
                             self._cursor_ctrl == 'right'))
 
         any_drag = False
+        cur_pos = getattr(self, '_vr_cursor_screen_pos', None)
 
-        for trig, usable, state_attr, press_t_attr in (
-            (lt, left_laser_usable,  '_ltrig_state', '_ltrig_press_t'),
-            (rt, right_laser_usable, '_rtrig_state', '_rtrig_press_t'),
+        for trig, usable, state_attr, press_t_attr, press_px_attr in (
+            (lt, left_laser_usable,  '_ltrig_state', '_ltrig_press_t', '_ltrig_press_px'),
+            (rt, right_laser_usable, '_rtrig_state', '_rtrig_press_t', '_rtrig_press_px'),
         ):
             state = getattr(self, state_attr)
 
             if state == 'idle':
                 if trig >= PRESS_THRESH and usable:
-                    # Rising edge: fire an immediate click pulse so the OS can
-                    # accumulate it toward double-click detection, then start timer.
-                    self._emit_left_click()
                     setattr(self, state_attr,   'pressed')
                     setattr(self, press_t_attr, now)
+                    setattr(self, press_px_attr, cur_pos)
 
             elif state == 'pressed':
                 if not usable or trig <= RELEASE_THRESH:
-                    # Released quickly click already delivered, return to idle.
+                    # Quick release → left click (on release, not press)
+                    if usable:
+                        self._emit_left_click()
                     setattr(self, state_attr, 'idle')
-                elif (now - getattr(self, press_t_attr)) >= HOLD_TIME:
-                    # Held long enough begin drag (send LEFTDOWN if not already down).
-                    if not self._left_btn_down:
-                        _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
-                        self._left_btn_down = True
-                    setattr(self, state_attr, 'dragging')
-                    any_drag = True
+                else:
+                    press_px = getattr(self, press_px_attr, None)
+                    moved = False
+                    if press_px is not None and cur_pos is not None:
+                        dx = abs(cur_pos[0] - press_px[0])
+                        dy = abs(cur_pos[1] - press_px[1])
+                        moved = (dx > DRAG_THRESH_PX or dy > DRAG_THRESH_PX)
+                    if moved:
+                        if not self._left_btn_down:
+                            _send_mouse_flags(_MOUSEEVENTF_LEFTDOWN)
+                            self._left_btn_down = True
+                        setattr(self, state_attr, 'dragging')
+                        any_drag = True
+                    elif (now - getattr(self, press_t_attr)) >= LONG_PRESS_TIME:
+                        _send_mouse_flags(_MOUSEEVENTF_RIGHTDOWN)
+                        _send_mouse_flags(_MOUSEEVENTF_RIGHTUP)
+                        setattr(self, state_attr, 'consumed')
 
             elif state == 'dragging':
                 if not usable or trig <= RELEASE_THRESH:
@@ -692,7 +715,10 @@ class InputHandlerMixin:
                 else:
                     any_drag = True
 
-        # Send LEFTUP once both triggers leave drag state.
+            elif state == 'consumed':
+                if trig <= RELEASE_THRESH:
+                    setattr(self, state_attr, 'idle')
+
         if not any_drag and self._left_btn_down:
             _send_mouse_flags(_MOUSEEVENTF_LEFTUP)
             self._left_btn_down = False
