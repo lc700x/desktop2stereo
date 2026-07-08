@@ -1864,8 +1864,8 @@ class InputHandlerMixin:
         if y_now and not self._y_long_fired and not seat_adjust_active:
             if time.perf_counter() - self._y_press_t >= Y_LONG:
                 if screen_locked:
-                    if not (self._env_uses_view_pose_cycle() and self._cycle_view_pose()):
-                        self._cycle_lighting_preset()
+                    if self._env_uses_view_pose_cycle():
+                        self._cycle_view_pose()
                 else:
                     nxt = (self._preset_index + 1) % len(self._screen_presets)
                     self._apply_preset(nxt)

@@ -740,7 +740,7 @@ class OverlayMixin:
                 C_MODE  = (100, 255, 100, 255)
                 PAD = 12
                 cy = (ch - 32) // 2
-                mode_text = "CROP ADJUST" if self._crop_adjust_active else "Paused"
+                mode_text = "CROP ADJUST"
                 draw.text((PAD, cy), mode_text, font=bfont,
                           fill=C_MODE if self._crop_adjust_active else C_LABEL)
                 try:

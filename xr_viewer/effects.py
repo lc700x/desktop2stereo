@@ -610,18 +610,8 @@ class EffectsMixin:
             self._glow_mipmap_pending = False
             self._glow_mipmap_ready = False
             return
-        if mode in ('glow', 'glow2'):
-            frame = int(getattr(self, '_frame_count', 0) or 0)
-            if filter_changed or not bool(getattr(self, '_glow_mipmap_ready', False)):
-                glGenerateMipmap(GL_TEXTURE_2D)
-                self._glow_mipmap_last_frame = frame
-                self._glow_mipmap_pending = False
-                self._glow_mipmap_ready = True
-                return
-            self._glow_mipmap_pending = True
-            self._glow_mipmap_pending_frame = frame
-            return
         glGenerateMipmap(GL_TEXTURE_2D)
+        self._glow_mipmap_ready = True
 
     def _flush_pending_glow_mipmap(self, force=False):
         if not getattr(self, '_glow_mipmap_pending', False):
