@@ -1334,9 +1334,9 @@ class EnvironmentMixin:
         return True
 
     def _env_uses_view_pose_cycle(self):
-        """Only selected room models use Y long-press for seating/view cycling."""
+        """Room models that support Y long-press seating/view cycling."""
         env = (self._active_environment or self._environment_model or '').strip().lower()
-        return env in ('cinema', 'living room', 'theater')
+        return env in ('bedroom', 'cinema', 'living room', 'theater')
 
     def _toggle_passthrough_backdrop(self):
         """Toggle green passthrough without unloading the active environment."""
@@ -1350,8 +1350,15 @@ class EnvironmentMixin:
             self._bg_color_idx = 1
             print("[OpenXRViewer] Passthrough backdrop: on")
 
+    def _env_has_lighting_toggle(self):
+        env = (self._active_environment or self._environment_model or '').strip().lower()
+        return env in ('bedroom', 'cinema', 'theater', 'living room')
+
     def _cycle_light_from_x(self):
-        """Cycle screen glow mode from the left X long-press release."""
+        """X long-press release: toggle bright/dark for room envs, else cycle glow mode."""
+        if self._env_has_lighting_toggle() and self._lighting_presets:
+            self._cycle_lighting_preset()
+            return True
         modes = ('glow', 'glow2', 'veil', 'frosted', 'off')
         if hasattr(self, '_active_glow_mode'):
             current = self._active_glow_mode()
