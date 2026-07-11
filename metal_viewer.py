@@ -56,12 +56,12 @@ struct Uniforms {
     float eyeOffset;
     float depthStrength;
     float convergence;
-    float depthExponent;
+    float _pad0;
     float4 viewport;
     float mode;
     float featherEnabled;
     float featherWidth;
-    float _pad;
+    float _pad1;
 };
 
 vertex VertexOut vertex_main(uint vid [[vertex_id]]) {
@@ -107,9 +107,18 @@ fragment float4 overlay_fragment_main(
 }
 
 static float2 displaced_uv(float2 uv, float eye, texture2d<float> depthTex, sampler s, constant Uniforms& u) {
-    float d = depthTex.sample(s, uv).r;
-    d = pow(clamp(d, 0.0, 1.0), u.depthExponent);
-    float shift = (u.convergence - d) * u.depthStrength * eye;
+    // 3-tap Gaussian depth smoothing along horizontal parallax (matches viewer.py DIBR)
+    float2 ds_dir = float2(sign(eye) / float(depthTex.get_width()) * 1.5, 0.0);
+    float d0 = depthTex.sample(s, uv).r;
+    float dm = depthTex.sample(s, uv - ds_dir).r;
+    float dp = depthTex.sample(s, uv + ds_dir).r;
+    float d = clamp(d0 * 0.7 + dm * 0.15 + dp * 0.15, 0.0, 1.0);
+    // Asymmetric depth shaping: boosts near-object pop ~35% (matches viewer.py)
+    float depth_shaped = d * (1.0 + 0.35 * (1.0 - d));
+    float shift = (depth_shaped - u.convergence) * u.depthStrength * eye;
+    // Edge falloff: reduce parallax at image borders to prevent sampling artifacts
+    float edge_falloff = smoothstep(0.0, 0.05, uv.x) * smoothstep(1.0, 0.95, uv.x);
+    shift *= edge_falloff;
     return float2(clamp(uv.x + shift, 0.0, 1.0), uv.y);
 }
 
@@ -302,7 +311,6 @@ class StereoWindow:
         self.depth_ratio = depth_ratio
         self.depth_ratio_original = depth_ratio
         self.depth_strength = 0.1
-        self.depth_exponent = 1.45
         self.convergence = convergence
         self.display_mode = display_mode
         self.fill_16_9 = fill_16_9
@@ -693,7 +701,7 @@ class StereoWindow:
                 eye,
                 self.depth_strength * self.depth_ratio,
                 self.convergence,
-                self.depth_exponent,
+                0.0,
                 float(viewport[0]),
                 float(viewport[1]),
                 float(viewport[2]),
