@@ -8,7 +8,6 @@ cache
 /streamer
 views
 .DS*
-*.zip
 models/.locks
 models/models--*
 *.pdf

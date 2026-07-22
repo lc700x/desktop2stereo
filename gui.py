@@ -35,11 +35,114 @@ CompactDropdown (L615)
   Properties: .value (r/w), .options (r/w, triggers menu rebuild), .set_tooltip(text)
 """
 import os
+import platform
 FLET_STORAGE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "flet_client"))
-os.environ["FLET_VIEW_PATH"] = FLET_STORAGE_PATH
+
+def _ensure_flet_client():
+    """Extract the bundled Flet client archive if an archive exists and no app/exe is present.
+    Returns True if a client is available locally (archive or extracted), False otherwise."""
+    system = platform.system()
+    if system == "Darwin":
+        app_path = os.path.join(FLET_STORAGE_PATH, "Flet.app")
+        archive = os.path.join(FLET_STORAGE_PATH, "flet-macos.tar.gz")
+        if os.path.exists(app_path):
+            return True
+        if os.path.exists(archive):
+            import tarfile
+            with tarfile.open(archive, "r:gz") as tar:
+                tar.extractall(path=FLET_STORAGE_PATH, filter="data")
+            # Strip quarantine so macOS doesn't block the extracted .app
+            import subprocess
+            subprocess.run(
+                ["xattr", "-r", "-d", "com.apple.quarantine", app_path],
+                capture_output=True,
+            )
+            subprocess.run(
+                ["codesign", "--force", "--deep", "-s", "-", app_path],
+                capture_output=True,
+            )
+            return True
+        return False
+    elif system == "Windows":
+        exe_path = os.path.join(FLET_STORAGE_PATH, "flet.exe")
+        archive = os.path.join(FLET_STORAGE_PATH, "flet-windows.zip")
+        if os.path.exists(exe_path):
+            return True
+        if os.path.exists(archive):
+            import zipfile
+            import shutil
+            nested = os.path.join(FLET_STORAGE_PATH, "flet")
+            with zipfile.ZipFile(archive, "r") as zf:
+                zf.extractall(path=FLET_STORAGE_PATH)
+            # The archive extracts to flet_client/flet/ — move contents up one level
+            if os.path.isdir(nested):
+                for name in os.listdir(nested):
+                    src = os.path.join(nested, name)
+                    dst = os.path.join(FLET_STORAGE_PATH, name)
+                    if os.path.exists(dst):
+                        if os.path.isdir(dst):
+                            shutil.rmtree(dst)
+                        else:
+                            os.remove(dst)
+                    shutil.move(src, dst)
+                os.rmdir(nested)
+            return True
+        return False
+    # Linux: no local client — let Flet download itself
+    return False
+
+if _ensure_flet_client():
+    os.environ["FLET_VIEW_PATH"] = FLET_STORAGE_PATH
+
 import sys
 import subprocess
 import time
+
+def _sign_project_binaries():
+    """macOS only: strip quarantine and ad-hoc sign project binaries so they
+    don't trigger Gatekeeper / 'unidentified developer' dialogs."""
+    if platform.system() != "Darwin":
+        return
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    _sign_dirs = [
+        (project_root, 1),                                          # root only (run_mac etc)
+        (os.path.join(project_root, "flet_client"), None),          # full depth (Flet.app)
+        (os.path.join(project_root, ".env", "bin"), 1),             # bin only
+        (os.path.join(project_root, "rtmp"), None),                 # full depth (ffmpeg, mediamtx)
+    ]
+    for d, maxdepth in _sign_dirs:
+        if not os.path.isdir(d):
+            continue
+        # Strip quarantine
+        subprocess.run(
+            ["xattr", "-r", "-d", "com.apple.quarantine", d],
+            capture_output=True,
+        )
+        # Ad-hoc sign .app bundles (handles all internals in one shot)
+        for name in os.listdir(d):
+            if name.endswith(".app"):
+                subprocess.run(
+                    ["codesign", "--force", "--deep", "-s", "-",
+                     os.path.join(d, name)],
+                    capture_output=True,
+                )
+        # Ad-hoc sign other standalone Mach-O files
+        find_args = ["find", d]
+        if maxdepth is not None:
+            find_args += ["-maxdepth", str(maxdepth)]
+        # Skip .app bundles — already signed above
+        find_args += ["-type", "f", "-perm", "+111", "-not", "-path", "*/*.app/*"]
+        result = subprocess.run(find_args, capture_output=True, text=True)
+        for path in result.stdout.strip().splitlines():
+            ft = subprocess.run(["file", "-b", path], capture_output=True, text=True)
+            if "Mach-O" in ft.stdout:
+                subprocess.run(
+                    ["codesign", "--force", "--deep", "-s", "-", path],
+                    capture_output=True,
+                )
+
+if platform.system() == "Darwin":
+    _sign_project_binaries()
 import asyncio
 import ctypes
 import re
@@ -652,6 +755,15 @@ DEFAULTS = {
     "Stereo Output": None,
 }
 
+# Protocol → default port mapping for RTMP streamer (port is read-only in RTMP mode)
+PROTOCOL_DEFAULT_PORTS = {
+    "RTMP": "1935",
+    "RTSP": "8554",
+    "HLS": "8888",
+    "HLS M3U8": "8888",
+    "WebRTC": "8889",
+}
+
 
 # ─────────────────────────────────────────────
 # Global Font Size
@@ -958,6 +1070,19 @@ class CompactTextField(ft.Container):
         except RuntimeError:
             pass
 
+    @property
+    def read_only(self):
+        return self._read_only
+
+    @read_only.setter
+    def read_only(self, val):
+        self._read_only = val
+        self._build_display()
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
     def _on_submit(self, e):
         if self._committed:
             return
@@ -980,7 +1105,7 @@ class CompactDropdown(ft.Container):
 
     def __init__(self, options=None, value="", on_select=None, expand=False,
                  dyna_width=None, width=None, min_width=None, max_width=None,
-                 tooltip=None, _instances_list=None):
+                 tooltip=None, editable=False, _instances_list=None):
         super().__init__()
         self._options = options or []
         self._on_select_cb = on_select
@@ -989,6 +1114,8 @@ class CompactDropdown(ft.Container):
         self._min = min_width or 0
         self._max = max_width or 0
         self._tooltip = tooltip
+        self._editable = editable
+        self._editing = False
         self.height = S(32)
         self.padding = 0
         self.bgcolor = None
@@ -1028,13 +1155,42 @@ class CompactDropdown(ft.Container):
             else:
                 self.width = None
 
-    def _build_menu(self):
+    def _on_label_click(self, e):
+        """Open inline TextField for editing (triggered by double-tap via GestureDetector)."""
+        self._editing = True
+        tf = ft.TextField(
+            value=self._label.value, text_size=FONT_SIZE, dense=True,
+            filled=False, border=ft.InputBorder.NONE,
+            content_padding=ft.Padding(0, 0, 0, 0), height=S(28),
+            autofocus=True, on_submit=self._on_editable_submit,
+            on_blur=self._on_editable_submit,
+        )
+        self._build_menu(tf)
+        self.update()
+
+    def _on_editable_submit(self, e):
+        """Commit typed value from inline TextField (editable mode only)."""
+        if not self._editing:
+            return
+        self._editing = False
+        val = e.control.value.strip()
+        if val:
+            self._label.value = val
+            self._apply_width()
+            if self._on_select_cb:
+                from types import SimpleNamespace
+                ev = SimpleNamespace(control=SimpleNamespace(value=val))
+                self._on_select_cb(ev)
+        self._build_menu()
+        self.update()
+
+    def _build_menu(self, edit_tf=None):
         def on_item_click(e):
             val = e.control.data
             self._label.value = val
+            self._editing = False
             self._apply_width()
             try:
-                self._label.update()
                 self.update()
             except RuntimeError:
                 pass
@@ -1051,30 +1207,83 @@ class CompactDropdown(ft.Container):
         has_limit = self._min or self._max
         align = ft.MainAxisAlignment.SPACE_BETWEEN if (self._fixed is not None or self._dyna or has_limit) else ft.MainAxisAlignment.START
 
-        self.content = ft.PopupMenuButton(
-            items=items,
-            menu_position=ft.PopupMenuPosition.UNDER,
-            enable_feedback=False,
-            padding=0, menu_padding=0,
-            tooltip=self._tooltip or "",
-            content=ft.Container(
-                height=S(32),
-                padding=ft.Padding(S(8), 0, S(8), 0),
+        if self._editable:
+            if edit_tf is not None:
+                # Currently editing — show TextField, no popup
+                self.content = ft.Container(
+                    height=S(32),
+                    padding=ft.Padding(S(8), 0, S(8), 0),
+                    tooltip=self._tooltip or "",
+                    border=ft.Border(
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                    ),
+                    border_radius=4,
+                    content=ft.Container(
+                        height=S(30),
+                        alignment=ft.Alignment(-1.0, 0.0),
+                        content=edit_tf,
+                    ),
+                )
+            else:
+                # Full-width PopupMenuButton + GestureDetector for double-tap → edit
+                content_row = ft.Container(
+                    height=S(32),
+                    padding=ft.Padding(S(8), 0, S(8), 0),
+                    tooltip=self._tooltip or "",
+                    border=ft.Border(
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                    ),
+                    border_radius=4,
+                    content=ft.Row([
+                        self._label,
+                        ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=S(16)),
+                    ], spacing=2, alignment=align,
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                )
+                detector = ft.GestureDetector(
+                    content=content_row,
+                    on_double_tap=self._on_label_click,
+                )
+                self.content = ft.PopupMenuButton(
+                    items=items,
+                    menu_position=ft.PopupMenuPosition.UNDER,
+                    enable_feedback=False,
+                    padding=0, menu_padding=0,
+                    tooltip=self._tooltip or "",
+                    content=detector,
+                )
+        else:
+            # Non-editable mode: original behaviour — entire control is a PopupMenuButton
+            self.content = ft.PopupMenuButton(
+                items=items,
+                menu_position=ft.PopupMenuPosition.UNDER,
+                enable_feedback=False,
+                padding=0, menu_padding=0,
                 tooltip=self._tooltip or "",
-                border=ft.Border(
-                    ft.BorderSide(1, ft.Colors.OUTLINE),
-                    ft.BorderSide(1, ft.Colors.OUTLINE),
-                    ft.BorderSide(1, ft.Colors.OUTLINE),
-                    ft.BorderSide(1, ft.Colors.OUTLINE),
+                content=ft.Container(
+                    height=S(32),
+                    padding=ft.Padding(S(8), 0, S(8), 0),
+                    tooltip=self._tooltip or "",
+                    border=ft.Border(
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                        ft.BorderSide(1, ft.Colors.OUTLINE),
+                    ),
+                    border_radius=4,
+                    content=ft.Row([
+                        self._label,
+                        ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=S(16)),
+                    ], spacing=2, alignment=align,
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ),
-                border_radius=4,
-                content=ft.Row([
-                    self._label,
-                    ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=S(16)),
-                ], spacing=2, alignment=align,
-                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ),
-        )
+            )
     def set_tooltip(self, text):
         self._tooltip = text
         try:
@@ -1342,12 +1551,12 @@ class Desktop2StereoGUI:
 
         # Row 2: Depth resolution + Convergence
         self.r1a_label = ft.Text("Depth Resolution:", size=FONT_SIZE, width=S(130))
-        self.depth_res_dd = CompactDropdown(options=[], width=S(130))
+        self.depth_res_dd = CompactDropdown(options=[], width=S(130), editable=True)
         self.r1b_label = ft.Text("Convergence:", size=FONT_SIZE, width=S(130))
         conv_options = [str(i / 4) for i in range(-2, 5)]
         self.convergence_dd = CompactDropdown(width=S(130),
             options=[v for v in conv_options],
-            value="0.0")
+            value="0.0", editable=True)
         row1 = ft.Row([
             self.r1a_label,
             self.depth_res_dd,
@@ -1361,12 +1570,12 @@ class Desktop2StereoGUI:
         ds_options = [f"{i / 2:.1f}" for i in range(21)]
         self.depth_strength_dd = CompactDropdown(width=S(130),
             options=[v for v in ds_options],
-            value="2.0")
+            value="2.0", editable=True)
         self.r2b_label = ft.Text("Foreground Scale:", size=FONT_SIZE, width=S(130))
         fg_options = [f"{i / 2:.1f}" for i in range(-10, 11)]
         self.foreground_scale_dd = CompactDropdown(width=S(130),
             options=[v for v in fg_options],
-            value="0.5")
+            value="0.5", editable=True)
         row2 = ft.Row([
             self.r2a_label,
             self.depth_strength_dd,
@@ -1378,11 +1587,11 @@ class Desktop2StereoGUI:
         # Row 4: Anti-aliasing + IPD
         self.r3a_label = ft.Text("Anti-aliasing:", size=FONT_SIZE, width=S(130))
         aa_options = [str(i) for i in range(11)]
-        self.antialiasing_dd = CompactDropdown(width=S(130), 
+        self.antialiasing_dd = CompactDropdown(width=S(130),
             options=[v for v in aa_options],
-            value="2")
+            value="2", editable=True)
         self.r3b_label = ft.Text("IPD (mm):", size=FONT_SIZE, width=S(130))
-        self.ipd_dd = CompactDropdown(options=[str(i) for i in range(58, 71)], value="64", width=S(130))
+        self.ipd_dd = CompactDropdown(options=[str(i) for i in range(58, 71)], value="64", width=S(130), editable=True)
         row3 = ft.Row([
             self.r3a_label,
             self.antialiasing_dd,
@@ -2437,6 +2646,15 @@ class Desktop2StereoGUI:
             saved_mix = self._config.get("Stereo Mix", "")
             if saved_mix and saved_mix in (self.audio_dd.options or []):
                 self.audio_dd.value = saved_mix
+            # Port is read-only in RTMP mode; auto-set to protocol default
+            self.stream_port_tf.read_only = True
+            proto = self.stream_proto_dd.value or "HLS"
+            self.stream_port_tf.value = PROTOCOL_DEFAULT_PORTS.get(proto, str(DEFAULT_PORT))
+        elif mode in ["MJPEG Streamer", "Legacy Streamer"]:
+            self.stream_port_tf.read_only = False
+            # Restore user's saved port from config (not RTMP template port)
+            saved_port = str(self._config.get("Streamer Port", DEFAULT_PORT))
+            self.stream_port_tf.value = saved_port
         self.update_stream_url()
         self._fit_window_to_content()
         self.page.update()
@@ -2652,6 +2870,9 @@ class Desktop2StereoGUI:
     def _on_stream_protocol_change(self, e):
         self.stream_protocol_key = e.control.value
         self._config["Stream Protocol"] = self.stream_protocol_key
+        if self.run_mode_key == "RTMP Streamer":
+            default_port = PROTOCOL_DEFAULT_PORTS.get(e.control.value, str(DEFAULT_PORT))
+            self.stream_port_tf.value = default_port
         self.update_stream_url()
         self._fit_window_to_content()
 
@@ -2959,7 +3180,9 @@ class Desktop2StereoGUI:
             "Crop Mode": self.crop_mode_key,
             "VSync": self.vsync_cb.value,
             "Stream Protocol": self.stream_proto_dd.value,
-            "Streamer Port": self._parse_int(self.stream_port_tf.value, DEFAULTS["Streamer Port"]),
+            "Streamer Port": (self._config.get("Streamer Port", DEFAULTS["Streamer Port"])
+                              if self.run_mode_key == "RTMP Streamer"
+                              else self._parse_int(self.stream_port_tf.value, DEFAULTS["Streamer Port"])),
             "Stream Quality": self._parse_int(self.stream_quality_dd.value, DEFAULTS["Stream Quality"]),
             "torch.compile": self.torch_compile_cb.value,
             **accelerator_values,
