@@ -64,14 +64,28 @@ def _ensure_flet_client():
             return True
         return False
     elif system == "Windows":
-        exe_path = os.path.join(FLET_STORAGE_PATH, "flet", "flet.exe")
+        exe_path = os.path.join(FLET_STORAGE_PATH, "flet.exe")
         archive = os.path.join(FLET_STORAGE_PATH, "flet-windows.zip")
         if os.path.exists(exe_path):
             return True
         if os.path.exists(archive):
             import zipfile
+            import shutil
+            nested = os.path.join(FLET_STORAGE_PATH, "flet")
             with zipfile.ZipFile(archive, "r") as zf:
                 zf.extractall(path=FLET_STORAGE_PATH)
+            # The archive extracts to flet_client/flet/ — move contents up one level
+            if os.path.isdir(nested):
+                for name in os.listdir(nested):
+                    src = os.path.join(nested, name)
+                    dst = os.path.join(FLET_STORAGE_PATH, name)
+                    if os.path.exists(dst):
+                        if os.path.isdir(dst):
+                            shutil.rmtree(dst)
+                        else:
+                            os.remove(dst)
+                    shutil.move(src, dst)
+                os.rmdir(nested)
             return True
         return False
     # Linux: no local client — let Flet download itself
