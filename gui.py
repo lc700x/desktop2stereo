@@ -3284,23 +3284,41 @@ class Desktop2StereoGUI:
         each call appears live on the real terminal *and* gets appended to
         the single rolling log file.  Runs until the child closes its
         stdout (i.e. on exit).
+
+        Uses chunked reads and splits on both ``\\r`` and ``\\n`` so that
+        carriage-return progress lines (ffmpeg, tqdm, etc.) are handled
+        without ever hitting asyncio's 64 KB ``readline()`` buffer limit.
         """
         try:
             stream = proc.stdout
             if stream is None:
                 return
+            buf = ""
             while True:
-                raw = await stream.readline()
-                if not raw:
+                chunk = await stream.read(4096)
+                if not chunk:
+                    # Flush any remaining buffered text on EOF
+                    if buf:
+                        print(buf)
                     break
                 try:
-                    text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                    text = chunk.decode("utf-8", errors="replace")
                 except Exception:
-                    text = repr(raw)
-                if text:
-                    # Tag child lines so they're easy to spot in the log,
-                    # but keep them readable on the console.
-                    print(text)
+                    text = repr(chunk)
+                buf += text
+                # Split on both \\r and \\n: ffmpeg uses \\r for
+                # in-place progress, tqdm uses \\r for redraw.
+                while True:
+                    sep_idx = len(buf)
+                    for c in ("\n", "\r"):
+                        if c in buf:
+                            sep_idx = min(sep_idx, buf.index(c))
+                    if sep_idx == len(buf):
+                        break
+                    line = buf[:sep_idx].rstrip("\r\n")
+                    buf = buf[sep_idx + 1:]
+                    if line:
+                        print(line)
         except Exception as e:
             try:
                 self._diag(f"_pump_child_output exception: {e}\n{traceback.format_exc()}", error=True)
