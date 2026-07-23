@@ -539,6 +539,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
                 '-muxdelay', '0',
                 '-muxpreload', '0',
                 '-flush_packets', '1',
+                '-nostats',
                 '-f', 'mpegts',
                 f'srt://localhost:8890?streamid=publish:{STREAM_KEY}&pkt_size=1316'
             ]
@@ -652,6 +653,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
                 '-muxdelay', '0',
                 '-muxpreload', '0',
                 '-flush_packets', '1',
+                '-nostats',
                 '-f', 'mpegts',
                 f'srt://localhost:8890?streamid=publish:{STREAM_KEY}&pkt_size=1316'
             ]
@@ -747,6 +749,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             "-c:a", "libopus",
             "-b:a", "96k",
             "-ar", "48000",
+            "-nostats",
             "-f", "rtsp",
             f"rtsp://localhost:8554/{STREAM_KEY}",
         ]
@@ -979,6 +982,7 @@ def get_rtmp_cmd(os_name=OS_NAME, window=None):
             "-ar", "44100", 
             "-b:a", "96k", 
             "-threads", "2",
+            "-nostats",
             "-f", "rtsp",
             f"rtsp://localhost:8554/{STREAM_KEY}",
         ]
@@ -1043,7 +1047,7 @@ def rtmp_stream(window):
             print(f"[RTMP] Restarting stream at {width}x{height}")
 
             rtmp_server = subprocess.Popen(server_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            ffmpeg = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE)
+            ffmpeg = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL)
 
             global_processes['rtmp_server'] = rtmp_server
             global_processes['ffmpeg'] = ffmpeg
