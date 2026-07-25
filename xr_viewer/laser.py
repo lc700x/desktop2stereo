@@ -15,7 +15,7 @@ from OpenGL.GL import glFrontFace, GL_CW, GL_CCW
 from .render import _view_mat_inv
 from .constants import (
     DEAD, EDGE_STRENGTH, KB_CURSOR_PRIORITY_BIAS, KB_CURSOR_RELEASE_GRACE,
-    _CURVED_HALF_ANGLE_RAD,
+    _CURVED_HALF_ANGLE_RAD, _KB_HYSTERESIS_M,
 )
 from .input import OneEuroFilter3D, EMAPositionFilter
 
@@ -794,12 +794,16 @@ class LaserMixin:
         v = 0.5 + loc_y / safe_h
         return u, v
 
-    def _keyboard_laser_hit(self, ctrl_pos, fwd_w):
+    def _keyboard_laser_hit(self, ctrl_pos, fwd_w, sticky_idx=None):
         """Return (key_index, t) if the aim ray hits a key on the virtual keyboard, else (None, None).
 
         Accounts for the keyboard's tilt (`_keyboard_pitch`) and yaw the plane is no
         longer axis-aligned, so we project the world hit point back into the keyboard's
         local 2D frame using the rotated basis vectors before testing rect_local bounds.
+
+        sticky_idx: index currently hovered by this hand.  Its rect is grown by
+        _KB_HYSTERESIS_M so hand tremor near a key border does not flip the
+        selection to a neighbour (Meta XrVirtualKeyboard behaviour).
         """
         if not self._keyboard_keys:
             return None, None
@@ -825,6 +829,13 @@ class LaserMixin:
         diff = hit - kb_pos
         lx = float(np.dot(diff, kb_x))
         ly = float(np.dot(diff, kb_y))
+        # Sticky key first: keep the current key while the ray is still within
+        # its grown rect, so tremor at a border does not jump to a neighbour.
+        if sticky_idx is not None and 0 <= sticky_idx < len(self._keyboard_keys):
+            m = _KB_HYSTERESIS_M
+            x0, y0, x1, y1 = self._keyboard_keys[sticky_idx].rect_local
+            if x0 - m <= lx <= x1 + m and y0 - m <= ly <= y1 + m:
+                return sticky_idx, t
         for i, key in enumerate(self._keyboard_keys):
             x0, y0, x1, y1 = key.rect_local
             if x0 <= lx <= x1 and y0 <= ly <= y1:
