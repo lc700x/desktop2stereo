@@ -651,6 +651,10 @@ class OpenXRViewer(
         self._kb_hover_r           = None  # index of key under right laser, or None
         self._kb_held_key_l        = None  # index of key held by left trigger, or None
         self._kb_held_key_r        = None  # index of key held by right trigger, or None
+        self._kb_rpt_t_l           = 0.0   # last auto-repeat emit time (left)
+        self._kb_rpt_t_r           = 0.0
+        self._kb_rpt_n_l           = 0     # repeats emitted; 0 = still in initial delay
+        self._kb_rpt_n_r           = 0
         self._kb_held_mods_l       = None  # (shift, ctrl, alt, win, vk) snapshot for left held key
         self._kb_held_mods_r       = None  # (shift, ctrl, alt, win, vk) snapshot for right held key
 

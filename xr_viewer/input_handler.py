@@ -16,6 +16,7 @@ from .constants import (
     DEAD, EDGE_STRENGTH, KB_CURSOR_PRIORITY_BIAS, KB_CURSOR_RELEASE_GRACE,
     _KB_UNITS_WIDE, _KB_ROWS, _KeyEntry,
     _KB_TEX_W, _KB_TEX_H, _VIVE_TB_Y,
+    _KB_REPEAT_DELAY, _KB_REPEAT_INTERVAL,
 )
 from .input import (
     _MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP,
@@ -778,17 +779,24 @@ class InputHandlerMixin:
             lt = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
             rt = self._read_float_action(self._act_right_trigger, "/user/hand/right")
 
-        for trig_now, trig_prev_attr, hover_attr, held_key_attr, held_mods_attr, aim_mat in [
-            (lt, '_kb_trig_prev_l', '_kb_hover_l', '_kb_held_key_l', '_kb_held_mods_l', self._aim_mat_l),
-            (rt, '_kb_trig_prev_r', '_kb_hover_r', '_kb_held_key_r', '_kb_held_mods_r', self._aim_mat_r),
+        for (trig_now, trig_prev_attr, hover_attr, held_key_attr, held_mods_attr,
+             rpt_t_attr, rpt_n_attr, aim_mat) in [
+            (lt, '_kb_trig_prev_l', '_kb_hover_l', '_kb_held_key_l', '_kb_held_mods_l',
+             '_kb_rpt_t_l', '_kb_rpt_n_l', self._aim_mat_l),
+            (rt, '_kb_trig_prev_r', '_kb_hover_r', '_kb_held_key_r', '_kb_held_mods_r',
+             '_kb_rpt_t_r', '_kb_rpt_n_r', self._aim_mat_r),
         ]:
             trig_prev = getattr(self, trig_prev_attr)
             held_key  = getattr(self, held_key_attr)
             held_mods = getattr(self, held_mods_attr)
             if aim_mat is not None:
-                # Calculate the laser beam's origin point and forward direction in world space
-                grip_mat = self._grip_mat_l if aim_mat is self._aim_mat_l else self._grip_mat_r
-                fw = -aim_mat[:3, 2].astype('f8')
+                # Use the One-Euro-smoothed ray (same source as the cursor/laser)
+                # so tremor doesn't flip the hovered key. Raw aim_mat jitter was
+                # the main cause of hitting a neighbouring key.
+                is_left = aim_mat is self._aim_mat_l
+                grip_mat = self._grip_mat_l if is_left else self._grip_mat_r
+                _sm_cp, _sm_fw = self._get_smoothed_ray(is_left)
+                fw = _sm_fw if _sm_fw is not None else -aim_mat[:3, 2].astype('f8')
                 right = aim_mat[:3, 0].astype('f8')
                 _ang = math.radians(12); _ca, _sa = math.cos(_ang), math.sin(_ang)
                 _k = right / (np.linalg.norm(right) + 1e-10)
@@ -798,7 +806,9 @@ class InputHandlerMixin:
                 else:
                     cp = aim_mat[:3, 3].astype('f8')
                 cp = cp + fw * 0.11
-                idx, kb_t = self._keyboard_laser_hit(cp, fw)
+                # Keep the held key sticky while typing; otherwise the hovered one.
+                _sticky = held_key if held_key is not None else getattr(self, hover_attr)
+                idx, kb_t = self._keyboard_laser_hit(cp, fw, sticky_idx=_sticky)
                 # Only interact with keyboard if it's closer than the screen
                 if idx is not None:
                     sc_t = self._laser_screen_hit_dist(cp, fw)
@@ -808,14 +818,11 @@ class InputHandlerMixin:
                 idx = None
             setattr(self, hover_attr, idx)
 
-            # ▶Release held regular key when trigger drops or laser leaves the key ▶
+            # ▶Release held regular key only when the trigger drops ▶
+            # A physical key stays down until you lift your finger; sliding the
+            # laser off it must NOT release it nor press the neighbour.
             if held_key is not None:
-                release = False
                 if trig_now < RELEASE_THRESH:
-                    release = True
-                elif idx != held_key:
-                    release = True
-                if release:
                     shift_dn, ctrl_dn, alt_dn, win_dn, vk_held = held_mods
                     kbd(vk_held, 0, _KEYEVENTF_KEYUP, 0)
                     if win_dn:   kbd(VK_WIN,   0, _KEYEVENTF_KEYUP, 0)
@@ -829,6 +836,18 @@ class InputHandlerMixin:
                     setattr(self, held_mods_attr, None)
                     held_key  = None
                     held_mods = None
+                else:
+                    # ▶Auto-repeat like a physical keyboard ▶
+                    # Windows does not auto-repeat synthetic keybd_event input,
+                    # so re-send key-down on our own delay/rate schedule.
+                    now_t = time.monotonic()
+                    t0 = getattr(self, rpt_t_attr, 0.0)
+                    n = getattr(self, rpt_n_attr, 0)
+                    due = _KB_REPEAT_DELAY if n == 0 else _KB_REPEAT_INTERVAL
+                    if now_t - t0 >= due:
+                        kbd(held_mods[4], 0, 0, 0)
+                        setattr(self, rpt_t_attr, now_t)
+                        setattr(self, rpt_n_attr, n + 1)
 
             # ▶Rising edge: modifier / caps toggles, or start holding a regular key ▶
             if trig_now >= CLICK_THRESH and trig_prev < CLICK_THRESH and idx is not None:
@@ -855,13 +874,10 @@ class InputHandlerMixin:
                     self._caps_lock = not self._caps_lock
                 else:
                     self._press_key(key, idx, held_key_attr, held_mods_attr)
-
-            # ▶Slide to new key: trigger already held, laser moved to another regular key ▶
-            if (held_key is None and trig_now >= CLICK_THRESH
-                    and idx is not None and trig_prev >= CLICK_THRESH):
-                key = self._keyboard_keys[idx]
-                if key.vk not in (VK_SHIFT, VK_CTRL, VK_ALT, VK_WIN, VK_CAPS):
-                    self._press_key(key, idx, held_key_attr, held_mods_attr)
+                    setattr(self, rpt_t_attr, time.monotonic())
+                    setattr(self, rpt_n_attr, 0)
+            # ponytail: no slide-to-new-key. Trigger held = one key locked, like
+            # a finger on a physical key.
 
             setattr(self, trig_prev_attr, trig_now)
 

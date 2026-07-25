@@ -10,6 +10,13 @@ EDGE_STRENGTH = 0.6 # snapping strength of cursor around screen edge
 # before the screen is allowed to steal the cursor. Larger = the keyboard keeps
 # the cursor more aggressively when it sits just below the screen edge.
 KB_CURSOR_PRIORITY_BIAS = 0.060
+# Sticky-key margin (metres) grown around the currently hovered key so hand
+# tremor at a key border does not flip selection to a neighbour. Keys are
+# ~0.023 m wide (0.42 m / 18 units), so this is ~25% of a key.
+_KB_HYSTERESIS_M = 0.006
+# Auto-repeat for a held virtual key (Windows defaults: ~500 ms delay, ~30 Hz).
+_KB_REPEAT_DELAY    = 0.5
+_KB_REPEAT_INTERVAL = 0.033
 # Post-release grace (seconds): after the keyboard stops owning the cursor (typing
 # ends / ray leaves the keys), keep the screen cursor suppressed this long so
 # ownership doesn't snap to the screen while the user lifts off toward it.
