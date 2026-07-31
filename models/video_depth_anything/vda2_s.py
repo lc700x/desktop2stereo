@@ -61,6 +61,18 @@ class VideoDepthAnything(nn.Module):
         self.pretrained = DINOv2(model_name=encoder)
 
         self.head = DPTHeadTemporal(self.pretrained.embed_dim, features, use_bn, out_channels=out_channels, use_clstoken=use_clstoken, num_frames=num_frames, pe=pe)
+
+        # Save base DPT forward for single-frame ONNX export path.
+        # DPTHeadTemporal with T=1 uses temporal attention on seq_len=1, where
+        # softmax(1x1)=1.0, making the temporal modules functionally identity.
+        # But their GroupNorm/GELU/attention ops create an ONNX subgraph that
+        # TensorRT FP8/FP4 quantization mishandles for narrow-channel models
+        # (vits: features=64, GroupNorm with 2 ch/group). Bypassing them
+        # produces a simpler ONNX graph that TensorRT compiles correctly.
+        from .dpt import DPTHead
+        self._head_forward_base = lambda features, ph, pw: DPTHead.forward(
+            self.head, features, ph, pw
+        )
         self.transform = None
         self.frame_id_list = []
         self.frame_cache_list = []
@@ -84,7 +96,20 @@ class VideoDepthAnything(nn.Module):
     def forward_depth(self, features, x_shape, cached_hidden_state_list=None):
         B, T, C, H, W = x_shape
         patch_h, patch_w = H // 14, W // 14
-        depth, cur_cached_hidden_state_list = self.head(features, patch_h, patch_w, T, cached_hidden_state_list=cached_hidden_state_list)
+
+        if cached_hidden_state_list is None and torch.jit.is_tracing():
+            # ONNX export: T=1 makes temporal attention identity
+            # (softmax on 1x1 matrix = 1.0). Use base DPT head to avoid
+            # the temporal module subgraph, whose GroupNorm/GELU ops
+            # TensorRT FP8/FP4 miscompiles for narrow-channel models.
+            depth = self._head_forward_base(features, patch_h, patch_w)
+            cur_cached_hidden_state_list = []
+        else:
+            depth, cur_cached_hidden_state_list = self.head(
+                features, patch_h, patch_w, T,
+                cached_hidden_state_list=cached_hidden_state_list
+            )
+
         depth = F.interpolate(depth, size=(H, W), mode="bilinear", align_corners=True)
         depth = F.relu(depth)
         return depth, cur_cached_hidden_state_list # return shape [B, T, H, W]
