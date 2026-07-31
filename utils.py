@@ -668,6 +668,11 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 
 def is_cn_ip():
+    """Check if the current IP is likely in China by testing connectivity to Google and Hugging Face."""
+    # inject trusted root certificates for requests
+    import truststore
+    truststore.inject_into_ssl()
+
     # Try connecting to Google and Hugging Face
     google_ok = False
     hf_ok = False

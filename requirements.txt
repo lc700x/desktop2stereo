@@ -28,3 +28,6 @@ e3nn==0.5.9
 # gui
 flet==0.85.2
 flet-desktop==0.85.2
+
+# cert truststore
+truststore==0.10.4
